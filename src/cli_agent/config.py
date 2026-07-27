@@ -25,6 +25,15 @@ def default_config_file() -> Path:
 
 
 @dataclass(frozen=True)
+class ModelConfig:
+    provider: str = "ollama"
+    model: str = "qwen3.5:9b"
+    base_url: str = "http://localhost:11434"
+    api_key_env: str | None = None
+    timeout: float = 120.0
+    headers: dict[str, str] = field(default_factory=dict)
+
+@dataclass(frozen=True)
 class LoggingConfig:
     enabled: bool = True
     level: str = "INFO"
@@ -49,6 +58,7 @@ class McpServerConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
+    model: ModelConfig = ModelConfig()
     logging: LoggingConfig = LoggingConfig()
     mcp_servers: tuple[McpServerConfig, ...] = ()
 
@@ -71,6 +81,51 @@ def _logging_config(values: dict[str, Any]) -> LoggingConfig:
         backup_count=int(values.get("backup_count", defaults.backup_count)),
     )
 
+def _model_config(values: dict[str, Any]) -> ModelConfig:
+    defaults = ModelConfig()
+
+    provider = str(
+        values.get("provider", defaults.provider)
+    ).strip().lower()
+
+    if provider not in {"ollama", "openai"}:
+        raise ValueError(
+            f"Nicht unterstützter Modell-Provider: {provider!r}."
+        )
+
+    model = str(values.get("model", defaults.model)).strip()
+    base_url = str(
+        values.get("base_url", defaults.base_url)
+    ).strip()
+
+    if not model:
+        raise ValueError("[model].model darf nicht leer sein.")
+
+    if not base_url:
+        raise ValueError("[model].base_url darf nicht leer sein.")
+
+    api_key_env_value = values.get("api_key_env")
+    api_key_env = (
+        str(api_key_env_value).strip()
+        if api_key_env_value is not None
+        else None
+    )
+
+    raw_headers = values.get("headers", {})
+    if not isinstance(raw_headers, dict):
+        raise ValueError("[model].headers muss eine Tabelle sein.")
+
+    return ModelConfig(
+        provider=provider,
+        model=model,
+        base_url=base_url.rstrip("/"),
+        api_key_env=api_key_env,
+        timeout=float(values.get("timeout", defaults.timeout)),
+        headers={
+            str(key): str(value)
+            for key, value in raw_headers.items()
+        },
+    )
 
 def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     name = str(values.get("name", "")).strip()
@@ -145,6 +200,14 @@ def load_config(path: Path | None = None) -> AppConfig:
     with config_file.open("rb") as handle:
         values = tomllib.load(handle)
 
+    model_values = values.get("model", {})
+    if not isinstance(model_values, dict):
+        raise ValueError("[model] muss eine Tabelle sein.")
+
+    model_values = values.get("model", {})
+    if not isinstance(model_values, dict):
+        raise ValueError("[model] in der Konfiguration muss eine Tabelle sein.")
+
     logging_values = values.get("logging", {})
     if not isinstance(logging_values, dict):
         raise ValueError("[logging] in der Konfiguration muss eine Tabelle sein.")
@@ -161,6 +224,7 @@ def load_config(path: Path | None = None) -> AppConfig:
             raise ValueError("Die Namen der MCP-Server müssen eindeutig sein.")
 
     return AppConfig(
+        model=_model_config(model_values),
         logging=_logging_config(logging_values),
         mcp_servers=mcp_servers,
     )

@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import traceback
 from pathlib import Path
 
 from .agent import CliAgent
 from .config import default_config_file, load_config
 from .logging_setup import configure_logging
-from .ollama import OllamaClient
+from .model_factory import create_model_client
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,16 +26,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path.cwd(),
         help="Fixed workspace directory (default: current directory)",
-    )
-    parser.add_argument(
-        "--model",
-        default=os.getenv("OLLAMA_MODEL", "qwen3.5:9b"),
-        help="Ollama model (default: OLLAMA_MODEL or qwen3.5:9b)",
-    )
-    parser.add_argument(
-        "--ollama-url",
-        default=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        help="Ollama base URL (default: OLLAMA_BASE_URL or localhost:11434)",
     )
     parser.add_argument(
         "--config",
@@ -86,10 +75,10 @@ async def run(args: argparse.Namespace) -> None:
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
-    ollama = OllamaClient(base_url=args.ollama_url, model=args.model)
+    model_client = create_model_client(config.model)
     agent = CliAgent(
         workspace,
-        ollama,
+        model_client,
         config.mcp_servers,
         logging_config=config.logging,
         config_file=args.config or default_config_file()
@@ -100,7 +89,10 @@ async def run(args: argparse.Namespace) -> None:
         "MCP-Server: "
         + (", ".join(server.name for server in config.mcp_servers) or "(keine)")
     )
-    print(f"Modell: {args.model} ({args.ollama_url})")
+    print(
+    f"Modell: {config.model.model} "
+    f"({config.model.provider}, {config.model.base_url})"
+)
     if config.logging.enabled:
         print(f"Logdatei: {config.logging.file}")
 

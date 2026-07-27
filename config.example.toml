@@ -7,6 +7,19 @@ log_tool_results = true
 max_bytes = 5000000
 backup_count = 3
 
+[model]
+provider = "ollama"
+model = "qwen3.5:9b"
+base_url = "http://localhost:11434"
+timeout = 120
+
+#[model]
+#provider = "openai"
+#model = "NAME-DES-FIRMENMODELLS"
+#base_url = "https://llm.firma.de/v1"
+#api_key_env = "FIRMA_LLM_API_KEY"
+#timeout = 120
+
 # The agent is general-purpose. It only receives tools from the MCP servers
 # listed here. Both placeholders are resolved by cli-agent.
 [[mcp_servers]]

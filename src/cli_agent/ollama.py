@@ -10,6 +10,19 @@ class OllamaError(RuntimeError):
 
 
 class OllamaClient:
+    @staticmethod
+    def _convert_messages(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        converted = []
+
+        for message in messages:
+            result = dict(message)
+            result.pop("tool_call_id", None)
+            converted.append(result)
+
+        return converted
+    
     def __init__(
         self,
         *,
@@ -28,7 +41,7 @@ class OllamaClient:
     ) -> dict[str, Any]:
         payload = {
             "model": self.model,
-            "messages": messages,
+            "messages": self._convert_messages(messages),
             "tools": tools,
             "stream": False,
         }

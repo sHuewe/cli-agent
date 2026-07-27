@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import httpx
+
+
+class OpenAIError(RuntimeError):
+    pass
+
+
+class OpenAIClient:
+    @staticmethod
+    def _convert_messages(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        converted: list[dict[str, Any]] = []
+
+        for message in messages:
+            result = dict(message)
+
+            result.pop("thinking", None)
+            result.pop("tool_name", None)
+
+            tool_calls = result.get("tool_calls")
+            if tool_calls:
+                converted_calls = []
+
+                for tool_call in tool_calls:
+                    converted_call = dict(tool_call)
+                    function = dict(
+                        converted_call.get("function", {})
+                    )
+
+                    arguments = function.get("arguments")
+                    if isinstance(arguments, dict):
+                        function["arguments"] = json.dumps(
+                            arguments,
+                            ensure_ascii=False,
+                        )
+
+                    converted_call["function"] = function
+                    converted_calls.append(converted_call)
+
+                result["tool_calls"] = converted_calls
+
+            converted.append(result)
+
+        return converted
+    @staticmethod
+    def _normalize_message(
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "role": "assistant",
+            "content": message.get("content") or "",
+        }
+
+        tool_calls = message.get("tool_calls")
+        if tool_calls:
+            normalized_calls = []
+
+            for tool_call in tool_calls:
+                normalized_call = dict(tool_call)
+                function = dict(
+                    normalized_call.get("function", {})
+                )
+
+                arguments = function.get("arguments", {})
+                if isinstance(arguments, str):
+                    try:
+                        function["arguments"] = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        function["arguments"] = arguments
+
+                normalized_call["function"] = function
+                normalized_calls.append(normalized_call)
+
+            result["tool_calls"] = normalized_calls
+
+        return result
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str | None,
+        timeout: float = 120.0,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.timeout = timeout
+        self.headers = dict(headers or {})
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        think: bool | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._convert_messages(messages),
+            "stream": False,
+        }
+
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        headers = {
+            "Content-Type": "application/json",
+            **self.headers,
+        }
+
+        if self.api_key:
+            headers.setdefault(
+                "Authorization",
+                f"Bearer {self.api_key}",
+            )
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout
+            ) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise OpenAIError(
+                f"OpenAI-kompatibles Modell unter "
+                f"{self.base_url} nicht erreichbar: {exc}"
+            ) from exc
+
+        data = response.json()
+
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise OpenAIError(
+                f"Unerwartete Modellantwort: {data}"
+            ) from exc
+
+        return self._normalize_message(message)
+
+    

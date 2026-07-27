@@ -13,7 +13,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from .ollama import OllamaClient
+from .model import ModelClient
 from .config import LoggingConfig, McpServerConfig
 
 
@@ -49,7 +49,7 @@ class CliAgent:
     def __init__(
         self,
         workspace_directory: Path,
-        ollama: OllamaClient,
+        model_client: ModelClient,
         mcp_servers: tuple[McpServerConfig, ...],
         *,
         max_tool_calls: int = 10,
@@ -57,7 +57,7 @@ class CliAgent:
         config_file: Path | None = None,
     ) -> None:
         self.workspace_directory = workspace_directory.resolve()
-        self.ollama = ollama
+        self.model_client = model_client
         self.mcp_servers = mcp_servers
         self.max_tool_calls = max_tool_calls
         self.logging_config = logging_config or LoggingConfig()
@@ -235,7 +235,7 @@ class CliAgent:
 
         calls = 0
         while True:
-            message = await self.ollama.chat(self.messages, self._model_tools)
+            message = await self.model_client.chat(self.messages, self._model_tools)
             if self.logging_config.log_model_messages:
                 logger.info(
                     "model_message=%s",
@@ -260,7 +260,7 @@ class CliAgent:
                         }
                     )
                     logger.info("Final answer was empty. Try to get an answer")
-                    answer = await self.ollama.chat(self.messages,self._model_tools)
+                    answer = await self.model_client.chat(self.messages,self._model_tools)
                 return answer or "(Das Modell hat keine Antwort erzeugt.)"
 
             for tool_call in tool_calls:
@@ -305,10 +305,16 @@ class CliAgent:
                         exposed_name,
                         result_text,
                     )
-                self.messages.append(
-                    {
-                        "role": "tool",
-                        "tool_name": exposed_name,
-                        "content": result_text,
-                    }
-                )
+                tool_message: dict[str, Any] = {
+                    "role": "tool",
+                    "content": result_text,
+                }
+
+                tool_call_id = tool_call.get("id")
+
+                if tool_call_id:
+                    tool_message["tool_call_id"] = tool_call_id
+                else:
+                    tool_message["tool_name"] = exposed_name
+
+                self.messages.append(tool_message)
