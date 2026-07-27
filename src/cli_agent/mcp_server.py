@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import argparse
+import logging
+from pathlib import Path
+
+from mcp.server.fastmcp import FastMCP
+
+from .compose import ComposeError, ComposeProject
+from .config import load_config
+from .logging_setup import configure_logging
+
+
+def create_server(project: ComposeProject) -> FastMCP:
+    mcp = FastMCP(
+        "Docker Compose",
+        instructions="""\
+Use these tools only for the Docker Compose project fixed when this server
+started. Inspect the Compose file, service status, and logs when information is
+missing. Never invent service names. Service-control tools have real effects:
+only start, stop, or restart services when the user requested that action.
+After an operational action, inspect the service status to verify the result.
+""",
+    )
+
+    @mcp.tool()
+    def get_compose_file() -> str:
+        """Return the Compose YAML selected by the user at agent startup."""
+        return project.read_compose_file()
+
+    @mcp.tool()
+    def compose_ps() -> str:
+        """Show the current status of services in the selected Compose project."""
+        return project.ps()
+
+    @mcp.tool()
+    def compose_up_all() -> str:
+        """Calls docker compose up for all services in the selected Compose project."""
+        return project.up_all()
+
+    @mcp.tool()
+    def compose_up(service_name: str) -> str:
+        """Calls docker compose up for one existing Compose service."""
+        return project.start(service_name)
+
+    @mcp.tool()
+    def compose_down(service_name: str) -> str:
+        """Calls docker compose down for one existing Compose service."""
+        return project.stop(service_name)
+
+    @mcp.tool()
+    def compose_restart(service_name: str) -> str:
+        """Calls docker compose restart for one existing Compose service."""
+        return project.restart(service_name)
+
+    @mcp.tool()
+    def compose_logs(service_name: str) -> str:
+        """Return the last 20 log lines for one service in the selected project.
+
+        Args:
+            service_name: A service name defined in the selected Compose file.
+        """
+        return project.logs(service_name)
+
+    return mcp
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="MCP server for Compose tools")
+    parser.add_argument(
+        "--project-directory",
+        required=True,
+        type=Path,
+        help="Compose project directory fixed for this MCP process",
+    )
+    parser.add_argument(
+        "--config-file",
+        type=Path,
+        default=None,
+        help=(
+            "Configuration file "
+        ))
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    config = load_config(path=args.config_file)
+    configure_logging(
+        config.logging,
+        default_filename="cli-agent-compose-mcp.log",
+    )
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "MCP server starting project_directory=%s",
+        args.project_directory,
+    )
+    try:
+        project = ComposeProject.from_directory(args.project_directory,config)
+    except ComposeError as exc:
+        logger.exception("MCP server initialization failed")
+        raise SystemExit(str(exc)) from exc
+    create_server(project).run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

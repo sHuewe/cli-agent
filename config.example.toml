@@ -1,0 +1,45 @@
+[logging]
+enabled = true
+level = "INFO"
+log_prompts = true
+log_model_messages = true
+log_tool_results = true
+max_bytes = 5000000
+backup_count = 3
+
+# The agent is general-purpose. It only receives tools from the MCP servers
+# listed here. Both placeholders are resolved by cli-agent.
+[[mcp_servers]]
+name = "compose"
+transport = "stdio"
+command = "{python}"
+args = [
+    "-m",
+    "cli_agent.mcp_server",
+    "--project-directory",
+    "{workspace_directory}",
+    "--config-file",
+    "{config_file}",
+]
+[mcp_servers.config]
+wsl2 = true 
+
+
+# Additional stdio server:
+# [[mcp_servers]]
+# name = "documents"
+# transport = "stdio"
+# command = "C:/tools/documents-mcp/.venv/Scripts/python.exe"
+# args = ["-m", "documents_mcp", "--root", "{workspace_directory}"]
+#
+# [mcp_servers.env]
+# EXAMPLE_API_URL = "http://localhost:8080"
+
+# Already-running MCP server using Streamable HTTP:
+# [[mcp_servers]]
+# name = "external"
+# transport = "streamable_http"
+# url = "http://127.0.0.1:8001/mcp"
+#
+# [mcp_servers.headers]
+# Authorization = "Bearer example-token"

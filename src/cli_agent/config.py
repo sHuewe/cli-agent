@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+from logging import config
+import os
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+def application_directory() -> Path:
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "cli-agent"
+
+    xdg_state_home = os.getenv("XDG_STATE_HOME")
+    if xdg_state_home:
+        return Path(xdg_state_home) / "cli-agent"
+
+    return Path.home() / ".cli-agent"
+
+
+def default_config_file() -> Path:
+    return application_directory() / "config.toml"
+
+
+@dataclass(frozen=True)
+class LoggingConfig:
+    enabled: bool = True
+    level: str = "INFO"
+    file: Path = application_directory() / "cli-agent.log"
+    log_prompts: bool = True
+    log_model_messages: bool = False
+    log_tool_results: bool = False
+    max_bytes: int = 5_000_000
+    backup_count: int = 3
+
+
+@dataclass(frozen=True)
+class McpServerConfig:
+    name: str
+    transport: str = "stdio"
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = field(default_factory=dict)
+    url: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
+
+@dataclass(frozen=True)
+class AppConfig:
+    logging: LoggingConfig = LoggingConfig()
+    mcp_servers: tuple[McpServerConfig, ...] = ()
+
+
+def _logging_config(values: dict[str, Any]) -> LoggingConfig:
+    defaults = LoggingConfig()
+    configured_file = values.get("file", defaults.file)
+    return LoggingConfig(
+        enabled=bool(values.get("enabled", defaults.enabled)),
+        level=str(values.get("level", defaults.level)).upper(),
+        file=Path(configured_file).expanduser(),
+        log_prompts=bool(values.get("log_prompts", defaults.log_prompts)),
+        log_model_messages=bool(
+            values.get("log_model_messages", defaults.log_model_messages)
+        ),
+        log_tool_results=bool(
+            values.get("log_tool_results", defaults.log_tool_results)
+        ),
+        max_bytes=int(values.get("max_bytes", defaults.max_bytes)),
+        backup_count=int(values.get("backup_count", defaults.backup_count)),
+    )
+
+
+def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
+    name = str(values.get("name", "")).strip()
+    transport = str(values.get("transport", "stdio")).strip().lower()
+    if not name:
+        raise ValueError("Jeder [[mcp_servers]]-Eintrag benötigt einen Namen.")
+    if transport not in {"stdio", "streamable_http"}:
+        raise ValueError(
+            f"Nicht unterstützter MCP-Transport für {name!r}: {transport!r}."
+        )
+
+    raw_args = values.get("args", [])
+    if not isinstance(raw_args, list) or not all(
+        isinstance(value, str) for value in raw_args
+    ):
+        raise ValueError(f"args von MCP-Server {name!r} muss eine String-Liste sein.")
+    raw_config = values.get("config", {})
+    if not isinstance(raw_config, dict):
+        raise ValueError(
+            f"config von MCP-Server {name!r} muss eine Tabelle sein."
+        )
+    raw_env = values.get("env", {})
+    if not isinstance(raw_env, dict):
+        raise ValueError(f"env von MCP-Server {name!r} muss eine Tabelle sein.")
+
+    raw_headers = values.get("headers", {})
+    if not isinstance(raw_headers, dict):
+        raise ValueError(f"headers von MCP-Server {name!r} muss eine Tabelle sein.")
+
+    command_value = values.get("command")
+    command = str(command_value).strip() if command_value is not None else None
+    url_value = values.get("url")
+    url = str(url_value).strip() if url_value is not None else None
+
+    if transport == "stdio":
+        if not command:
+            raise ValueError(
+                f"Der stdio-MCP-Server {name!r} benötigt command."
+            )
+        if url:
+            raise ValueError(
+                f"Der stdio-MCP-Server {name!r} darf keine url enthalten."
+            )
+    else:
+        if not url:
+            raise ValueError(
+                f"Der HTTP-MCP-Server {name!r} benötigt eine url."
+            )
+        if command or raw_args or raw_env:
+            raise ValueError(
+                f"Der HTTP-MCP-Server {name!r} darf command, args und env "
+                "nicht enthalten."
+            )
+
+    return McpServerConfig(
+        name=name,
+        transport=transport,
+        command=command,
+        args=tuple(raw_args),
+        env={str(key): str(value) for key, value in raw_env.items()},
+        url=url,
+        headers={str(key): str(value) for key, value in raw_headers.items()},
+        config=raw_config
+    )
+
+
+def load_config(path: Path | None = None) -> AppConfig:
+    config_file = (path or default_config_file()).expanduser()
+    if not config_file.exists():
+        return AppConfig()
+
+    with config_file.open("rb") as handle:
+        values = tomllib.load(handle)
+
+    logging_values = values.get("logging", {})
+    if not isinstance(logging_values, dict):
+        raise ValueError("[logging] in der Konfiguration muss eine Tabelle sein.")
+
+    raw_servers = values.get("mcp_servers")
+    if raw_servers is None:
+        mcp_servers = ()
+    else:
+        if not isinstance(raw_servers, list):
+            raise ValueError("[[mcp_servers]] muss eine Liste von Tabellen sein.")
+        mcp_servers = tuple(_mcp_server_config(value) for value in raw_servers)
+        names = [server.name for server in mcp_servers]
+        if len(names) != len(set(names)):
+            raise ValueError("Die Namen der MCP-Server müssen eindeutig sein.")
+
+    return AppConfig(
+        logging=_logging_config(logging_values),
+        mcp_servers=mcp_servers,
+    )
