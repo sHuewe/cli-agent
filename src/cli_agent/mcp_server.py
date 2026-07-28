@@ -10,18 +10,27 @@ from .compose import ComposeError, ComposeProject
 from .config import load_config
 from .logging_setup import configure_logging
 
+logger = logging.getLogger(__name__)
+
 
 def create_server(project: ComposeProject) -> FastMCP:
-    mcp = FastMCP(
-        "Docker Compose",
-        instructions="""\
+    instructions = ""
+    if project.is_available():
+        instructions = """\
 Use these tools only for the Docker Compose project fixed when this server
 started. Inspect the Compose file, service status, and logs when information is
 missing. Never invent service names. Service-control tools have real effects:
 only start, stop, or restart services when the user requested that action.
 After an operational action, inspect the service status to verify the result.
-""",
+"""
+    logger.info("MCP server instructions: %s", instructions)
+    mcp = FastMCP(
+        "Docker Compose",
+        instructions=instructions,
     )
+
+    if not project.is_available():
+        return mcp
 
     @mcp.tool()
     def get_compose_file() -> str:
@@ -35,12 +44,26 @@ After an operational action, inspect the service status to verify the result.
 
     @mcp.tool()
     def compose_up_all() -> str:
-        """Calls docker compose up for all services in the selected Compose project."""
+        """
+        Start all services of the Docker Compose project.
+
+        Use this tool only when the user explicitly asks to start the
+        complete project, the entire Compose stack, or all services.
+        Never use it when the user names only one specific service.
+        """
         return project.up_all()
 
     @mcp.tool()
     def compose_up(service_name: str) -> str:
-        """Calls docker compose up for one existing Compose service."""
+        """
+        Start exactly one Docker Compose service.
+
+        Use this tool when the user names a specific service.
+        Do not use compose_up_all() in that case.
+
+        Args:
+            service_name: Exact name of the single service to start.
+        """
         return project.start(service_name)
 
     @mcp.tool()
@@ -100,6 +123,7 @@ def main() -> None:
     except ComposeError as exc:
         logger.exception("MCP server initialization failed")
         raise SystemExit(str(exc)) from exc
+    
     create_server(project).run(transport="stdio")
 
 

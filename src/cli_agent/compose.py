@@ -32,10 +32,12 @@ def find_compose_file(project_directory: Path) -> Path:
     matches = [path for path in matches if path.is_file()]
     if not matches:
         expected = ", ".join(COMPOSE_FILENAMES)
-        raise ComposeError(
-            f"Keine Compose-Datei in {project_directory} gefunden "
-            f"(erwartet: {expected})."
+        logger.warning(
+            "Keine Compose-Datei in %s gefunden (erwartet: %s). Docker Compose-Tools nicht verfügbar.",
+            project_directory,
+            expected,
         )
+        return None
     return matches[0].relative_to(project_directory)
 
 
@@ -64,6 +66,9 @@ class ComposeProject:
             str(self.compose_file),
             *arguments,
         ]
+
+    def is_available(self) -> bool:
+        return self.compose_file != None
 
     def run(self, *arguments: str, timeout: int = 60) -> str:
         command = self.command(*arguments)

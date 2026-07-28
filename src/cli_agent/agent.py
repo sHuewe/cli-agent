@@ -147,6 +147,8 @@ class CliAgent:
             self.messages = [
                 {"role": "system", "content": self._build_system_prompt()}
             ]
+            logger.info("System prompt length=%d: %s", len(self.messages[0]["content"]), self.messages[0]["content"])
+            logger.info("Tools: %s", json.dumps(self._model_tools, ensure_ascii=False))
             self._exit_stack = stack
         except BaseException:
             await stack.aclose()
