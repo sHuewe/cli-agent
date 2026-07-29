@@ -136,6 +136,20 @@ Interaktiv im aktuellen Ordner:
 cli-agent
 ```
 
+Während der interaktiven Sitzung lassen sich bereits verbundene MCP-Server für
+das Modell aus- und wieder einschalten:
+
+```text
+disable compose
+enable compose
+```
+
+Beim Deaktivieren bleiben Verbindung und Serverprozess bestehen; lediglich die
+Tools und Instructions dieses Servers werden aus den folgenden Modellaufrufen
+entfernt. `enable` verwendet dieselbe Verbindung und die bereits geladenen
+Tooldefinitionen erneut. Alle Verbindungen werden erst beim Beenden der Sitzung
+geschlossen.
+
 Anderer Arbeitsordner:
 
 ```powershell

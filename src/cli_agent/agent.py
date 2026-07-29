@@ -4,6 +4,7 @@ import copy
 import json
 import logging
 import os
+import re
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -67,8 +68,9 @@ class CliAgent:
         self._exit_stack: AsyncExitStack | None = None
         self._sessions: dict[str, ClientSession] = {}
         self._tool_routes: dict[str, tuple[ClientSession, str, McpServerConfig]] = {}
-        self._model_tools: list[dict[str, Any]] = []
-        self._server_instructions: list[tuple[str, str]] = []
+        self._server_tools: dict[str, list[dict[str, Any]]] = {}
+        self._server_instructions: dict[str, str] = {}
+        self._active_servers: set[str] = set()
 
     def _resolve(self, value: str) -> str:
         return (
@@ -83,15 +85,55 @@ class CliAgent:
             BASE_SYSTEM_PROMPT,
             f"Festgelegter Arbeitsordner: {self.workspace_directory}",
         ]
-        if self._server_instructions:
+        active_instructions = [
+            (name, instructions)
+            for name, instructions in self._server_instructions.items()
+            if name in self._active_servers
+        ]
+        if active_instructions:
             instructions = "\n\n".join(
                 f"### MCP-Server {name}\n{text}"
-                for name, text in self._server_instructions
+                for name, text in active_instructions
             )
             parts.append(
                 "Anweisungen der verbundenen MCP-Server:\n\n" + instructions
             )
         return "\n\n".join(parts)
+
+    def _model_tools(self) -> list[dict[str, Any]]:
+        return [
+            tool
+            for server_name, tools in self._server_tools.items()
+            if server_name in self._active_servers
+            for tool in tools
+        ]
+
+    def _refresh_system_prompt(self) -> None:
+        if self.messages and self.messages[0].get("role") == "system":
+            self.messages[0] = {
+                "role": "system",
+                "content": self._build_system_prompt(),
+            }
+
+    def set_server_enabled(self, server_name: str, *, enabled: bool) -> bool:
+        """Change only a connected server's visibility to the language model."""
+        if server_name not in self._sessions:
+            raise ValueError(f"Unbekannter MCP-Server: {server_name}")
+
+        was_enabled = server_name in self._active_servers
+        if enabled:
+            self._active_servers.add(server_name)
+        else:
+            self._active_servers.discard(server_name)
+        self._refresh_system_prompt()
+        logger.info("mcp_server_enabled name=%s enabled=%s", server_name, enabled)
+        return was_enabled != enabled
+
+    def enable_server(self, server_name: str) -> bool:
+        return self.set_server_enabled(server_name, enabled=True)
+
+    def disable_server(self, server_name: str) -> bool:
+        return self.set_server_enabled(server_name, enabled=False)
 
     async def __aenter__(self) -> "CliAgent":
         await self.start()
@@ -112,10 +154,10 @@ class CliAgent:
                     stack, server_config
                 )
                 self._sessions[server_config.name] = session
+                self._active_servers.add(server_config.name)
+                self._server_tools[server_config.name] = []
                 if instructions:
-                    self._server_instructions.append(
-                        (server_config.name, instructions)
-                    )
+                    self._server_instructions[server_config.name] = instructions
 
                 listed = await session.list_tools()
                 tool_names: list[str] = []
@@ -124,7 +166,7 @@ class CliAgent:
                     if exposed_name in self._tool_routes:
                         raise RuntimeError(f"Doppelter Toolname: {exposed_name}")
                     self._tool_routes[exposed_name] = (session, tool.name, server_config)
-                    self._model_tools.append(
+                    self._server_tools[server_config.name].append(
                         {
                             "type": "function",
                             "function": {
@@ -149,14 +191,15 @@ class CliAgent:
                 {"role": "system", "content": self._build_system_prompt()}
             ]
             logger.info("System prompt length=%d: %s", len(self.messages[0]["content"]), self.messages[0]["content"])
-            logger.info("Tools: %s", json.dumps(self._model_tools, ensure_ascii=False))
+            logger.info("Tools: %s", json.dumps(self._model_tools(), ensure_ascii=False))
             self._exit_stack = stack
         except BaseException:
             await stack.aclose()
             self._sessions.clear()
             self._tool_routes.clear()
-            self._model_tools.clear()
+            self._server_tools.clear()
             self._server_instructions.clear()
+            self._active_servers.clear()
             self.messages.clear()
             raise
 
@@ -224,14 +267,25 @@ class CliAgent:
         self._exit_stack = None
         self._sessions.clear()
         self._tool_routes.clear()
-        self._model_tools.clear()
+        self._server_tools.clear()
         self._server_instructions.clear()
+        self._active_servers.clear()
         self.messages.clear()
         await stack.aclose()
 
     async def ask(self, prompt: str) -> str:
         if self._exit_stack is None:
             raise RuntimeError("Der Agent wurde noch nicht gestartet.")
+        command = re.fullmatch(r"(enable|disable)\s+(\S+)", prompt.strip())
+        if command:
+            action, server_name = command.groups()
+            changed = self.set_server_enabled(
+                server_name,
+                enabled=action == "enable",
+            )
+            state = "aktiviert" if action == "enable" else "deaktiviert"
+            suffix = "" if changed else " (war bereits so)"
+            return f"MCP-Server {server_name} {state}{suffix}."
         if self.logging_config.log_prompts:
             logger.info("user_prompt=%s", prompt)
         turn_start_index = len(self.messages)
@@ -239,7 +293,7 @@ class CliAgent:
 
         calls = 0
         while True:
-            message = await self.model_client.chat(self.messages, self._model_tools)
+            message = await self.model_client.chat(self.messages, self._model_tools())
             if self.logging_config.log_model_messages:
                 logger.info(
                     "model_message=%s",
@@ -264,7 +318,10 @@ class CliAgent:
                         }
                     )
                     logger.info("Final answer was empty. Try to get an answer")
-                    answer = await self.model_client.chat(self.messages,self._model_tools)
+                    answer = await self.model_client.chat(
+                        self.messages,
+                        self._model_tools(),
+                    )
                 return answer or "(Das Modell hat keine Antwort erzeugt.)"
 
             for tool_call in tool_calls:
@@ -284,6 +341,10 @@ class CliAgent:
                 if route is None:
                     raise RuntimeError(f"Unbekanntes MCP-Tool: {exposed_name}")
                 session, original_name, server_config  = route
+                if server_config.name not in self._active_servers:
+                    raise RuntimeError(
+                        f"MCP-Server ist deaktiviert: {server_config.name}"
+                    )
 
                 logger.info(
                     "tool_call name=%s arguments=%s",
