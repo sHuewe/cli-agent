@@ -34,6 +34,8 @@ args = [
     "--config-file",
     "{config_file}",
 ]
+compress_result = true
+compress_min_chars = 8000
 [mcp_servers.config]
 wsl2 = true 
 

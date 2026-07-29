@@ -153,4 +153,4 @@ class ComposeProject:
 
     def logs(self, service_name: str) -> str:
         service = self.validate_service(service_name)
-        return self.run("logs", "--tail", "20", "--no-color", service)
+        return self.run("logs", "--tail", "200", "--no-color", service)

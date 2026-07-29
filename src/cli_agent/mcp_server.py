@@ -92,7 +92,7 @@ After an operational action, inspect the service status to verify the result.
 
     @mcp.tool()
     def compose_logs(service_name: str) -> str:
-        """Return the last 20 log lines for one service in the selected project.
+        """Return the last 200 log lines for one service in the selected project.
 
         Args:
             service_name: A service name defined in the selected Compose file.

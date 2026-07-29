@@ -55,6 +55,8 @@ class McpServerConfig:
     url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     config: dict[str, Any] = field(default_factory=dict)
+    compress_result: bool = False
+    compress_min_chars: int = 8000
 
 
     def allow_write_files(self) -> bool:
@@ -188,6 +190,23 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
                 "nicht enthalten."
             )
 
+    compress_result = values.get("compress_result", False)
+    if not isinstance(compress_result, bool):
+        raise ValueError(
+            f"compress_result von MCP-Server {name!r} muss true oder false sein."
+        )
+
+    compress_min_chars = values.get("compress_min_chars", 8_000)
+    if (
+        not isinstance(compress_min_chars, int)
+        or isinstance(compress_min_chars, bool)
+        or compress_min_chars < 0
+    ):
+        raise ValueError(
+            f"compress_min_chars von MCP-Server {name!r} "
+            "muss eine nichtnegative Ganzzahl sein."
+        )
+
     return McpServerConfig(
         name=name,
         transport=transport,
@@ -196,7 +215,9 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
         env={str(key): str(value) for key, value in raw_env.items()},
         url=url,
         headers={str(key): str(value) for key, value in raw_headers.items()},
-        config=raw_config
+        config=raw_config,
+        compress_result=compress_result,
+        compress_min_chars=compress_min_chars
     )
 
 
