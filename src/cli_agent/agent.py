@@ -304,8 +304,25 @@ class CliAgent:
         self.messages.append({"role": "user", "content": prompt})
 
         calls = 0
+        transient_rejections: list[
+            tuple[dict[str, Any], dict[str, Any], dict[str, Any]]
+        ] = []
         while True:
-            message = await self.model_client.chat(self.messages, self._model_tools())
+            try:
+                message = await self.model_client.chat(
+                    self.messages,
+                    self._model_tools(),
+                )
+            finally:
+                for assistant_message, tool_call, tool_message in (
+                    transient_rejections
+                ):
+                    self._discard_rejected_tool_call(
+                        assistant_message,
+                        tool_call,
+                        tool_message,
+                    )
+                transient_rejections.clear()
             if self.logging_config.log_model_messages:
                 logger.info(
                     "model_message=%s",
@@ -351,23 +368,29 @@ class CliAgent:
 
                 route = self._tool_routes.get(exposed_name)
                 if route is None:
-                    self._append_tool_error(
+                    tool_message = self._append_tool_error(
                         tool_call,
                         exposed_name,
                         f"Das MCP-Tool {exposed_name!r} existiert nicht oder ist "
                         "aktuell nicht verfügbar. Verwende ausschließlich ein "
                         "Tool aus der aktuellen Toolliste.",
                     )
+                    transient_rejections.append(
+                        (message, tool_call, tool_message)
+                    )
                     continue
                 session, original_name, server_config  = route
                 if server_config.name not in self._active_servers:
-                    self._append_tool_error(
+                    tool_message = self._append_tool_error(
                         tool_call,
                         exposed_name,
                         f"Das MCP-Tool {exposed_name!r} ist nicht verfügbar, weil "
                         f"der MCP-Server {server_config.name!r} deaktiviert ist. "
                         "Rufe es nicht erneut auf und verwende ausschließlich ein "
                         "Tool aus der aktuellen Toolliste.",
+                    )
+                    transient_rejections.append(
+                        (message, tool_call, tool_message)
                     )
                     continue
 
@@ -446,8 +469,8 @@ class CliAgent:
         tool_call: dict[str, Any],
         tool_name: Any,
         message: str,
-    ) -> None:
-        """Return an invalid model-requested tool call to the model as an error."""
+    ) -> dict[str, Any]:
+        """Append a transient error for an invalid model-requested tool call."""
         logger.warning("tool_call_rejected name=%s reason=%s", tool_name, message)
         tool_message: dict[str, Any] = {
             "role": "tool",
@@ -459,6 +482,31 @@ class CliAgent:
         else:
             tool_message["tool_name"] = str(tool_name)
         self.messages.append(tool_message)
+        return tool_message
+
+    def _discard_rejected_tool_call(
+        self,
+        assistant_message: dict[str, Any],
+        rejected_call: dict[str, Any],
+        tool_message: dict[str, Any],
+    ) -> None:
+        """Remove a rejected call after the model has consumed its error once."""
+        self.messages = [
+            item for item in self.messages if item is not tool_message
+        ]
+        remaining_calls = [
+            item
+            for item in assistant_message.get("tool_calls") or []
+            if item is not rejected_call
+        ]
+        if remaining_calls:
+            assistant_message["tool_calls"] = remaining_calls
+        else:
+            assistant_message.pop("tool_calls", None)
+            if not assistant_message.get("content"):
+                self.messages = [
+                    item for item in self.messages if item is not assistant_message
+                ]
 
     async def _compress_tool_result(
         self,

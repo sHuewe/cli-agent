@@ -149,6 +149,16 @@ def test_disabled_server_tool_call_is_rejected(tmp_path: Path) -> None:
     assert "compose__ps" not in str(model.calls[0][1])
     assert model.calls[1][0][-1]["role"] == "tool"
     assert "deaktiviert" in model.calls[1][0][-1]["content"]
+    assert all(message.get("role") != "tool" for message in agent.messages)
+    assert "old-call" not in str(agent.messages)
+
+    agent.enable_server("compose")
+    model.response = {"role": "assistant", "content": "Available again."}
+    assert asyncio.run(agent.ask("Use the available tool if needed")) == (
+        "Available again."
+    )
+    assert "compose__ps" in str(model.calls[-1][1])
+    assert "deaktiviert" not in str(model.calls[-1][0])
 
 
 def test_unknown_tool_call_is_reported_to_model(tmp_path: Path) -> None:
@@ -176,6 +186,8 @@ def test_unknown_tool_call_is_reported_to_model(tmp_path: Path) -> None:
     assert error["role"] == "tool"
     assert error["tool_call_id"] == "invented-call"
     assert "existiert nicht" in error["content"]
+    assert "invented-call" not in str(agent.messages)
+    assert "existiert nicht" not in str(agent.messages)
 
 
 def test_unknown_server_command_does_not_reach_model(tmp_path: Path) -> None:
