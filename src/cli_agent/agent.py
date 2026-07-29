@@ -85,6 +85,18 @@ class CliAgent:
             BASE_SYSTEM_PROMPT,
             f"Festgelegter Arbeitsordner: {self.workspace_directory}",
         ]
+        available_tool_names = [
+            tool["function"]["name"] for tool in self._model_tools()
+        ]
+        if available_tool_names:
+            parts.append(
+                "Aktuell verfügbare MCP-Tools (nur diese Namen dürfen aufgerufen "
+                "werden):\n- " + "\n- ".join(available_tool_names)
+            )
+        else:
+            parts.append(
+                "Aktuell sind keine MCP-Tools verfügbar. Rufe kein MCP-Tool auf."
+            )
         active_instructions = [
             (name, instructions)
             for name, instructions in self._server_instructions.items()
@@ -339,12 +351,25 @@ class CliAgent:
 
                 route = self._tool_routes.get(exposed_name)
                 if route is None:
-                    raise RuntimeError(f"Unbekanntes MCP-Tool: {exposed_name}")
+                    self._append_tool_error(
+                        tool_call,
+                        exposed_name,
+                        f"Das MCP-Tool {exposed_name!r} existiert nicht oder ist "
+                        "aktuell nicht verfügbar. Verwende ausschließlich ein "
+                        "Tool aus der aktuellen Toolliste.",
+                    )
+                    continue
                 session, original_name, server_config  = route
                 if server_config.name not in self._active_servers:
-                    raise RuntimeError(
-                        f"MCP-Server ist deaktiviert: {server_config.name}"
+                    self._append_tool_error(
+                        tool_call,
+                        exposed_name,
+                        f"Das MCP-Tool {exposed_name!r} ist nicht verfügbar, weil "
+                        f"der MCP-Server {server_config.name!r} deaktiviert ist. "
+                        "Rufe es nicht erneut auf und verwende ausschließlich ein "
+                        "Tool aus der aktuellen Toolliste.",
                     )
+                    continue
 
                 logger.info(
                     "tool_call name=%s arguments=%s",
@@ -415,6 +440,25 @@ class CliAgent:
                     tool_message["tool_name"] = exposed_name
 
                 self.messages.append(tool_message)
+
+    def _append_tool_error(
+        self,
+        tool_call: dict[str, Any],
+        tool_name: Any,
+        message: str,
+    ) -> None:
+        """Return an invalid model-requested tool call to the model as an error."""
+        logger.warning("tool_call_rejected name=%s reason=%s", tool_name, message)
+        tool_message: dict[str, Any] = {
+            "role": "tool",
+            "content": f"FEHLER: {message}",
+        }
+        tool_call_id = tool_call.get("id")
+        if tool_call_id:
+            tool_message["tool_call_id"] = tool_call_id
+        else:
+            tool_message["tool_name"] = str(tool_name)
+        self.messages.append(tool_message)
 
     async def _compress_tool_result(
         self,

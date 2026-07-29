@@ -50,6 +50,8 @@ class RecordingModel:
 
     async def chat(self, messages, tools, *, think=None):
         self.calls.append((messages.copy(), tools.copy()))
+        if isinstance(self.response, list):
+            return self.response.pop(0)
         return self.response
 
 
@@ -102,6 +104,8 @@ def test_disable_and_enable_filter_cached_server_assets(tmp_path: Path) -> None:
     assert "documents__read" in str(agent._model_tools())
     assert "Compose instructions" not in agent.messages[0]["content"]
     assert "Document instructions" in agent.messages[0]["content"]
+    assert "compose__ps" not in agent.messages[0]["content"]
+    assert "documents__read" in agent.messages[0]["content"]
     assert model.calls == []
 
     assert asyncio.run(agent.ask("disable compose")) == (
@@ -121,25 +125,57 @@ def test_disable_and_enable_filter_cached_server_assets(tmp_path: Path) -> None:
 
 def test_disabled_server_tool_call_is_rejected(tmp_path: Path) -> None:
     model = RecordingModel(
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "old-call",
-                    "function": {"name": "compose__ps", "arguments": {}},
-                }
-            ],
-        }
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "old-call",
+                        "function": {"name": "compose__ps", "arguments": {}},
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "Tool is unavailable."},
+        ]
     )
     agent, compose_session = connected_agent(tmp_path, model)
     agent.disable_server("compose")
 
-    with pytest.raises(RuntimeError, match="MCP-Server ist deaktiviert: compose"):
-        asyncio.run(agent.ask("Use the tool mentioned earlier"))
+    answer = asyncio.run(agent.ask("Use the tool mentioned earlier"))
 
+    assert answer == "Tool is unavailable."
     assert compose_session.tool_calls == []
     assert "compose__ps" not in str(model.calls[0][1])
+    assert model.calls[1][0][-1]["role"] == "tool"
+    assert "deaktiviert" in model.calls[1][0][-1]["content"]
+
+
+def test_unknown_tool_call_is_reported_to_model(tmp_path: Path) -> None:
+    model = RecordingModel(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "invented-call",
+                        "function": {"name": "invented__tool", "arguments": {}},
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "I cannot use that tool."},
+        ]
+    )
+    agent, _ = connected_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("Call an invented tool"))
+
+    assert answer == "I cannot use that tool."
+    error = model.calls[1][0][-1]
+    assert error["role"] == "tool"
+    assert error["tool_call_id"] == "invented-call"
+    assert "existiert nicht" in error["content"]
 
 
 def test_unknown_server_command_does_not_reach_model(tmp_path: Path) -> None:
