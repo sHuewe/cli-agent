@@ -101,7 +101,10 @@ async def run(args: argparse.Namespace) -> None:
             print(await agent.ask(" ".join(args.prompt)))
             return
 
-        print("Interaktiver Modus; 'exit' oder 'quit' beendet die Sitzung.")
+        print(
+            "Interaktiver Modus; 'enable <server>' und 'disable <server>' "
+            "steuern MCP-Server, 'exit' oder 'quit' beendet die Sitzung."
+        )
         while True:
             try:
                 prompt = input("\n> ").strip()
