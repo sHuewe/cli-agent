@@ -56,6 +56,14 @@ class McpServerConfig:
     headers: dict[str, str] = field(default_factory=dict)
     config: dict[str, Any] = field(default_factory=dict)
 
+
+    def allow_write_files(self) -> bool:
+        return self.config.get("allow_write_files", False)
+
+    def allow_modify_services(self) -> bool:
+        return self.config.get("allow_modify_services", False)
+
+
 @dataclass(frozen=True)
 class AppConfig:
     model: ModelConfig = ModelConfig()

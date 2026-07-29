@@ -48,11 +48,9 @@ class ComposeProject:
     config: McpServerConfig
 
     @classmethod
-    def from_directory(cls, directory: Path, config: AppConfig) -> "ComposeProject":
+    def from_directory(cls, directory: Path, config: McpServerConfig) -> "ComposeProject":
         resolved = directory.resolve()
-        for mcp_server in config.mcp_servers:
-            if mcp_server.name == "compose":
-                return cls(resolved, find_compose_file(resolved), mcp_server)
+        return cls(resolved, find_compose_file(resolved), config)
         raise ComposeError(
             "Kein MCP-Server mit dem Namen 'compose' in der Konfiguration gefunden.")
 

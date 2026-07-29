@@ -44,6 +44,9 @@ class OllamaClient:
             "messages": self._convert_messages(messages),
             "tools": tools,
             "stream": False,
+            "options": {
+                "num_ctx": 8192
+            },
         }
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:

@@ -52,7 +52,7 @@ class CliAgent:
         model_client: ModelClient,
         mcp_servers: tuple[McpServerConfig, ...],
         *,
-        max_tool_calls: int = 10,
+        max_tool_calls: int = 20,
         logging_config: LoggingConfig | None = None,
         config_file: Path | None = None,
     ) -> None:
