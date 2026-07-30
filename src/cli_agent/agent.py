@@ -64,7 +64,7 @@ class CliAgent:
         self.max_tool_calls = max_tool_calls
         self.logging_config = logging_config or LoggingConfig()
         self.config_file = config_file
-        self.messages: list[dict[str, Any]] = []
+        self.history: list[dict[str, Any]] = []
         self._exit_stack: AsyncExitStack | None = None
         self._sessions: dict[str, ClientSession] = {}
         self._tool_routes: dict[str, tuple[ClientSession, str, McpServerConfig]] = {}
@@ -120,12 +120,6 @@ class CliAgent:
             for tool in tools
         ]
 
-    def _refresh_system_prompt(self) -> None:
-        if self.messages and self.messages[0].get("role") == "system":
-            self.messages[0] = {
-                "role": "system",
-                "content": self._build_system_prompt(),
-            }
 
     def set_server_enabled(self, server_name: str, *, enabled: bool) -> bool:
         """Change only a connected server's visibility to the language model."""
@@ -137,7 +131,6 @@ class CliAgent:
             self._active_servers.add(server_name)
         else:
             self._active_servers.discard(server_name)
-        self._refresh_system_prompt()
         logger.info("mcp_server_enabled name=%s enabled=%s", server_name, enabled)
         return was_enabled != enabled
 
@@ -199,10 +192,10 @@ class CliAgent:
                     json.dumps(tool_names, ensure_ascii=False),
                 )
 
-            self.messages = [
+            self.history = [
                 {"role": "system", "content": self._build_system_prompt()}
             ]
-            logger.info("System prompt length=%d: %s", len(self.messages[0]["content"]), self.messages[0]["content"])
+            logger.info("System prompt length=%d: %s", len(self.history[0]["content"]), self.history[0]["content"])
             logger.info("Tools: %s", json.dumps(self._model_tools(), ensure_ascii=False))
             self._exit_stack = stack
         except BaseException:
@@ -212,7 +205,7 @@ class CliAgent:
             self._server_tools.clear()
             self._server_instructions.clear()
             self._active_servers.clear()
-            self.messages.clear()
+            self.history.clear()
             raise
 
     async def _connect_server(
@@ -282,7 +275,7 @@ class CliAgent:
         self._server_tools.clear()
         self._server_instructions.clear()
         self._active_servers.clear()
-        self.messages.clear()
+        self.history.clear()
         await stack.aclose()
 
     async def ask(self, prompt: str) -> str:
@@ -298,10 +291,15 @@ class CliAgent:
             state = "aktiviert" if action == "enable" else "deaktiviert"
             suffix = "" if changed else " (war bereits so)"
             return f"MCP-Server {server_name} {state}{suffix}."
+        working_messages = [
+            {"role": "system", "content": self._build_system_prompt()},
+            *self.history,
+            {"role": "user", "content": prompt},
+        ]
         if self.logging_config.log_prompts:
             logger.info("user_prompt=%s", prompt)
-        turn_start_index = len(self.messages)
-        self.messages.append({"role": "user", "content": prompt})
+        turn_start_index = len(self.history)
+        self.history.append({"role": "user", "content": prompt})
 
         calls = 0
         transient_rejections: list[
@@ -310,9 +308,10 @@ class CliAgent:
         while True:
             try:
                 message = await self.model_client.chat(
-                    self.messages,
-                    self._model_tools(),
+                    messages=working_messages,
+                    tools=self._model_tools(),
                 )
+                working_messages.append(message)
             finally:
                 for assistant_message, tool_call, tool_message in (
                     transient_rejections
@@ -328,15 +327,15 @@ class CliAgent:
                     "model_message=%s",
                     json.dumps(message, ensure_ascii=False),
                 )
-            self.messages.append(message)
+
             tool_calls = message.get("tool_calls") or []
 
             if not tool_calls:
                 answer = str(message.get("content") or "").strip()
                 logger.info("assistant_answer_length=%d", len(answer))
                 if len(answer) == 0:
-                    self.messages.append(message)
-                    self.messages.append(
+                    working_messages.append(message)
+                    working_messages.append(
                         {
                             "role": "user",
                             "content": (
@@ -348,9 +347,13 @@ class CliAgent:
                     )
                     logger.info("Final answer was empty. Try to get an answer")
                     answer = await self.model_client.chat(
-                        self.messages,
-                        self._model_tools(),
+                        messages=working_messages,
+                        tools=self._model_tools(),
                     )
+                self.history.extend([
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": answer},
+                ])
                 return answer or "(Das Modell hat keine Antwort erzeugt.)"
 
             for tool_call in tool_calls:
@@ -417,7 +420,7 @@ class CliAgent:
 
                 if should_compress:
                     current_turn_messages = copy.deepcopy(
-                     self.messages[turn_start_index:]
+                     working_messages
                     )
                     try:
                         result_text = await self._compress_tool_result(
@@ -462,7 +465,7 @@ class CliAgent:
                 else:
                     tool_message["tool_name"] = exposed_name
 
-                self.messages.append(tool_message)
+                working_messages.append(tool_message)
 
     def _append_tool_error(
         self,
@@ -481,7 +484,7 @@ class CliAgent:
             tool_message["tool_call_id"] = tool_call_id
         else:
             tool_message["tool_name"] = str(tool_name)
-        self.messages.append(tool_message)
+        self.history.append(tool_message)
         return tool_message
 
     def _discard_rejected_tool_call(
@@ -491,8 +494,8 @@ class CliAgent:
         tool_message: dict[str, Any],
     ) -> None:
         """Remove a rejected call after the model has consumed its error once."""
-        self.messages = [
-            item for item in self.messages if item is not tool_message
+        self.history = [
+            item for item in self.history if item is not tool_message
         ]
         remaining_calls = [
             item
@@ -504,8 +507,8 @@ class CliAgent:
         else:
             assistant_message.pop("tool_calls", None)
             if not assistant_message.get("content"):
-                self.messages = [
-                    item for item in self.messages if item is not assistant_message
+                self.history = [
+                    item for item in self.history if item is not assistant_message
                 ]
 
     async def _compress_tool_result(
