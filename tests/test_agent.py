@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,61 @@ def test_resolves_workspace_placeholders(tmp_path: Path) -> None:
 
     assert agent._resolve("{workspace_directory}") == str(tmp_path.resolve())
     assert agent._resolve("{project_directory}") == str(tmp_path.resolve())
+
+
+def test_llm_context_is_dumped_as_json_when_enabled(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = CliAgent(tmp_path, model, (), dump_llm_context=True)
+    agent._exit_stack = SimpleNamespace()
+    agent.history = [{"role": "system", "content": "System"}]
+
+    answer = asyncio.run(agent.ask("Grüße"))
+
+    assert answer == "ok"
+    dump_directory = tmp_path / ".cli-agent"
+    assert json.loads((dump_directory / "history.json").read_text()) == (
+        agent.history
+    )
+    assert json.loads(
+        (dump_directory / "working_messages.json").read_text()
+    ) == model.calls[-1][0] + [{"role": "assistant", "content": "ok"}]
+    assert json.loads((dump_directory / "system_prompt.json").read_text()) == (
+        model.calls[-1][0][0]["content"]
+    )
+
+
+def test_unchanged_history_is_not_dumped_again(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = CliAgent(
+        tmp_path,
+        RecordingModel(),
+        (),
+        dump_llm_context=True,
+    )
+    working_messages = [{"role": "system", "content": "System"}]
+    written_files: list[str] = []
+    original_write_text = Path.write_text
+
+    def record_write(path: Path, *args, **kwargs):
+        written_files.append(path.name)
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", record_write)
+
+    agent._dump_context(working_messages)
+    agent._dump_context(working_messages)
+
+    assert written_files.count("history.json") == 1
+    assert written_files.count("working_messages.json") == 2
+    assert written_files.count("system_prompt.json") == 2
+
+
+def test_llm_context_is_not_dumped_by_default(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+
+    assert not (tmp_path / ".cli-agent").exists()
 
 
 def test_system_prompt_contains_named_server_instructions(tmp_path: Path) -> None:

@@ -57,6 +57,7 @@ class CliAgent:
         max_tool_calls: int = 20,
         logging_config: LoggingConfig | None = None,
         config_file: Path | None = None,
+        dump_llm_context: bool = False,
     ) -> None:
         self.workspace_directory = workspace_directory.resolve()
         self.model_client = model_client
@@ -64,13 +65,42 @@ class CliAgent:
         self.max_tool_calls = max_tool_calls
         self.logging_config = logging_config or LoggingConfig()
         self.config_file = config_file
+        self.dump_llm_context = dump_llm_context
         self.history: list[dict[str, Any]] = []
+        self._dumped_history_json: str | None = None
         self._exit_stack: AsyncExitStack | None = None
         self._sessions: dict[str, ClientSession] = {}
         self._tool_routes: dict[str, tuple[ClientSession, str, McpServerConfig]] = {}
         self._server_tools: dict[str, list[dict[str, Any]]] = {}
         self._server_instructions: dict[str, str] = {}
         self._active_servers: set[str] = set()
+
+    def _dump_context(self, working_messages: list[dict[str, Any]]) -> None:
+        if not self.dump_llm_context:
+            return
+
+        dump_directory = self.workspace_directory / ".cli-agent"
+        dump_directory.mkdir(parents=True, exist_ok=True)
+        history_json = json.dumps(self.history, ensure_ascii=False, indent=2)
+        if history_json != self._dumped_history_json:
+            (dump_directory / "history.json").write_text(
+                history_json,
+                encoding="utf-8",
+            )
+            self._dumped_history_json = history_json
+
+        (dump_directory / "working_messages.json").write_text(
+            json.dumps(working_messages, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (dump_directory / "system_prompt.json").write_text(
+            json.dumps(
+                working_messages[0]["content"],
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def _resolve(self, value: str) -> str:
         return (
@@ -306,6 +336,7 @@ class CliAgent:
             tuple[dict[str, Any], dict[str, Any], dict[str, Any]]
         ] = []
         while True:
+            self._dump_context(working_messages)
             try:
                 message = await self.model_client.chat(
                     messages=working_messages,
@@ -354,6 +385,7 @@ class CliAgent:
                     {"role": "user", "content": prompt},
                     {"role": "assistant", "content": answer},
                 ])
+                self._dump_context(working_messages)
                 return answer or "(Das Modell hat keine Antwort erzeugt.)"
 
             for tool_call in tool_calls:
@@ -466,6 +498,7 @@ class CliAgent:
                     tool_message["tool_name"] = exposed_name
 
                 working_messages.append(tool_message)
+                self._dump_context(working_messages)
 
     def _append_tool_error(
         self,
