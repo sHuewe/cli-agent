@@ -39,7 +39,18 @@ compress_min_chars = 8000
 [mcp_servers.config]
 wsl2 = true 
 
-
+[[mcp_servers]]
+name = "python-validator"
+transport = "stdio"
+command = "{python}"
+args = [
+    "-m",
+    "cli_agent.python_validator_mcp",
+    "--project-directory",
+    "{workspace_directory}",
+    "--python-image",
+    "python:3.12-slim",
+]
 # Additional stdio server:
 # [[mcp_servers]]
 # name = "documents"

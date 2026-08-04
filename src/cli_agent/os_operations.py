@@ -28,6 +28,8 @@ TEXT_SUFFIXES = frozenset(
         ".kt",
         ".kts",
         ".log",
+        ".log.1",
+        ".log.2",
         ".md",
         ".properties",
         ".py",
@@ -137,7 +139,10 @@ class Workspace:
             )
 
         try:
-            return file_path.read_text(encoding="utf-8")
+            res = file_path.read_text(encoding="utf-8")
+            if not res or len(res) == 0:
+                res = "(Empty file)"
+            return res
         except UnicodeDecodeError as exc:
             raise WorkspaceError(
                 f"Datei ist nicht als UTF-8-Text lesbar: {path!r}"

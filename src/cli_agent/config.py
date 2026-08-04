@@ -68,6 +68,7 @@ class McpServerConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
+    dump_llm_context: bool = False
     model: ModelConfig = ModelConfig()
     logging: LoggingConfig = LoggingConfig()
     mcp_servers: tuple[McpServerConfig, ...] = ()
@@ -253,6 +254,7 @@ def load_config(path: Path | None = None) -> AppConfig:
             raise ValueError("Die Namen der MCP-Server müssen eindeutig sein.")
 
     return AppConfig(
+        dump_llm_context=bool(values.get("dump_llm_context", False)),
         model=_model_config(model_values),
         logging=_logging_config(logging_values),
         mcp_servers=mcp_servers,

@@ -4,6 +4,9 @@ from typing import Any
 
 import httpx
 
+ctx_large= 24576
+ctx_small = 8192
+
 
 class OllamaError(RuntimeError):
     """Ollama could not provide a usable response."""
@@ -45,7 +48,7 @@ class OllamaClient:
             "tools": tools,
             "stream": False,
             "options": {
-                "num_ctx": 8192
+                "num_ctx": ctx_large
             },
         }
         try:

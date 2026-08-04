@@ -81,7 +81,8 @@ async def run(args: argparse.Namespace) -> None:
         model_client,
         config.mcp_servers,
         logging_config=config.logging,
-        config_file=args.config or default_config_file()
+        config_file=args.config or default_config_file(),
+        dump_llm_context=config.dump_llm_context
     )
 
     print(f"Arbeitsordner: {workspace}")

@@ -147,6 +147,7 @@ def main() -> None:
     config = load_config(path=args.config_file)
     configure_logging(
         config.logging,
+        logger = logger,
         default_filename="cli-agent-os-mcp.log",
     )
 
