@@ -82,7 +82,8 @@ async def run(args: argparse.Namespace) -> None:
         config.mcp_servers,
         logging_config=config.logging,
         config_file=args.config or default_config_file(),
-        dump_llm_context=config.dump_llm_context
+        dump_llm_context=config.dump_llm_context,
+        okf=config.okf
     )
 
     print(f"Arbeitsordner: {workspace}")
@@ -96,6 +97,11 @@ async def run(args: argparse.Namespace) -> None:
 )
     if config.logging.enabled:
         print(f"Logdatei: {config.logging.file}")
+
+    if config.okf:
+        print(
+            f"OKF-Repository: {config.okf.repository}"
+        )
 
     async with agent:
         if args.prompt:

@@ -69,3 +69,10 @@ args = [
 #
 # [mcp_servers.headers]
 # Authorization = "Bearer example-token"
+
+[okf]
+repository = "C:///dev/llm/knowledge-catalog/okf/bundles/crypto_bitcoin"
+max_tool_calls = 200
+max_read_bytes = 2560000
+compress_min_chars = 20000
+required = true

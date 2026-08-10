@@ -46,6 +46,14 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class OkfConfig:
+    repository: str
+    max_tool_calls: int = 200
+    max_read_bytes: int = 2_560_000
+    compress_min_chars: int = 20_000
+    required: bool = True
+
+@dataclass(frozen=True)
 class McpServerConfig:
     name: str
     transport: str = "stdio"
@@ -72,6 +80,7 @@ class AppConfig:
     model: ModelConfig = ModelConfig()
     logging: LoggingConfig = LoggingConfig()
     mcp_servers: tuple[McpServerConfig, ...] = ()
+    okf: OkfConfig | None = None
 
 
 def _logging_config(values: dict[str, Any]) -> LoggingConfig:
@@ -136,6 +145,19 @@ def _model_config(values: dict[str, Any]) -> ModelConfig:
             str(key): str(value)
             for key, value in raw_headers.items()
         },
+    )
+
+def _okf_config(values: dict[str, Any]) -> OkfConfig:
+    repository = str(values.get("repository", "")).strip()
+    if not repository:
+        raise ValueError("[okf].repository darf nicht leer sein.")
+
+    return OkfConfig(
+        repository=repository,
+        max_tool_calls=int(values.get("max_tool_calls", 200)),
+        max_read_bytes=int(values.get("max_read_bytes", 2_560_000)),
+        compress_min_chars=int(values.get("compress_min_chars", 20_000)),
+        required=bool(values.get("required", True))
     )
 
 def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
@@ -258,4 +280,5 @@ def load_config(path: Path | None = None) -> AppConfig:
         model=_model_config(model_values),
         logging=_logging_config(logging_values),
         mcp_servers=mcp_servers,
+        okf=_okf_config(values.get("okf", {})) if "okf" in values else None
     )
