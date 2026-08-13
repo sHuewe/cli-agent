@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 import logging
 import os
@@ -348,7 +349,8 @@ class CliAgent:
     def _build_system_prompt(self) -> str:
         parts = [
             BASE_SYSTEM_PROMPT,
-            f"Festgelegter Arbeitsordner: {self.workspace_directory}",
+            f"Festgelegter Arbeitsordner: {os.path.basename(self.workspace_directory)}",
+            f"Aktuelles Datum (isoformat): {datetime.datetime.now().isoformat()}",
         ]
         available_tool_names = [
             tool["function"]["name"] for tool in self._model_tools()
