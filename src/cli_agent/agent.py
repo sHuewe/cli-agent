@@ -57,20 +57,20 @@ Kontext und niemals Quellenbelege.
 Ist die Anfrage nicht anwendbar, rufe keine weiteren OKF-Tools auf und antworte
 sofort mit `found_content: false` und `reason_code: "not_applicable"`.
 
-Andernfalls öffne mindestens einen plausiblen Verweis aus `root_index`, bevor
-`not_found` zulässig ist. Index- oder Dokumentpfade müssen den Suchbegriff nicht
-enthalten; ein thematisch passender Bereich genügt. Fehlende direkte
-Concept-Links im Root-Index sind erwartbar und kein Abbruchgrund. Folge zuerst
-dem direkt passendsten Pfad und erweitere die Suche nur, solange die gelesenen
-Concepts für die Aufgabe nicht ausreichen. Berücksichtige dabei auch Synonyme
-sowie übergeordnete oder unterstützende Concepts. Verwende ausschließlich
-Pfade, die exakt in `root_index` oder `internal_links` eines Tool-Ergebnisses
-stehen; konstruiere keine Pfade. Bei Handlungsaufforderungen sind insbesondere
-Voraussetzungen, Einschränkungen, Parameter, Eingabeformate, Abläufe,
-Schnittstellen, Beispiele, Fehlerfälle und Sicherheitsanforderungen relevant.
-Gib den `reason_code` `"not_found"` nur aus, wenn mindestens ein plausibles
-Navigationsziel erfolgreich geprüft wurde und keinen hilfreichen Inhalt ergab
-oder das konfigurierte Concept-Limit erreicht ist.
+Andernfalls folge von `root_index` aus dem direkt passendsten Pfad. Index- oder
+Dokumentpfade müssen den Suchbegriff nicht enthalten; ein thematisch passender
+Bereich genügt. Fehlende direkte Concept-Links im Root-Index sind erwartbar und
+kein Abbruchgrund. Index-Dokumente dienen ausschließlich der Navigation und sind
+keine ausreichende Grundlage für das Endergebnis. Folge bei einer anwendbaren
+Anfrage dem plausibelsten Zweig, bis mindestens ein Concept erfolgreich gelesen
+wurde. Erweitere die Suche danach nur, solange die gelesenen Concepts für die
+Aufgabe nicht ausreichen. Berücksichtige dabei auch Synonyme sowie übergeordnete
+oder unterstützende Concepts. Verwende ausschließlich Pfade, die exakt in
+`root_index` oder `internal_links` eines Tool-Ergebnisses stehen; konstruiere
+keine Pfade. Bei Handlungsaufforderungen sind insbesondere Voraussetzungen,
+Einschränkungen, Parameter, Eingabeformate, Abläufe, Schnittstellen, Beispiele,
+Fehlerfälle und Sicherheitsanforderungen relevant. Gib `not_found` erst aus,
+nachdem mindestens ein Concept gelesen und als nicht hilfreich bewertet wurde.
 
 Für die Navigation reicht es, wenn ein Concept einen möglicherweise hilfreichen
 Teilaspekt liefert. Wähle final jedoch nur Concepts, deren Quelltext materiell
@@ -122,7 +122,8 @@ EXPECTED_KNOWLEDGE_TOOLS = {
     "knowledge_read",
 }
 
-DEFAULT_OKF_MAX_TOOL_CALLS = 100
+DEFAULT_OKF_MAX_TOOL_CALLS = 200
+DEFAULT_OKF_MAX_CONCEPT_READS = 180
 MAX_PREMATURE_KNOWLEDGE_RETRIES = 2
 MAX_KNOWLEDGE_SELECTION_RETRIES = 2
 
@@ -143,7 +144,7 @@ class OkfConfigLike(Protocol):
 class _OkfOptions:
     repository: Path
     max_tool_calls: int = DEFAULT_OKF_MAX_TOOL_CALLS
-    max_concept_reads: int = 4
+    max_concept_reads: int = DEFAULT_OKF_MAX_CONCEPT_READS
     max_read_bytes: int = 256_000
     max_index_entries: int = 200
     compress_min_chars: int = 12_000
@@ -438,12 +439,20 @@ def _validate_knowledge_selection(
                 "Bei `found_content: false` muss `reason_code` entweder "
                 "`not_applicable` oder `not_found` sein.",
             )
-        if reason_code == "not_found" and state.successful_followup_calls == 0:
+        if (
+            reason_code == "not_applicable"
+            and state.successful_followup_calls > 0
+        ):
+            return (
+                selection,
+                "`not_applicable` ist nur vor Beginn der Repository-Recherche "
+                "zulässig.",
+            )
+        if reason_code == "not_found" and not state.concepts:
             return (
                 selection,
                 "`not_found` ist erst zulässig, nachdem mindestens ein "
-                "Navigationsziel aus dem Root-Index erfolgreich mit einem "
-                "weiteren OKF-Tool-Aufruf geprüft wurde.",
+                "Concept-Dokument erfolgreich gelesen und geprüft wurde.",
             )
 
     return selection, None
@@ -629,7 +638,11 @@ class CliAgent:
                     "max_tool_calls",
                     DEFAULT_OKF_MAX_TOOL_CALLS,
                 ),
-                "max_concept_reads": getattr(config, "max_concept_reads", 4),
+                "max_concept_reads": getattr(
+                    config,
+                    "max_concept_reads",
+                    DEFAULT_OKF_MAX_CONCEPT_READS,
+                ),
                 "max_read_bytes": getattr(config, "max_read_bytes", 2_560_000),
                 "max_index_entries": getattr(config, "max_index_entries", 2_000),
                 "compress_min_chars": getattr(
@@ -655,7 +668,12 @@ class CliAgent:
             max_tool_calls=int(
                 values.get("max_tool_calls", DEFAULT_OKF_MAX_TOOL_CALLS)
             ),
-            max_concept_reads=int(values.get("max_concept_reads", 4)),
+            max_concept_reads=int(
+                values.get(
+                    "max_concept_reads",
+                    DEFAULT_OKF_MAX_CONCEPT_READS,
+                )
+            ),
             max_read_bytes=int(values.get("max_read_bytes", 2_560_000)),
             max_index_entries=int(values.get("max_index_entries", 2000)),
             compress_min_chars=int(values.get("compress_min_chars", 20_000)),
