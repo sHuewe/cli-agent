@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from logging import config
 import os
 import tomllib
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,24 @@ def default_config_file() -> Path:
     return application_directory() / "config.toml"
 
 
+def ensure_default_config_file() -> Path:
+    """Create the packaged safe default config if no user config exists yet."""
+    config_file = default_config_file().expanduser()
+    if config_file.exists():
+        return config_file
+
+    template = files("cli_agent").joinpath("config.example.toml").read_text(
+        encoding="utf-8"
+    )
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        config_file.write_text(template, encoding="utf-8")
+    except FileExistsError:
+        # Another process may have created the file in parallel.
+        pass
+    return config_file
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     provider: str = "ollama"
@@ -32,6 +50,7 @@ class ModelConfig:
     api_key_env: str | None = None
     timeout: float = 120.0
     headers: dict[str, str] = field(default_factory=dict)
+
 
 @dataclass(frozen=True)
 class LoggingConfig:
@@ -53,6 +72,7 @@ class OkfConfig:
     compress_min_chars: int = 20_000
     required: bool = True
 
+
 @dataclass(frozen=True)
 class McpServerConfig:
     name: str
@@ -65,7 +85,6 @@ class McpServerConfig:
     config: dict[str, Any] = field(default_factory=dict)
     compress_result: bool = False
     compress_min_chars: int = 8000
-
 
     def allow_write_files(self) -> bool:
         return self.config.get("allow_write_files", False)
@@ -101,12 +120,10 @@ def _logging_config(values: dict[str, Any]) -> LoggingConfig:
         backup_count=int(values.get("backup_count", defaults.backup_count)),
     )
 
+
 def _model_config(values: dict[str, Any]) -> ModelConfig:
     defaults = ModelConfig()
-
-    provider = str(
-        values.get("provider", defaults.provider)
-    ).strip().lower()
+    provider = str(values.get("provider", defaults.provider)).strip().lower()
 
     if provider not in {"ollama", "openai"}:
         raise ValueError(
@@ -114,13 +131,10 @@ def _model_config(values: dict[str, Any]) -> ModelConfig:
         )
 
     model = str(values.get("model", defaults.model)).strip()
-    base_url = str(
-        values.get("base_url", defaults.base_url)
-    ).strip()
+    base_url = str(values.get("base_url", defaults.base_url)).strip()
 
     if not model:
         raise ValueError("[model].model darf nicht leer sein.")
-
     if not base_url:
         raise ValueError("[model].base_url darf nicht leer sein.")
 
@@ -141,11 +155,9 @@ def _model_config(values: dict[str, Any]) -> ModelConfig:
         base_url=base_url.rstrip("/"),
         api_key_env=api_key_env,
         timeout=float(values.get("timeout", defaults.timeout)),
-        headers={
-            str(key): str(value)
-            for key, value in raw_headers.items()
-        },
+        headers={str(key): str(value) for key, value in raw_headers.items()},
     )
+
 
 def _okf_config(values: dict[str, Any]) -> OkfConfig:
     repository = str(values.get("repository", "")).strip()
@@ -157,8 +169,9 @@ def _okf_config(values: dict[str, Any]) -> OkfConfig:
         max_tool_calls=int(values.get("max_tool_calls", 200)),
         max_read_bytes=int(values.get("max_read_bytes", 2_560_000)),
         compress_min_chars=int(values.get("compress_min_chars", 20_000)),
-        required=bool(values.get("required", True))
+        required=bool(values.get("required", True)),
     )
+
 
 def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     name = str(values.get("name", "")).strip()
@@ -174,19 +187,25 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     if not isinstance(raw_args, list) or not all(
         isinstance(value, str) for value in raw_args
     ):
-        raise ValueError(f"args von MCP-Server {name!r} muss eine String-Liste sein.")
+        raise ValueError(
+            f"args von MCP-Server {name!r} muss eine String-Liste sein."
+        )
+
     raw_config = values.get("config", {})
     if not isinstance(raw_config, dict):
         raise ValueError(
             f"config von MCP-Server {name!r} muss eine Tabelle sein."
         )
+
     raw_env = values.get("env", {})
     if not isinstance(raw_env, dict):
         raise ValueError(f"env von MCP-Server {name!r} muss eine Tabelle sein.")
 
     raw_headers = values.get("headers", {})
     if not isinstance(raw_headers, dict):
-        raise ValueError(f"headers von MCP-Server {name!r} muss eine Tabelle sein.")
+        raise ValueError(
+            f"headers von MCP-Server {name!r} muss eine Tabelle sein."
+        )
 
     command_value = values.get("command")
     command = str(command_value).strip() if command_value is not None else None
@@ -240,21 +259,21 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
         headers={str(key): str(value) for key, value in raw_headers.items()},
         config=raw_config,
         compress_result=compress_result,
-        compress_min_chars=compress_min_chars
+        compress_min_chars=compress_min_chars,
     )
 
 
 def load_config(path: Path | None = None) -> AppConfig:
-    config_file = (path or default_config_file()).expanduser()
+    config_file = (
+        ensure_default_config_file()
+        if path is None
+        else path.expanduser()
+    )
     if not config_file.exists():
         return AppConfig()
 
     with config_file.open("rb") as handle:
         values = tomllib.load(handle)
-
-    model_values = values.get("model", {})
-    if not isinstance(model_values, dict):
-        raise ValueError("[model] muss eine Tabelle sein.")
 
     model_values = values.get("model", {})
     if not isinstance(model_values, dict):
@@ -280,5 +299,5 @@ def load_config(path: Path | None = None) -> AppConfig:
         model=_model_config(model_values),
         logging=_logging_config(logging_values),
         mcp_servers=mcp_servers,
-        okf=_okf_config(values.get("okf", {})) if "okf" in values else None
+        okf=_okf_config(values.get("okf", {})) if "okf" in values else None,
     )
