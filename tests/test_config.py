@@ -3,6 +3,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import pytest
+
+import cli_agent.config as config_module
 from cli_agent.config import load_config
 from cli_agent.logging_setup import configure_logging
 
@@ -114,7 +117,51 @@ command = "python"
         encoding="utf-8",
     )
 
-    import pytest
-
     with pytest.raises(ValueError, match="darf command, args und env"):
         load_config(config_file)
+
+
+def test_default_config_is_created_from_safe_packaged_template(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_file = tmp_path / "state" / "config.toml"
+    monkeypatch.setattr(config_module, "default_config_file", lambda: config_file)
+
+    config = load_config()
+
+    assert config_file.is_file()
+    assert config.mcp_servers == ()
+    assert config.okf is None
+    content = config_file.read_text(encoding="utf-8")
+    assert "# [[mcp_servers]]" in content
+    assert "# [okf]" in content
+
+
+def test_existing_default_config_is_not_overwritten(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_file = tmp_path / "config.toml"
+    original = """
+[model]
+provider = "ollama"
+model = "custom-model"
+base_url = "http://localhost:11434"
+""".strip()
+    config_file.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(config_module, "default_config_file", lambda: config_file)
+
+    config = load_config()
+
+    assert config.model.model == "custom-model"
+    assert config_file.read_text(encoding="utf-8") == original
+
+
+def test_missing_explicit_config_is_not_created(tmp_path: Path) -> None:
+    config_file = tmp_path / "custom" / "config.toml"
+
+    config = load_config(config_file)
+
+    assert config.mcp_servers == ()
+    assert not config_file.exists()
