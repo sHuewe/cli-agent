@@ -89,6 +89,8 @@ def test_with_python_validator_adds_default_server() -> None:
         "{workspace_directory}",
         "--python-image",
         "python:3.12-slim",
+        "--config-file",
+        "{config_file}",
     )
 
 
@@ -116,7 +118,8 @@ def test_with_python_validator_replaces_configured_server() -> None:
     ]
     validator = config.mcp_servers[1]
     assert validator.command == "{python}"
-    assert validator.args[-2:] == ("--python-image", "python:3.12-slim")
+    assert validator.args[-2:] == ("--config-file", "{config_file}")
+    assert validator.args[-4:-2] == ("--python-image", "python:3.12-slim")
 
 
 def test_os_and_python_validator_cli_overrides_can_be_combined() -> None:
