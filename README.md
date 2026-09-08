@@ -4,7 +4,11 @@
 
 `cli-agent` ist ein lokaler Kommandozeilen-Agent für LLM-basierte Aufgaben mit
 Conversation History, konfigurierbaren MCP-Servern, optionalem OKF-Retrieval und
-explizit ladbarem Web-Kontext.
+explizit ladbarem Web-Kontext. Verfügbare Fähigkeiten werden über Konfiguration
+und CLI-Optionen gezielt freigeschaltet; optionale Context Dumps halten die an
+das Modell übergebenen Kontexte, Tool-Aufrufe und Retrieval-Ergebnisse fest und
+machen damit nachvollziehbar, welche Informationen und Aktionen zu einem
+Agentenergebnis geführt haben.
 
 Der Agent verwaltet die Modellnachrichten und den Sitzungszustand, hält
 MCP-Verbindungen offen, stellt die jeweils aktiven Tooldefinitionen bereit,
