@@ -10,7 +10,7 @@ from cli_agent.web_context import WebContext, _extract_web_content, _validate_we
 from cli_agent.web_context_agent import WebContextCliAgent
 
 
-def test_extract_html_removes_non_content_elements() -> None:
+def test_extract_html_uses_main_content() -> None:
     title, content = _extract_web_content(
         """
         <html>
@@ -19,10 +19,20 @@ def test_extract_html_removes_non_content_elements() -> None:
             <style>.hidden { display: none; }</style>
             <script>do_not_include()</script>
           </head>
-          <body><h1>Users API</h1><p>GET /users</p></body>
+          <body>
+            <nav>Home Products Pricing Contact</nav>
+            <main>
+              <article>
+                <h1>Users API</h1>
+                <p>GET /users returns the available users.</p>
+              </article>
+            </main>
+            <footer>Legal Privacy Imprint</footer>
+          </body>
         </html>
         """,
         "text/html",
+        url="https://example.org/docs",
     )
 
     assert title == "API Docs"
@@ -30,6 +40,16 @@ def test_extract_html_removes_non_content_elements() -> None:
     assert "GET /users" in content
     assert "do_not_include" not in content
     assert "display: none" not in content
+
+
+def test_extract_plain_text_is_unchanged_except_normalization() -> None:
+    title, content = _extract_web_content(
+        "First line\r\n\r\nSecond   line",
+        "text/plain",
+    )
+
+    assert title is None
+    assert content == "First line\n\nSecond line"
 
 
 def test_validate_web_url_allows_local_and_private_hosts() -> None:
