@@ -13,6 +13,7 @@ from .model_factory import create_model_client
 
 
 OS_MCP_SERVER_NAME = "os"
+PYTHON_VALIDATOR_MCP_SERVER_NAME = "python-validator"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +63,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--with-python-validator",
+        action="store_true",
+        help=(
+            "Enable the built-in Python validator MCP server. Overrides a "
+            "'python-validator' MCP server from the config."
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Show a complete traceback when an error occurs",
@@ -91,16 +100,50 @@ def _os_mcp_server_config(access: str) -> McpServerConfig:
     )
 
 
-def apply_mcp_cli_overrides(config: AppConfig, *, os_access: str | None) -> AppConfig:
-    """Apply command-line MCP settings with precedence over file config."""
-    if os_access is None:
-        return config
+def _python_validator_mcp_server_config() -> McpServerConfig:
+    return McpServerConfig(
+        name=PYTHON_VALIDATOR_MCP_SERVER_NAME,
+        transport="stdio",
+        command="{python}",
+        args=(
+            "-m",
+            "cli_agent.python_validator_mcp",
+            "--project-directory",
+            "{workspace_directory}",
+            "--python-image",
+            "python:3.12-slim",
+        ),
+    )
 
-    servers = tuple(
-        server
-        for server in config.mcp_servers
-        if server.name != OS_MCP_SERVER_NAME
-    ) + (_os_mcp_server_config(os_access),)
+
+def apply_mcp_cli_overrides(
+    config: AppConfig,
+    *,
+    os_access: str | None,
+    with_python_validator: bool = False,
+) -> AppConfig:
+    """Apply command-line MCP settings with precedence over file config."""
+    servers = config.mcp_servers
+    changed = False
+
+    if os_access is not None:
+        servers = tuple(
+            server
+            for server in servers
+            if server.name != OS_MCP_SERVER_NAME
+        ) + (_os_mcp_server_config(os_access),)
+        changed = True
+
+    if with_python_validator:
+        servers = tuple(
+            server
+            for server in servers
+            if server.name != PYTHON_VALIDATOR_MCP_SERVER_NAME
+        ) + (_python_validator_mcp_server_config(),)
+        changed = True
+
+    if not changed:
+        return config
     return replace(config, mcp_servers=servers)
 
 
@@ -131,7 +174,11 @@ def print_error(exc: BaseException, *, debug: bool) -> None:
 
 async def run(args: argparse.Namespace) -> None:
     config = load_config(args.config)
-    config = apply_mcp_cli_overrides(config, os_access=args.os_access)
+    config = apply_mcp_cli_overrides(
+        config,
+        os_access=args.os_access,
+        with_python_validator=args.with_python_validator,
+    )
     configure_logging(config.logging)
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
