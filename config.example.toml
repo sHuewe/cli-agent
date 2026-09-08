@@ -1,9 +1,16 @@
+# cli-agent configuration template
+#
+# No MCP server and no OKF repository are enabled by default. Enable only the
+# capabilities required for a specific use case.
+
+dump_llm_context = false
+
 [logging]
 enabled = true
 level = "INFO"
 log_prompts = true
-log_model_messages = true
-log_tool_results = true
+log_model_messages = false
+log_tool_results = false
 max_bytes = 5000000
 backup_count = 3
 
@@ -13,55 +20,76 @@ model = "qwen3.5:9b"
 base_url = "http://localhost:11434"
 timeout = 120
 
-#[model]
-#provider = "openai"
-#model = "NAME-DES-FIRMENMODELLS"
-#base_url = "https://llm.firma.de/v1"
-#api_key_env = "FIRMA_LLM_API_KEY"
-#timeout = 120
+# OpenAI-compatible model endpoint:
+# [model]
+# provider = "openai"
+# model = "NAME-DES-MODELLS"
+# base_url = "https://llm.example.org/v1"
+# api_key_env = "LLM_API_KEY"
+# timeout = 120
 
-# The agent is general-purpose. It only receives tools from the MCP servers
-# listed here. Both placeholders are resolved by cli-agent.
-[[mcp_servers]]
-name = "compose"
-transport = "stdio"
-command = "{python}"
-args = [
-    "-m",
-    "cli_agent.mcp_server",
-    "--project-directory",
-    "{workspace_directory}",
-    "--config-file",
-    "{config_file}",
-]
-compress_result = true
-compress_min_chars = 8000
-[mcp_servers.config]
-wsl2 = true 
+# -----------------------------------------------------------------------------
+# Built-in MCP servers
+# -----------------------------------------------------------------------------
+# All examples below are intentionally commented out. Uncomment a complete block
+# to enable that server persistently. The Workspace OS and Python Validator MCPs
+# can alternatively be enabled for a single invocation with CLI flags.
 
-[[mcp_servers]]
-name = "python-validator"
-transport = "stdio"
-command = "{python}"
-args = [
-    "-m",
-    "cli_agent.python_validator_mcp",
-    "--project-directory",
-    "{workspace_directory}",
-    "--python-image",
-    "python:3.12-slim",
-]
-# Additional stdio server:
+# Docker Compose MCP
 # [[mcp_servers]]
-# name = "documents"
+# name = "compose"
 # transport = "stdio"
-# command = "C:/tools/documents-mcp/.venv/Scripts/python.exe"
-# args = ["-m", "documents_mcp", "--root", "{workspace_directory}"]
+# command = "{python}"
+# args = [
+#     "-m",
+#     "cli_agent.mcp_server",
+#     "--project-directory",
+#     "{workspace_directory}",
+#     "--config-file",
+#     "{config_file}",
+# ]
 #
-# [mcp_servers.env]
-# EXAMPLE_API_URL = "http://localhost:8080"
+# [mcp_servers.config]
+# allow_modify_services = false
+# wsl = false
 
-# Already-running MCP server using Streamable HTTP:
+# Workspace OS MCP - read-only by default
+# [[mcp_servers]]
+# name = "os"
+# transport = "stdio"
+# command = "{python}"
+# args = [
+#     "-m",
+#     "cli_agent.os_mcp_server",
+#     "--project-directory",
+#     "{workspace_directory}",
+#     "--config-file",
+#     "{config_file}",
+# ]
+#
+# [mcp_servers.config]
+# allow_write_files = false
+
+# Python Validator MCP
+# [[mcp_servers]]
+# name = "python-validator"
+# transport = "stdio"
+# command = "{python}"
+# args = [
+#     "-m",
+#     "cli_agent.python_validator_mcp",
+#     "--project-directory",
+#     "{workspace_directory}",
+#     "--python-image",
+#     "python:3.12-slim",
+#     "--config-file",
+#     "{config_file}",
+# ]
+
+# -----------------------------------------------------------------------------
+# Optional external MCP server
+# -----------------------------------------------------------------------------
+
 # [[mcp_servers]]
 # name = "external"
 # transport = "streamable_http"
@@ -70,9 +98,15 @@ args = [
 # [mcp_servers.headers]
 # Authorization = "Bearer example-token"
 
-[okf]
-repository = "C:///dev/llm/knowledge-catalog/okf/bundles/crypto_bitcoin"
-max_tool_calls = 200
-max_read_bytes = 2560000
-compress_min_chars = 20000
-required = true
+# -----------------------------------------------------------------------------
+# Optional OKF knowledge repository
+# -----------------------------------------------------------------------------
+# The OKF server is started internally for the separate retrieval phase and is
+# not part of the normal Main-Phase tool set.
+
+# [okf]
+# repository = "C:/dev/knowledge/okf/bundle"
+# max_tool_calls = 200
+# max_read_bytes = 2560000
+# compress_min_chars = 20000
+# required = true
