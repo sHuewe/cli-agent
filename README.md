@@ -353,10 +353,12 @@ add_web_context https://example.org/docs
 clear_web_context
 ```
 
-Der Agent lädt ausschließlich die angegebene `http`- oder `https`-URL und
-extrahiert den Text mit BeautifulSoup. Geladene Web-Kontexte werden separat von
-`history` gehalten und bei jedem folgenden normalen Turn erneut in die aktuelle
-User-Nachricht des Arbeitskontexts eingebaut.
+Der Agent lädt ausschließlich die angegebene `http`- oder `https`-URL. Bei
+HTML-Seiten extrahiert Trafilatura den relevanten Hauptinhalt und reduziert
+dabei typischen Boilerplate-Inhalt wie Navigation, Footer oder Seitenteaser.
+Geladene Web-Kontexte werden separat von `history` gehalten und bei jedem
+folgenden normalen Turn erneut in die aktuelle User-Nachricht des
+Arbeitskontexts eingebaut.
 
 `clear_web_context` entfernt alle Web-Kontexte aus dem Session-State. Inhalte
 geladener Webseiten gelten als nicht vertrauenswürdige Referenzdaten und dürfen
