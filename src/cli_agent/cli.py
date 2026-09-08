@@ -6,10 +6,10 @@ import traceback
 from dataclasses import replace
 from pathlib import Path
 
-from .agent import CliAgent
 from .config import AppConfig, McpServerConfig, default_config_file, load_config
 from .logging_setup import configure_logging
 from .model_factory import create_model_client
+from .web_context_agent import WebContextCliAgent
 
 
 OS_MCP_SERVER_NAME = "os"
@@ -184,7 +184,7 @@ async def run(args: argparse.Namespace) -> None:
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
     model_client = create_model_client(config.model)
-    agent = CliAgent(
+    agent = WebContextCliAgent(
         workspace,
         model_client,
         config.mcp_servers,
@@ -218,7 +218,9 @@ async def run(args: argparse.Namespace) -> None:
 
         print(
             "Interaktiver Modus; 'enable <server>' und 'disable <server>' "
-            "steuern MCP-Server, 'exit' oder 'quit' beendet die Sitzung."
+            "steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, "
+            "'clear_web_context' entfernt ihn, 'exit' oder 'quit' beendet "
+            "die Sitzung."
         )
         while True:
             try:
