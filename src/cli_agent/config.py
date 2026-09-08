@@ -35,9 +35,10 @@ def ensure_default_config_file() -> Path:
     )
     config_file.parent.mkdir(parents=True, exist_ok=True)
     try:
-        config_file.write_text(template, encoding="utf-8")
+        with config_file.open("x", encoding="utf-8") as handle:
+            handle.write(template)
     except FileExistsError:
-        # Another process may have created the file in parallel.
+        # Another process created the config between exists() and open().
         pass
     return config_file
 
