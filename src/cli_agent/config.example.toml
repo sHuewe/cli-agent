@@ -1,0 +1,113 @@
+# cli-agent configuration template
+#
+# This file is used as the initial default configuration. No MCP server and no
+# OKF repository are enabled by default. Enable only the capabilities that are
+# required for a specific use case.
+
+dump_llm_context = false
+
+[logging]
+enabled = true
+level = "INFO"
+log_prompts = true
+log_model_messages = false
+log_tool_results = false
+max_bytes = 5000000
+backup_count = 3
+
+[model]
+provider = "ollama"
+model = "qwen3.5:9b"
+base_url = "http://localhost:11434"
+timeout = 120
+
+# OpenAI-compatible model endpoint:
+# [model]
+# provider = "openai"
+# model = "NAME-DES-MODELLS"
+# base_url = "https://llm.example.org/v1"
+# api_key_env = "LLM_API_KEY"
+# timeout = 120
+
+# -----------------------------------------------------------------------------
+# Built-in MCP servers
+# -----------------------------------------------------------------------------
+# All examples below are intentionally commented out. Uncomment a complete block
+# to enable that server persistently. The Workspace OS and Python Validator MCPs
+# can alternatively be enabled for a single invocation with CLI flags.
+
+# Docker Compose MCP
+# [[mcp_servers]]
+# name = "compose"
+# transport = "stdio"
+# command = "{python}"
+# args = [
+#     "-m",
+#     "cli_agent.mcp_server",
+#     "--project-directory",
+#     "{workspace_directory}",
+#     "--config-file",
+#     "{config_file}",
+# ]
+#
+# [mcp_servers.config]
+# allow_modify_services = false
+# wsl = false
+
+# Workspace OS MCP - read-only by default
+# [[mcp_servers]]
+# name = "os"
+# transport = "stdio"
+# command = "{python}"
+# args = [
+#     "-m",
+#     "cli_agent.os_mcp_server",
+#     "--project-directory",
+#     "{workspace_directory}",
+#     "--config-file",
+#     "{config_file}",
+# ]
+#
+# [mcp_servers.config]
+# allow_write_files = false
+
+# Python Validator MCP
+# [[mcp_servers]]
+# name = "python-validator"
+# transport = "stdio"
+# command = "{python}"
+# args = [
+#     "-m",
+#     "cli_agent.python_validator_mcp",
+#     "--project-directory",
+#     "{workspace_directory}",
+#     "--python-image",
+#     "python:3.12-slim",
+#     "--config-file",
+#     "{config_file}",
+# ]
+
+# -----------------------------------------------------------------------------
+# Optional external MCP server
+# -----------------------------------------------------------------------------
+
+# [[mcp_servers]]
+# name = "external"
+# transport = "streamable_http"
+# url = "http://127.0.0.1:8001/mcp"
+#
+# [mcp_servers.headers]
+# Authorization = "Bearer example-token"
+
+# -----------------------------------------------------------------------------
+# Optional OKF knowledge repository
+# -----------------------------------------------------------------------------
+# The OKF server is started internally for the separate retrieval phase and is
+# not part of the normal Main-Phase tool set.
+
+# [okf]
+# repository = "C:/dev/knowledge/okf/bundle"
+# max_tool_calls = 200
+# max_read_bytes = 2560000
+# compress_min_chars = 20000
+# required = true
