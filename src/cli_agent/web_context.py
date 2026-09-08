@@ -76,7 +76,6 @@ def _extract_web_content(
         document = bare_extraction(
             raw_text,
             url=url,
-            favor_precision=True,
             include_comments=False,
             include_tables=True,
             include_images=False,
