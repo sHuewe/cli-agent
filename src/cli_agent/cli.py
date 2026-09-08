@@ -117,6 +117,8 @@ def _python_validator_mcp_server_config() -> McpServerConfig:
             "{workspace_directory}",
             "--python-image",
             "python:3.12-slim",
+            "--config-file",
+            "{config_file}",
         ),
     )
 
