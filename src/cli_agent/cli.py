@@ -41,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
             f"(default: {default_config_file()})"
         ),
     )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Override model.model from the configuration file",
+    )
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument(
         "--with-os-read",
@@ -147,6 +152,13 @@ def apply_mcp_cli_overrides(
     return replace(config, mcp_servers=servers)
 
 
+def apply_model_cli_override(config: AppConfig, *, model: str | None) -> AppConfig:
+    """Override only model.model while preserving all other model settings."""
+    if model is None:
+        return config
+    return replace(config, model=replace(config.model, model=model))
+
+
 def exception_details(exc: BaseException) -> str:
     """Return useful leaf messages instead of ExceptionGroup's generic title."""
     leaves: list[str] = []
@@ -174,6 +186,7 @@ def print_error(exc: BaseException, *, debug: bool) -> None:
 
 async def run(args: argparse.Namespace) -> None:
     config = load_config(args.config)
+    config = apply_model_cli_override(config, model=args.model)
     config = apply_mcp_cli_overrides(
         config,
         os_access=args.os_access,

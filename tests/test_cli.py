@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from cli_agent.cli import apply_mcp_cli_overrides, build_parser
-from cli_agent.config import AppConfig, McpServerConfig
+from cli_agent.cli import apply_mcp_cli_overrides, apply_model_cli_override, build_parser
+from cli_agent.config import AppConfig, McpServerConfig, ModelConfig
 from cli_agent.os_mcp_server import resolve_mcp_config
 
 
@@ -130,3 +130,37 @@ def test_os_and_python_validator_cli_overrides_can_be_combined() -> None:
         "os",
         "python-validator",
     ]
+
+
+def test_model_cli_argument_is_parsed() -> None:
+    args = build_parser().parse_args(["--model", "gwen100"])
+
+    assert args.model == "gwen100"
+
+
+def test_model_cli_override_replaces_only_model_name() -> None:
+    original = AppConfig(
+        model=ModelConfig(
+            provider="openai-compatible",
+            model="configured-model",
+            base_url="http://model-host:8000/v1",
+            api_key_env="MODEL_API_KEY",
+            timeout=42.0,
+            headers={"X-Test": "value"},
+        )
+    )
+
+    config = apply_model_cli_override(original, model="gwen100")
+
+    assert config.model.model == "gwen100"
+    assert config.model.provider == original.model.provider
+    assert config.model.base_url == original.model.base_url
+    assert config.model.api_key_env == original.model.api_key_env
+    assert config.model.timeout == original.model.timeout
+    assert config.model.headers == original.model.headers
+
+
+def test_without_model_cli_argument_keeps_config_unchanged() -> None:
+    original = AppConfig(model=ModelConfig(model="configured-model"))
+
+    assert apply_model_cli_override(original, model=None) is original
