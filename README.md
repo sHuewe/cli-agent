@@ -1,460 +1,89 @@
 # CLI Agent
 
-`cli-agent` ist ein lokaler Kommandozeilen-Agent, der ein Large Language Model
-(LLM) mit Gesprächskontext, optionalem OKF-Wissen und Werkzeugen aus
-konfigurierbaren MCP-Servern verbindet.
+## 1. Überblick
 
-Das Projekt ist bewusst klein gehalten: Die Agentenlogik liegt sichtbar im
-Client. Dadurch lässt sich nachvollziehen, welche Nachrichten an das Modell
-gesendet werden, wie Tool-Aufrufe entstehen und wie Tool-Ergebnisse wieder in
-den Modellkontext gelangen.
+`cli-agent` ist ein lokaler Kommandozeilen-Agent für LLM-basierte Aufgaben mit
+Conversation History, konfigurierbaren MCP-Servern, optionalem OKF-Retrieval und
+explizit ladbarem Web-Kontext. Verfügbare Fähigkeiten werden über Konfiguration
+und CLI-Optionen gezielt freigeschaltet; optionale Context Dumps halten die an
+das Modell übergebenen Kontexte, Tool-Aufrufe und Retrieval-Ergebnisse fest und
+machen damit nachvollziehbar, welche Informationen und Aktionen zu einem
+Agentenergebnis geführt haben.
 
-Der mitgelieferte Docker-Compose-MCP-Server ist nur eine mögliche Werkzeugquelle.
-Die Agentenlogik selbst ist nicht auf Docker oder Compose festgelegt.
-
-## Architektur in einem Satz
-
-```text
-User -> CLI Agent -> [optionale OKF-Knowledge-Phase] -> LLM <-> MCP-Tools -> Antwort
-```
-
-Der entscheidende Punkt ist: **Das LLM ist nicht der Agent.** Das Modell bekommt
-Nachrichten und Tooldefinitionen und erzeugt daraus Text oder Tool-Aufrufe. Der
-Agent hält Zustand, baut den Kontext, führt Tools aus und entscheidet, welche
-Informationen beim nächsten Modellaufruf wieder mitgesendet werden.
-
-## Vom LLM zum Agenten
-
-Die folgenden Diagramme bauen die Architektur schrittweise auf. Sie eignen sich
-auch dazu, den Ablauf in einer Präsentation von einem einfachen LLM-Aufruf bis
-zum vollständigen Agenten mit OKF und MCP zu erklären.
-
-### 1. Einfacher LLM-Aufruf: noch kein Agentengedächtnis
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant A as Anwendung
-    participant L as LLM
-
-    U->>A: Prompt
-    A->>L: System-Prompt + User-Prompt
-    L-->>A: Antwort
-    A-->>U: Antwort
-```
-
-Aus Sicht dieser Anwendung ist ein Modellaufruf stateless: Beim nächsten
-Request kennt das Modell den vorherigen Request nicht automatisch. Soll ein
-Gespräch fortgesetzt werden, muss die Anwendung den bisherigen Kontext erneut
-mitsenden.
-
-### 2. Agent mit Conversation History
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant A as CLI Agent
-    participant H as History
-    participant L as LLM
-
-    U->>A: neue User-Nachricht
-    A->>H: bisherige History lesen
-    A->>L: System + History + neue User-Nachricht
-    L-->>A: finale Antwort
-    A->>H: User-Nachricht + finale Antwort speichern
-    A-->>U: Antwort
-```
-
-`CliAgent.history` enthält die bisherigen User-Nachrichten und die jeweils
-finalen Assistant-Antworten. Für jeden neuen Turn wird daraus ein neuer
-`working_messages`-Kontext aufgebaut.
-
-Wichtig: Tool-Zwischenschritte eines Turns werden nicht dauerhaft in
-`history` übernommen. Sie existieren während des aktuellen Agentenlaufs in
-`working_messages`; für spätere Turns bleiben nur die ursprüngliche
-User-Nachricht und die finale Antwort erhalten.
-
-### 3. Agent mit MCP-Tools
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant A as CLI Agent
-    participant L as LLM
-    participant M as MCP Server
-
-    U->>A: Aufgabe
-    A->>L: System + History + User + Tooldefinitionen
-    L-->>A: Tool Call
-    A->>M: MCP tool(arguments)
-    M-->>A: Tool Result
-    A->>L: bisheriger Kontext + Tool Result
-    L-->>A: Antwort oder weiterer Tool Call
-    A-->>U: finale Antwort
-```
-
-Das Modell führt kein MCP-Tool selbst aus. Es erzeugt lediglich einen
-strukturierten Tool-Aufruf. Der Agent validiert den Aufruf, routet ihn zum
-passenden MCP-Server, führt ihn aus und fügt das Ergebnis als Nachricht mit
-`role: tool` in den laufenden Modellkontext ein. Danach wird das LLM erneut
-aufgerufen.
-
-Dieser Loop läuft so lange, bis das Modell statt eines Tool-Aufrufs eine finale
-Antwort erzeugt oder ein konfiguriertes Limit erreicht wird.
-
-### 4. Vollständiger Ablauf mit OKF-Knowledge-Phase und MCP
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant A as CLI Agent
-    participant O as OKF MCP Server
-    participant L as LLM
-    participant M as Fach-/MCP-Server
-
-    U->>A: User Input
-
-    rect rgb(245,245,245)
-        Note over A,O: Knowledge-Phase
-        A->>O: knowledge_index(".")
-        O-->>A: Root-Index
-        A->>L: Knowledge-System-Prompt + History + User Request + Root-Index
-        L-->>A: OKF Tool Call
-        A->>O: knowledge_index(...) / knowledge_read(...)
-        O-->>A: Index oder Concept
-        A->>L: OKF Tool Result
-        Note over A,L: Navigation wiederholt sich bis relevante Concepts ausgewählt sind
-        L-->>A: selected_okf_tokens
-        A->>A: vollständige ausgewählte Concepts zusammensetzen
-    end
-
-    rect rgb(235,245,255)
-        Note over A,M: Main-Phase
-        A->>L: System + History + User + OKF-Kontext + normale MCP-Tools
-        L-->>A: Tool Call oder Antwort
-        A->>M: MCP Tool Call
-        M-->>A: Tool Result
-        A->>L: Tool Result
-        L-->>A: finale Antwort
-    end
-
-    A->>A: User + finale Antwort in History speichern
-    A-->>U: Antwort
-```
-
-Die Knowledge-Phase ist bewusst vom eigentlichen Arbeitslauf getrennt. Sie darf
-nur Wissen aus dem OKF-Repository ermitteln; Aktionen werden erst in der
-Main-Phase ausgeführt.
-
-## Komponenten
-
-```mermaid
-flowchart LR
-    U[User / CLI]
-    L[LLM]
-
-    subgraph A[CLI Agent]
-        S[Session & History]
-        K[Knowledge Phase]
-        P[Main Agent Loop]
-        R[MCP Routing]
-        D[Context Dumps]
-    end
-
-    O[interner OKF MCP Server]
-    M1[MCP Server A]
-    M2[MCP Server B]
-
-    U --> P
-    S --> K
-    S --> P
-    K <--> L
-    K <--> O
-    K --> P
-    P <--> L
-    P --> R
-    R <--> M1
-    R <--> M2
-    P --> S
-    K -.-> D
-    P -.-> D
-    S -.-> D
-```
-
-### `CliAgent`
-
-`CliAgent` ist die zentrale Orchestrierungsschicht. Er
-
-- hält die Conversation History,
-- verbindet MCP-Server und hält ihre Sessions offen,
-- baut System-Prompts und Modellnachrichten,
-- stellt dem Modell Tooldefinitionen bereit,
-- verarbeitet Tool-Calls in einem Agentenloop,
-- führt optional vor jedem normalen Turn die OKF-Knowledge-Phase aus und
-- kann den vollständigen Modellkontext zu Debug- und Demonstrationszwecken
-  dumpen.
-
-### Model Client
-
-Der Agent hängt nur von der kleinen `ModelClient`-Abstraktion ab. Aktuell gibt
-es Clients für
-
-- Ollama und
-- OpenAI-kompatible Chat-Completions-Endpunkte.
-
-Damit kann dieselbe Agentenlogik sowohl mit einem lokalen Modell als auch mit
-einem zentral bereitgestellten Unternehmensmodell verwendet werden.
-
-### Normale MCP-Server
-
-Beim Start verbindet sich der Agent einmal mit allen konfigurierten MCP-Servern.
-Unterstützt werden
-
-- `stdio` und
-- Streamable HTTP.
-
-Nach `initialize` lädt der Agent die verfügbaren Tools. Gegenüber dem Modell
-werden sie als `<server>__<tool>` exponiert, beispielsweise
-`compose__compose_ps`. Dadurch bleiben gleichnamige Tools verschiedener Server
-eindeutig routbar.
-
-`instructions` aus dem MCP-`initialize`-Ergebnis werden unter dem jeweiligen
-Servernamen in den System-Prompt aufgenommen. Zentrale Agentenregeln bleiben
-vorrangig.
-
-Ein Server kann während einer interaktiven Sitzung mit `disable <name>` für das
-Modell ausgeblendet und mit `enable <name>` wieder aktiviert werden. Die
-MCP-Verbindung selbst bleibt dabei bestehen.
-
-### Interner OKF-MCP-Server
-
-Wenn `[okf]` konfiguriert ist, startet der Agent zusätzlich einen eigenen,
-read-only OKF-MCP-Server. Dieser ist **nicht** Teil des normalen Toolsets der
-Main-Phase.
-
-Der interne Server muss exakt zwei Tools anbieten:
-
-- `knowledge_index`
-- `knowledge_read`
-
-Damit ist die Wissensbeschaffung technisch und promptseitig von den späteren
-Aktions-Tools getrennt.
-
-## Die Knowledge-Phase im Detail
-
-Die Knowledge-Phase wird vor der eigentlichen Bearbeitung eines User-Prompts
-ausgeführt.
-
-### 1. Root-Index wird vom Agenten geladen
-
-Der Agent ruft zuerst selbst
+Der Agent verwaltet die Modellnachrichten und den Sitzungszustand, hält
+MCP-Verbindungen offen, stellt die jeweils aktiven Tooldefinitionen bereit,
+routet Tool-Aufrufe an die zuständigen MCP-Server und führt nach jedem
+Tool-Ergebnis den Modelllauf fort.
 
 ```text
-knowledge_index(".")
+User -> CLI Agent -> [optional: OKF Retrieval] -> LLM <-> MCP Tools -> Antwort
 ```
 
-auf. Das Ergebnis wird als `root_index` zusammen mit der ursprünglichen
-User-Anfrage in einen separaten Retrieval-Kontext eingebaut.
+MCP-Fähigkeiten sind standardmäßig deaktiviert. Eine neu angelegte
+Standardkonfiguration enthält keine aktiven MCP-Server und kein OKF-Repository.
+Damit startet `cli-agent` ohne zusätzliche CLI-Flags zunächst ohne Tools.
 
-Der Root-Index ist nur Navigation. Er wird nicht als eigentliche fachliche
-Quelle ausgewählt.
+## 2. Setup / Installation
 
-### 2. Separater Modellkontext
-
-Für die Retrieval-Phase erzeugt der Agent einen eigenen Kontext aus
-
-```text
-Knowledge-System-Prompt
-+ bisheriger Conversation History
-+ original_user_request
-+ root_index
-+ aktuellem Selection-State
-```
-
-Das Modell sieht in dieser Phase ausschließlich die beiden OKF-Tools. Normale
-MCP-Tools stehen nicht zur Verfügung.
-
-### 3. Modellgesteuerte Navigation, agentenseitig begrenzt
-
-Das Modell entscheidet, welchem Link aus dem OKF-Index es folgen möchte. Der
-Agent erzwingt dabei zusätzliche Regeln:
-
-- pro Modellantwort ist genau ein OKF-Tool-Aufruf zulässig,
-- identische erfolgreiche Aufrufe werden nicht erneut ausgeführt,
-- ein Pfad darf nur verwendet werden, wenn er vorher vom Root-Index oder einem
-  `internal_links`-Ergebnis angeboten wurde,
-- `not_found` ist erst zulässig, nachdem mindestens ein Concept gelesen wurde,
-- Tool- und Concept-Limits begrenzen den Retrieval-Lauf.
-
-Damit ist die Navigation weiterhin LLM-gesteuert, aber nicht beliebig.
-
-### 4. Concepts erhalten Agent-Tokens
-
-Nach einem erfolgreichen `knowledge_read` eines Concept-Dokuments registriert
-der Agent das Dokument intern und vergibt dafür einen zufälligen
-Selection-Token.
-
-Das Retrieval-Modell darf am Ende nur solche bereits vergebenen Tokens in
-`selected_okf_tokens` zurückgeben. Repository-Pfade oder `concept_id`-Werte
-sind keine gültige Auswahl.
-
-Das verhindert, dass die finale Auswahl auf nicht gelesene oder erfundene
-Concepts verweist.
-
-### 5. Auswahl wird validiert
-
-Die finale Retrieval-Antwort ist ein JSON-Objekt. Der Agent prüft unter anderem,
-ob
-
-- `found_content` korrekt gesetzt ist,
-- bei `found_content: true` mindestens ein gültiger Selection-Token vorhanden
-  ist und
-- `not_applicable` beziehungsweise `not_found` zum bisherigen Retrieval-Verlauf
-  passen.
-
-Ungültige Ausgaben werden korrigierend an das Modell zurückgespielt. Nach
-wiederholt ungültigen Antworten existiert ein agentenseitiger Fallback auf die
-bereits tatsächlich gelesenen Concepts.
-
-### 6. Nur ausgewählte Originalinhalte gehen in die Main-Phase
-
-Aus den ausgewählten Tokens erzeugt der Agent einen Payload mit dem
-vollständigen Inhalt der ausgewählten Concept-Dokumente:
-
-```json
-{
-  "found_content": true,
-  "content": [
-    {
-      "concept": "...",
-      "content_type": "full",
-      "content": "..."
-    }
-  ],
-  "warnings": []
-}
-```
-
-Dieser Payload wird zusammen mit der ursprünglichen User-Anfrage in die
-Main-Phase übernommen. OKF-Inhalte werden dort explizit als nicht
-vertrauenswürdige Referenzdaten behandelt; enthaltene Anweisungen dürfen keine
-System- oder Benutzerregeln überschreiben.
-
-Wenn die Knowledge-Phase keinen anwendbaren oder hilfreichen Inhalt findet,
-bekommt die Main-Phase einfach die ursprüngliche User-Anfrage ohne zusätzlichen
-OKF-Kontext.
-
-## Main Agent Loop
-
-Der normale Agentenlauf beginnt mit
-
-```text
-System-Prompt
-+ Conversation History
-+ aktuelle User-Nachricht
-+ optional ausgewähltem OKF-Kontext
-```
-
-Zusätzlich werden die aktuell aktiven MCP-Tooldefinitionen separat an den
-Model-Client übergeben.
-
-Wenn das Modell einen Tool-Call erzeugt:
-
-1. prüft der Agent, ob das Tool existiert und der zugehörige Server aktiv ist,
-2. führt er den MCP-Aufruf aus,
-3. fügt das Ergebnis als `role: tool` in `working_messages` ein und
-4. ruft das Modell mit dem erweiterten Kontext erneut auf.
-
-Wenn das Modell eine Textantwort ohne Tool-Call erzeugt, ist der Turn beendet.
-Erst dann werden die ursprüngliche User-Nachricht und die finale Antwort in die
-Conversation History aufgenommen.
-
-## Kontext-Dumps: sehen, was das LLM wirklich bekommt
-
-Für Debugging und zum Verständnis des Agenten kann der komplette Modellkontext
-im Workspace ausgegeben werden. Dazu in der Konfiguration auf Top-Level setzen:
-
-```toml
-dump_llm_context = true
-```
-
-Die Dateien werden unter
-
-```text
-<workspace>/.cli-agent/
-```
-
-geschrieben. Besonders hilfreich sind:
-
-| Datei | Inhalt |
-| --- | --- |
-| `history.json` | persistierte Conversation History |
-| `main_system_prompt.json` | aktueller System-Prompt der Main-Phase |
-| `main_working_messages.json` | vollständiger laufender Main-Kontext inkl. Tool-Calls und Tool-Resultaten |
-| `knowledge_system_prompt.json` | separater Retrieval-System-Prompt |
-| `knowledge_working_messages.json` | vollständiger Kontext der Knowledge-Phase |
-| `knowledge_last_model_message.json` | letzte Modellantwort der Knowledge-Phase |
-| `knowledge_selection.json` | finale Auswahl des Retrieval-Modells |
-| `knowledge_result.json` | tatsächlich an die Main-Phase übernommener OKF-Payload bzw. Fehlerstatus |
-| `knowledge_selection_fallback.json` | nur bei einem Retrieval-Fallback |
-
-Gerade `*_working_messages.json` macht sichtbar, dass History, Tool-Calls und
-Tool-Ergebnisse keine interne Magie des LLM sind, sondern vom Agenten explizit
-als Nachrichten aufgebaut und erneut an das Modell geschickt werden.
-
-## Mitgelieferter Compose-MCP-Server
-
-Der Compose-Server wird auf ein Projektverzeichnis festgelegt und bietet:
-
-- `get_compose_file`
-- `compose_ps`
-- `compose_logs`
-- `compose_up_all`
-- `compose_start`
-- `compose_stop`
-- `compose_restart`
-
-Servicenamen werden vor Aktionen mit `docker compose config --services`
-validiert. Docker wird ohne Shell über eine feste Argumentliste aufgerufen.
-`compose_start` verwendet `docker compose up -d <service>`, sodass der Service
-bei Bedarf auch erstellt wird. `compose_stop` entfernt den Container nicht.
-
-## Voraussetzungen
+### Voraussetzungen
 
 - Python 3.11 oder neuer
-- ein unterstützter Modellendpunkt
+- ein unterstützter Modellendpunkt:
   - Ollama oder
   - OpenAI-kompatible Chat-Completions-API
-- ein Modell mit Tool-Calling-Unterstützung, falls MCP-Tools genutzt werden
-- für die Compose-Werkzeuge: Docker mit `docker compose`
+- Tool-Calling-Unterstützung des Modells, wenn MCP-Tools verwendet werden
+- Docker nur für den Compose-MCP und den Python-Validator
 
-## Installation
+### Installation
 
-Im Projektverzeichnis:
+Im Repository:
 
 ```powershell
 pipx install --editable .
 ```
 
-Oder in einer virtuellen Umgebung:
+Alternativ in einer virtuellen Umgebung:
 
 ```powershell
 python -m pip install -e .
 ```
 
-Der Benutzerbefehl heißt:
+Für Entwicklung und Tests:
+
+```powershell
+python -m pip install -e ".[dev]"
+pytest
+```
+
+Der ausführbare Benutzerbefehl lautet:
 
 ```text
 cli-agent
 ```
 
-Der zusätzliche Einstiegspunkt `cli-agent-compose-mcp` kann zum Debuggen des
-mitgelieferten Compose-Servers direkt verwendet werden. Normalerweise startet
-ihn der Agent als `stdio`-Unterprozess.
+Interaktiver Start im aktuellen Verzeichnis:
 
-## Konfiguration
+```powershell
+cli-agent
+```
 
-Die Standarddatei liegt unter Windows in:
+Mit explizitem Workspace:
+
+```powershell
+cli-agent --workspace C:\Projekte\mein-projekt
+```
+
+Einmalige Anfrage:
+
+```powershell
+cli-agent --workspace C:\Projekte\mein-projekt "Welche Services laufen?"
+```
+
+## 3. Konfiguration
+
+### Standarddatei
+
+Die Standardkonfiguration liegt unter Windows in:
 
 ```text
 %LOCALAPPDATA%\cli-agent\config.toml
@@ -463,9 +92,28 @@ Die Standarddatei liegt unter Windows in:
 Unter anderen Plattformen wird `XDG_STATE_HOME` beziehungsweise
 `~/.cli-agent` verwendet.
 
+Existiert die Standarddatei beim ersten Start noch nicht, kopiert der Agent die
+mit dem Paket ausgelieferte sichere Vorlage automatisch an diese Stelle.
+Vorhandene Konfigurationen werden dabei nicht überschrieben.
+
+Die Vorlage ist zusätzlich im Repository als
+[`config.example.toml`](config.example.toml) verfügbar. Sie enthält bewusst
+**keine aktivierten MCP-Server und keine aktivierte OKF-Konfiguration**. Die
+mitgelieferten Server sind vollständig auskommentiert enthalten und können bei
+Bedarf blockweise aktiviert werden.
+
+Eine andere Konfigurationsdatei kann explizit ausgewählt werden:
+
+```powershell
+cli-agent --config C:\Pfad\config.toml
+```
+
+Ein nicht vorhandener expliziter `--config`-Pfad wird nicht automatisch
+angelegt.
+
 ### Modell
 
-Lokales Ollama:
+Beispiel für Ollama:
 
 ```toml
 [model]
@@ -475,7 +123,7 @@ base_url = "http://localhost:11434"
 timeout = 120
 ```
 
-OpenAI-kompatibler Endpunkt:
+Beispiel für einen OpenAI-kompatiblen Endpunkt:
 
 ```toml
 [model]
@@ -486,47 +134,31 @@ api_key_env = "LLM_API_KEY"
 timeout = 120
 ```
 
-### MCP-Server über `stdio`
+Der Modellname kann für einen einzelnen Start überschrieben werden:
 
-Ohne `[[mcp_servers]]`-Einträge ist der Agent weiterhin verwendbar, besitzt in
-der Main-Phase aber keine Tools.
+```powershell
+cli-agent --model anderes-modell
+```
+
+`--model` ersetzt ausschließlich `model.model`; Provider, Base-URL, Header,
+Timeout und die übrige Konfiguration bleiben erhalten.
+
+### MCP-Server
+
+Persistente MCP-Verbindungen werden über `[[mcp_servers]]` konfiguriert.
+Unterstützt werden `stdio` und Streamable HTTP.
+
+Beispiel für einen externen `stdio`-Server:
 
 ```toml
 [[mcp_servers]]
-name = "compose"
+name = "example"
 transport = "stdio"
 command = "{python}"
-args = [
-    "-m",
-    "cli_agent.mcp_server",
-    "--project-directory",
-    "{workspace_directory}",
-    "--config-file",
-    "{config_file}",
-]
+args = ["-m", "example_mcp", "--root", "{workspace_directory}"]
 ```
 
-Unterstützte Platzhalter:
-
-- `{python}`: aktuell laufender Python-Interpreter
-- `{workspace_directory}`: festgelegter Workspace
-- `{config_file}`: verwendete Konfigurationsdatei
-- `{project_directory}`: älterer Alias für `{workspace_directory}`
-
-Ein externer `stdio`-Server kann aus einer eigenen Umgebung gestartet werden:
-
-```toml
-[[mcp_servers]]
-name = "documents"
-transport = "stdio"
-command = "C:/Projekte/documents-mcp/.venv/Scripts/python.exe"
-args = ["-m", "documents_mcp", "--root", "{workspace_directory}"]
-
-[mcp_servers.env]
-EXAMPLE_API_URL = "http://localhost:8080"
-```
-
-### MCP über Streamable HTTP
+Beispiel für Streamable HTTP:
 
 ```toml
 [[mcp_servers]]
@@ -538,7 +170,34 @@ url = "http://127.0.0.1:8001/mcp"
 Authorization = "Bearer example-token"
 ```
 
-### OKF-Repository
+Für `stdio`-Server stehen folgende Platzhalter zur Verfügung:
+
+- `{python}`: aktuell laufender Python-Interpreter
+- `{workspace_directory}`: beim Agentenstart festgelegter Workspace
+- `{project_directory}`: Alias für `{workspace_directory}`
+- `{config_file}`: tatsächlich verwendete Konfigurationsdatei
+
+Zwei mitgelieferte Server können für einen einzelnen Agentenstart ohne
+persistente Konfigurationsänderung zugeschaltet werden:
+
+```powershell
+cli-agent --with-os-read
+cli-agent --with-os-write
+cli-agent --with-python-validator
+```
+
+Die CLI-Varianten ersetzen einen eventuell gleichnamigen Server aus der
+Konfigurationsdatei durch die eingebaute Definition. Die ausgewählte globale
+Konfigurationsdatei wird an den gestarteten MCP-Prozess weitergegeben.
+
+Ohne `[[mcp_servers]]` und ohne diese CLI-Flags werden in der Main-Phase keine
+MCP-Tools bereitgestellt. Insbesondere erhält ein ohne weitere Parameter aus
+einer Taskleiste oder einem Terminal gestarteter Agent dadurch keinen
+Dateisystemzugriff über den Workspace-OS-MCP.
+
+### OKF-Knowledge-Phase
+
+Die optionale OKF-Integration wird separat konfiguriert:
 
 ```toml
 [okf]
@@ -549,85 +208,175 @@ compress_min_chars = 20000
 required = true
 ```
 
-Mit `required = true` bricht die Bearbeitung ab, wenn die konfigurierte
-Knowledge-Phase nicht verfügbar ist oder fehlschlägt. Mit `required = false`
-kann die Main-Phase ohne OKF-Kontext fortgesetzt werden.
+Sie ist in der ausgelieferten Standardkonfiguration deaktiviert. Technische
+Details stehen unter [docs/mcp-okf.md](docs/mcp-okf.md).
 
-## Verwendung
+### Logging und Context Dumps
 
-Interaktiv im aktuellen Ordner:
-
-```powershell
-cli-agent
+```toml
+[logging]
+enabled = true
+level = "INFO"
+log_prompts = true
+log_model_messages = false
+log_tool_results = false
+max_bytes = 5000000
+backup_count = 3
 ```
 
-Anderer Arbeitsordner:
+Mit
 
-```powershell
-cli-agent --workspace C:\Projekte\n8n
+```toml
+dump_llm_context = true
 ```
 
-Einmalige Anfrage:
+schreibt der Agent zusätzliche Diagnoseinformationen unter
+`<workspace>/.cli-agent/`.
 
-```powershell
-cli-agent --workspace C:\Projekte\n8n "Welche Services laufen?"
-```
+## 4. Mitgelieferte MCP-Server
 
-Eigene Konfiguration:
+| MCP-Server | Zweck | Aktivierung | Dokumentation |
+| --- | --- | --- | --- |
+| Docker Compose | Compose-Datei, Service-Status, Logs und optional Service-Steuerung | `[[mcp_servers]]` | [Compose MCP](docs/mcp-compose.md) |
+| Workspace OS | Workspace-relative Dateioperationen, optional mit Schreibzugriff | `[[mcp_servers]]`, `--with-os-read`, `--with-os-write` | [Workspace OS MCP](docs/mcp-os.md) |
+| Python Validator | Python-Projekte in einem kurzlebigen Docker-Container installieren und starten | `[[mcp_servers]]`, `--with-python-validator` | [Python Validator MCP](docs/mcp-python-validator.md) |
+| OKF | Read-only Retrieval aus einem Open-Knowledge-Format-Repository | `[okf]` | [OKF MCP](docs/mcp-okf.md) |
 
-```powershell
-cli-agent --config C:\Pfad\config.toml
-```
+Die Server sind in `config.example.toml` als auskommentierte Konfigurationsblöcke
+enthalten. Zusätzliche externe MCP-Server können unabhängig davon über `stdio`
+oder Streamable HTTP angebunden werden.
 
-Während einer interaktiven Sitzung:
+Während einer interaktiven Sitzung können bereits verbundene normale MCP-Server
+für folgende Modellaufrufe deaktiviert beziehungsweise erneut aktiviert werden:
 
 ```text
 disable compose
 enable compose
 ```
 
-Beim Deaktivieren bleiben Verbindung und Serverprozess bestehen. Nur Tools und
-Instructions dieses Servers werden aus den folgenden Main-Modellaufrufen
-entfernt. Alle Verbindungen werden erst beim Beenden der Sitzung geschlossen.
+Dabei bleibt die MCP-Verbindung bestehen. Nur die Tools und `instructions` des
+Servers werden aus dem aktiven Modellkontext entfernt beziehungsweise wieder
+hinzugefügt.
 
-## System-Prompt und Tooldefinitionen
+## 5. Technischer Ablauf des Agenten
 
-Der Main-System-Prompt wird für jeden Turn neu aufgebaut. Er enthält unter
-anderem
+### Session und Conversation History
 
-- die zentralen Regeln des CLI-Agenten,
-- den festgelegten Workspace,
-- das aktuelle Datum,
-- die Namen der aktuell verfügbaren MCP-Tools und
-- die `instructions` der aktiven MCP-Server.
-
-Die eigentlichen Toolschemas werden nicht als Text in den System-Prompt
-kopiert, sondern separat über die Tool-/Function-Schnittstelle des
-Model-Clients übertragen.
-
-Die Knowledge-Phase besitzt einen eigenen System-Prompt und ein eigenes
-Toolset. Dadurch können Retrieval-Regeln unabhängig von den normalen
-Arbeitsregeln formuliert und validiert werden.
-
-## Logging
-
-Standardmäßig liegt die Logdatei unter Windows in:
+`CliAgent.history` enthält die abgeschlossenen User-/Assistant-Turns der
+aktuellen Sitzung. Für jeden neuen Prompt wird daraus ein separater
+`working_messages`-Kontext erzeugt.
 
 ```text
-%LOCALAPPDATA%\cli-agent\cli-agent.log
+System-Prompt
++ Conversation History
++ aktuelle User-Nachricht
++ optionaler OKF-Kontext
++ optionaler Web-Kontext
 ```
 
-Über `[logging]` können unter anderem vollständige Modellnachrichten und
-Toolresultate aktiviert werden. Für die strukturelle Analyse eines kompletten
-Agentenlaufs sind die oben beschriebenen Context Dumps meist übersichtlicher.
+Tool-Aufrufe und Tool-Ergebnisse eines laufenden Turns werden nur in
+`working_messages` ergänzt. Nach einer finalen Modellantwort werden die
+ursprüngliche User-Nachricht und die Endantwort in `history` übernommen; die
+Tool-Zwischenschritte werden nicht in die persistierte Conversation History
+kopiert.
 
-## Tests
+### System-Prompt und Tooldefinitionen
 
-```powershell
-python -m pip install -e ".[dev]"
-pytest
+Der Main-System-Prompt wird für jeden Turn neu aufgebaut. Er enthält unter
+anderem den festgelegten Workspace, das aktuelle Datum, die Namen der aktuell
+verfügbaren Tools sowie `instructions` der aktiven MCP-Server.
+
+Die vollständigen Toolschemas werden nicht als Text in den System-Prompt
+kopiert. Sie werden separat über die Tool-/Function-Schnittstelle des
+Model-Clients übertragen.
+
+MCP-`instructions` werden als serverbezogene Hinweise eingebunden. Sie dürfen
+die zentralen Agentenregeln, Benutzeranweisungen und Berechtigungsgrenzen nicht
+überschreiben.
+
+### MCP-Verbindungen und Modell-Tool-Loop
+
+Beim Start öffnet der Agent für jeden konfigurierten normalen MCP-Server eine
+Session und ruft `initialize` sowie `list_tools` auf. Die Verbindung bleibt für
+die gesamte Agentensitzung bestehen.
+
+Toolnamen werden gegenüber dem Modell als `<server>__<tool>` exponiert. Damit
+bleiben gleichnamige Tools unterschiedlicher Server eindeutig routbar.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as CLI Agent
+    participant L as LLM
+    participant M as MCP Server
+
+    U->>A: Prompt
+    A->>L: System + History + User + Tools
+    L-->>A: Tool Call
+    A->>M: MCP tool(arguments)
+    M-->>A: Tool Result
+    A->>L: Working Messages + Tool Result
+    L-->>A: weiterer Tool Call oder finale Antwort
+    A-->>U: finale Antwort
 ```
 
-Die Tests mocken Docker und MCP-Verbindungen. Ein realer End-to-End-Test
-benötigt den jeweiligen Modellendpunkt und die tatsächlich verwendeten
-MCP-/OKF-Server.
+Bei einem Tool-Aufruf prüft der Agent den exponierten Toolnamen und den Status
+des zugehörigen Servers, führt den MCP-Aufruf aus und fügt das Ergebnis als
+`role: tool` in den aktuellen Arbeitskontext ein. Danach wird das Modell erneut
+mit dem erweiterten Kontext aufgerufen. Dieser Ablauf wiederholt sich bis zu
+einer finalen Textantwort oder bis ein konfiguriertes Tool-Call-Limit erreicht
+ist.
+
+### Separate OKF-Retrieval-Phase
+
+Wenn `[okf]` konfiguriert ist, wird vor dem Main-Agentenlauf ein separater
+Retrieval-Kontext aufgebaut. Dieser verwendet einen eigenen System-Prompt und
+sieht ausschließlich die read-only Tools `knowledge_index` und
+`knowledge_read` des internen OKF-MCP-Servers.
+
+Der Agent lädt den Root-Index, begrenzt die Navigation auf tatsächlich vom
+Repository angebotene Pfade und validiert die finale Concept-Auswahl über
+agentenseitig vergebene Selection-Tokens. Nur die ausgewählten, vollständig
+gelesenen Concepts werden anschließend als Referenzkontext in die Main-Phase
+übernommen.
+
+Details zu Limits, Navigation und Auswahlvalidierung stehen in
+[docs/mcp-okf.md](docs/mcp-okf.md).
+
+### Web-Kontext
+
+Im interaktiven Modus können Webseiten explizit als Session-Kontext geladen
+werden:
+
+```text
+add_web_context https://example.org/docs
+clear_web_context
+```
+
+Der Agent lädt ausschließlich die angegebene `http`- oder `https`-URL. Bei
+HTML-Seiten extrahiert Trafilatura den relevanten Hauptinhalt und reduziert
+dabei typischen Boilerplate-Inhalt wie Navigation, Footer oder Seitenteaser.
+Geladene Web-Kontexte werden separat von `history` gehalten und bei jedem
+folgenden normalen Turn erneut in die aktuelle User-Nachricht des
+Arbeitskontexts eingebaut.
+
+`clear_web_context` entfernt alle Web-Kontexte aus dem Session-State. Inhalte
+geladener Webseiten gelten als nicht vertrauenswürdige Referenzdaten und dürfen
+keine zusätzlichen Netzwerkzugriffe auslösen. `localhost` und private
+Netzwerkadressen sind für den expliziten `add_web_context`-Befehl zulässig.
+
+### Context Dumps
+
+Mit `dump_llm_context = true` werden unter `<workspace>/.cli-agent/` unter
+anderem folgende Dateien geschrieben:
+
+- `history.json`
+- `main_system_prompt.json`
+- `main_working_messages.json`
+- `knowledge_system_prompt.json`
+- `knowledge_working_messages.json`
+- `knowledge_selection.json`
+- `knowledge_result.json`
+
+Die Dumps bilden die vom Agenten erzeugten Nachrichtenkontexte und die Übergabe
+zwischen Retrieval- und Main-Phase ab.

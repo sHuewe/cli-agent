@@ -1,9 +1,10 @@
 # cli-agent configuration template
 #
-# No MCP server and no OKF repository are enabled by default. Enable only the
-# capabilities required for a specific use case.
+# This file is used as the initial default configuration. No MCP server and no
+# OKF repository are enabled by default. Enable only the capabilities that are
+# required for a specific use case.
 
-dump_llm_context = false
+dump_llm_context = true
 
 [logging]
 enabled = true

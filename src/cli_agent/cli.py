@@ -3,12 +3,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import traceback
+from dataclasses import replace
 from pathlib import Path
 
-from .agent import CliAgent
-from .config import default_config_file, load_config
+from .config import AppConfig, McpServerConfig, default_config_file, load_config
 from .logging_setup import configure_logging
 from .model_factory import create_model_client
+from .web_context_agent import WebContextCliAgent
+
+
+OS_MCP_SERVER_NAME = "os"
+PYTHON_VALIDATOR_MCP_SERVER_NAME = "python-validator"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,11 +42,123 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--model",
+        default=None,
+        help="Override model.model from the configuration file",
+    )
+    os_access = parser.add_mutually_exclusive_group()
+    os_access.add_argument(
+        "--with-os-read",
+        action="store_const",
+        const="read",
+        dest="os_access",
+        help=(
+            "Enable the built-in workspace OS MCP server with read-only "
+            "access. Overrides an 'os' MCP server from the config."
+        ),
+    )
+    os_access.add_argument(
+        "--with-os-write",
+        action="store_const",
+        const="write",
+        dest="os_access",
+        help=(
+            "Enable the built-in workspace OS MCP server with read and write "
+            "access. Overrides an 'os' MCP server from the config."
+        ),
+    )
+    parser.add_argument(
+        "--with-python-validator",
+        action="store_true",
+        help=(
+            "Enable the built-in Python validator MCP server. Overrides a "
+            "'python-validator' MCP server from the config."
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Show a complete traceback when an error occurs",
     )
     return parser
+
+
+def _os_mcp_server_config(access: str) -> McpServerConfig:
+    if access not in {"read", "write"}:
+        raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
+
+    return McpServerConfig(
+        name=OS_MCP_SERVER_NAME,
+        transport="stdio",
+        command="{python}",
+        args=(
+            "-m",
+            "cli_agent.os_mcp_server",
+            "--project-directory",
+            "{workspace_directory}",
+            "--config-file",
+            "{config_file}",
+            "--access",
+            access,
+        ),
+        config={"allow_write_files": access == "write"},
+    )
+
+
+def _python_validator_mcp_server_config() -> McpServerConfig:
+    return McpServerConfig(
+        name=PYTHON_VALIDATOR_MCP_SERVER_NAME,
+        transport="stdio",
+        command="{python}",
+        args=(
+            "-m",
+            "cli_agent.python_validator_mcp",
+            "--project-directory",
+            "{workspace_directory}",
+            "--python-image",
+            "python:3.12-slim",
+            "--config-file",
+            "{config_file}",
+        ),
+    )
+
+
+def apply_mcp_cli_overrides(
+    config: AppConfig,
+    *,
+    os_access: str | None,
+    with_python_validator: bool = False,
+) -> AppConfig:
+    """Apply command-line MCP settings with precedence over file config."""
+    servers = config.mcp_servers
+    changed = False
+
+    if os_access is not None:
+        servers = tuple(
+            server
+            for server in servers
+            if server.name != OS_MCP_SERVER_NAME
+        ) + (_os_mcp_server_config(os_access),)
+        changed = True
+
+    if with_python_validator:
+        servers = tuple(
+            server
+            for server in servers
+            if server.name != PYTHON_VALIDATOR_MCP_SERVER_NAME
+        ) + (_python_validator_mcp_server_config(),)
+        changed = True
+
+    if not changed:
+        return config
+    return replace(config, mcp_servers=servers)
+
+
+def apply_model_cli_override(config: AppConfig, *, model: str | None) -> AppConfig:
+    """Override only model.model while preserving all other model settings."""
+    if model is None:
+        return config
+    return replace(config, model=replace(config.model, model=model))
 
 
 def exception_details(exc: BaseException) -> str:
@@ -71,12 +188,18 @@ def print_error(exc: BaseException, *, debug: bool) -> None:
 
 async def run(args: argparse.Namespace) -> None:
     config = load_config(args.config)
+    config = apply_model_cli_override(config, model=args.model)
+    config = apply_mcp_cli_overrides(
+        config,
+        os_access=args.os_access,
+        with_python_validator=args.with_python_validator,
+    )
     configure_logging(config.logging)
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
     model_client = create_model_client(config.model)
-    agent = CliAgent(
+    agent = WebContextCliAgent(
         workspace,
         model_client,
         config.mcp_servers,
@@ -110,7 +233,9 @@ async def run(args: argparse.Namespace) -> None:
 
         print(
             "Interaktiver Modus; 'enable <server>' und 'disable <server>' "
-            "steuern MCP-Server, 'exit' oder 'quit' beendet die Sitzung."
+            "steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, "
+            "'clear_web_context' entfernt ihn, 'exit' oder 'quit' beendet "
+            "die Sitzung."
         )
         while True:
             try:

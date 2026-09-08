@@ -94,7 +94,6 @@ Only write a file when the user requested a file change.
             """
             return workspace.make_directory(path)
 
-
         @mcp.tool()
         def copy_file(path_src: str, path_dst: str) -> str:
             """
@@ -107,8 +106,7 @@ Only write a file when the user requested a file change.
                     and ".." are forbidden.
             """
             return workspace.copy_file(path_src, path_dst)
-   
-                
+
     return mcp
 
 
@@ -128,6 +126,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Configuration file",
     )
+    parser.add_argument(
+        "--access",
+        choices=("read", "write"),
+        default=None,
+        help=(
+            "Explicit access mode. When set, it overrides the 'os' MCP "
+            "configuration from the config file."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -142,21 +149,38 @@ def find_mcp_config(
     )
 
 
+def resolve_mcp_config(
+    configurations: tuple[McpServerConfig, ...],
+    *,
+    access: str | None,
+) -> McpServerConfig:
+    if access is None:
+        return find_mcp_config(configurations)
+    return McpServerConfig(
+        name="os",
+        config={"allow_write_files": access == "write"},
+    )
+
+
 def main() -> None:
     args = parse_args()
     config = load_config(path=args.config_file)
     configure_logging(
         config.logging,
-        logger = logger,
+        logger=logger,
         default_filename="cli-agent-os-mcp.log",
     )
 
     logger.info(
-        "MCP server starting project_directory=%s",
+        "MCP server starting project_directory=%s access=%s",
         args.project_directory,
+        args.access or "config",
     )
     try:
-        mcp_config = find_mcp_config(config.mcp_servers)
+        mcp_config = resolve_mcp_config(
+            config.mcp_servers,
+            access=args.access,
+        )
         workspace = Workspace.from_directory(
             args.project_directory,
             mcp_config,
