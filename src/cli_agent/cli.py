@@ -3,12 +3,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import traceback
+from dataclasses import replace
 from pathlib import Path
 
 from .agent import CliAgent
-from .config import default_config_file, load_config
+from .config import AppConfig, McpServerConfig, default_config_file, load_config
 from .logging_setup import configure_logging
 from .model_factory import create_model_client
+
+
+OS_MCP_SERVER_NAME = "os"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,12 +40,68 @@ def build_parser() -> argparse.ArgumentParser:
             f"(default: {default_config_file()})"
         ),
     )
+    os_access = parser.add_mutually_exclusive_group()
+    os_access.add_argument(
+        "--with-os-read",
+        action="store_const",
+        const="read",
+        dest="os_access",
+        help=(
+            "Enable the built-in workspace OS MCP server with read-only "
+            "access. Overrides an 'os' MCP server from the config."
+        ),
+    )
+    os_access.add_argument(
+        "--with-os-write",
+        action="store_const",
+        const="write",
+        dest="os_access",
+        help=(
+            "Enable the built-in workspace OS MCP server with read and write "
+            "access. Overrides an 'os' MCP server from the config."
+        ),
+    )
     parser.add_argument(
         "--debug",
         action="store_true",
         help="Show a complete traceback when an error occurs",
     )
     return parser
+
+
+def _os_mcp_server_config(access: str) -> McpServerConfig:
+    if access not in {"read", "write"}:
+        raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
+
+    return McpServerConfig(
+        name=OS_MCP_SERVER_NAME,
+        transport="stdio",
+        command="{python}",
+        args=(
+            "-m",
+            "cli_agent.os_mcp_server",
+            "--project-directory",
+            "{workspace_directory}",
+            "--config-file",
+            "{config_file}",
+            "--access",
+            access,
+        ),
+        config={"allow_write_files": access == "write"},
+    )
+
+
+def apply_mcp_cli_overrides(config: AppConfig, *, os_access: str | None) -> AppConfig:
+    """Apply command-line MCP settings with precedence over file config."""
+    if os_access is None:
+        return config
+
+    servers = tuple(
+        server
+        for server in config.mcp_servers
+        if server.name != OS_MCP_SERVER_NAME
+    ) + (_os_mcp_server_config(os_access),)
+    return replace(config, mcp_servers=servers)
 
 
 def exception_details(exc: BaseException) -> str:
@@ -71,6 +131,7 @@ def print_error(exc: BaseException, *, debug: bool) -> None:
 
 async def run(args: argparse.Namespace) -> None:
     config = load_config(args.config)
+    config = apply_mcp_cli_overrides(config, os_access=args.os_access)
     configure_logging(config.logging)
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
