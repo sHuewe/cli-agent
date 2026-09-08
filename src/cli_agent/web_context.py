@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 import httpx
-from bs4 import BeautifulSoup
+from trafilatura import bare_extraction
 
 
 MAX_WEB_RESPONSE_BYTES = 5_000_000
@@ -66,20 +66,29 @@ def _normalize_text(text: str) -> str:
     return "\n".join(result).strip()
 
 
-def _extract_web_content(raw_text: str, media_type: str) -> tuple[str | None, str]:
+def _extract_web_content(
+    raw_text: str,
+    media_type: str,
+    *,
+    url: str | None = None,
+) -> tuple[str | None, str]:
     if media_type in {"text/html", "application/xhtml+xml"}:
-        soup = BeautifulSoup(raw_text, "html.parser")
-        for tag in soup(["script", "style", "noscript", "svg", "canvas", "template"]):
-            tag.decompose()
+        document = bare_extraction(
+            raw_text,
+            url=url,
+            favor_precision=True,
+            include_comments=False,
+            include_tables=True,
+            include_images=False,
+            include_links=False,
+            deduplicate=True,
+            with_metadata=True,
+        )
+        if document is None:
+            return None, ""
 
-        title: str | None = None
-        if soup.title is not None:
-            title_text = " ".join(soup.title.stripped_strings).strip()
-            if title_text:
-                title = title_text
-
-        content_root = soup.body if soup.body is not None else soup
-        content = _normalize_text("\n".join(content_root.stripped_strings))
+        title = _normalize_text(document.title or "") or None
+        content = _normalize_text(document.text or "")
         return title, content
 
     return None, _normalize_text(raw_text)
@@ -128,7 +137,11 @@ async def fetch_web_context(url: str) -> WebContext:
             encoding = response.encoding or "utf-8"
             raw_text = body.decode(encoding, errors="replace")
 
-    title, content = _extract_web_content(raw_text, media_type)
+    title, content = _extract_web_content(
+        raw_text,
+        media_type,
+        url=final_url,
+    )
     if not content:
         raise ValueError("Die Webseite enthält keinen verwertbaren Textinhalt.")
 
