@@ -25,58 +25,133 @@ Damit startet `cli-agent` ohne zusätzliche CLI-Flags zunächst ohne Tools.
 
 ## 2. Setup / Installation
 
-### Voraussetzungen
+### Voraussetzung
 
-- Python 3.11 oder neuer
-- ein unterstützter Modellendpunkt:
-  - Ollama oder
-  - OpenAI-kompatible Chat-Completions-API
-- Tool-Calling-Unterstützung des Modells, wenn MCP-Tools verwendet werden
-- Docker nur für den Compose-MCP und den Python-Validator
+Python 3.11 oder neuer muss installiert sein. Unter Windows sollte Python über
+`py` oder `python` aufrufbar sein.
 
-### Installation
+Docker wird für den Grundbetrieb nicht benötigt. Es ist nur erforderlich, wenn
+der Compose-MCP oder der Python-Validator verwendet werden soll.
 
-Im Repository:
+### 1. pipx installieren
 
-```powershell
-pipx install --editable .
-```
-
-Alternativ in einer virtuellen Umgebung:
+`cli-agent` wird mit [pipx](https://pipx.pypa.io/) installiert. Unter Windows
+kann pipx direkt über die vorhandene Python-Installation eingerichtet werden:
 
 ```powershell
-python -m pip install -e .
+py -m pip install pipx
+py -m pipx ensurepath
 ```
 
-Für Entwicklung und Tests:
+Falls `py` nicht verfügbar ist, kann stattdessen `python` verwendet werden:
 
 ```powershell
-python -m pip install -e ".[dev]"
-pytest
+python -m pip install pipx
+python -m pipx ensurepath
 ```
 
-Der ausführbare Benutzerbefehl lautet:
+Nach `ensurepath` muss das Terminal gegebenenfalls geschlossen und neu geöffnet
+werden, damit die von pipx installierten Programme über `PATH` gefunden werden.
+
+### 2. cli-agent installieren
+
+Im Verzeichnis des ausgecheckten Repositories:
+
+```powershell
+py -m pipx install .
+```
+
+Falls `py` nicht verfügbar ist:
+
+```powershell
+python -m pipx install .
+```
+
+Danach steht der Befehl `cli-agent` unabhängig vom aktuellen Verzeichnis zur
+Verfügung.
+
+### 3. Standardkonfiguration anlegen
+
+Nach der Installation `cli-agent` einmal starten:
+
+```powershell
+cli-agent
+```
+
+Beim ersten Start wird automatisch die Standardkonfiguration angelegt. Unter
+Windows liegt sie hier:
 
 ```text
-cli-agent
+%LOCALAPPDATA%\cli-agent\config.toml
 ```
 
-Interaktiver Start im aktuellen Verzeichnis:
+### 4. LLM konfigurieren
+
+Vor der eigentlichen Nutzung muss die erzeugte `config.toml` in einem Texteditor
+geöffnet und der Abschnitt `[model]` an den verwendeten LLM-Endpunkt angepasst
+werden. Beispielsweise für ein lokales Ollama-Modell:
+
+```toml
+[model]
+provider = "ollama"
+model = "qwen3.5:9b"
+base_url = "http://localhost:11434"
+timeout = 120
+```
+
+Für einen OpenAI-kompatiblen Endpunkt müssen insbesondere `provider`, `model`
+und `base_url` angepasst werden. Optional kann `api_key_env` auf den Namen einer
+Umgebungsvariable gesetzt werden, die den API-Key enthält. Ist die Variable
+nicht gesetzt oder `api_key_env` nicht konfiguriert, verwendet der Agent den
+Wert `dummy` als Bearer-Token. Das ist für interne oder lokale
+OpenAI-kompatible Endpunkte nützlich, die zwar einen Authorization-Header
+erwarten, den Schlüssel aber nicht prüfen.
+
+Weitere Beispiele stehen im Abschnitt [Konfiguration](#3-konfiguration).
+
+### 5. Agent in einem Projekt starten
+
+Ohne `--workspace` verwendet `cli-agent` das aktuelle Arbeitsverzeichnis als
+Workspace. Der übliche projektbezogene Workflow ist daher, zuerst in das
+Projektverzeichnis zu wechseln und den Agenten dort zu starten:
 
 ```powershell
+cd C:\Projekte\mein-projekt
 cli-agent
 ```
 
-Mit explizitem Workspace:
+Falls ein Projekt eine eigene Konfiguration benötigt, kann diese direkt im
+Projektverzeichnis liegen und beispielsweise zusammen mit dem Projekt in Git
+versioniert werden. Relative Pfade bei `--config` werden relativ zum aktuellen
+Arbeitsverzeichnis aufgelöst:
+
+```powershell
+cd C:\Projekte\mein-projekt
+cli-agent --config mein_config.toml
+```
+
+Ein expliziter Workspace ist nur erforderlich, wenn der Agent für einen anderen
+Ordner arbeiten soll als das aktuelle Arbeitsverzeichnis:
 
 ```powershell
 cli-agent --workspace C:\Projekte\mein-projekt
 ```
 
-Einmalige Anfrage:
+Auch einmalige Anfragen können direkt aus dem Projektverzeichnis gestartet
+werden:
 
 ```powershell
-cli-agent --workspace C:\Projekte\mein-projekt "Welche Services laufen?"
+cli-agent --config mein_config.toml "Welche Services laufen?"
+```
+
+### Entwicklung und Tests
+
+Für eine lokale Entwicklungsinstallation mit Testabhängigkeiten kann alternativ
+eine virtuelle Umgebung verwendet werden:
+
+```powershell
+python -m pip install -e ".[dev]"
+pytest
 ```
 
 ## 3. Konfiguration
@@ -102,9 +177,12 @@ Die Vorlage ist zusätzlich im Repository als
 mitgelieferten Server sind vollständig auskommentiert enthalten und können bei
 Bedarf blockweise aktiviert werden.
 
-Eine andere Konfigurationsdatei kann explizit ausgewählt werden:
+Eine andere Konfigurationsdatei kann explizit ausgewählt werden. Absolute und
+relative Pfade sind möglich; relative Pfade beziehen sich auf das aktuelle
+Arbeitsverzeichnis:
 
 ```powershell
+cli-agent --config mein_config.toml
 cli-agent --config C:\Pfad\config.toml
 ```
 
@@ -133,6 +211,10 @@ base_url = "https://llm.example.org/v1"
 api_key_env = "LLM_API_KEY"
 timeout = 120
 ```
+
+`api_key_env` ist optional. Wenn die konfigurierte Umgebungsvariable nicht
+existiert oder kein `api_key_env` angegeben ist, verwendet der Agent `dummy` als
+API-Key.
 
 Der Modellname kann für einen einzelnen Start überschrieben werden:
 
