@@ -25,43 +25,79 @@ Damit startet `cli-agent` ohne zusätzliche CLI-Flags zunächst ohne Tools.
 
 ## 2. Setup / Installation
 
-### Voraussetzungen
+### Voraussetzung
 
-- Python 3.11 oder neuer
-- ein unterstützter Modellendpunkt:
-  - Ollama oder
-  - OpenAI-kompatible Chat-Completions-API
-- Tool-Calling-Unterstützung des Modells, wenn MCP-Tools verwendet werden
-- Docker nur für den Compose-MCP und den Python-Validator
+Python 3.11 oder neuer muss installiert sein. Unter Windows sollte Python über
+`py` oder `python` aufrufbar sein.
 
-### Installation
+Docker wird für den Grundbetrieb nicht benötigt. Es ist nur erforderlich, wenn
+der Compose-MCP oder der Python-Validator verwendet werden soll.
 
-Im Repository:
+### 1. pipx installieren
 
-```powershell
-pipx install --editable .
-```
-
-Alternativ in einer virtuellen Umgebung:
+`cli-agent` wird mit [pipx](https://pipx.pypa.io/) installiert. Unter Windows
+kann pipx direkt über die vorhandene Python-Installation eingerichtet werden:
 
 ```powershell
-python -m pip install -e .
+py -m pip install pipx
+py -m pipx ensurepath
 ```
 
-Für Entwicklung und Tests:
+Falls `py` nicht verfügbar ist, kann stattdessen `python` verwendet werden:
 
 ```powershell
-python -m pip install -e ".[dev]"
-pytest
+python -m pip install pipx
+python -m pipx ensurepath
 ```
 
-Der ausführbare Benutzerbefehl lautet:
+Nach `ensurepath` muss das Terminal gegebenenfalls geschlossen und neu geöffnet
+werden, damit der Befehl `pipx` verfügbar ist.
 
-```text
+### 2. cli-agent installieren
+
+Im Verzeichnis des ausgecheckten Repositories:
+
+```powershell
+pipx install .
+```
+
+Danach steht der Befehl `cli-agent` unabhängig vom aktuellen Verzeichnis zur
+Verfügung.
+
+### 3. Standardkonfiguration anlegen
+
+Nach der Installation `cli-agent` einmal starten:
+
+```powershell
 cli-agent
 ```
 
-Interaktiver Start im aktuellen Verzeichnis:
+Beim ersten Start wird automatisch die Standardkonfiguration angelegt. Unter
+Windows liegt sie hier:
+
+```text
+%LOCALAPPDATA%\cli-agent\config.toml
+```
+
+### 4. LLM konfigurieren
+
+Vor der eigentlichen Nutzung muss die erzeugte `config.toml` in einem Texteditor
+geöffnet und der Abschnitt `[model]` an den verwendeten LLM-Endpunkt angepasst
+werden. Beispielsweise für ein lokales Ollama-Modell:
+
+```toml
+[model]
+provider = "ollama"
+model = "qwen3.5:9b"
+base_url = "http://localhost:11434"
+timeout = 120
+```
+
+Für einen OpenAI-kompatiblen Endpunkt müssen insbesondere `provider`, `model`,
+`base_url` und gegebenenfalls `api_key_env` angepasst werden. Weitere Beispiele
+stehen im Abschnitt [Konfiguration](#3-konfiguration).
+
+Anschließend kann der Agent normal gestartet werden:
 
 ```powershell
 cli-agent
@@ -77,6 +113,16 @@ Einmalige Anfrage:
 
 ```powershell
 cli-agent --workspace C:\Projekte\mein-projekt "Welche Services laufen?"
+```
+
+### Entwicklung und Tests
+
+Für eine lokale Entwicklungsinstallation mit Testabhängigkeiten kann alternativ
+eine virtuelle Umgebung verwendet werden:
+
+```powershell
+python -m pip install -e ".[dev]"
+pytest
 ```
 
 ## 3. Konfiguration
