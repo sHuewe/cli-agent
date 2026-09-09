@@ -19,15 +19,9 @@ def create_model_client(
         )
 
     if config.provider == "openai":
-        api_key = None
-
+        api_key = "dummy"
         if config.api_key_env:
-            api_key = os.getenv(config.api_key_env)
-            if not api_key:
-                raise ValueError(
-                    f"Die Umgebungsvariable "
-                    f"{config.api_key_env!r} ist nicht gesetzt."
-                )
+            api_key = os.getenv(config.api_key_env) or "dummy"
 
         return OpenAIClient(
             base_url=config.base_url,
