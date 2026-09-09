@@ -109,22 +109,39 @@ erwarten, den Schlüssel aber nicht prüfen.
 
 Weitere Beispiele stehen im Abschnitt [Konfiguration](#3-konfiguration).
 
-Anschließend kann der Agent normal gestartet werden:
+### 5. Agent in einem Projekt starten
+
+Ohne `--workspace` verwendet `cli-agent` das aktuelle Arbeitsverzeichnis als
+Workspace. Der übliche projektbezogene Workflow ist daher, zuerst in das
+Projektverzeichnis zu wechseln und den Agenten dort zu starten:
 
 ```powershell
+cd C:\Projekte\mein-projekt
 cli-agent
 ```
 
-Mit explizitem Workspace:
+Falls ein Projekt eine eigene Konfiguration benötigt, kann diese direkt im
+Projektverzeichnis liegen und beispielsweise zusammen mit dem Projekt in Git
+versioniert werden. Relative Pfade bei `--config` werden relativ zum aktuellen
+Arbeitsverzeichnis aufgelöst:
+
+```powershell
+cd C:\Projekte\mein-projekt
+cli-agent --config mein_config.toml
+```
+
+Ein expliziter Workspace ist nur erforderlich, wenn der Agent für einen anderen
+Ordner arbeiten soll als das aktuelle Arbeitsverzeichnis:
 
 ```powershell
 cli-agent --workspace C:\Projekte\mein-projekt
 ```
 
-Einmalige Anfrage:
+Auch einmalige Anfragen können direkt aus dem Projektverzeichnis gestartet
+werden:
 
 ```powershell
-cli-agent --workspace C:\Projekte\mein-projekt "Welche Services laufen?"
+cli-agent --config mein_config.toml "Welche Services laufen?"
 ```
 
 ### Entwicklung und Tests
@@ -160,9 +177,12 @@ Die Vorlage ist zusätzlich im Repository als
 mitgelieferten Server sind vollständig auskommentiert enthalten und können bei
 Bedarf blockweise aktiviert werden.
 
-Eine andere Konfigurationsdatei kann explizit ausgewählt werden:
+Eine andere Konfigurationsdatei kann explizit ausgewählt werden. Absolute und
+relative Pfade sind möglich; relative Pfade beziehen sich auf das aktuelle
+Arbeitsverzeichnis:
 
 ```powershell
+cli-agent --config mein_config.toml
 cli-agent --config C:\Pfad\config.toml
 ```
 
