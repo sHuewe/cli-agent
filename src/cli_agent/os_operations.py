@@ -110,6 +110,21 @@ class Workspace:
         name = path.name.lower()
         return name in TEXT_FILENAMES or path.suffix.lower() in TEXT_SUFFIXES
 
+    @staticmethod
+    def _existing_line_ending(path: Path) -> str:
+        """Return the line ending used by an existing file, defaulting to LF."""
+        if not path.exists():
+            return "\n"
+
+        data = path.read_bytes()
+        if b"\r\n" in data:
+            return "\r\n"
+        if b"\n" in data:
+            return "\n"
+        if b"\r" in data:
+            return "\r"
+        return "\n"
+
     def list_files(self, path: str) -> str:
         directory = self.resolve_path(path)
         if not directory.is_dir():
@@ -171,8 +186,7 @@ class Workspace:
         src_path = self.resolve_path(path_src)
         if not src_path.is_file():
             raise WorkspaceError(f"Quellpfad ist keine Datei: {path_src!r}")
-  
-        
+
         dst_path = self.resolve_path(path_dst, must_exist=False)
         if dst_path.exists() and not dst_path.is_file():
             raise WorkspaceError(f"Zielpfad ist keine Datei: {path_dst!r}")
@@ -185,9 +199,7 @@ class Workspace:
         shutil.copy2(src_path, dst_path)
 
         relative = dst_path.relative_to(self.directory).as_posix()
-        return (
-            f"Datei kopiert: {relative} "
-        )
+        return f"Datei kopiert: {relative} "
 
     def make_directory(self, path: str) -> str:
         dir_path = self.resolve_path(path, must_exist=False)
@@ -221,7 +233,13 @@ class Workspace:
             )
 
         try:
-            file_path.write_text(content, encoding="utf-8")
+            newline = self._existing_line_ending(file_path)
+            normalized_content = content.replace("\r\n", "\n").replace("\r", "\n")
+            file_path.write_text(
+                normalized_content,
+                encoding="utf-8",
+                newline=newline,
+            )
         except OSError as exc:
             raise WorkspaceError(
                 f"Datei konnte nicht geschrieben werden: {path!r}: {exc}"
@@ -230,5 +248,5 @@ class Workspace:
         relative = file_path.relative_to(self.directory).as_posix()
         return (
             f"Datei geschrieben: {relative} "
-            f"({len(content.encode('utf-8'))} Bytes)"
+            f"({file_path.stat().st_size} Bytes)"
         )
