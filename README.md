@@ -51,14 +51,20 @@ python -m pipx ensurepath
 ```
 
 Nach `ensurepath` muss das Terminal gegebenenfalls geschlossen und neu geöffnet
-werden, damit der Befehl `pipx` verfügbar ist.
+werden, damit die von pipx installierten Programme über `PATH` gefunden werden.
 
 ### 2. cli-agent installieren
 
 Im Verzeichnis des ausgecheckten Repositories:
 
 ```powershell
-pipx install .
+py -m pipx install .
+```
+
+Falls `py` nicht verfügbar ist:
+
+```powershell
+python -m pipx install .
 ```
 
 Danach steht der Befehl `cli-agent` unabhängig vom aktuellen Verzeichnis zur
@@ -93,9 +99,15 @@ base_url = "http://localhost:11434"
 timeout = 120
 ```
 
-Für einen OpenAI-kompatiblen Endpunkt müssen insbesondere `provider`, `model`,
-`base_url` und gegebenenfalls `api_key_env` angepasst werden. Weitere Beispiele
-stehen im Abschnitt [Konfiguration](#3-konfiguration).
+Für einen OpenAI-kompatiblen Endpunkt müssen insbesondere `provider`, `model`
+und `base_url` angepasst werden. Optional kann `api_key_env` auf den Namen einer
+Umgebungsvariable gesetzt werden, die den API-Key enthält. Ist die Variable
+nicht gesetzt oder `api_key_env` nicht konfiguriert, verwendet der Agent den
+Wert `dummy` als Bearer-Token. Das ist für interne oder lokale
+OpenAI-kompatible Endpunkte nützlich, die zwar einen Authorization-Header
+erwarten, den Schlüssel aber nicht prüfen.
+
+Weitere Beispiele stehen im Abschnitt [Konfiguration](#3-konfiguration).
 
 Anschließend kann der Agent normal gestartet werden:
 
@@ -179,6 +191,10 @@ base_url = "https://llm.example.org/v1"
 api_key_env = "LLM_API_KEY"
 timeout = 120
 ```
+
+`api_key_env` ist optional. Wenn die konfigurierte Umgebungsvariable nicht
+existiert oder kein `api_key_env` angegeben ist, verwendet der Agent `dummy` als
+API-Key.
 
 Der Modellname kann für einen einzelnen Start überschrieben werden:
 
