@@ -112,16 +112,18 @@ class Workspace:
 
     @staticmethod
     def _existing_line_ending(path: Path) -> str:
-        """Return the line ending used by an existing file, defaulting to LF."""
+        """Return the dominant line ending, defaulting to LF on ties."""
         if not path.exists():
             return "\n"
 
         data = path.read_bytes()
-        if b"\r\n" in data:
+        crlf_count = data.count(b"\r\n")
+        lf_count = data.count(b"\n") - crlf_count
+        cr_count = data.count(b"\r") - crlf_count
+
+        if crlf_count > lf_count and crlf_count > cr_count:
             return "\r\n"
-        if b"\n" in data:
-            return "\n"
-        if b"\r" in data:
+        if cr_count > lf_count and cr_count > crlf_count:
             return "\r"
         return "\n"
 
