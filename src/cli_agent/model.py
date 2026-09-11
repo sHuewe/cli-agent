@@ -17,6 +17,7 @@ class ModelClient(Protocol):
     model: str
     base_url: str
     last_usage: TokenUsage | None
+    usage_history: list[TokenUsage]
 
     async def chat(
         self,
