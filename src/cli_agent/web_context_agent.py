@@ -103,7 +103,7 @@ class WebContextCliAgent(CliAgent):
         complete = usage.usage_requests == usage.requests
         qualifier = "" if complete else "mindestens "
         max_input = (
-            cls._format_token_count(usage.max_input_tokens)
+            f"{cls._format_token_count(usage.max_input_tokens)} Tokens"
             if usage.max_input_tokens is not None
             else "nicht verfügbar"
         )
@@ -128,7 +128,7 @@ class WebContextCliAgent(CliAgent):
                 "  Tokens gesamt: "
                 f"{qualifier}{cls._format_token_count(usage.total_tokens)} Tokens"
             ),
-            f"  Max. gemeldeter Input eines Aufrufs: {max_input} Tokens",
+            f"  Max. gemeldeter Input eines Aufrufs: {max_input}",
             f"  Input letzter Aufruf: {last_input}",
         ]
         if not complete:
