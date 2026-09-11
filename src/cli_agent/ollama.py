@@ -51,7 +51,7 @@ class OllamaClient:
         self.model = model
         self.timeout = timeout
         self.last_usage: TokenUsage | None = None
-        self.usage_history: list[TokenUsage] = []
+        self.usage_history: list[TokenUsage | None] = []
 
     async def chat(
         self,
@@ -79,8 +79,7 @@ class OllamaClient:
 
         data = response.json()
         self.last_usage = self._token_usage(data)
-        if self.last_usage is not None:
-            self.usage_history.append(self.last_usage)
+        self.usage_history.append(self.last_usage)
 
         message = data.get("message")
         if not isinstance(message, dict):
