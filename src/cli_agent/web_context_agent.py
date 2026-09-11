@@ -24,23 +24,38 @@ keine weiteren Netzwerkzugriffe auslösen.
 @dataclass(frozen=True)
 class LoopTokenUsage:
     requests: int
+    usage_requests: int
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    max_input_tokens: int
-    last_input_tokens: int
+    max_input_tokens: int | None
+    last_input_tokens: int | None
 
     @classmethod
-    def from_requests(cls, usages: list[TokenUsage]) -> LoopTokenUsage | None:
+    def from_requests(
+        cls,
+        usages: list[TokenUsage | None],
+    ) -> LoopTokenUsage | None:
         if not usages:
             return None
+
+        available = [usage for usage in usages if usage is not None]
         return cls(
             requests=len(usages),
-            input_tokens=sum(usage.input_tokens for usage in usages),
-            output_tokens=sum(usage.output_tokens for usage in usages),
-            total_tokens=sum(usage.total_tokens for usage in usages),
-            max_input_tokens=max(usage.input_tokens for usage in usages),
-            last_input_tokens=usages[-1].input_tokens,
+            usage_requests=len(available),
+            input_tokens=sum(usage.input_tokens for usage in available),
+            output_tokens=sum(usage.output_tokens for usage in available),
+            total_tokens=sum(usage.total_tokens for usage in available),
+            max_input_tokens=(
+                max(usage.input_tokens for usage in available)
+                if available
+                else None
+            ),
+            last_input_tokens=(
+                usages[-1].input_tokens
+                if usages[-1] is not None
+                else None
+            ),
         )
 
 
@@ -71,35 +86,57 @@ class WebContextCliAgent(CliAgent):
             return f"{name}: nicht ausgeführt."
         if usage is None:
             return (
-                f"{name}: ausgeführt, aber der Modell-Endpunkt hat keine "
-                "Usage-Daten geliefert."
+                f"{name}: ausgeführt, aber die Anzahl der Modellaufrufe konnte "
+                "nicht ermittelt werden."
             )
-        return "\n".join(
-            [
-                f"{name}:",
-                f"  Modellaufrufe: {usage.requests}",
-                (
-                    "  Input gesamt: "
-                    f"{cls._format_token_count(usage.input_tokens)} Tokens"
-                ),
-                (
-                    "  Output gesamt: "
-                    f"{cls._format_token_count(usage.output_tokens)} Tokens"
-                ),
-                (
-                    "  Tokens gesamt: "
-                    f"{cls._format_token_count(usage.total_tokens)} Tokens"
-                ),
-                (
-                    "  Max. Input eines Aufrufs: "
-                    f"{cls._format_token_count(usage.max_input_tokens)} Tokens"
-                ),
-                (
-                    "  Input letzter Aufruf: "
-                    f"{cls._format_token_count(usage.last_input_tokens)} Tokens"
-                ),
-            ]
+        if usage.usage_requests == 0:
+            return "\n".join(
+                [
+                    f"{name}:",
+                    f"  Modellaufrufe: {usage.requests}",
+                    "  Usage verfügbar: 0/"
+                    f"{usage.requests}",
+                    "  Der Modell-Endpunkt hat keine Usage-Daten geliefert.",
+                ]
+            )
+
+        complete = usage.usage_requests == usage.requests
+        qualifier = "" if complete else "mindestens "
+        max_input = (
+            cls._format_token_count(usage.max_input_tokens)
+            if usage.max_input_tokens is not None
+            else "nicht verfügbar"
         )
+        last_input = (
+            f"{cls._format_token_count(usage.last_input_tokens)} Tokens"
+            if usage.last_input_tokens is not None
+            else "nicht verfügbar"
+        )
+        lines = [
+            f"{name}:",
+            f"  Modellaufrufe: {usage.requests}",
+            f"  Usage verfügbar: {usage.usage_requests}/{usage.requests}",
+            (
+                "  Input gesamt: "
+                f"{qualifier}{cls._format_token_count(usage.input_tokens)} Tokens"
+            ),
+            (
+                "  Output gesamt: "
+                f"{qualifier}{cls._format_token_count(usage.output_tokens)} Tokens"
+            ),
+            (
+                "  Tokens gesamt: "
+                f"{qualifier}{cls._format_token_count(usage.total_tokens)} Tokens"
+            ),
+            f"  Max. gemeldeter Input eines Aufrufs: {max_input} Tokens",
+            f"  Input letzter Aufruf: {last_input}",
+        ]
+        if not complete:
+            lines.append(
+                "  Hinweis: Usage-Daten sind unvollständig; Summen und Maximum "
+                "berücksichtigen nur gemeldete Requests."
+            )
+        return "\n".join(lines)
 
     def token_usage_text(self) -> str:
         if not self._last_main_loop_ran and not self._last_knowledge_loop_ran:
@@ -143,11 +180,7 @@ class WebContextCliAgent(CliAgent):
             if start_index is None or not isinstance(usage_history, list):
                 usage = None
             else:
-                new_usages = [
-                    item
-                    for item in usage_history[start_index:]
-                    if isinstance(item, TokenUsage)
-                ]
+                new_usages = usage_history[start_index:]
                 usage = LoopTokenUsage.from_requests(new_usages)
 
             if phase == "main":
