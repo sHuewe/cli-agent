@@ -123,7 +123,7 @@ class OpenAIClient:
         self.timeout = timeout
         self.headers = dict(headers or {})
         self.last_usage: TokenUsage | None = None
-        self.usage_history: list[TokenUsage] = []
+        self.usage_history: list[TokenUsage | None] = []
 
     async def chat(
         self,
@@ -172,8 +172,7 @@ class OpenAIClient:
 
         data = response.json()
         self.last_usage = self._token_usage(data)
-        if self.last_usage is not None:
-            self.usage_history.append(self.last_usage)
+        self.usage_history.append(self.last_usage)
 
         try:
             message = data["choices"][0]["message"]
