@@ -206,7 +206,7 @@ async def run(args: argparse.Namespace) -> None:
         logging_config=config.logging,
         config_file=args.config or default_config_file(),
         dump_llm_context=config.dump_llm_context,
-        okf=config.okf
+        okf=config.okf,
     )
 
     print(f"Arbeitsordner: {workspace}")
@@ -215,9 +215,9 @@ async def run(args: argparse.Namespace) -> None:
         + (", ".join(server.name for server in config.mcp_servers) or "(keine)")
     )
     print(
-    f"Modell: {config.model.model} "
-    f"({config.model.provider}, {config.model.base_url})"
-)
+        f"Modell: {config.model.model} "
+        f"({config.model.provider}, {config.model.base_url})"
+    )
     if config.logging.enabled:
         print(f"Logdatei: {config.logging.file}")
 
@@ -234,8 +234,8 @@ async def run(args: argparse.Namespace) -> None:
         print(
             "Interaktiver Modus; 'enable <server>' und 'disable <server>' "
             "steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, "
-            "'clear_web_context' entfernt ihn, 'exit' oder 'quit' beendet "
-            "die Sitzung."
+            "'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des "
+            "letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung."
         )
         while True:
             try:
