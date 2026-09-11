@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from .model import TokenUsage
+
 
 class OpenAIError(RuntimeError):
     pass
@@ -48,6 +50,7 @@ class OpenAIClient:
             converted.append(result)
 
         return converted
+
     @staticmethod
     def _normalize_message(
         message: dict[str, Any],
@@ -80,6 +83,31 @@ class OpenAIClient:
             result["tool_calls"] = normalized_calls
 
         return result
+
+    @staticmethod
+    def _token_usage(data: dict[str, Any]) -> TokenUsage | None:
+        usage = data.get("usage")
+        if not isinstance(usage, dict):
+            return None
+
+        input_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+        output_tokens = usage.get(
+            "completion_tokens",
+            usage.get("output_tokens"),
+        )
+        if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+            return None
+
+        total_tokens = usage.get("total_tokens")
+        if not isinstance(total_tokens, int):
+            total_tokens = input_tokens + output_tokens
+
+        return TokenUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
+
     def __init__(
         self,
         *,
@@ -94,6 +122,8 @@ class OpenAIClient:
         self.api_key = api_key
         self.timeout = timeout
         self.headers = dict(headers or {})
+        self.last_usage: TokenUsage | None = None
+        self.usage_history: list[TokenUsage] = []
 
     async def chat(
         self,
@@ -123,6 +153,7 @@ class OpenAIClient:
                 f"Bearer {self.api_key}",
             )
 
+        self.last_usage = None
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout
@@ -140,6 +171,9 @@ class OpenAIClient:
             ) from exc
 
         data = response.json()
+        self.last_usage = self._token_usage(data)
+        if self.last_usage is not None:
+            self.usage_history.append(self.last_usage)
 
         try:
             message = data["choices"][0]["message"]
@@ -149,5 +183,3 @@ class OpenAIClient:
             ) from exc
 
         return self._normalize_message(message)
-
-    
