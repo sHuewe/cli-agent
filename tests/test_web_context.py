@@ -86,10 +86,10 @@ class RecordingModel:
 
 
 class UsageRecordingModel(RecordingModel):
-    def __init__(self, usages: list[TokenUsage]) -> None:
+    def __init__(self, usages: list[TokenUsage | None]) -> None:
         super().__init__()
         self.pending_usages = list(usages)
-        self.usage_history: list[TokenUsage] = []
+        self.usage_history: list[TokenUsage | None] = []
         self.last_usage: TokenUsage | None = None
 
     async def chat(self, messages, tools, **kwargs):
@@ -184,11 +184,32 @@ def test_loop_token_usage_aggregates_requests() -> None:
 
     assert usage == LoopTokenUsage(
         requests=2,
+        usage_requests=2,
         input_tokens=350,
         output_tokens=30,
         total_tokens=380,
         max_input_tokens=250,
         last_input_tokens=250,
+    )
+
+
+def test_loop_token_usage_preserves_missing_requests() -> None:
+    usage = LoopTokenUsage.from_requests(
+        [
+            TokenUsage(input_tokens=100, output_tokens=10, total_tokens=110),
+            TokenUsage(input_tokens=250, output_tokens=20, total_tokens=270),
+            None,
+        ]
+    )
+
+    assert usage == LoopTokenUsage(
+        requests=3,
+        usage_requests=2,
+        input_tokens=350,
+        output_tokens=30,
+        total_tokens=380,
+        max_input_tokens=250,
+        last_input_tokens=None,
     )
 
 
@@ -226,12 +247,51 @@ def test_tokens_command_reports_main_and_knowledge_usage(tmp_path: Path) -> None
     answer = asyncio.run(agent.ask("tokens"))
 
     assert "Main-Loop:" in answer
+    assert "Usage verfügbar: 1/1" in answer
     assert "Input gesamt: 3.000 Tokens" in answer
     assert "Output gesamt: 200 Tokens" in answer
-    assert "Max. Input eines Aufrufs: 3.000 Tokens" in answer
+    assert "Max. gemeldeter Input eines Aufrufs: 3.000 Tokens" in answer
     assert "Knowledge-Loop:" in answer
     assert "Input gesamt: 1.500 Tokens" in answer
     assert len(model.calls) == calls_before
+
+
+def test_tokens_command_marks_mixed_usage_as_incomplete(tmp_path: Path) -> None:
+    usage = LoopTokenUsage.from_requests(
+        [
+            TokenUsage(input_tokens=1_000, output_tokens=100, total_tokens=1_100),
+            TokenUsage(input_tokens=2_000, output_tokens=200, total_tokens=2_200),
+            None,
+        ]
+    )
+    assert usage is not None
+
+    text = WebContextCliAgent._format_loop_usage(
+        "Main-Loop",
+        ran=True,
+        usage=usage,
+    )
+
+    assert "Modellaufrufe: 3" in text
+    assert "Usage verfügbar: 2/3" in text
+    assert "Input gesamt: mindestens 3.000 Tokens" in text
+    assert "Input letzter Aufruf: nicht verfügbar" in text
+    assert "Usage-Daten sind unvollständig" in text
+
+
+def test_tokens_command_reports_all_missing_usage(tmp_path: Path) -> None:
+    usage = LoopTokenUsage.from_requests([None, None])
+    assert usage is not None
+
+    text = WebContextCliAgent._format_loop_usage(
+        "Main-Loop",
+        ran=True,
+        usage=usage,
+    )
+
+    assert "Modellaufrufe: 2" in text
+    assert "Usage verfügbar: 0/2" in text
+    assert "keine Usage-Daten geliefert" in text
 
 
 def test_tokens_command_does_not_clear_previous_usage(tmp_path: Path) -> None:
