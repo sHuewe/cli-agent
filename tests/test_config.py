@@ -39,6 +39,42 @@ backup_count = 2
     assert config.mcp_servers == ()
 
 
+def test_load_model_context_length(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[model]
+provider = "openai"
+model = "test-model"
+base_url = "http://localhost:8000/v1"
+context_length = 262144
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_file)
+
+    assert config.model.context_length == 262_144
+
+
+@pytest.mark.parametrize("value", [0, -1, '"invalid"', "true"])
+def test_model_context_length_must_be_positive_integer(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        f"""
+[model]
+context_length = {value}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="context_length"):
+        load_config(config_file)
+
+
 def test_configure_logging_writes_file(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     log_file = tmp_path / "agent.log"

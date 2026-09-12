@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from .model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
+
 
 class OpenAIError(RuntimeError):
     pass
@@ -48,6 +50,7 @@ class OpenAIClient:
             converted.append(result)
 
         return converted
+
     @staticmethod
     def _normalize_message(
         message: dict[str, Any],
@@ -80,6 +83,31 @@ class OpenAIClient:
             result["tool_calls"] = normalized_calls
 
         return result
+
+    @staticmethod
+    def _token_usage(data: dict[str, Any]) -> TokenUsage | None:
+        usage = data.get("usage")
+        if not isinstance(usage, dict):
+            return None
+
+        input_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+        output_tokens = usage.get(
+            "completion_tokens",
+            usage.get("output_tokens"),
+        )
+        if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+            return None
+
+        total_tokens = usage.get("total_tokens")
+        if not isinstance(total_tokens, int):
+            total_tokens = input_tokens + output_tokens
+
+        return TokenUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
+
     def __init__(
         self,
         *,
@@ -88,12 +116,46 @@ class OpenAIClient:
         api_key: str | None,
         timeout: float = 120.0,
         headers: dict[str, str] | None = None,
+        context_length: int | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
         self.headers = dict(headers or {})
+        self.context_length = context_length
+        self.last_usage: TokenUsage | None = None
+        self.usage_history: list[TokenUsage | None] = []
+        self._context_limit_reached = False
+
+    def _context_limit_error(self) -> ContextLimitReachedError:
+        usage = self.last_usage
+        if usage is None or self.context_length is None:
+            return ContextLimitReachedError(
+                "Context-Limit der aktuellen Sitzung wurde erreicht. "
+                "Es werden keine weiteren Modellanfragen gesendet. Bitte starte "
+                "eine neue Sitzung."
+            )
+        return ContextLimitReachedError(
+            "Context-Limit der aktuellen Sitzung wurde erreicht. "
+            f"Input des letzten Modellaufrufs: {usage.input_tokens} Tokens; "
+            f"konfiguriertes Limit: {self.context_length} Tokens; "
+            f"Sicherheitsreserve: {CONTEXT_LIMIT_MARGIN} Tokens. "
+            "Die Modellantwort wurde verworfen. Es werden keine weiteren "
+            "Modellanfragen gesendet. Bitte starte eine neue Sitzung."
+        )
+
+    def _check_context_limit(self) -> None:
+        if self._context_limit_reached:
+            raise self._context_limit_error()
+        if (
+            self.context_length is not None
+            and self.last_usage is not None
+            and self.last_usage.input_tokens + CONTEXT_LIMIT_MARGIN
+            >= self.context_length
+        ):
+            self._context_limit_reached = True
+            raise self._context_limit_error()
 
     async def chat(
         self,
@@ -102,6 +164,8 @@ class OpenAIClient:
         *,
         think: bool | None = None,
     ) -> dict[str, Any]:
+        self._check_context_limit()
+
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": self._convert_messages(messages),
@@ -123,6 +187,7 @@ class OpenAIClient:
                 f"Bearer {self.api_key}",
             )
 
+        self.last_usage = None
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout
@@ -140,6 +205,9 @@ class OpenAIClient:
             ) from exc
 
         data = response.json()
+        self.last_usage = self._token_usage(data)
+        self.usage_history.append(self.last_usage)
+        self._check_context_limit()
 
         try:
             message = data["choices"][0]["message"]
@@ -149,5 +217,3 @@ class OpenAIClient:
             ) from exc
 
         return self._normalize_message(message)
-
-    

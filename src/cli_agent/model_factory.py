@@ -16,6 +16,7 @@ def create_model_client(
             base_url=config.base_url,
             model=config.model,
             timeout=config.timeout,
+            context_length=config.context_length,
         )
 
     if config.provider == "openai":
@@ -29,6 +30,7 @@ def create_model_client(
             api_key=api_key,
             timeout=config.timeout,
             headers=config.headers,
+            context_length=config.context_length,
         )
 
     raise ValueError(
