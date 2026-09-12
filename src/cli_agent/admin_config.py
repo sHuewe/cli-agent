@@ -24,10 +24,14 @@ class AdminConfig:
 
 
 def default_admin_config_file() -> Path:
-    """Return the fixed machine-wide security-policy path."""
+    """Return the fixed machine-wide security-policy path.
+
+    On Windows the policy location is deliberately independent of environment
+    variables such as PROGRAMDATA, because those can be changed by the caller
+    and therefore must not select a security-policy file.
+    """
     if os.name == "nt":
-        program_data = os.getenv("PROGRAMDATA", r"C:\ProgramData")
-        return Path(program_data) / "cli-agent" / "admin_config.toml"
+        return Path(r"C:\ProgramData\cli-agent\admin_config.toml")
     return Path("/etc/cli-agent/admin_config.toml")
 
 
