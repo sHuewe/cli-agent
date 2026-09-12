@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+import platform
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +30,7 @@ def default_admin_config_file() -> Path:
     variables such as PROGRAMDATA, because those can be changed by the caller
     and therefore must not select a security-policy file.
     """
-    if os.name == "nt":
+    if platform.system() == "Windows":
         return Path(r"C:\ProgramData\cli-agent\admin_config.toml")
     return Path("/etc/cli-agent/admin_config.toml")
 
