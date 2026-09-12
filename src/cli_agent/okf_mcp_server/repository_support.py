@@ -11,7 +11,7 @@ import yaml
 from yaml.constructor import ConstructorError
 from yaml.events import AliasEvent
 
-from ..workspace import WorkspacePathError, WorkspaceRoot
+from .workspace import WorkspacePathError, WorkspaceRoot
 
 FRONTMATTER_PATTERN = re.compile(
     r"\A---[ \t]*\r?\n(?P<yaml>.*?)\r?\n---[ \t]*(?:\r?\n|\Z)",
