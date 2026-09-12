@@ -42,12 +42,18 @@ def _approval_arguments(arguments: dict[str, object]) -> str:
     return json.dumps(summary, ensure_ascii=False, sort_keys=True)
 
 
-async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> bool:
+async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> bool | str:
     if not sys.stdin.isatty():
         return False
     print("\nExplizite Freigabe erforderlich: " f"{tool_name}({_approval_arguments(arguments)})")
-    answer = await asyncio.to_thread(input, "Aktion ausführen? [j/N] ")
-    return answer.strip().lower() in {"j", "ja", "y", "yes"}
+    answer = await asyncio.to_thread(
+        input,
+        "Aktion ausführen? [j]a / [s] dieses Tool für die Session / [N]ein ",
+    )
+    normalized = answer.strip().casefold()
+    if normalized in {"s", "session"}:
+        return "session"
+    return normalized in {"j", "ja", "y", "yes"}
 
 
 def build_parser() -> argparse.ArgumentParser:
