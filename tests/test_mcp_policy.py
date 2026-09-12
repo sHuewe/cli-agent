@@ -28,7 +28,7 @@ class ToolModel:
             {"role": "assistant", "content": "done"},
         ]
 
-    async def chat(self, _messages, _tools, *, think=None):
+    async def chat(self, messages, tools, *, think=None):
         return self.responses.pop(0)
 
 
