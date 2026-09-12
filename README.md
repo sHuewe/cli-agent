@@ -12,27 +12,39 @@ Docker Compose und der Docker-basierte Python Validator gehören nicht zum Kern.
 
 ## Setup / Installation
 
-Python 3.11 oder neuer wird benötigt. Unter Windows:
+Python 3.11 oder neuer wird benötigt. Für eine lokale Installation aus dem ausgecheckten Repository unter Windows:
 
 ```powershell
 py -m pip install pipx
 py -m pipx ensurepath
-py -m pipx install .
+py -m pipx install --editable .
 ```
 
-Beim ersten Start wird die normale Benutzerkonfiguration unter `%LOCALAPPDATA%\cli-agent\config.toml` angelegt.
+Beim ersten Start wird die normale Benutzerkonfiguration unter `%LOCALAPPDATA%\cli-agent\config.toml` angelegt. Danach werden insbesondere Modell, MCP-Server und optionale Funktionen dort konfiguriert.
 
-### Maschinenweite Security-Policy
+Für die lokale Open-Source-Nutzung ist keine Admin-Datei zwingend erforderlich. Fehlt sie, verwendet `cli-agent` sichere Defaults: Modell- und HTTP-MCP-Zugriff nur auf localhost, kein Webzugriff, keine externen stdio-MCPs und keine administrativ automatisch freigegebenen externen Tools.
 
-Security-relevante Netzwerk- und MCP-Freigaben liegen bewusst **nicht** in der normalen `config.toml`. Unter Windows lädt `cli-agent` ausschließlich:
+## Zwei getrennte Konfigurationsebenen
+
+Die normale `config.toml` bestimmt, **was der Benutzer verwenden möchte**. Die maschinenweite `admin_config.toml` bestimmt unabhängig davon, **was verwendet werden darf**. Security-relevante Netzwerk- und MCP-Freigaben können deshalb nicht über die normale Benutzerkonfiguration gelockert werden.
+
+Unter Windows wird die Admin-Policy ausschließlich von folgendem festen Pfad geladen:
 
 ```text
 C:\ProgramData\cli-agent\admin_config.toml
 ```
 
-Unter Linux ist der feste Pfad `/etc/cli-agent/admin_config.toml`. Fehlt die Datei, gelten sichere Defaults: Modell- und HTTP-MCP-Zugriff nur auf localhost, Webzugriff aus, externe stdio-MCPs aus und keine automatisch freigegebenen externen Tools.
+Unter Linux ist der feste Pfad:
 
-Im Repository liegt `admin_config.example.toml`. Unter Windows kann die Policy einmalig in einer als Administrator gestarteten PowerShell eingerichtet werden:
+```text
+/etc/cli-agent/admin_config.toml
+```
+
+Ein `[network]`-Abschnitt oder `allow_untrusted_stdio` in der Benutzerkonfiguration wird als Konfigurationsfehler abgewiesen. Eine vorhandene, aber syntaktisch oder typseitig ungültige Admin-Policy führt ebenfalls zu einem Fehler, statt still auf weniger restriktive Werte zurückzufallen.
+
+## Maschinenweite Admin-Policy einrichten
+
+Im Repository liegt `admin_config.example.toml`. Unter Windows wird die Policy bewusst nicht während der normalen `pipx`-Installation erzeugt. Ein Administrator richtet sie explizit mit einer als Administrator gestarteten PowerShell ein:
 
 ```powershell
 .\scripts\setup-admin-config.ps1 -LlmHost "llm.intern.firma.de"
@@ -48,15 +60,15 @@ Optional können weitere administrativ freizugebende Ziele beziehungsweise Fähi
   -AutoApproveTools "continuous__search"
 ```
 
-`-AllowUntrustedStdio` erlaubt externe stdio-MCP-Prozesse. Diese Freigabe ist bewusst administrativ und kann nicht aus `config.toml` gesetzt werden. Das Setup-Skript zeigt eine vorhandene Policy vor dem Ersetzen an; `-Force` überspringt nur diese Rückfrage. Die erzeugte Datei erhält ACLs mit Full Control für Administrators/SYSTEM und Read für Users.
+`-AllowUntrustedStdio` erlaubt externe stdio-MCP-Prozesse. Diese Freigabe ist administrativ und kann nicht aus `config.toml` gesetzt werden. Das Setup-Skript fragt vor dem Ersetzen einer vorhandenen Policy nach; `-Force` überspringt diese Rückfrage. Verzeichnis und Datei werden mit ACLs geschützt: Administrators und SYSTEM erhalten Full Control, normale Users nur Leserechte.
 
-Die Admin-Policy enthält beispielsweise:
+Eine Admin-Policy kann beispielsweise so aussehen:
 
 ```toml
 [network]
 model_allowed_hosts = ["localhost", "127.0.0.1", "::1", "llm.intern.firma.de"]
-mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
-web_allowed_hosts = []
+mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1", "mcp.intern.firma.de"]
+web_allowed_hosts = ["docs.intern.firma.de"]
 
 [mcp]
 allow_untrusted_stdio = false
@@ -65,11 +77,9 @@ allow_untrusted_stdio = false
 auto_approve_tools = ["continuous__search"]
 ```
 
-`auto_approve_tools` verwendet ausschließlich exakte exponierte Toolnamen `<server>__<tool>`; Wildcards werden nicht interpretiert. Alle übrigen externen MCP-Tool-Aufrufe benötigen weiterhin die interaktive Zustimmung.
+Die Netzwerklisten enthalten Hosts, keine vollständigen URLs. Modell- und MCP-URLs bleiben Teil der normalen Benutzerkonfiguration, ihre Hosts müssen aber von der Admin-Policy erlaubt sein. `auto_approve_tools` verwendet ausschließlich exakte exponierte Toolnamen `<server>__<tool>`; Wildcards werden nicht interpretiert. Administrative Auto-Approvals gelten nur für externe MCP-Tools und können die Approval-Regeln eingebauter Tools nicht umgehen.
 
 ## Benutzer-/Projektkonfiguration
-
-Die normale `config.toml` bestimmt, **was verwendet werden soll**. Die Admin-Policy bestimmt unabhängig davon, **was verwendet werden darf**. Ein `[network]`-Abschnitt oder `allow_untrusted_stdio` in der Benutzerkonfiguration wird deshalb als Konfigurationsfehler abgewiesen.
 
 Beispiel Modell:
 
@@ -94,9 +104,25 @@ transport = "streamable_http"
 url = "https://mcp.intern.firma.de/mcp"
 ```
 
-Der Host muss in `network.mcp_allowed_hosts` der Admin-Policy enthalten sein. Externe stdio-MCPs können ebenfalls konfiguriert werden, werden aber nur gestartet, wenn die Admin-Policy `allow_untrusted_stdio = true` setzt.
+Der Host muss in `network.mcp_allowed_hosts` der Admin-Policy enthalten sein. Externe stdio-MCPs können ebenfalls konfiguriert werden, werden aber nur gestartet, wenn die Admin-Policy `allow_untrusted_stdio = true` setzt. Für stdio stehen `{python}`, `{workspace_directory}`, `{project_directory}` und `{config_file}` als Platzhalter zur Verfügung.
 
-Für stdio stehen `{python}`, `{workspace_directory}`, `{project_directory}` und `{config_file}` als Platzhalter zur Verfügung.
+## MCP-Tool-Freigaben
+
+Read-only Built-in-Tools werden ohne interaktive Nachfrage ausgeführt. Schreibende Tools des eingebauten Workspace-OS-MCPs und externe MCP-Tools benötigen standardmäßig eine explizite Benutzerfreigabe.
+
+Bei einer solchen Nachfrage stehen drei Entscheidungen zur Verfügung:
+
+```text
+[j]a      -> nur diesen einzelnen Aufruf ausführen
+[s]ession -> genau dieses Tool für den Rest der laufenden Session freigeben
+[N]ein    -> Aufruf ablehnen (Default)
+```
+
+Eine Session-Freigabe gilt für den **exakten exponierten Toolnamen**. Wird beispielsweise `continuous__search` für die Session freigegeben, dürfen weitere Aufrufe dieses Tools auch mit anderen Argumenten ohne erneute Nachfrage ausgeführt werden. `continuous__read` bleibt davon unberührt. Die Freigabe wird ausschließlich im Speicher gehalten und endet mit dem `cli-agent`-Prozess; sie wird weder in `config.toml` noch in `admin_config.toml` persistiert.
+
+Das gilt auch für bestätigungspflichtige Built-in-OS-Schreibtools: Eine Session-Freigabe für `os__write_file` betrifft nur `os__write_file`; `os__delete_file` benötigt weiterhin eine eigene Freigabe. Die zusätzlichen Workspace- und Sensitive-Path-Schutzmechanismen der Built-in-Tools bleiben dabei unverändert aktiv.
+
+Für häufig verwendete **externe** Tools kann ein Administrator die interaktive Nachfrage dauerhaft über `[mcp.approval].auto_approve_tools` vermeiden. Damit ergeben sich für externe Tools folgende Stufen: administrativ auto-approved -> direkt ausführen; für die Session freigegeben -> direkt ausführen; andernfalls interaktiv nachfragen. Built-in-Tools werden nicht durch `auto_approve_tools` freigeschaltet.
 
 ## Start / Workspace
 
@@ -107,13 +133,13 @@ cd C:\Projekte\mein-projekt
 cli-agent
 ```
 
-Projektbezogene Config:
+Eine projektbezogene Konfiguration kann relativ zum aktuellen Verzeichnis angegeben werden:
 
 ```powershell
 cli-agent --config mein_config.toml
 ```
 
-Eingebauter Workspace-OS-MCP:
+Der eingebaute Workspace-OS-MCP wird explizit aktiviert:
 
 ```powershell
 cli-agent --with-os-read
@@ -161,4 +187,4 @@ Mit `tokens` kann die Usage des letzten Agentenlaufs angezeigt werden.
 
 ## Security
 
-Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, externe stdio-MCPs und administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern.
+Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, externe stdio-MCPs und administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern. Session-Freigaben sind dagegen eine bewusste, nicht persistente Benutzerentscheidung für genau ein Tool innerhalb des laufenden Prozesses.
