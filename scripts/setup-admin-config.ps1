@@ -16,13 +16,28 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     throw "Dieses Skript muss in einer PowerShell mit Administratorrechten ausgefuehrt werden."
 }
 
-$targetDirectory = Join-Path $env:ProgramData "cli-agent"
+# Keep this path in sync with cli_agent.admin_config.default_admin_config_file().
+# Do not derive it from PROGRAMDATA: process environment variables are
+# user-controlled and must not select a machine-wide security-policy file.
+$targetDirectory = "C:\ProgramData\cli-agent"
 $targetFile = Join-Path $targetDirectory "admin_config.toml"
 
-if ((Test-Path $targetFile) -and -not $Force) {
+function Assert-NotReparsePoint([string]$Path, [string]$Description) {
+    if (Test-Path -LiteralPath $Path) {
+        $item = Get-Item -LiteralPath $Path -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Description darf kein Reparse Point/Symlink sein: $Path"
+        }
+    }
+}
+
+Assert-NotReparsePoint -Path $targetDirectory -Description "Der Admin-Policy-Ordner"
+Assert-NotReparsePoint -Path $targetFile -Description "Die Admin-Policy-Datei"
+
+if ((Test-Path -LiteralPath $targetFile) -and -not $Force) {
     Write-Host "Es existiert bereits eine Admin-Policy: $targetFile"
     Write-Host "Vorhandener Inhalt:"
-    Get-Content $targetFile | ForEach-Object { Write-Host $_ }
+    Get-Content -LiteralPath $targetFile | ForEach-Object { Write-Host $_ }
     $answer = Read-Host "Policy vollstaendig ersetzen? [j/N]"
     if ($answer.ToLowerInvariant() -notin @("j", "ja", "y", "yes")) {
         Write-Host "Abgebrochen."
@@ -62,6 +77,13 @@ function Invoke-Icacls([string[]]$Arguments, [string]$Description) {
     }
 }
 
+function Invoke-Takeown([string]$Path, [string]$Description) {
+    & takeown.exe /F $Path /A | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description konnte nicht uebernommen werden (takeown Exit-Code $LASTEXITCODE)."
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($LlmHost)) {
     $LlmHost = Read-Host "Zusaetzlich erlaubter LLM-Host (leer = nur localhost)"
 }
@@ -90,9 +112,14 @@ auto_approve_tools = $(Toml-Array $autoApprove)
 "@
 
 New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+Assert-NotReparsePoint -Path $targetDirectory -Description "Der Admin-Policy-Ordner"
 
-# Harden the directory as well as the file. Otherwise a user with directory
-# modification rights could replace a protected policy file with a new one.
+# A normal user may have pre-created the directory with explicit ACEs for their
+# own SID. Take ownership, reset the DACL to inherited defaults, then remove
+# inheritance before granting only the intended principals. This prevents stale
+# explicit ACEs from surviving the setup.
+Invoke-Takeown -Path $targetDirectory -Description "Der Besitz von $targetDirectory"
+Invoke-Icacls -Arguments @($targetDirectory, "/reset") -Description "Die ACL fuer $targetDirectory"
 Invoke-Icacls -Arguments @($targetDirectory, "/inheritance:r") -Description "Die ACL-Vererbung fuer $targetDirectory"
 Invoke-Icacls -Arguments @(
     $targetDirectory,
@@ -102,11 +129,20 @@ Invoke-Icacls -Arguments @(
     '*S-1-5-32-545:(OI)(CI)(RX)'
 ) -Description "Die ACL fuer $targetDirectory"
 
+# Do not preserve a pre-existing file object or any explicit ACLs attached to
+# it. After the directory is protected, remove the old file and create a new
+# policy file under the trusted directory ACL.
+if (Test-Path -LiteralPath $targetFile) {
+    Assert-NotReparsePoint -Path $targetFile -Description "Die Admin-Policy-Datei"
+    Remove-Item -LiteralPath $targetFile -Force
+}
+
 # .NET's UTF8Encoding(false) is UTF-8 without BOM on Windows PowerShell 5.1
 # as well as modern PowerShell. tomllib expects a BOM-free UTF-8 TOML file.
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($targetFile, $content, $utf8NoBom)
 
+# Replace the inherited file ACL with the exact machine-policy ACL.
 Invoke-Icacls -Arguments @($targetFile, "/inheritance:r") -Description "Die ACL-Vererbung fuer $targetFile"
 Invoke-Icacls -Arguments @(
     $targetFile,
