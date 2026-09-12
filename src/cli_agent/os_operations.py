@@ -146,6 +146,14 @@ class Workspace:
             or name.endswith(".log")
         )
 
+    @classmethod
+    def _reject_sensitive_mutation(cls, path: Path) -> None:
+        if cls._is_sensitive_file(path):
+            raise WorkspaceError(
+                "Das Ändern von Secret-/Credential- oder internen "
+                "Workspace-Dateien ist über den Workspace-OS-Server nicht erlaubt."
+            )
+
     @staticmethod
     def _existing_line_ending(path: Path) -> str:
         """Return the dominant line ending, defaulting to LF on ties."""
@@ -219,6 +227,7 @@ class Workspace:
         file_path = self.resolve_path(path)
         if not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
+        self._reject_sensitive_mutation(file_path)
 
         try:
             file_path.unlink()
@@ -241,6 +250,7 @@ class Workspace:
             )
 
         dst_path = self.resolve_path(path_dst, must_exist=False)
+        self._reject_sensitive_mutation(dst_path)
         if dst_path.exists() and not dst_path.is_file():
             raise WorkspaceError(f"Zielpfad ist keine Datei: {path_dst!r}")
         if not dst_path.parent.is_dir():
@@ -256,6 +266,7 @@ class Workspace:
 
     def make_directory(self, path: str) -> str:
         dir_path = self.resolve_path(path, must_exist=False)
+        self._reject_sensitive_mutation(dir_path)
         if dir_path.exists() and not dir_path.is_dir():
             raise WorkspaceError(f"Pfad ist kein Ordner: {path!r}")
         if dir_path.exists():
@@ -274,6 +285,7 @@ class Workspace:
 
     def write_file(self, path: str, content: str) -> str:
         file_path = self.resolve_path(path, must_exist=False)
+        self._reject_sensitive_mutation(file_path)
         if file_path.exists() and not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
         if not self._is_text_file(file_path):
