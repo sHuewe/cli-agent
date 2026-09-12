@@ -180,8 +180,13 @@ def test_default_config_is_created_from_safe_packaged_template(tmp_path: Path, m
     assert config.mcp_servers == ()
     assert config.okf is None
     content = config_file.read_text(encoding="utf-8")
-    assert "[network]" not in content
-    assert "allow_untrusted_stdio" not in content
+    active_lines = {
+        line.strip()
+        for line in content.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    assert "[network]" not in active_lines
+    assert not any(line.startswith("allow_untrusted_stdio") for line in active_lines)
     assert "# [[mcp_servers]]" in content
     assert "# [okf]" in content
 
