@@ -51,6 +51,13 @@ function Toml-Array([string[]]$Values) {
     return "[" + (($Values | ForEach-Object { Toml-String $_ }) -join ", ") + "]"
 }
 
+function Invoke-Icacls([string[]]$Arguments, [string]$Description) {
+    & icacls.exe @Arguments | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description konnte nicht gesetzt werden (icacls Exit-Code $LASTEXITCODE)."
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($LlmHost)) {
     $LlmHost = Read-Host "Zusaetzlich erlaubter LLM-Host (leer = nur localhost)"
 }
@@ -79,14 +86,31 @@ auto_approve_tools = $(Toml-Array $autoApprove)
 "@
 
 New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
-Set-Content -Path $targetFile -Value $content -Encoding utf8
 
-# Protect the policy from non-elevated modification. SIDs avoid localized group names.
-& icacls.exe $targetFile /inheritance:r | Out-Null
-& icacls.exe $targetFile /grant:r '*S-1-5-32-544:(F)' '*S-1-5-18:(F)' '*S-1-5-32-545:(R)' | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "Die ACL fuer $targetFile konnte nicht gesetzt werden."
-}
+# Harden the directory as well as the file. Otherwise a user with directory
+# modification rights could replace a protected policy file with a new one.
+Invoke-Icacls -Arguments @($targetDirectory, "/inheritance:r") -Description "Die ACL-Vererbung fuer $targetDirectory"
+Invoke-Icacls -Arguments @(
+    $targetDirectory,
+    "/grant:r",
+    '*S-1-5-32-544:(OI)(CI)(F)',
+    '*S-1-5-18:(OI)(CI)(F)',
+    '*S-1-5-32-545:(OI)(CI)(RX)'
+) -Description "Die ACL fuer $targetDirectory"
+
+# .NET's UTF8Encoding(false) is UTF-8 without BOM on Windows PowerShell 5.1
+# as well as modern PowerShell. tomllib expects a BOM-free UTF-8 TOML file.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($targetFile, $content, $utf8NoBom)
+
+Invoke-Icacls -Arguments @($targetFile, "/inheritance:r") -Description "Die ACL-Vererbung fuer $targetFile"
+Invoke-Icacls -Arguments @(
+    $targetFile,
+    "/grant:r",
+    '*S-1-5-32-544:(F)',
+    '*S-1-5-18:(F)',
+    '*S-1-5-32-545:(R)'
+) -Description "Die ACL fuer $targetFile"
 
 Write-Host "Admin-Policy geschrieben: $targetFile"
-Write-Host "Normale Benutzer koennen die Datei lesen, aber nur mit erhoehten Rechten aendern."
+Write-Host "Normale Benutzer koennen die Policy lesen, aber weder die Datei noch ihren Policy-Ordner ohne erhoehte Rechte veraendern."
