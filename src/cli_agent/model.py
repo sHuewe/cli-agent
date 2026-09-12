@@ -4,6 +4,13 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 
+CONTEXT_LIMIT_MARGIN = 500
+
+
+class ContextLimitReachedError(RuntimeError):
+    """Configured context limit was reached for the current model session."""
+
+
 @dataclass(frozen=True)
 class TokenUsage:
     """Normalized token usage for one model request."""
