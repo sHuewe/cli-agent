@@ -38,7 +38,6 @@ def ensure_default_config_file() -> Path:
         with config_file.open("x", encoding="utf-8") as handle:
             handle.write(template)
     except FileExistsError:
-        # Another process created the config between exists() and open().
         pass
     return config_file
 
@@ -51,6 +50,7 @@ class ModelConfig:
     api_key_env: str | None = None
     timeout: float = 120.0
     headers: dict[str, str] = field(default_factory=dict)
+    context_length: int | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +150,19 @@ def _model_config(values: dict[str, Any]) -> ModelConfig:
     if not isinstance(raw_headers, dict):
         raise ValueError("[model].headers muss eine Tabelle sein.")
 
+    raw_context_length = values.get("context_length")
+    context_length: int | None
+    if raw_context_length is None:
+        context_length = None
+    elif (
+        not isinstance(raw_context_length, int)
+        or isinstance(raw_context_length, bool)
+        or raw_context_length <= 0
+    ):
+        raise ValueError("[model].context_length muss eine positive Ganzzahl sein.")
+    else:
+        context_length = raw_context_length
+
     return ModelConfig(
         provider=provider,
         model=model,
@@ -157,6 +170,7 @@ def _model_config(values: dict[str, Any]) -> ModelConfig:
         api_key_env=api_key_env,
         timeout=float(values.get("timeout", defaults.timeout)),
         headers={str(key): str(value) for key, value in raw_headers.items()},
+        context_length=context_length,
     )
 
 
