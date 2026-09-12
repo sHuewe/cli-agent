@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..workspace import WorkspacePathError, WorkspaceRoot
+from .workspace import WorkspacePathError, WorkspaceRoot
 from .repository_support import OkfRepositoryError, RepositoryMetadataMixin
 
 
