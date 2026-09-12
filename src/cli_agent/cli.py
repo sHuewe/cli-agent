@@ -341,8 +341,8 @@ async def run(args: argparse.Namespace) -> None:
         print(
             "Interaktiver Modus; 'enable <server>' und 'disable <server>' "
             "steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, "
-            "'clear_web_context' entfernt ihn, 'exit' oder 'quit' beendet "
-            "die Sitzung."
+            "'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des "
+            "letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung."
         )
         while True:
             try:

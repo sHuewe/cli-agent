@@ -75,3 +75,17 @@ def test_model_endpoint_can_use_an_explicit_internal_host() -> None:
     )
 
     assert isinstance(client, OpenAIClient)
+
+
+def test_model_factory_passes_context_length() -> None:
+    client = create_model_client(
+        ModelConfig(
+            provider="openai",
+            model="test-model",
+            base_url="http://localhost:8000/v1",
+            context_length=262_144,
+        )
+    )
+
+    assert isinstance(client, OpenAIClient)
+    assert client.context_length == 262_144

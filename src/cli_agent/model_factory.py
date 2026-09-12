@@ -25,6 +25,7 @@ def create_model_client(
             base_url=config.base_url,
             model=config.model,
             timeout=config.timeout,
+            context_length=config.context_length,
             allowed_hosts=network.model_allowed_hosts,
         )
 
@@ -39,6 +40,7 @@ def create_model_client(
             api_key=api_key,
             timeout=config.timeout,
             headers=config.headers,
+            context_length=config.context_length,
             allowed_hosts=network.model_allowed_hosts,
         )
 
