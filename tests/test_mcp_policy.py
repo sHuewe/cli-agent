@@ -4,12 +4,9 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from cli_agent.admin_config import McpPolicy
 from cli_agent.agent import CliAgent
 from cli_agent.config import McpServerConfig
-from cli_agent.ollama import OllamaClient
 
 
 class ToolModel:
@@ -89,14 +86,6 @@ def test_external_tool_without_auto_approval_uses_callback(tmp_path: Path) -> No
     assert session.calls == [("search", {"query": "x"})]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known production defect: process_tool_calls currently does not pass the "
-        "exposed <server>__<tool> name to _requires_approval, so admin "
-        "auto_approve_tools is not effective in the real tool-call path."
-    ),
-)
 def test_admin_auto_approved_external_tool_skips_callback(tmp_path: Path) -> None:
     async def must_not_be_called(_name, _arguments):
         raise AssertionError("approval callback must not run for auto-approved tool")
