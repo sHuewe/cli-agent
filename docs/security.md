@@ -20,7 +20,7 @@
 
 **Problem:** Eine maschinenweite Policy schützt nur dann vor normalen Benutzeränderungen, wenn nicht nur die Datei, sondern auch ihr Verzeichnis gegen Ersetzen/Umbenennen geschützt ist und Fehler beim Setzen der ACLs nicht unbemerkt bleiben.
 
-**Gelöst:** `scripts/setup-admin-config.ps1` muss elevated ausgeführt werden, setzt ACLs auf Datei **und** Elternverzeichnis mit well-known SIDs für Administrators, SYSTEM und Users und prüft den Exit-Code jedes `icacls`-Aufrufs. Die Datei wird als UTF-8 ohne BOM geschrieben. Eine bestehende Policy wird interaktiv bestätigt oder nur mit bewusstem `-Force` ersetzt. Entwickler mit lokalen Adminrechten können diese Grenze durch eine bewusste Elevation ändern; das ist als administrative Security-Entscheidung dokumentiert und nicht als normale Userconfig-Funktion gedacht.
+**Gelöst:** `scripts/setup-admin-config.ps1` muss elevated ausgeführt werden, verwendet denselben festen Policy-Pfad wie der Loader und vertraut nicht auf `PROGRAMDATA`. Das Skript lehnt Reparse Points ab, übernimmt den Besitz des Policy-Verzeichnisses, setzt dessen DACL vor der Vergabe der vorgesehenen well-known SID-basierten Rechte zurück und erzeugt eine vorhandene Policy-Datei nach Absicherung des Verzeichnisses neu. Administrators und SYSTEM erhalten Full Control, normale Users nur Leserechte. Fehler von `takeown`/`icacls` werden geprüft. Eine bestehende Policy wird interaktiv bestätigt oder nur mit bewusstem `-Force` ersetzt. Entwickler mit lokalen Adminrechten können diese Grenze durch eine bewusste Elevation ändern; das ist als administrative Security-Entscheidung dokumentiert und nicht als normale Userconfig-Funktion gedacht.
 
 ### Externe stdio-MCPs / Prozessausführung
 
@@ -32,13 +32,13 @@
 
 **Problem:** Tool-Metadaten und Tool-Aufrufe stammen aus nicht vollständig vertrauenswürdigen Komponenten. Insbesondere externe MCP-Tools sollten nicht ohne eine eigene Freigabegrenze ausgeführt werden.
 
-**Gelöst:** Externe MCP-Tools benötigen standardmäßig eine interaktive Benutzerfreigabe. Administratoren können nur exakte exponierte externe Toolnamen über `[mcp.approval].auto_approve_tools` dauerhaft freigeben; Wildcards gibt es nicht. Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses Tool nur für den laufenden Prozess freigeben. Diese Session-Freigabe ist in-memory und wird nicht persistiert. Unbekannte Tools, ungültige JSON-Argumente und Tools deaktivierter Server werden vor der Ausführung abgewiesen. Die Approval-Anzeige redigiert sensitive Argumentnamen und große Inhalte. `tests/test_mcp_policy.py`, `tests/test_session_approval.py`, `tests/test_agent_tool_calls.py` und `tests/test_cli.py` decken diese Grenzen ab.
+**Gelöst:** Externe MCP-Tools benötigen standardmäßig eine interaktive Benutzerfreigabe. Administratoren können nur exakte exponierte externe Toolnamen über `[mcp.approval].auto_approve_tools` dauerhaft freigeben; Wildcards gibt es nicht. Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses Tool nur für den laufenden Prozess freigeben. Für vertrauenswürdige Skripte kann dieselbe prozesslokale Vertrauensentscheidung vor dem Start mit wiederholbarem `--approve-tool <exposed_name>` explizit getroffen werden. Diese CLI-Freigabe verwendet ebenfalls nur exakte Toolnamen, kennt kein `approve-all` und ersetzt ausschließlich die interaktive Nachfrage; Serveraktivierung, Admin-Policy, Netzwerk-, Workspace- und Sensitive-Path-Grenzen bleiben bestehen. Ohne TTY und ohne passende CLI-Vorabfreigabe wird weiterhin fail-closed abgelehnt. Unbekannte Tools, ungültige JSON-Argumente und Tools deaktivierter Server werden vor der Ausführung abgewiesen. Die Approval-Anzeige redigiert sensitive Argumentnamen und große Inhalte. `tests/test_mcp_policy.py`, `tests/test_session_approval.py`, `tests/test_agent_tool_calls.py` und `tests/test_cli.py` decken diese Grenzen ab.
 
 ### Built-in-OS-Schreiboperationen
 
 **Problem:** Schreibzugriff auf den Workspace ist eine höhere Fähigkeit als Lesen und darf weder implizit aktiv sein noch durch eine externe Tool-Auto-Approval-Regel versehentlich freigeschaltet werden.
 
-**Gelöst:** Der eingebaute OS-MCP ist standardmäßig read-only; Schreiben wird explizit über `--with-os-write` aktiviert. Mutierende Built-in-Tools (`write_file`, `delete_file`, `make_directory`, `copy_file`) benötigen dann weiterhin Zustimmung. Administrative `auto_approve_tools` gelten absichtlich nur für externe MCPs und können diese Built-in-Regel nicht umgehen. Der Benutzer kann ein konkretes Built-in-Write-Tool bewusst für die aktuelle Session freigeben; ein anderes Write-Tool bleibt separat zustimmungspflichtig. Diese Policy ist in `tests/test_agent.py` und `tests/test_session_approval.py` abgesichert.
+**Gelöst:** Der eingebaute OS-MCP ist standardmäßig read-only; Schreiben wird explizit über `--with-os-write` aktiviert. Mutierende Built-in-Tools (`write_file`, `delete_file`, `make_directory`, `copy_file`) benötigen dann weiterhin Zustimmung. Administrative `auto_approve_tools` gelten absichtlich nur für externe MCPs und können diese Built-in-Regel nicht umgehen. Der Benutzer kann ein konkretes Built-in-Write-Tool bewusst für die aktuelle Session oder mit `--approve-tool` für genau den aktuellen Prozesslauf freigeben; ein anderes Write-Tool bleibt separat zustimmungspflichtig. Workspace-Containment und Sensitive-Path-Schutz werden dadurch nicht umgangen. Diese Policy ist in `tests/test_agent.py`, `tests/test_session_approval.py` und `tests/test_cli.py` abgesichert.
 
 ### Workspace-Escape und Secret-Zugriff
 
@@ -56,7 +56,7 @@
 
 **Problem:** Geladene Webseiten sind untrusted Input und können Prompt-Injection enthalten; unbeschränkte Antworten können außerdem Speicher-/Kontextprobleme verursachen.
 
-**Gelöst:** Webzugriff benötigt eine Admin-Allowlist. Nur textuelle HTTP-Inhalte werden akzeptiert, Response-Bytes und resultierender Modellkontext sind begrenzt. Redirect-Ziele werden erneut validiert. Der geladene Inhalt wird ausdrücklich als nicht vertrauenswürdiger Referenzinhalt markiert und nicht als System-/Benutzeranweisung behandelt; Web-Kontext wird nicht dauerhaft in die normale Conversation-History übernommen. `tests/test_web_context.py` deckt URL-Prüfung, Extraktion und History-Trennung ab.
+**Gelöst:** Webzugriff benötigt eine Admin-Allowlist. Nur textuelle HTTP-Inhalte werden akzeptiert, Response-Bytes und resultierender Modellkontext sind begrenzt. Redirect-Ziele werden erneut validiert. Der geladene Inhalt wird ausdrücklich als nicht vertrauenswürdiger Referenzinhalt markiert und nicht als System-/Benutzeranweisung behandelt; Web-Kontext wird nicht dauerhaft in die normale Conversation-History übernommen. `--add-web-context <url>` verwendet für One-Shot-/Skriptaufrufe denselben Ladepfad wie der interaktive Befehl `add_web_context <url>` und erbt damit dieselbe Allowlist-, Redirect-, Größen- und Untrusted-Content-Behandlung. `tests/test_web_context.py` und `tests/test_cli.py` decken diese Grenzen ab.
 
 ### OKF-/Knowledge-Inhalte und Repository-Navigation
 
@@ -101,17 +101,17 @@ URLs werden gegen exakte Hostnamen aus der Admin-Policy validiert. Remote-Ziele 
 
 Externe stdio-MCPs werden nur gestartet, wenn `[mcp].allow_untrusted_stdio = true` in der Admin-Policy gesetzt ist. Ein gleichnamiger Wert in der Userconfig wird abgewiesen.
 
-Externe MCP-Tools benötigen standardmäßig eine interaktive Zustimmung. Administratoren können einzelne externe Tools über exakte exponierte Namen in `[mcp.approval].auto_approve_tools` freigeben. Bei einer interaktiven Nachfrage kann `[s]` genau dieses Tool für die aktuelle Session freigeben; diese Entscheidung wird nicht persistiert. Eingebaute mutierende Workspace-OS-Tools behalten ihre eigene Freigabelogik und können nicht über die Admin-Auto-Approval-Liste freigeschaltet werden.
+Externe MCP-Tools benötigen standardmäßig eine interaktive Zustimmung. Administratoren können einzelne externe Tools über exakte exponierte Namen in `[mcp.approval].auto_approve_tools` freigeben. Bei einer interaktiven Nachfrage kann `[s]` genau dieses Tool für die aktuelle Session freigeben; diese Entscheidung wird nicht persistiert. Für vertrauenswürdige Automation kann `--approve-tool` einen exakten Toolnamen für den aktuellen Prozess vorab freigeben. Diese Option ist keine dauerhafte Policy und umgeht keine anderen Security-Grenzen. Eingebaute mutierende Workspace-OS-Tools können nicht über die Admin-Auto-Approval-Liste freigeschaltet werden.
 
 stdio-Prozesse erhalten nur eine reduzierte Umgebung; zusätzliche Werte müssen explizit über die MCP-Konfiguration übergeben werden.
 
 ## Workspace OS
 
-Workspace-Pfade werden auf den festgelegten Workspace begrenzt. Absolute Pfade, `..` und Symlink-Escapes werden abgewiesen. Lesezugriffe und Mutationen auf bekannte Secret-/Credential- sowie interne Agenten-/Repository-Pfade werden blockiert. Schreibzugriff ist standardmäßig aus und muss explizit über `--with-os-write` aktiviert werden; mutierende Tools bleiben zustimmungspflichtig, solange sie nicht bewusst für die aktuelle Session freigegeben wurden.
+Workspace-Pfade werden auf den festgelegten Workspace begrenzt. Absolute Pfade, `..` und Symlink-Escapes werden abgewiesen. Lesezugriffe und Mutationen auf bekannte Secret-/Credential- sowie interne Agenten-/Repository-Pfade werden blockiert. Schreibzugriff ist standardmäßig aus und muss explizit über `--with-os-write` aktiviert werden; mutierende Tools bleiben zustimmungspflichtig, solange sie nicht bewusst für die aktuelle Session oder den aktuellen Prozesslauf freigegeben wurden.
 
 ## Web-Kontext
 
-Webzugriff ist ohne `web_allowed_hosts` deaktiviert. Geladener Webinhalt ist nicht vertrauenswürdiger Referenzinhalt, wird größenbegrenzt verarbeitet und darf keine weiteren Netzwerkzugriffe oder Berechtigungsänderungen auslösen.
+Webzugriff ist ohne `web_allowed_hosts` deaktiviert. Geladener Webinhalt ist nicht vertrauenswürdiger Referenzinhalt, wird größenbegrenzt verarbeitet und darf keine weiteren Netzwerkzugriffe oder Berechtigungsänderungen auslösen. `--add-web-context` verwendet dieselbe Verarbeitung wie der interaktive `add_web_context`-Befehl.
 
 ## Logging
 
