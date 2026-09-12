@@ -13,7 +13,6 @@ dependencies = [
     "mcp>=1.9,<2",
     "PyYAML>=6.0",
     "trafilatura>=2.2,<3",
-    "cryptography>=50,<51",
 ]
 
 [project.optional-dependencies]
