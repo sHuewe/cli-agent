@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import sys
 import traceback
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
 from pathlib import Path
 
@@ -16,6 +18,8 @@ from .web_context_agent import WebContextCliAgent
 
 OS_MCP_SERVER_NAME = "os"
 SENSITIVE_ARGUMENT_MARKERS = ("auth", "api_key", "apikey", "authorization", "credential", "password", "secret", "token")
+
+logger = logging.getLogger("cli_agent.cli")
 
 
 def _is_sensitive_argument_name(name: str) -> bool:
@@ -56,6 +60,27 @@ async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> boo
     return normalized in {"j", "ja", "y", "yes"}
 
 
+def build_approval_callback(
+    preapproved_tools: Iterable[str],
+) -> Callable[[str, dict[str, object]], Awaitable[bool | str]]:
+    """Return the approval callback for one process run.
+
+    CLI pre-approvals are exact exposed tool names. They intentionally bypass
+    only the interactive confirmation for those tools; all server, workspace,
+    network and sensitive-path restrictions remain enforced elsewhere.
+    """
+
+    approved = frozenset(preapproved_tools)
+
+    async def callback(tool_name: str, arguments: dict[str, object]) -> bool | str:
+        if tool_name in approved:
+            logger.info("tool_call_cli_preapproved name=%s", tool_name)
+            return True
+        return await approve_tool_call(tool_name, arguments)
+
+    return callback
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cli-agent", description="General local agent using configurable MCP servers")
     parser.add_argument("prompt", nargs="*", help="Optional one-shot prompt; omit it for interactive mode")
@@ -65,6 +90,26 @@ def build_parser() -> argparse.ArgumentParser:
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
+    parser.add_argument(
+        "--approve-tool",
+        action="append",
+        default=[],
+        metavar="TOOL",
+        help=(
+            "Pre-approve one exact exposed tool name for this process run; "
+            "repeat the option for multiple tools. Intended for trusted automation."
+        ),
+    )
+    parser.add_argument(
+        "--add-web-context",
+        action="append",
+        default=[],
+        metavar="URL",
+        help=(
+            "Load a web URL before processing the prompt; repeat the option "
+            "for multiple URLs. The normal web allowlist and redirect checks apply."
+        ),
+    )
     parser.add_argument("--debug", action="store_true", help="Show a complete traceback when an error occurs")
     return parser
 
@@ -127,6 +172,7 @@ async def run(args: argparse.Namespace) -> None:
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
     model_client = create_model_client(config.model, network=admin_config.network)
+    approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
     agent = WebContextCliAgent(
         workspace,
         model_client,
@@ -136,7 +182,7 @@ async def run(args: argparse.Namespace) -> None:
         dump_llm_context=config.dump_llm_context,
         network=admin_config.network,
         mcp_policy=admin_config.mcp,
-        approval_callback=approve_tool_call,
+        approval_callback=approval_callback,
         okf=config.okf,
     )
     print(f"Arbeitsordner: {workspace}")
@@ -148,6 +194,8 @@ async def run(args: argparse.Namespace) -> None:
     if config.okf:
         print(f"OKF-Repository: {config.okf.repository}")
     async with agent:
+        for url in getattr(args, "add_web_context", ()):
+            print(await agent.ask(f"add_web_context {url}"))
         if args.prompt:
             print(await agent.ask(" ".join(args.prompt)))
             return
