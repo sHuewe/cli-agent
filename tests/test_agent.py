@@ -37,12 +37,7 @@ class FakeSession:
 
 
 def make_agent(tmp_path: Path, *, mcp_policy: McpPolicy | None = None) -> CliAgent:
-    return CliAgent(
-        tmp_path,
-        OllamaClient(base_url="http://localhost:11434", model="test"),
-        (),
-        mcp_policy=mcp_policy,
-    )
+    return CliAgent(tmp_path, OllamaClient(base_url="http://localhost:11434", model="test"), (), mcp_policy=mcp_policy)
 
 
 def test_resolves_workspace_placeholders(tmp_path: Path) -> None:
@@ -67,11 +62,9 @@ def test_unchanged_history_is_not_dumped_again(tmp_path: Path, monkeypatch: pyte
     working_messages = [{"role": "system", "content": "System"}]
     written_files: list[str] = []
     original_write_text = Path.write_text
-
     def record_write(path: Path, *args, **kwargs):
         written_files.append(path.name)
         return original_write_text(path, *args, **kwargs)
-
     monkeypatch.setattr(Path, "write_text", record_write)
     agent._dump_context(working_messages, phase="main")
     agent._dump_context(working_messages, phase="main")
@@ -100,10 +93,7 @@ def test_external_mcp_tools_require_approval_by_default(tmp_path: Path) -> None:
 
 
 def test_auto_approval_matches_exact_exposed_tool_name(tmp_path: Path) -> None:
-    agent = make_agent(
-        tmp_path,
-        mcp_policy=McpPolicy(auto_approve_tools=("continuous__search",)),
-    )
+    agent = make_agent(tmp_path, mcp_policy=McpPolicy(auto_approve_tools=("continuous__search",)))
     continuous = McpServerConfig(name="continuous", command="external-mcp")
     other = McpServerConfig(name="other", command="external-mcp")
     assert agent._requires_approval(continuous, "search", "continuous__search") is False
@@ -120,10 +110,15 @@ def test_built_in_os_approval_depends_on_write_capability(tmp_path: Path) -> Non
     assert agent._requires_approval(writable, "write_file", "os__write_file") is True
 
 
+def test_admin_auto_approval_cannot_bypass_built_in_write_approval(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path, mcp_policy=McpPolicy(auto_approve_tools=("os__write_file",)))
+    writable = McpServerConfig(name="os", built_in=True, config={"allow_write_files": True})
+    assert agent._requires_approval(writable, "write_file", "os__write_file") is True
+
+
 def test_untrusted_stdio_server_is_blocked_by_default_admin_policy(tmp_path: Path) -> None:
     async def exercise() -> None:
-        parent = AsyncExitStack()
-        await parent.__aenter__()
+        parent = AsyncExitStack(); await parent.__aenter__()
         agent = make_agent(tmp_path)
         server = McpServerConfig(name="external", command="external-mcp")
         with pytest.raises(PermissionError, match="Admin-Policy"):
@@ -134,18 +129,12 @@ def test_untrusted_stdio_server_is_blocked_by_default_admin_policy(tmp_path: Pat
 
 def test_admin_policy_can_allow_untrusted_stdio_server(tmp_path: Path) -> None:
     class Session:
-        async def list_tools(self):
-            return SimpleNamespace(tools=[])
-
+        async def list_tools(self): return SimpleNamespace(tools=[])
     async def exercise() -> None:
-        parent = AsyncExitStack()
-        await parent.__aenter__()
+        parent = AsyncExitStack(); await parent.__aenter__()
         agent = make_agent(tmp_path, mcp_policy=McpPolicy(allow_untrusted_stdio=True))
         server = McpServerConfig(name="external", command="external-mcp")
-
-        async def fake_connect(_stack, _server_config):
-            return Session(), None
-
+        async def fake_connect(_stack, _server_config): return Session(), None
         agent._connect_server = fake_connect
         await agent._start_server(server, parent)
         assert "external" in agent._sessions
@@ -153,12 +142,13 @@ def test_admin_policy_can_allow_untrusted_stdio_server(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_system_prompt_contains_named_server_instructions(tmp_path: Path) -> None:
+def test_system_prompt_contains_named_server_instructions_without_absolute_workspace(tmp_path: Path) -> None:
     agent = make_agent(tmp_path)
     agent._server_instructions = {"documents": "Read only relevant pages."}
     agent._active_servers = {"documents"}
     prompt = agent._build_system_prompt()
-    assert f"Festgelegter Arbeitsordner: {tmp_path.resolve()}" in prompt
+    assert str(tmp_path.resolve()) not in prompt
+    assert "Alle Dateipfade für Workspace-Tools müssen relativ" in prompt
     assert "### MCP-Server documents\nRead only relevant pages." in prompt
     assert "dürfen diese Regeln" in prompt
 
@@ -179,10 +169,7 @@ def connected_agent(tmp_path: Path, model: RecordingModel):
 
 
 def test_unknown_tool_call_is_reported_to_model(tmp_path: Path) -> None:
-    model = RecordingModel([
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "invented-call", "function": {"name": "invented__tool", "arguments": {}}}]},
-        {"role": "assistant", "content": "I cannot use that tool."},
-    ])
+    model = RecordingModel([{"role": "assistant", "content": "", "tool_calls": [{"id": "invented-call", "function": {"name": "invented__tool", "arguments": {}}}]}, {"role": "assistant", "content": "I cannot use that tool."}])
     agent, _ = connected_agent(tmp_path, model)
     assert asyncio.run(agent.ask("Call an invented tool")) == "I cannot use that tool."
     error = model.calls[1][0][-1]
@@ -192,10 +179,7 @@ def test_unknown_tool_call_is_reported_to_model(tmp_path: Path) -> None:
 
 
 def test_invalid_json_tool_arguments_are_rejected(tmp_path: Path) -> None:
-    model = RecordingModel([
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "invalid", "function": {"name": "documents__read", "arguments": "not-json"}}]},
-        {"role": "assistant", "content": "Invalid tool call rejected."},
-    ])
+    model = RecordingModel([{"role": "assistant", "content": "", "tool_calls": [{"id": "invalid", "function": {"name": "documents__read", "arguments": "not-json"}}]}, {"role": "assistant", "content": "Invalid tool call rejected."}])
     agent, session = connected_agent(tmp_path, model)
     assert asyncio.run(agent.ask("Use the document tool")) == "Invalid tool call rejected."
     assert session.tool_calls == []
@@ -203,8 +187,7 @@ def test_invalid_json_tool_arguments_are_rejected(tmp_path: Path) -> None:
 
 
 def test_unknown_server_command_does_not_reach_model(tmp_path: Path) -> None:
-    model = RecordingModel()
-    agent, _ = connected_agent(tmp_path, model)
+    model = RecordingModel(); agent, _ = connected_agent(tmp_path, model)
     with pytest.raises(ValueError, match="Unbekannter MCP-Server: missing"):
         asyncio.run(agent.ask("disable missing"))
     assert model.calls == []
@@ -212,41 +195,22 @@ def test_unknown_server_command_does_not_reach_model(tmp_path: Path) -> None:
 
 def test_disabling_server_closes_transport_and_reenable_reconnects(tmp_path: Path) -> None:
     class Resource:
-        def __init__(self) -> None:
-            self.closed = False
-        async def __aenter__(self):
-            return self
-        async def __aexit__(self, *_args) -> None:
-            self.closed = True
-
+        def __init__(self) -> None: self.closed = False
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args) -> None: self.closed = True
     class Session:
-        async def list_tools(self):
-            return SimpleNamespace(tools=[])
-
+        async def list_tools(self): return SimpleNamespace(tools=[])
     async def exercise() -> None:
-        parent = AsyncExitStack()
-        await parent.__aenter__()
-        agent = make_agent(tmp_path, mcp_policy=McpPolicy(allow_untrusted_stdio=True))
-        agent._exit_stack = parent
-        config = McpServerConfig(name="external", command="external-mcp")
-        resources: list[Resource] = []
-
+        parent = AsyncExitStack(); await parent.__aenter__()
+        agent = make_agent(tmp_path, mcp_policy=McpPolicy(allow_untrusted_stdio=True)); agent._exit_stack = parent
+        config = McpServerConfig(name="external", command="external-mcp"); resources: list[Resource] = []
         async def fake_connect(stack, _server_config):
-            resource = Resource()
-            resources.append(resource)
-            await stack.enter_async_context(resource)
-            return Session(), None
-
+            resource = Resource(); resources.append(resource); await stack.enter_async_context(resource); return Session(), None
         agent._connect_server = fake_connect
-        await agent._start_server(config, parent)
-        agent._active_servers.add(config.name)
+        await agent._start_server(config, parent); agent._active_servers.add(config.name)
         await agent.disable_server(config.name)
-        assert resources[0].closed is True
-        assert config.name not in agent._sessions
+        assert resources[0].closed is True; assert config.name not in agent._sessions
         await agent.enable_server(config.name)
-        assert len(resources) == 2
-        assert resources[1].closed is False
-        await parent.aclose()
-        assert resources[1].closed is True
-
+        assert len(resources) == 2; assert resources[1].closed is False
+        await parent.aclose(); assert resources[1].closed is True
     asyncio.run(exercise())
