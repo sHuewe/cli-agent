@@ -127,7 +127,11 @@ async def process_tool_calls(
             transient_rejections.append((assistant_message, tool_call, tool_message))
             continue
 
-        if agent._requires_approval(server_config, original_name):
+        if agent._requires_approval(
+            server_config,
+            original_name,
+            exposed_name=exposed_name,
+        ):
             approved = await agent._approve_tool_call(
                 exposed_name,
                 arguments,
