@@ -11,7 +11,6 @@ from .config import load_config
 from .logging_setup import configure_logging
 from .python_validator import DockerPythonValidator, ValidatorSettings
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -39,10 +38,11 @@ and validate again. Never claim that untested behavior works.
         """Install and start a Python project in a temporary Docker container.
 
         The project must be below the workspace fixed when this MCP server was
-        started. It is mounted read-only, copied inside the container, and left
-        unchanged on the host. Dependencies are installed from requirements.txt
-        and/or the Python package metadata. The container is removed afterwards.
-        No functional tests or endpoint requests are performed.
+        started. A sanitized temporary copy is mounted read-only, copied inside
+        the container, and left unchanged on the host. Dependencies are
+        installed from requirements.txt and/or the Python package metadata. The
+        container is removed afterwards. No functional tests or endpoint
+        requests are performed.
 
         Args:
             project_path: Project directory relative to the workspace; use "."
@@ -84,8 +84,28 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--python-image",
-        default="python:3.12-slim",
-        help="Trusted Python base image used for validation",
+        required=True,
+        help=(
+            "Python base image used for validation; provide an immutable "
+            "@sha256 digest from the approved internal registry"
+        ),
+    )
+    parser.add_argument(
+        "--require-pinned-image",
+        action="store_true",
+        help=(
+            "Reject mutable image tags; require a full @sha256 digest for "
+            "the validator image."
+        ),
+    )
+    parser.add_argument(
+        "--network-mode",
+        choices=("none", "bridge"),
+        default="none",
+        help=(
+            "Container network mode. 'none' is the secure default; use "
+            "'bridge' only for an explicitly trusted validation run."
+        ),
     )
     parser.add_argument("--setup-timeout", type=int, default=180)
     parser.add_argument("--startup-grace", type=float, default=3.0)
@@ -105,11 +125,15 @@ def main() -> None:
     config = load_config(args.config_file)
     configure_logging(
         config.logging,
-        logger = logger,
+        logger=logger,
         default_filename="cli-agent-python-validator-mcp.log",
     )
     settings = ValidatorSettings(
         python_image=args.python_image,
+        # Image pinning is mandatory for every validator process. The flag is
+        # retained as a compatibility marker for existing invocations.
+        require_pinned_image=True,
+        network_mode=args.network_mode,
         setup_timeout_seconds=args.setup_timeout,
         startup_grace_seconds=args.startup_grace,
         memory_limit=args.memory_limit,

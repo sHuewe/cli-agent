@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from .network_policy import LOCAL_HOSTS, validate_http_url
+
 
 class OpenAIError(RuntimeError):
     pass
@@ -29,9 +31,7 @@ class OpenAIClient:
 
                 for tool_call in tool_calls:
                     converted_call = dict(tool_call)
-                    function = dict(
-                        converted_call.get("function", {})
-                    )
+                    function = dict(converted_call.get("function", {}))
 
                     arguments = function.get("arguments")
                     if isinstance(arguments, dict):
@@ -48,6 +48,7 @@ class OpenAIClient:
             converted.append(result)
 
         return converted
+
     @staticmethod
     def _normalize_message(
         message: dict[str, Any],
@@ -63,9 +64,7 @@ class OpenAIClient:
 
             for tool_call in tool_calls:
                 normalized_call = dict(tool_call)
-                function = dict(
-                    normalized_call.get("function", {})
-                )
+                function = dict(normalized_call.get("function", {}))
 
                 arguments = function.get("arguments", {})
                 if isinstance(arguments, str):
@@ -80,6 +79,7 @@ class OpenAIClient:
             result["tool_calls"] = normalized_calls
 
         return result
+
     def __init__(
         self,
         *,
@@ -88,8 +88,13 @@ class OpenAIClient:
         api_key: str | None,
         timeout: float = 120.0,
         headers: dict[str, str] | None = None,
+        allowed_hosts: tuple[str, ...] = LOCAL_HOSTS,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_http_url(
+            base_url,
+            allowed_hosts=allowed_hosts,
+            purpose="OpenAI-Modell",
+        ).rstrip("/")
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
@@ -125,7 +130,9 @@ class OpenAIClient:
 
         try:
             async with httpx.AsyncClient(
-                timeout=self.timeout
+                timeout=self.timeout,
+                follow_redirects=False,
+                trust_env=False,
             ) as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
@@ -144,10 +151,6 @@ class OpenAIClient:
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise OpenAIError(
-                f"Unerwartete Modellantwort: {data}"
-            ) from exc
+            raise OpenAIError(f"Unerwartete Modellantwort: {data}") from exc
 
         return self._normalize_message(message)
-
-    

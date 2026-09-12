@@ -4,7 +4,9 @@ from typing import Any
 
 import httpx
 
-ctx_large= 24576
+from .network_policy import LOCAL_HOSTS, validate_http_url
+
+ctx_large = 24576
 ctx_small = 8192
 
 
@@ -25,15 +27,20 @@ class OllamaClient:
             converted.append(result)
 
         return converted
-    
+
     def __init__(
         self,
         *,
         base_url: str,
         model: str,
         timeout: float = 120.0,
+        allowed_hosts: tuple[str, ...] = LOCAL_HOSTS,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_http_url(
+            base_url,
+            allowed_hosts=allowed_hosts,
+            purpose="Ollama-Modell",
+        ).rstrip("/")
         self.model = model
         self.timeout = timeout
 
@@ -47,12 +54,14 @@ class OllamaClient:
             "messages": self._convert_messages(messages),
             "tools": tools,
             "stream": False,
-            "options": {
-                "num_ctx": ctx_large
-            },
+            "options": {"num_ctx": ctx_large},
         }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
                 response = await client.post(f"{self.base_url}/api/chat", json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -65,4 +74,3 @@ class OllamaClient:
         if not isinstance(message, dict):
             raise OllamaError(f"Unerwartete Ollama-Antwort: {data}")
         return message
-

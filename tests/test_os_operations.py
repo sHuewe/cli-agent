@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from cli_agent.config import McpServerConfig
-from cli_agent.os_operations import Workspace
+from cli_agent.os_operations import Workspace, WorkspaceError
 
 
 def _workspace(tmp_path):
@@ -70,3 +72,47 @@ def test_write_file_uses_lf_for_new_files(tmp_path) -> None:
     workspace.write_file("Example.java", "line1\r\nline2\r\n")
 
     assert (tmp_path / "Example.java").read_bytes() == b"line1\nline2\n"
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [".env", ".env.production", "credentials.json", "server.pem"],
+)
+def test_read_file_rejects_sensitive_files(tmp_path, filename) -> None:
+    (tmp_path / filename).write_text("secret", encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="Secret-/Credential"):
+        _workspace(tmp_path).read_file(filename)
+
+
+def test_read_file_rejects_oversized_text(tmp_path) -> None:
+    (tmp_path / "large.txt").write_text("x" * 1_000_001, encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="Leselimit"):
+        _workspace(tmp_path).read_file("large.txt")
+
+
+def test_copy_file_rejects_sensitive_source(tmp_path) -> None:
+    (tmp_path / "credentials.json").write_text("secret", encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="Secret-/Credential"):
+        _workspace(tmp_path).copy_file("credentials.json", "copy.txt")
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [".git/config", ".cli-agent/history.json", "service.log"],
+)
+def test_read_file_rejects_sensitive_project_artifacts(tmp_path, relative_path) -> None:
+    file_path = tmp_path / relative_path
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("sensitive", encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="Secret-/Credential"):
+        _workspace(tmp_path).read_file(relative_path)
+
+
+@pytest.mark.parametrize("path", [r"C:\\outside.txt", r"D:relative.txt"])
+def test_workspace_rejects_windows_drive_paths(tmp_path, path: str) -> None:
+    with pytest.raises(WorkspaceError, match="relativ"):
+        _workspace(tmp_path).read_file(path)

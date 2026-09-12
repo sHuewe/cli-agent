@@ -43,10 +43,18 @@ args = [
 
 [mcp_servers.config]
 allow_write_files = false
+allow_untrusted_stdio = true # audited built-in process only
 ```
 
 Mit `allow_write_files = true` werden zusätzlich die schreibenden Tools
 registriert.
+
+Bei einer persistenten TOML-Konfiguration verlangt der Agent vor jedem
+Tool-Aufruf eine explizite Benutzerfreigabe, weil der Prozess als
+user-provided stdio-Server gilt. Die CLI-Variante `--with-os-read` ist als
+eingebauter read-only Server markiert; nicht-interaktive Aufrufer ohne
+Approval-Callback werden abgewiesen. Der Approval-Dialog zeigt keine
+Datei-Inhalte an.
 
 ## Tools
 
@@ -78,6 +86,8 @@ Zusätzlich gelten unter anderem:
 - `..` ist in Pfaden verboten,
 - Symlinks dürfen nicht aus dem Workspace herausführen,
 - `read_file` und `write_file` akzeptieren nur bekannte Textdateitypen,
+- `read_file` und `copy_file` verweigern `.env*`, Credential-/Private-Key-Dateien,
+  `.git`-/`.cli-agent`-Artefakte, Logdateien und Dateien über 1 MB,
 - der Parent-Ordner einer zu schreibenden Datei muss bereits existieren.
 
 Die MCP-`instructions` fordern das Modell außerdem auf, bestehende Dateien vor

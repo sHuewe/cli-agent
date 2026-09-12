@@ -32,11 +32,62 @@ backup_count = 2
     assert config.logging.level == "DEBUG"
     assert config.logging.file == Path("agent.log")
     assert config.logging.log_prompts is False
+    assert config.logging.log_tool_calls is False
     assert config.logging.log_model_messages is True
     assert config.logging.log_tool_results is True
     assert config.logging.max_bytes == 1234
     assert config.logging.backup_count == 2
     assert config.mcp_servers == ()
+
+
+def test_load_network_allowlists(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[network]
+model_allowed_hosts = ["llm.internal"]
+mcp_allowed_hosts = ["mcp.internal"]
+web_allowed_hosts = ["docs.internal"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    network = load_config(config_file).network
+
+    assert network.model_allowed_hosts == ("llm.internal",)
+    assert network.mcp_allowed_hosts == ("mcp.internal",)
+    assert network.web_allowed_hosts == ("docs.internal",)
+
+
+def test_load_config_rejects_string_security_flags(tmp_path: Path) -> None:
+    logging_config_file = tmp_path / "logging-config.toml"
+    logging_config_file.write_text(
+        """
+[logging]
+log_prompts = "false"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="log_prompts"):
+        load_config(logging_config_file)
+
+    mcp_config_file = tmp_path / "mcp-config.toml"
+    mcp_config_file.write_text(
+        """
+[[mcp_servers]]
+name = "os"
+transport = "stdio"
+command = "python"
+
+[mcp_servers.config]
+allow_write_files = "false"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="allow_write_files"):
+        load_config(mcp_config_file)
 
 
 def test_configure_logging_writes_file(tmp_path: Path) -> None:

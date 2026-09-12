@@ -99,6 +99,20 @@ base_url = "http://localhost:11434"
 timeout = 120
 ```
 
+Network-capable features use exact host allowlists. Model and MCP access allow
+only local endpoints by default. Web retrieval is disabled until its hosts are
+explicitly configured:
+
+```toml
+[network]
+model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+web_allowed_hosts = []
+```
+
+Web-Kontext bleibt mit `web_allowed_hosts = []` standardmäßig deaktiviert;
+trage dort nur explizit benötigte interne Dokumentationshosts ein.
+
 Für einen OpenAI-kompatiblen Endpunkt müssen insbesondere `provider`, `model`
 und `base_url` angepasst werden. Optional kann `api_key_env` auf den Namen einer
 Umgebungsvariable gesetzt werden, die den API-Key enthält. Ist die Variable
@@ -238,7 +252,15 @@ name = "example"
 transport = "stdio"
 command = "{python}"
 args = ["-m", "example_mcp", "--root", "{workspace_directory}"]
+
+[mcp_servers.config]
+allow_untrusted_stdio = true
 ```
+
+`allow_untrusted_stdio` ist eine bewusste Vertrauensfreigabe: Der Prozess
+läuft mit den Berechtigungen des Benutzers und benötigt zusätzlich eine
+separate OS-/Container-Sandbox. Alle seine Tool-Aufrufe bleiben
+freigabepflichtig.
 
 Beispiel für Streamable HTTP:
 
@@ -265,8 +287,21 @@ persistente Konfigurationsänderung zugeschaltet werden:
 ```powershell
 cli-agent --with-os-read
 cli-agent --with-os-write
-cli-agent --with-python-validator
+cli-agent --with-python-validator `
+  --python-validator-image registry.intern/cli-agent/python@sha256:<64-hex-zeichen>
 ```
+
+Für Validierungen von untrusted Bring-in-Code sollte das Validator-Image lokal
+gespiegelt und unveränderlich per Digest referenziert werden:
+
+```powershell
+cli-agent --with-python-validator `
+  --python-validator-image registry.intern/cli-agent/python@sha256:<64-hex-zeichen> `
+  --require-pinned-validator-image
+```
+
+Das Validator-Image muss immer über `--python-validator-image` als vollständiger
+Digest angegeben werden; ein veränderliches Tag wird abgewiesen.
 
 Die CLI-Varianten ersetzen einen eventuell gleichnamigen Server aus der
 Konfigurationsdatei durch die eingebaute Definition. Die ausgewählte globale
@@ -299,7 +334,8 @@ Details stehen unter [docs/mcp-okf.md](docs/mcp-okf.md).
 [logging]
 enabled = true
 level = "INFO"
-log_prompts = true
+log_prompts = false
+log_tool_calls = false
 log_model_messages = false
 log_tool_results = false
 max_bytes = 5000000
@@ -336,9 +372,9 @@ disable compose
 enable compose
 ```
 
-Dabei bleibt die MCP-Verbindung bestehen. Nur die Tools und `instructions` des
-Servers werden aus dem aktiven Modellkontext entfernt beziehungsweise wieder
-hinzugefügt.
+Beim Deaktivieren wird die MCP-Verbindung geschlossen und der Serverprozess
+beendet. Beim erneuten Aktivieren wird eine frische Verbindung aufgebaut; nur
+die Tools und `instructions` des aktiven Servers werden dem Modell angeboten.
 
 ## 5. Technischer Ablauf des Agenten
 
@@ -444,8 +480,9 @@ Arbeitskontexts eingebaut.
 
 `clear_web_context` entfernt alle Web-Kontexte aus dem Session-State. Inhalte
 geladener Webseiten gelten als nicht vertrauenswürdige Referenzdaten und dürfen
-keine zusätzlichen Netzwerkzugriffe auslösen. `localhost` und private
-Netzwerkadressen sind für den expliziten `add_web_context`-Befehl zulässig.
+keine zusätzlichen Netzwerkzugriffe auslösen. Nur Hosts aus
+`network.web_allowed_hosts` sind für den expliziten `add_web_context`-Befehl
+zulässig; Redirects werden ebenfalls gegen diese Allowlist geprüft.
 
 ### Context Dumps
 

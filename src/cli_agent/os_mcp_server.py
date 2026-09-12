@@ -46,7 +46,9 @@ Only write a file when the user requested a file change.
         Read one UTF-8 text file from the project workspace.
 
         Supports common source, configuration, script, markup and text file
-        types. Binary files are rejected.
+        types. Secret/credential files and files larger than 1 MB are rejected;
+        binary files are rejected as well. Secret/credential files cannot be
+        copied through the server either.
 
         Args:
             path: File relative to the project workspace. Absolute paths and
@@ -54,7 +56,7 @@ Only write a file when the user requested a file change.
         """
         return workspace.read_file(path)
 
-    if mcp_config.config.get("allow_write_files", False):
+    if mcp_config.allow_write_files():
 
         @mcp.tool()
         def write_file(path: str, content: str) -> str:
@@ -100,10 +102,10 @@ Only write a file when the user requested a file change.
             Copy a file within the project workspace.
 
             Args:
-                path_src: Source file relative to the project workspace. Absolute paths
-                    and ".." are forbidden.
-                path_dst: Destination file relative to the project workspace. Absolute paths
-                    and ".." are forbidden.
+                path_src: Source file relative to the project workspace.
+                    Absolute paths and ".." are forbidden.
+                path_dst: Destination file relative to the project workspace.
+                    Absolute paths and ".." are forbidden.
             """
             return workspace.copy_file(path_src, path_dst)
 

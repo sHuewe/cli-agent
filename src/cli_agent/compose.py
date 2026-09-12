@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import shutil
-import subprocess
+
+# Compose commands use fixed argv lists and are never invoked through a shell.
+import subprocess  # nosec B404
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import AppConfig, McpServerConfig
+from .config import McpServerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +31,24 @@ def find_compose_file(project_directory: Path) -> Path:
         raise ComposeError(f"Projektverzeichnis existiert nicht: {project_directory}")
 
     matches = [project_directory / name for name in COMPOSE_FILENAMES]
-    matches = [path for path in matches if path.is_file()]
-    if not matches:
+    existing_matches = [path for path in matches if path.is_file()]
+    if not existing_matches:
         expected = ", ".join(COMPOSE_FILENAMES)
-        logger.warning(
-            "Keine Compose-Datei in %s gefunden (erwartet: %s). Docker Compose-Tools nicht verfügbar.",
-            project_directory,
-            expected,
+        raise ComposeError(
+            f"Keine Compose-Datei in {project_directory} gefunden "
+            f"(erwartet: {expected})."
         )
-        return None
-    return matches[0].relative_to(project_directory)
+
+    selected = existing_matches[0]
+    try:
+        resolved = selected.resolve(strict=True)
+        resolved.relative_to(project_directory)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ComposeError(
+            "Die Compose-Datei muss innerhalb des festgelegten "
+            "Projektverzeichnisses liegen."
+        ) from exc
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -48,15 +58,21 @@ class ComposeProject:
     config: McpServerConfig
 
     @classmethod
-    def from_directory(cls, directory: Path, config: McpServerConfig) -> "ComposeProject":
+    def from_directory(
+        cls,
+        directory: Path,
+        config: McpServerConfig | None = None,
+    ) -> ComposeProject:
         resolved = directory.resolve()
-        return cls(resolved, find_compose_file(resolved), config)
-        raise ComposeError(
-            "Kein MCP-Server mit dem Namen 'compose' in der Konfiguration gefunden.")
+        return cls(
+            resolved,
+            find_compose_file(resolved),
+            config or McpServerConfig(name="compose"),
+        )
 
     def command(self, *arguments: str) -> list[str]:
-        docker_cmd = ["docker","compose"]
-        if self.config.config.get("wsl", False):
+        docker_cmd = ["docker", "compose"]
+        if self.config.config.get("wsl", False) is True:
             docker_cmd = ["wsl"] + docker_cmd
         return [
             *docker_cmd,
@@ -66,7 +82,7 @@ class ComposeProject:
         ]
 
     def is_available(self) -> bool:
-        return self.compose_file != None
+        return self.compose_file.is_file()
 
     def run(self, *arguments: str, timeout: int = 60) -> str:
         command = self.command(*arguments)
@@ -77,7 +93,8 @@ class ComposeProject:
             str(self.directory),
         )
         try:
-            completed = subprocess.run(
+            # shell=False is explicit through subprocess.run's default.
+            completed = subprocess.run(  # nosec B603
                 command,
                 cwd=self.directory,
                 capture_output=True,
@@ -100,10 +117,9 @@ class ComposeProject:
         if completed.returncode != 0:
             details = (completed.stderr or completed.stdout).strip()
             logger.error(
-                "Command failed returncode=%s stdout=%r stderr=%r",
+                "Command failed returncode=%s output_length=%d",
                 completed.returncode,
-                completed.stdout,
-                completed.stderr,
+                len(details),
             )
             raise ComposeError(
                 f"Docker Compose endete mit Code {completed.returncode}: {details}"
@@ -111,7 +127,7 @@ class ComposeProject:
         output = "\n".join(
             part.strip()
             for part in (completed.stdout, completed.stderr)
-                if part.strip()
+            if part.strip()
         )
         return output.strip()
 

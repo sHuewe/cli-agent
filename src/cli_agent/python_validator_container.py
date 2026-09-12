@@ -3,13 +3,15 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import subprocess
+
+# The container runner invokes fixed commands without a shell.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
-
 SOURCE = Path("/source")
-PROJECT = Path("/app")
+# The validator runs without root; /tmp is the writable container filesystem.
+PROJECT = Path(os.sep) / "tmp" / "python-validator"
 IGNORED_NAMES = (
     ".git",
     ".mypy_cache",
@@ -21,6 +23,27 @@ IGNORED_NAMES = (
     "dist",
     "node_modules",
     "venv",
+    ".cli-agent",
+    ".env",
+    ".env.*",
+    ".aws",
+    ".azure",
+    ".docker",
+    ".git-credentials",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".ssh",
+    "credentials",
+    "credentials.*",
+    "secrets",
+    "secrets.*",
+    "*.key",
+    "*.pem",
+    "*.p12",
+    "*.pfx",
+    "*.log",
+    "*.log.*",
 )
 
 
@@ -40,8 +63,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_checked(command: list[str]) -> None:
-    print(f"[python-validator] running: {command!r}", flush=True)
-    subprocess.run(command, check=True)
+    # Do not echo argv: validator arguments can contain user-provided secrets.
+    print("[python-validator] running command", flush=True)
+    subprocess.run(command, check=True)  # nosec B603
 
 
 def install_dependencies() -> None:
@@ -50,6 +74,7 @@ def install_dependencies() -> None:
         "-m",
         "pip",
         "install",
+        "--user",
         "--disable-pip-version-check",
         "--no-cache-dir",
     ]
@@ -72,7 +97,7 @@ def start_command(args: argparse.Namespace) -> list[str]:
     try:
         entrypoint.relative_to(PROJECT)
     except ValueError as exc:
-        raise RuntimeError("Entrypoint is outside /app") from exc
+        raise RuntimeError("Entrypoint is outside the validator workspace") from exc
     if not entrypoint.is_file():
         raise RuntimeError(f"Entrypoint does not exist: {args.entrypoint}")
     return [sys.executable, str(entrypoint), *args.arguments]
@@ -99,8 +124,9 @@ def main() -> None:
     print(ready_token, flush=True)
 
     command = start_command(args)
-    print(f"[python-validator] starting: {command!r}", flush=True)
-    os.execv(command[0], command)
+    print("[python-validator] starting validated process", flush=True)
+    # execv starts the validated executable directly and does not invoke a shell.
+    os.execv(command[0], command)  # nosec B606
 
 
 if __name__ == "__main__":
