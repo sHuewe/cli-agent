@@ -69,7 +69,7 @@ class _RuntimeMcpServerConfig:
 
 ServerConfig = McpServerConfig | _RuntimeMcpServerConfig
 ToolRoute = tuple[ClientSession, str, ServerConfig]
-ApprovalCallback = Callable[[str, dict[str, Any]], Awaitable[bool]]
+ApprovalCallback = Callable[[str, dict[str, Any]], Awaitable[bool | str]]
 
 WRITE_TOOLS = frozenset(
     {
@@ -120,189 +120,89 @@ class _KnowledgeRunState:
         return selection_token
 
 
-def _validate_knowledge_selection(
-    answer: str,
-    state: _KnowledgeRunState,
-) -> tuple[dict[str, Any] | None, str | None]:
+def _validate_knowledge_selection(answer: str, state: _KnowledgeRunState) -> tuple[dict[str, Any] | None, str | None]:
     try:
         selection = json.loads(answer)
     except json.JSONDecodeError:
         return None, "Die finale Antwort ist kein gültiges JSON-Objekt."
     if not isinstance(selection, dict):
         return None, "Die finale Antwort ist kein JSON-Objekt."
-
     found_content = selection.get("found_content")
     if not isinstance(found_content, bool):
         return selection, "`found_content` muss ein boolescher Wert sein."
-
     selected_tokens = selection.get("selected_okf_tokens")
-    if not isinstance(selected_tokens, list) or not all(
-        isinstance(token, str) for token in selected_tokens
-    ):
-        return (
-            selection,
-            "`selected_okf_tokens` muss eine Liste von Zeichenketten sein.",
-        )
-
+    if not isinstance(selected_tokens, list) or not all(isinstance(token, str) for token in selected_tokens):
+        return selection, "`selected_okf_tokens` muss eine Liste von Zeichenketten sein."
     warnings = selection.get("warnings", [])
-    if not isinstance(warnings, list) or not all(
-        isinstance(warning, str) for warning in warnings
-    ):
+    if not isinstance(warnings, list) or not all(isinstance(warning, str) for warning in warnings):
         return selection, "`warnings` muss eine Liste von Zeichenketten sein."
-
     if found_content:
         if not selected_tokens:
-            return (
-                selection,
-                "Bei `found_content: true` fehlt eine `selected_okf_tokens`-Auswahl.",
-            )
-        unknown_tokens = sorted(
-            {token for token in selected_tokens if token not in state.concepts}
-        )
+            return selection, "Bei `found_content: true` fehlt eine `selected_okf_tokens`-Auswahl."
+        unknown_tokens = sorted({token for token in selected_tokens if token not in state.concepts})
         if unknown_tokens:
-            return (
-                selection,
-                "Diese Tokens gehören zu keinem erfolgreich gelesenen Concept: "
-                + ", ".join(unknown_tokens),
-            )
+            return selection, "Diese Tokens gehören zu keinem erfolgreich gelesenen Concept: " + ", ".join(unknown_tokens)
     elif selected_tokens:
-        return (
-            selection,
-            "Bei `found_content: false` muss `selected_okf_tokens` leer sein.",
-        )
+        return selection, "Bei `found_content: false` muss `selected_okf_tokens` leer sein."
     else:
         reason_code = selection.get("reason_code")
         if reason_code not in {"not_applicable", "not_found"}:
-            return (
-                selection,
-                "Bei `found_content: false` muss `reason_code` entweder "
-                "`not_applicable` oder `not_found` sein.",
-            )
+            return selection, "Bei `found_content: false` muss `reason_code` entweder `not_applicable` oder `not_found` sein."
         if reason_code == "not_applicable" and state.successful_followup_calls > 0:
-            return (
-                selection,
-                "`not_applicable` ist nur vor Beginn der Repository-Recherche "
-                "zulässig.",
-            )
+            return selection, "`not_applicable` ist nur vor Beginn der Repository-Recherche zulässig."
         if reason_code == "not_found" and not state.concepts:
-            return (
-                selection,
-                "`not_found` ist erst zulässig, nachdem mindestens ein "
-                "Concept-Dokument erfolgreich gelesen und geprüft wurde.",
-            )
-
+            return selection, "`not_found` ist erst zulässig, nachdem mindestens ein Concept-Dokument erfolgreich gelesen und geprüft wurde."
     return selection, None
 
 
-def _fallback_knowledge_selection(
-    selection: dict[str, Any] | None,
-    state: _KnowledgeRunState,
-    *,
-    reason: str,
-) -> dict[str, Any]:
+def _fallback_knowledge_selection(selection: dict[str, Any] | None, state: _KnowledgeRunState, *, reason: str) -> dict[str, Any]:
     selected_tokens: list[str] = []
     if selection is not None:
         raw_tokens = selection.get("selected_okf_tokens")
         if isinstance(raw_tokens, list):
-            selected_tokens = list(
-                dict.fromkeys(
-                    token
-                    for token in raw_tokens
-                    if isinstance(token, str) and token in state.concepts
-                )
-            )
-
+            selected_tokens = list(dict.fromkeys(token for token in raw_tokens if isinstance(token, str) and token in state.concepts))
     strategy = "valid_tokens_from_invalid_response"
     if not selected_tokens:
         selected_tokens = list(state.concepts)
         strategy = "all_read_concepts" if selected_tokens else "no_read_concepts"
-
     warnings: list[str] = []
     if selection is not None:
         raw_warnings = selection.get("warnings")
         if isinstance(raw_warnings, list):
-            warnings = list(
-                dict.fromkeys(
-                    warning for warning in raw_warnings if isinstance(warning, str)
-                )
-            )
-
-    fallback = {
-        "strategy": strategy,
-        "reason": reason,
-    }
+            warnings = list(dict.fromkeys(warning for warning in raw_warnings if isinstance(warning, str)))
+    fallback = {"strategy": strategy, "reason": reason}
     if selected_tokens:
-        return {
-            "found_content": True,
-            "selected_okf_tokens": selected_tokens,
-            "warnings": warnings,
-            "agent_fallback": fallback,
-        }
-
-    return {
-        "found_content": False,
-        "selected_okf_tokens": [],
-        "warnings": warnings,
-        "reason_code": "retrieval_incomplete",
-        "reason": ("Der Knowledge-Lauf konnte keine belegte Concept-Auswahl erzeugen."),
-        "agent_fallback": fallback,
-    }
+        return {"found_content": True, "selected_okf_tokens": selected_tokens, "warnings": warnings, "agent_fallback": fallback}
+    return {"found_content": False, "selected_okf_tokens": [], "warnings": warnings, "reason_code": "retrieval_incomplete", "reason": "Der Knowledge-Lauf konnte keine belegte Concept-Auswahl erzeugen.", "agent_fallback": fallback}
 
 
-def _assemble_knowledge_payload(
-    selection: dict[str, Any],
-    concepts: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
+def _assemble_knowledge_payload(selection: dict[str, Any], concepts: dict[str, dict[str, Any]]) -> dict[str, Any]:
     selected_tokens = selection.get("selected_okf_tokens")
     if not isinstance(selected_tokens, list) or not selected_tokens:
-        raise RuntimeError(
-            "Der OKF-Wissenslauf hat keine ausgewählten OKF-Tokens geliefert."
-        )
-
+        raise RuntimeError("Der OKF-Wissenslauf hat keine ausgewählten OKF-Tokens geliefert.")
     unique_tokens: list[str] = []
     seen_tokens: set[str] = set()
     for token in selected_tokens:
         if not isinstance(token, str):
-            raise RuntimeError(
-                "Der OKF-Wissenslauf hat einen ungültigen OKF-Token geliefert."
-            )
+            raise RuntimeError("Der OKF-Wissenslauf hat einen ungültigen OKF-Token geliefert.")
         if token not in seen_tokens:
             unique_tokens.append(token)
             seen_tokens.add(token)
-
     unknown_tokens = [token for token in unique_tokens if token not in concepts]
     if unknown_tokens:
-        raise RuntimeError(
-            "Der OKF-Wissenslauf hat unbekannte OKF-Tokens ausgewählt: "
-            + ", ".join(unknown_tokens)
-        )
-
+        raise RuntimeError("Der OKF-Wissenslauf hat unbekannte OKF-Tokens ausgewählt: " + ", ".join(unknown_tokens))
     raw_warnings = selection.get("warnings", [])
-    if not isinstance(raw_warnings, list) or not all(
-        isinstance(warning, str) for warning in raw_warnings
-    ):
+    if not isinstance(raw_warnings, list) or not all(isinstance(warning, str) for warning in raw_warnings):
         raise RuntimeError("Der OKF-Wissenslauf hat ungültige Warnungen geliefert.")
-
     warnings = list(dict.fromkeys(raw_warnings))
     content: list[dict[str, str]] = []
     for token in unique_tokens:
         document = concepts[token]
         path = str(document["path"])
-        content.append(
-            {
-                "concept": path,
-                "content_type": "full",
-                "content": document["content"],
-            }
-        )
+        content.append({"concept": path, "content_type": "full", "content": document["content"]})
         warning = document.get("warning")
         if isinstance(warning, str) and warning:
             formatted_warning = f"{path}: {warning}"
             if formatted_warning not in warnings:
                 warnings.append(formatted_warning)
-
-    return {
-        "found_content": True,
-        "content": content,
-        "warnings": warnings,
-    }
+    return {"found_content": True, "content": content, "warnings": warnings}
