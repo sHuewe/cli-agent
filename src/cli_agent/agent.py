@@ -55,6 +55,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self.network = network or NetworkConfig()
         self.mcp_policy = mcp_policy or McpPolicy()
         self.approval_callback = approval_callback
+        self._session_approved_tools: set[str] = set()
         self._okf_options = self._normalize_okf_config(okf)
         self.history: list[dict[str, Any]] = []
         self._dumped_history_json: str | None = None
@@ -159,6 +160,8 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         return [tool for server_name, tools in self._server_tools.items() if server_name in self._active_servers for tool in tools]
 
     def _requires_approval(self, server_config: ServerConfig, tool_name: str, exposed_name: str | None = None) -> bool:
+        if exposed_name is not None and exposed_name in self._session_approved_tools:
+            return False
         if not getattr(server_config, "built_in", False):
             if exposed_name is not None and exposed_name in self.mcp_policy.auto_approve_tools:
                 return False
@@ -172,7 +175,12 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             logger.warning("tool_call_rejected name=%s reason=approval_callback_missing", tool_name)
             return False
         try:
-            return bool(await self.approval_callback(tool_name, arguments))
+            decision = await self.approval_callback(tool_name, arguments)
         except Exception as exc:
             logger.error("tool_call_approval_failed name=%s error_type=%s", tool_name, type(exc).__name__)
             return False
+        if isinstance(decision, str) and decision.casefold() == "session":
+            self._session_approved_tools.add(tool_name)
+            logger.info("tool_call_session_approved name=%s", tool_name)
+            return True
+        return bool(decision)
