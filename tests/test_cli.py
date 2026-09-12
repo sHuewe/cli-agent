@@ -11,6 +11,7 @@ from cli_agent.cli import (
     _approval_arguments,
     apply_mcp_cli_overrides,
     apply_model_cli_override,
+    build_approval_callback,
     build_parser,
 )
 from cli_agent.config import AppConfig, McpServerConfig, ModelConfig
@@ -75,6 +76,50 @@ def test_model_cli_argument_is_parsed() -> None:
     assert build_parser().parse_args(["--model", "gwen100"]).model == "gwen100"
 
 
+def test_cli_automation_options_are_repeatable() -> None:
+    args = build_parser().parse_args(
+        [
+            "--approve-tool",
+            "os__write_file",
+            "--approve-tool",
+            "external__run",
+            "--add-web-context",
+            "https://docs.example/a",
+            "--add-web-context",
+            "https://docs.example/b",
+            "prompt",
+        ]
+    )
+    assert args.approve_tool == ["os__write_file", "external__run"]
+    assert args.add_web_context == [
+        "https://docs.example/a",
+        "https://docs.example/b",
+    ]
+    assert args.prompt == ["prompt"]
+
+
+def test_cli_preapproval_matches_exact_tool_name(monkeypatch) -> None:
+    async def fail_if_called(_tool_name, _arguments):
+        raise AssertionError("interactive approval must not be used")
+
+    monkeypatch.setattr(cli_module, "approve_tool_call", fail_if_called)
+    callback = build_approval_callback(["os__write_file"])
+    assert asyncio.run(callback("os__write_file", {"path": "a.txt"})) is True
+
+
+def test_cli_preapproval_does_not_match_other_tool(monkeypatch) -> None:
+    seen = []
+
+    async def interactive(tool_name, arguments):
+        seen.append((tool_name, arguments))
+        return False
+
+    monkeypatch.setattr(cli_module, "approve_tool_call", interactive)
+    callback = build_approval_callback(["os__write_file"])
+    assert asyncio.run(callback("os__delete_file", {"path": "a.txt"})) is False
+    assert seen == [("os__delete_file", {"path": "a.txt"})]
+
+
 def test_validator_cli_option_is_no_longer_available() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(["--with-python-validator"])
@@ -106,6 +151,8 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
             captured["model_client"] = model_client
             captured["network"] = kwargs["network"]
             captured["mcp_policy"] = kwargs["mcp_policy"]
+            captured["approval_callback"] = kwargs["approval_callback"]
+            captured["prompts"] = []
 
         async def __aenter__(self):
             return self
@@ -113,7 +160,8 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
         async def __aexit__(self, *_args):
             return None
 
-        async def ask(self, _prompt):
+        async def ask(self, prompt):
+            captured["prompts"].append(prompt)
             return "ok"
 
     monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
@@ -125,6 +173,8 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
         config=None,
         model=None,
         os_access=None,
+        approve_tool=["continuous__search"],
+        add_web_context=["https://docs.internal/reference"],
         debug=False,
         workspace=tmp_path,
         prompt=["hello"],
@@ -134,6 +184,13 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
     assert captured["model_client"].base_url == "https://llm.internal/v1"
     assert captured["network"] is admin_config.network
     assert captured["mcp_policy"] is admin_config.mcp
+    assert captured["prompts"] == [
+        "add_web_context https://docs.internal/reference",
+        "hello",
+    ]
+    assert asyncio.run(
+        captured["approval_callback"]("continuous__search", {"query": "test"})
+    ) is True
 
 
 def test_model_cli_override_replaces_only_model_name() -> None:
