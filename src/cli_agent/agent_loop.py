@@ -326,6 +326,7 @@ async def run_model_loop(
         )
 
         if knowledge_concept_limit_notice_pending and knowledge_state is not None:
+            knowledge_selection_only_mode = True
             valid_tokens = {
                 token: document["path"]
                 for token, document in knowledge_state.concepts.items()
