@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.admin_config import load_admin_config
+import cli_agent.admin_config as admin_config_module
+from cli_agent.admin_config import default_admin_config_file, load_admin_config
 from cli_agent.config import load_config
 
 
@@ -16,6 +17,15 @@ def test_admin_config_defaults_are_restrictive(tmp_path: Path) -> None:
     assert config.network.web_allowed_hosts == ()
     assert config.mcp.allow_untrusted_stdio is False
     assert config.mcp.auto_approve_tools == ()
+
+
+def test_windows_admin_config_path_ignores_programdata_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admin_config_module.os, "name", "nt")
+    monkeypatch.setenv("PROGRAMDATA", r"C:\Users\attacker\policy")
+
+    assert default_admin_config_file() == Path(r"C:\ProgramData\cli-agent\admin_config.toml")
 
 
 def test_admin_config_loads_network_and_mcp_policy(tmp_path: Path) -> None:
