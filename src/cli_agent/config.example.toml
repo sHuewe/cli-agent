@@ -20,6 +20,8 @@ provider = "ollama"
 model = "qwen3.5:9b"
 base_url = "http://localhost:11434"
 timeout = 120
+# Optional hard guard based on provider-reported input-token usage.
+# context_length = 24576
 
 # OpenAI-compatible model endpoint:
 # [model]
@@ -28,6 +30,7 @@ timeout = 120
 # base_url = "https://llm.example.org/v1"
 # api_key_env = "LLM_API_KEY"
 # timeout = 120
+# context_length = 262144
 
 # -----------------------------------------------------------------------------
 # Built-in MCP servers
