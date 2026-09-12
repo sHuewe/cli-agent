@@ -188,7 +188,11 @@ def test_knowledge_concept_limit_disables_tools_on_next_model_request() -> None:
             {
                 "role": "assistant",
                 "content": json.dumps(
-                    {"found_content": True, "selected_okf_tokens": ["okf_1"]}
+                    {
+                        "found_content": False,
+                        "selected_okf_tokens": [],
+                        "reason_code": "not_found",
+                    }
                 ),
             },
         ]
@@ -208,6 +212,7 @@ def test_knowledge_concept_limit_disables_tools_on_next_model_request() -> None:
         )
     )
 
-    assert result["found_content"] is True
+    assert result["found_content"] is False
+    assert result["reason_code"] == "not_found"
     assert agent.model_client.tool_sets[0] == tools
     assert agent.model_client.tool_sets[1] == []
