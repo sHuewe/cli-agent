@@ -25,7 +25,8 @@ Konfigurationsdatei wird weiterhin an den MCP-Prozess übergeben.
 
 ## Konfiguration über TOML
 
-Alternativ kann der Server explizit konfiguriert werden:
+Alternativ kann der Server explizit in der normalen Benutzer-/Projektkonfiguration
+konfiguriert werden:
 
 ```toml
 [[mcp_servers]]
@@ -43,18 +44,33 @@ args = [
 
 [mcp_servers.config]
 allow_write_files = false
-allow_untrusted_stdio = true # audited built-in process only
 ```
 
 Mit `allow_write_files = true` werden zusätzlich die schreibenden Tools
 registriert.
 
-Bei einer persistenten TOML-Konfiguration verlangt der Agent vor jedem
-Tool-Aufruf eine explizite Benutzerfreigabe, weil der Prozess als
-user-provided stdio-Server gilt. Die CLI-Variante `--with-os-read` ist als
-eingebauter read-only Server markiert; nicht-interaktive Aufrufer ohne
-Approval-Callback werden abgewiesen. Der Approval-Dialog zeigt keine
-Datei-Inhalte an.
+Da eine solche persistente TOML-Konfiguration als user-provided stdio-MCP gilt,
+muss dessen Start zusätzlich in der maschinenweiten `admin_config.toml`
+administrativ erlaubt sein:
+
+```toml
+[mcp]
+allow_untrusted_stdio = true
+```
+
+Diese Einstellung gehört bewusst **nicht** unter `[mcp_servers.config]` in die
+normale `config.toml`; dort wird sie vom Agenten abgewiesen. Unter Windows wird
+die Admin-Policy über `scripts/setup-admin-config.ps1 -AllowUntrustedStdio`
+gesetzt.
+
+Bei einer persistenten TOML-Konfiguration verlangt der Agent standardmäßig vor
+Tool-Aufrufen eine explizite Benutzerfreigabe, weil der Prozess als
+user-provided stdio-Server gilt. Ein Tool kann interaktiv einmalig oder exakt
+für die laufende Session freigegeben werden; permanente Auto-Approvals für
+externe MCP-Tools gehören ebenfalls in die Admin-Policy. Die CLI-Variante
+`--with-os-read` ist dagegen als eingebauter read-only Server markiert.
+Nicht-interaktive Aufrufer ohne Approval-Callback werden abgewiesen. Der
+Approval-Dialog zeigt keine Datei-Inhalte an.
 
 ## Tools
 
@@ -88,6 +104,8 @@ Zusätzlich gelten unter anderem:
 - `read_file` und `write_file` akzeptieren nur bekannte Textdateitypen,
 - `read_file` und `copy_file` verweigern `.env*`, Credential-/Private-Key-Dateien,
   `.git`-/`.cli-agent`-Artefakte, Logdateien und Dateien über 1 MB,
+- mutierende Operationen verweigern bekannte Secret-/Credential-, `.git`-,
+  `.cli-agent`- und Log-Ziele,
 - der Parent-Ordner einer zu schreibenden Datei muss bereits existieren.
 
 Die MCP-`instructions` fordern das Modell außerdem auf, bestehende Dateien vor
