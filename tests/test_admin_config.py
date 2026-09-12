@@ -45,6 +45,31 @@ auto_approve_tools = ["continuous__search"]
     assert config.mcp.auto_approve_tools == ("continuous__search",)
 
 
+def test_admin_config_accepts_empty_optional_lists(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        """
+[network]
+model_allowed_hosts = ["localhost", "127.0.0.1", "::1", "openrouter.ai"]
+mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+web_allowed_hosts = []
+
+[mcp]
+allow_untrusted_stdio = false
+
+[mcp.approval]
+auto_approve_tools = []
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_admin_config(path)
+
+    assert "openrouter.ai" in config.network.model_allowed_hosts
+    assert config.network.web_allowed_hosts == ()
+    assert config.mcp.auto_approve_tools == ()
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [
