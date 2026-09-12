@@ -124,6 +124,25 @@ Das gilt auch für bestätigungspflichtige Built-in-OS-Schreibtools: Eine Sessio
 
 Für häufig verwendete **externe** Tools kann ein Administrator die interaktive Nachfrage dauerhaft über `[mcp.approval].auto_approve_tools` vermeiden. Damit ergeben sich für externe Tools folgende Stufen: administrativ auto-approved -> direkt ausführen; für die Session freigegeben -> direkt ausführen; andernfalls interaktiv nachfragen. Built-in-Tools werden nicht durch `auto_approve_tools` freigeschaltet.
 
+### Tool-Freigaben für Skripte / One-Shot-Aufrufe
+
+Für vertrauenswürdige Automatisierung kann ein exakter exponierter Toolname mit `--approve-tool` für genau diesen Prozesslauf vorab freigegeben werden:
+
+```powershell
+cli-agent --with-os-write --approve-tool os__write_file "Schreibe test.txt mit dem Inhalt Hallo"
+```
+
+Mehrere Tools werden jeweils explizit angegeben:
+
+```powershell
+cli-agent `
+  --approve-tool external__search `
+  --approve-tool external__export `
+  "Führe die Auswertung aus"
+```
+
+`--approve-tool` interpretiert keine Wildcards und ist bewusst **kein** `--approve-all`. Die Freigabe betrifft alle Aufrufe genau dieses Tools während des aktuellen Prozesses, unabhängig von dessen Argumenten. Sie ersetzt nur die interaktive Bestätigung. Sie aktiviert keinen MCP-Server und umgeht weder `--with-os-write` noch Admin-Policy, Netzwerk-Allowlist, Workspace-Containment oder Sensitive-Path-Schutz. Ohne passende Vorabfreigabe werden bestätigungspflichtige Tool-Aufrufe bei nicht-interaktivem `stdin` weiterhin abgelehnt. Die Verwendung von `--approve-tool` wird im Log als CLI-Vorabfreigabe protokolliert.
+
 ## Start / Workspace
 
 Ohne `--workspace` ist das aktuelle Arbeitsverzeichnis der Workspace:
@@ -161,6 +180,25 @@ required = true
 
 Details: [OKF MCP](docs/mcp-okf.md).
 
+## Web-Kontext
+
+Web-Kontext kann interaktiv mit `add_web_context <url>` geladen und mit `clear_web_context` entfernt werden. Für One-Shot-Aufrufe und Skripte steht dieselbe Funktion zusätzlich als CLI-Option zur Verfügung:
+
+```powershell
+cli-agent --add-web-context "https://docs.intern.firma.de/reference" "Fasse die relevanten Änderungen zusammen"
+```
+
+Die Option ist wiederholbar, wenn mehrere Seiten als Referenzkontext geladen werden sollen:
+
+```powershell
+cli-agent `
+  --add-web-context "https://docs.intern.firma.de/a" `
+  --add-web-context "https://docs.intern.firma.de/b" `
+  "Vergleiche die beiden Quellen"
+```
+
+Der CLI-Aufruf verwendet denselben `add_web_context`-Pfad wie der interaktive Befehl. Daher gelten dieselben Security-Regeln: Nur Hosts aus `admin_config.toml`/`network.web_allowed_hosts` sind zulässig, Redirect-Ziele werden erneut geprüft, und geladener Web-Inhalt wird als nicht vertrauenswürdiger Referenzkontext behandelt. Ist ein URL-Aufruf nicht zulässig oder schlägt er fehl, wird der Agent-Prompt nicht ausgeführt.
+
 ## Logging und Context Dumps
 
 ```toml
@@ -181,10 +219,8 @@ Der Agent hält MCP-Sessions offen, exponiert Tools als `<server>__<tool>` und f
 
 Wenn `[okf]` konfiguriert ist, läuft vor der Main-Phase ein separater Retrieval-Kontext mit den read-only Tools `knowledge_index` und `knowledge_read`.
 
-Web-Kontext kann interaktiv mit `add_web_context <url>` geladen und mit `clear_web_context` entfernt werden. Nur Hosts aus `admin_config.toml`/`network.web_allowed_hosts` sind zulässig; Redirects werden ebenfalls geprüft.
-
 Mit `tokens` kann die Usage des letzten Agentenlaufs angezeigt werden.
 
 ## Security
 
-Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, externe stdio-MCPs und administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern. Session-Freigaben sind dagegen eine bewusste, nicht persistente Benutzerentscheidung für genau ein Tool innerhalb des laufenden Prozesses.
+Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, externe stdio-MCPs und administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern. Session- und CLI-Vorabfreigaben sind dagegen bewusste, nicht persistente Benutzerentscheidungen für genau benannte Tools innerhalb des laufenden Prozesses.
