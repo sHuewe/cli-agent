@@ -129,7 +129,13 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         return value.replace("{python}", sys.executable).replace("{workspace_directory}", str(self.workspace_directory)).replace("{project_directory}", str(self.workspace_directory)).replace("{config_file}", str(self.config_file))
 
     def _build_system_prompt(self) -> str:
-        parts = [BASE_SYSTEM_PROMPT, f"Festgelegter Arbeitsordner: {self.workspace_directory}", f"Aktuelles Datum (isoformat): {datetime.datetime.now(datetime.UTC).isoformat()}"]
+        parts = [
+            BASE_SYSTEM_PROMPT,
+            "Es ist ein Projekt-Workspace festgelegt. Alle Dateipfade für "
+            "Workspace-Tools müssen relativ zu diesem Workspace angegeben werden; "
+            "verwende keine absoluten Dateipfade.",
+            f"Aktuelles Datum (isoformat): {datetime.datetime.now(datetime.UTC).isoformat()}",
+        ]
         available_tool_names = [tool["function"]["name"] for tool in self._model_tools()]
         if available_tool_names:
             parts.append("Aktuell verfügbare MCP-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(available_tool_names))
