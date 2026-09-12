@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from .model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
+from .network_policy import LOCAL_HOSTS, validate_http_url
 
 ctx_large = 24576
 ctx_small = 8192
@@ -47,8 +48,13 @@ class OllamaClient:
         model: str,
         timeout: float = 120.0,
         context_length: int | None = None,
+        allowed_hosts: tuple[str, ...] = LOCAL_HOSTS,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_http_url(
+            base_url,
+            allowed_hosts=allowed_hosts,
+            purpose="Ollama-Modell",
+        ).rstrip("/")
         self.model = model
         self.timeout = timeout
         self.context_length = context_length
@@ -97,13 +103,15 @@ class OllamaClient:
             "messages": self._convert_messages(messages),
             "tools": tools,
             "stream": False,
-            "options": {
-                "num_ctx": ctx_large
-            },
+            "options": {"num_ctx": ctx_large},
         }
         self.last_usage = None
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
                 response = await client.post(f"{self.base_url}/api/chat", json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:

@@ -17,13 +17,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8,<9",
-    "pytest-asyncio>=0.24,<1",
+    "pytest>=9.0.3,<10",
+    "pytest-asyncio>=1,<2",
+    "pytest-cov>=6,<8",
 ]
 
 [project.scripts]
 cli-agent = "cli_agent.cli:main"
-cli-agent-compose-mcp = "cli_agent.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cli_agent"]
@@ -34,3 +34,11 @@ packages = ["src/cli_agent"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E501"]

@@ -26,12 +26,11 @@ backup_count = 2
 """.strip(),
         encoding="utf-8",
     )
-
     config = load_config(config_file)
-
     assert config.logging.level == "DEBUG"
     assert config.logging.file == Path("agent.log")
     assert config.logging.log_prompts is False
+    assert config.logging.log_tool_calls is False
     assert config.logging.log_model_messages is True
     assert config.logging.log_tool_results is True
     assert config.logging.max_bytes == 1234
@@ -51,46 +50,47 @@ context_length = 262144
 """.strip(),
         encoding="utf-8",
     )
-
-    config = load_config(config_file)
-
-    assert config.model.context_length == 262_144
+    assert load_config(config_file).model.context_length == 262_144
 
 
 @pytest.mark.parametrize("value", [0, -1, '"invalid"', "true"])
-def test_model_context_length_must_be_positive_integer(
-    tmp_path: Path,
-    value: str,
-) -> None:
+def test_model_context_length_must_be_positive_integer(tmp_path: Path, value: str) -> None:
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        f"""
-[model]
-context_length = {value}
+    config_file.write_text(f"[model]\ncontext_length = {value}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="context_length"):
+        load_config(config_file)
+
+
+def test_load_config_rejects_string_security_flags(tmp_path: Path) -> None:
+    logging_config_file = tmp_path / "logging-config.toml"
+    logging_config_file.write_text('[logging]\nlog_prompts = "false"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="log_prompts"):
+        load_config(logging_config_file)
+
+    mcp_config_file = tmp_path / "mcp-config.toml"
+    mcp_config_file.write_text(
+        """
+[[mcp_servers]]
+name = "os"
+transport = "stdio"
+command = "python"
+
+[mcp_servers.config]
+allow_write_files = "false"
 """.strip(),
         encoding="utf-8",
     )
-
-    with pytest.raises(ValueError, match="context_length"):
-        load_config(config_file)
+    with pytest.raises(ValueError, match="allow_write_files"):
+        load_config(mcp_config_file)
 
 
 def test_configure_logging_writes_file(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     log_file = tmp_path / "agent.log"
-    config_file.write_text(
-        f"""
-[logging]
-file = "{log_file.as_posix()}"
-""".strip(),
-        encoding="utf-8",
-    )
-    config = load_config(config_file)
-
-    configure_logging(config.logging)
-    logging.getLogger("cli_agent.test").info("tool_call name=compose_ps")
-
-    assert "tool_call name=compose_ps" in log_file.read_text(encoding="utf-8")
+    config_file.write_text(f'[logging]\nfile = "{log_file.as_posix()}"\n', encoding="utf-8")
+    configure_logging(load_config(config_file).logging)
+    logging.getLogger("cli_agent.test").info("tool_call name=example")
+    assert "tool_call name=example" in log_file.read_text(encoding="utf-8")
 
 
 def test_load_mcp_servers(tmp_path: Path) -> None:
@@ -108,9 +108,7 @@ API_URL = "http://localhost:8080"
 """.strip(),
         encoding="utf-8",
     )
-
     config = load_config(config_file)
-
     assert len(config.mcp_servers) == 1
     assert config.mcp_servers[0].name == "special"
     assert config.mcp_servers[0].args == ("-m", "special.server")
@@ -131,9 +129,7 @@ Authorization = "Bearer test"
 """.strip(),
         encoding="utf-8",
     )
-
     server = load_config(config_file).mcp_servers[0]
-
     assert server.transport == "streamable_http"
     assert server.url == "http://127.0.0.1:8001/mcp"
     assert server.command is None
@@ -152,32 +148,50 @@ command = "python"
 """.strip(),
         encoding="utf-8",
     )
-
     with pytest.raises(ValueError, match="darf command, args und env"):
         load_config(config_file)
 
 
-def test_default_config_is_created_from_safe_packaged_template(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_duplicate_mcp_server_names_are_rejected(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[[mcp_servers]]
+name = "same"
+transport = "stdio"
+command = "first"
+
+[[mcp_servers]]
+name = "same"
+transport = "stdio"
+command = "second"
+""".strip(),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="eindeutig"):
+        load_config(config_file)
+
+
+def test_default_config_is_created_from_safe_packaged_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "state" / "config.toml"
     monkeypatch.setattr(config_module, "default_config_file", lambda: config_file)
-
     config = load_config()
-
     assert config_file.is_file()
     assert config.mcp_servers == ()
     assert config.okf is None
     content = config_file.read_text(encoding="utf-8")
+    active_lines = {
+        line.strip()
+        for line in content.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    assert "[network]" not in active_lines
+    assert not any(line.startswith("allow_untrusted_stdio") for line in active_lines)
     assert "# [[mcp_servers]]" in content
     assert "# [okf]" in content
 
 
-def test_existing_default_config_is_not_overwritten(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_existing_default_config_is_not_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "config.toml"
     original = """
 [model]
@@ -187,17 +201,13 @@ base_url = "http://localhost:11434"
 """.strip()
     config_file.write_text(original, encoding="utf-8")
     monkeypatch.setattr(config_module, "default_config_file", lambda: config_file)
-
     config = load_config()
-
     assert config.model.model == "custom-model"
     assert config_file.read_text(encoding="utf-8") == original
 
 
 def test_missing_explicit_config_is_not_created(tmp_path: Path) -> None:
     config_file = tmp_path / "custom" / "config.toml"
-
     config = load_config(config_file)
-
     assert config.mcp_servers == ()
     assert not config_file.exists()

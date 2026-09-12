@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from cli_agent.config import ModelConfig
 from cli_agent.model_factory import create_model_client
+from cli_agent.network_policy import NetworkConfig
 from cli_agent.openai_client import OpenAIClient
 
 
@@ -48,6 +51,30 @@ def test_openai_client_uses_dummy_without_api_key_env() -> None:
 
     assert isinstance(client, OpenAIClient)
     assert client.api_key == "dummy"
+
+
+def test_model_endpoint_must_be_allowlisted() -> None:
+    with pytest.raises(ValueError, match="nicht erlaubt"):
+        create_model_client(
+            ModelConfig(
+                provider="openai",
+                model="test-model",
+                base_url="https://provider.example/v1",
+            )
+        )
+
+
+def test_model_endpoint_can_use_an_explicit_internal_host() -> None:
+    client = create_model_client(
+        ModelConfig(
+            provider="openai",
+            model="test-model",
+            base_url="https://llm.internal/v1",
+        ),
+        network=NetworkConfig(model_allowed_hosts=("llm.internal",)),
+    )
+
+    assert isinstance(client, OpenAIClient)
 
 
 def test_model_factory_passes_context_length() -> None:

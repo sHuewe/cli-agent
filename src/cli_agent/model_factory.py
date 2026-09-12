@@ -4,19 +4,29 @@ import os
 
 from .config import ModelConfig
 from .model import ModelClient
+from .network_policy import NetworkConfig, validate_http_url
 from .ollama import OllamaClient
 from .openai_client import OpenAIClient
 
 
 def create_model_client(
     config: ModelConfig,
+    *,
+    network: NetworkConfig | None = None,
 ) -> ModelClient:
+    network = network or NetworkConfig()
+    validate_http_url(
+        config.base_url,
+        allowed_hosts=network.model_allowed_hosts,
+        purpose="Modell",
+    )
     if config.provider == "ollama":
         return OllamaClient(
             base_url=config.base_url,
             model=config.model,
             timeout=config.timeout,
             context_length=config.context_length,
+            allowed_hosts=network.model_allowed_hosts,
         )
 
     if config.provider == "openai":
@@ -31,9 +41,7 @@ def create_model_client(
             timeout=config.timeout,
             headers=config.headers,
             context_length=config.context_length,
+            allowed_hosts=network.model_allowed_hosts,
         )
 
-    raise ValueError(
-        f"Unbekannter Modell-Provider: "
-        f"{config.provider!r}"
-    )
+    raise ValueError(f"Unbekannter Modell-Provider: {config.provider!r}")
