@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -22,10 +22,12 @@ def test_admin_config_defaults_are_restrictive(tmp_path: Path) -> None:
 def test_windows_admin_config_path_ignores_programdata_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(admin_config_module.os, "name", "nt")
+    monkeypatch.setattr(admin_config_module.platform, "system", lambda: "Windows")
     monkeypatch.setenv("PROGRAMDATA", r"C:\Users\attacker\policy")
 
-    assert default_admin_config_file() == Path(r"C:\ProgramData\cli-agent\admin_config.toml")
+    assert PureWindowsPath(default_admin_config_file()) == PureWindowsPath(
+        r"C:\ProgramData\cli-agent\admin_config.toml"
+    )
 
 
 def test_admin_config_loads_network_and_mcp_policy(tmp_path: Path) -> None:
