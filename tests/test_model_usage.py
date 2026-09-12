@@ -1,4 +1,6 @@
-from cli_agent.model import TokenUsage
+import pytest
+
+from cli_agent.model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
 from cli_agent.ollama import OllamaClient
 from cli_agent.openai_client import OpenAIClient
 
@@ -51,3 +53,57 @@ def test_ollama_token_usage_uses_eval_counts() -> None:
         output_tokens=54,
         total_tokens=375,
     )
+
+
+def test_context_guard_triggers_at_configured_margin() -> None:
+    client = OpenAIClient(
+        base_url="http://localhost:8000/v1",
+        model="test",
+        api_key=None,
+        context_length=10_000,
+    )
+    client.last_usage = TokenUsage(
+        input_tokens=10_000 - CONTEXT_LIMIT_MARGIN,
+        output_tokens=20,
+        total_tokens=10_000 - CONTEXT_LIMIT_MARGIN + 20,
+    )
+
+    with pytest.raises(ContextLimitReachedError, match="Context-Limit"):
+        client._check_context_limit()
+
+    assert client._context_limit_reached is True
+
+
+def test_context_guard_does_not_trigger_below_margin() -> None:
+    client = OpenAIClient(
+        base_url="http://localhost:8000/v1",
+        model="test",
+        api_key=None,
+        context_length=10_000,
+    )
+    client.last_usage = TokenUsage(
+        input_tokens=10_000 - CONTEXT_LIMIT_MARGIN - 1,
+        output_tokens=20,
+        total_tokens=10_000 - CONTEXT_LIMIT_MARGIN + 19,
+    )
+
+    client._check_context_limit()
+
+    assert client._context_limit_reached is False
+
+
+def test_context_guard_is_disabled_without_configured_limit() -> None:
+    client = OpenAIClient(
+        base_url="http://localhost:8000/v1",
+        model="test",
+        api_key=None,
+    )
+    client.last_usage = TokenUsage(
+        input_tokens=1_000_000,
+        output_tokens=20,
+        total_tokens=1_000_020,
+    )
+
+    client._check_context_limit()
+
+    assert client._context_limit_reached is False
