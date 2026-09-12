@@ -153,9 +153,9 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         return [tool for server_name, tools in self._server_tools.items() if server_name in self._active_servers for tool in tools]
 
     def _requires_approval(self, server_config: ServerConfig, tool_name: str, exposed_name: str | None = None) -> bool:
-        if exposed_name is not None and exposed_name in self.mcp_policy.auto_approve_tools:
-            return False
         if not getattr(server_config, "built_in", False):
+            if exposed_name is not None and exposed_name in self.mcp_policy.auto_approve_tools:
+                return False
             return True
         if tool_name in WRITE_TOOLS:
             return bool(getattr(server_config, "allow_write_files", lambda: False)())
