@@ -46,18 +46,18 @@ class LoopAgent:
         return message
 
 
-def _run(agent, *, phase="main", state=None, tools=None):
+def _run(agent, *, phase="main", state=None, tools=None, routes=None, max_concept_reads=10):
     return asyncio.run(
         run_model_loop(
             agent,
             messages=[{"role": "system", "content": "system"}],
             tools=tools or [],
-            routes={},
+            routes=routes or {},
             enabled_server_names=None,
             max_tool_calls=10,
             phase=phase,
             knowledge_state=state,
-            max_concept_reads=10,
+            max_concept_reads=max_concept_reads,
         )
     )
 
@@ -147,3 +147,67 @@ def test_knowledge_loop_falls_back_after_two_empty_responses() -> None:
     result = json.loads(_run(agent, phase="knowledge", state=state))
     assert result["selected_okf_tokens"] == [token]
     assert result["agent_fallback"]["strategy"] == "all_read_concepts"
+
+
+def test_knowledge_concept_limit_disables_tools_on_next_model_request() -> None:
+    state = _KnowledgeRunState()
+    state.add_allowed_calls({"a.md": {"knowledge_read"}})
+
+    tool_call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "okf__knowledge_read",
+            "arguments": {"path": "a.md"},
+        },
+    }
+
+    class KnowledgeSession:
+        async def call_tool(self, name, arguments):
+            assert name == "knowledge_read"
+            assert arguments == {"path": "a.md"}
+            return SimpleNamespace(
+                isError=False,
+                content=[
+                    SimpleNamespace(
+                        text=json.dumps(
+                            {"kind": "concept", "path": "a.md", "content": "A"}
+                        )
+                    )
+                ],
+            )
+
+    server_config = SimpleNamespace(
+        name="okf",
+        compress_result=False,
+        compress_min_chars=12_000,
+    )
+    agent = LoopAgent(
+        [
+            {"role": "assistant", "content": "", "tool_calls": [tool_call]},
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {"found_content": True, "selected_okf_tokens": ["okf_1"]}
+                ),
+            },
+        ]
+    )
+    agent._requires_approval = lambda *args, **kwargs: False
+    tools = [{"type": "function", "function": {"name": "okf__knowledge_read"}}]
+    routes = {"okf__knowledge_read": (KnowledgeSession(), "knowledge_read", server_config)}
+
+    result = json.loads(
+        _run(
+            agent,
+            phase="knowledge",
+            state=state,
+            tools=tools,
+            routes=routes,
+            max_concept_reads=1,
+        )
+    )
+
+    assert result["found_content"] is True
+    assert agent.model_client.tool_sets[0] == tools
+    assert agent.model_client.tool_sets[1] == []
