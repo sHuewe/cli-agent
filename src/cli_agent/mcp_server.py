@@ -7,15 +7,13 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from .compose import ComposeError, ComposeProject
-from .config import load_config, McpServerConfig
+from .config import McpServerConfig, load_config
 from .logging_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
 
-
-def create_server(project: ComposeProject,mcp_config: McpServerConfig 
-) -> FastMCP:
+def create_server(project: ComposeProject, mcp_config: McpServerConfig) -> FastMCP:
     instructions = ""
     if project.is_available():
         instructions = """\
@@ -73,7 +71,7 @@ After an operational action, inspect the service status to verify the result.
         @mcp.tool()
         def compose_down(service_name: str) -> str:
             """
-            Calls docker compose down for one existing Compose service.
+            Stop exactly one existing Docker Compose service.
 
             Args:
                 service_name: Exact name of the single service to stop.
@@ -111,23 +109,19 @@ def parse_args() -> argparse.Namespace:
         help="Compose project directory fixed for this MCP process",
     )
     parser.add_argument(
-        "--config-file",
-        type=Path,
-        default=None,
-        help=(
-            "Configuration file "
-        ))
+        "--config-file", type=Path, default=None, help=("Configuration file ")
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     config = load_config(path=args.config_file)
-    mcp_config = None
+    mcp_config = McpServerConfig(name="compose")
     for mcp_server in config.mcp_servers:
-                if mcp_server.name == "compose":
-                    mcp_config = mcp_server
-                    break
+        if mcp_server.name == "compose":
+            mcp_config = mcp_server
+            break
     configure_logging(
         config.logging,
         default_filename="cli-agent-compose-mcp.log",
@@ -138,11 +132,11 @@ def main() -> None:
         args.project_directory,
     )
     try:
-        project = ComposeProject.from_directory(args.project_directory,mcp_config)
+        project = ComposeProject.from_directory(args.project_directory, mcp_config)
     except ComposeError as exc:
         logger.exception("MCP server initialization failed")
         raise SystemExit(str(exc)) from exc
-    
+
     create_server(project, mcp_config).run(transport="stdio")
 
 

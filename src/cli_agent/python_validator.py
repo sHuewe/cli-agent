@@ -1,35 +1,27 @@
 from __future__ import annotations
 
-import json
-import re
-import subprocess
+import shutil
+import subprocess  # nosec B404
+import tempfile
 import time
 import uuid
-from dataclasses import dataclass
-from pathlib import Path, PurePath
-from typing import Any, Callable, Literal, Sequence
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from typing import Any, Literal
+
+from .python_validator_docker import (
+    VALIDATOR_IGNORED_NAMES,
+    DockerValidatorSupportMixin,
+)
+from .python_validator_types import (
+    CommandRunner,
+    PythonValidationError,
+    ValidatorSettings,
+    is_pinned_image,
+)
 
 
-class PythonValidationError(RuntimeError):
-    """The Python validation request is invalid."""
-
-
-CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
-_MODULE_NAME = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
-
-
-@dataclass(frozen=True)
-class ValidatorSettings:
-    python_image: str = "python:3.12-slim"
-    setup_timeout_seconds: int = 180
-    startup_grace_seconds: float = 3.0
-    memory_limit: str = "2g"
-    cpu_limit: str = "2.0"
-    pids_limit: int = 256
-    log_lines: int = 200
-
-
-class DockerPythonValidator:
+class DockerPythonValidator(DockerValidatorSupportMixin):
     """Build and start Python code in a short-lived Docker container."""
 
     def __init__(
@@ -50,153 +42,40 @@ class DockerPythonValidator:
         self.settings = settings or ValidatorSettings()
         self._run_command = command_runner
         self._sleep = sleep
-        self._container_runner = Path(__file__).with_name(
-            "python_validator_container.py"
-        ).resolve()
+        self._container_runner = (
+            Path(__file__).with_name("python_validator_container.py").resolve()
+        )
         if not self._container_runner.is_file():
             raise PythonValidationError(
                 f"Container-Runner fehlt: {self._container_runner}"
             )
 
-    def _resolve_project(self, project_path: str) -> Path:
-        if not isinstance(project_path, str) or not project_path.strip():
-            raise PythonValidationError("Der Projektpfad darf nicht leer sein.")
-
-        candidate = Path(project_path)
-        if candidate.is_absolute():
-            raise PythonValidationError(
-                "Der Projektpfad muss relativ zum Workspace sein."
-            )
-        if ".." in PurePath(project_path).parts:
-            raise PythonValidationError(
-                "Der Projektpfad darf '..' nicht enthalten."
-            )
-
-        resolved = (self.workspace / candidate).resolve()
-        try:
-            resolved.relative_to(self.workspace)
-        except ValueError as exc:
-            raise PythonValidationError(
-                "Der Projektpfad verweist außerhalb des Workspaces."
-            ) from exc
-        if not resolved.is_dir():
-            raise PythonValidationError(
-                f"Python-Projekt existiert nicht: {project_path!r}"
-            )
-        return resolved
-
     @staticmethod
-    def _validate_entrypoint(
+    def _stage_project(
         project: Path,
-        entrypoint: str,
-        entrypoint_type: Literal["file", "module"],
-    ) -> None:
-        if entrypoint_type not in {"file", "module"}:
-            raise PythonValidationError(
-                "entrypoint_type muss 'file' oder 'module' sein."
-            )
-        if not isinstance(entrypoint, str) or not entrypoint.strip():
-            raise PythonValidationError("Der Python-Einstiegspunkt fehlt.")
+    ) -> tuple[tempfile.TemporaryDirectory[str], Path]:
+        """Create a sanitized, temporary copy for the container mount.
 
-        if entrypoint_type == "module":
-            if not _MODULE_NAME.fullmatch(entrypoint):
-                raise PythonValidationError(
-                    f"Ungültiger Python-Modulname: {entrypoint!r}"
-                )
-            return
-
-        candidate = Path(entrypoint)
-        if candidate.is_absolute() or ".." in PurePath(entrypoint).parts:
-            raise PythonValidationError(
-                "Der Einstiegspunkt muss innerhalb des Projekts liegen."
-            )
-        resolved = (project / candidate).resolve()
+        The original workspace must never be mounted into the container: a
+        read-only mount still exposes any credentials that happen to be there
+        to untrusted project code.
+        """
+        staging_directory = tempfile.TemporaryDirectory(prefix="cli-agent-validator-")
+        staged_project = Path(staging_directory.name) / "project"
         try:
-            resolved.relative_to(project)
-        except ValueError as exc:
+            shutil.copytree(
+                project,
+                staged_project,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(*VALIDATOR_IGNORED_NAMES),
+            )
+        except (OSError, shutil.Error) as exc:
+            staging_directory.cleanup()
             raise PythonValidationError(
-                "Der Einstiegspunkt verweist außerhalb des Projekts."
+                "Das Python-Projekt konnte nicht für die isolierte Validierung "
+                "bereitgestellt werden."
             ) from exc
-        if not resolved.is_file():
-            raise PythonValidationError(
-                f"Python-Einstiegspunkt existiert nicht: {entrypoint!r}"
-            )
-        if resolved.suffix.lower() != ".py":
-            raise PythonValidationError(
-                "Ein Datei-Einstiegspunkt muss eine .py-Datei sein."
-            )
-
-    @staticmethod
-    def _validate_arguments(arguments: Sequence[str] | None) -> list[str]:
-        values = list(arguments or [])
-        if not all(isinstance(value, str) for value in values):
-            raise PythonValidationError(
-                "Alle Startargumente müssen Strings sein."
-            )
-        return values
-
-    def _command(
-        self,
-        args: list[str],
-        *,
-        timeout: float,
-    ) -> subprocess.CompletedProcess[str]:
-        return self._run_command(
-            args,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-        )
-
-    def _logs(self, container_name: str) -> str:
-        result = self._command(
-            [
-                "docker",
-                "logs",
-                "--tail",
-                str(self.settings.log_lines),
-                container_name,
-            ],
-            timeout=10,
-        )
-        return (result.stdout + result.stderr).strip()
-
-    def _state(self, container_name: str) -> dict[str, Any] | None:
-        result = self._command(
-            [
-                "docker",
-                "inspect",
-                "--format",
-                "{{json .State}}",
-                container_name,
-            ],
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return None
-        try:
-            value = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return None
-        return value if isinstance(value, dict) else None
-
-    def _remove_container(self, container_name: str) -> tuple[bool, str]:
-        try:
-            cleanup = self._command(
-                ["docker", "rm", "--force", container_name],
-                timeout=20,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            return False, str(exc)
-        detail = (
-            cleanup.stdout.strip()
-            if cleanup.returncode == 0
-            else cleanup.stderr.strip()
-        )
-        return cleanup.returncode == 0, detail
+        return staging_directory, staged_project
 
     def validate(
         self,
@@ -210,6 +89,7 @@ class DockerPythonValidator:
         project = self._resolve_project(project_path)
         self._validate_entrypoint(project, entrypoint, entrypoint_type)
         start_arguments = self._validate_arguments(arguments)
+        staging_directory, staged_project = self._stage_project(project)
 
         container_name = f"cli-agent-python-validator-{uuid.uuid4().hex[:12]}"
         ready_token = f"PYTHON_VALIDATOR_READY_{uuid.uuid4().hex}"
@@ -301,7 +181,14 @@ class DockerPythonValidator:
                 container_name,
                 "--init",
                 "--pull",
-                "missing",
+                "never",
+                "--user",
+                "65532:65532",
+                "--read-only",
+                "--tmpfs",
+                "/" + "tmp:rw,nosuid,nodev",
+                "--network",
+                self.settings.network_mode,
                 "--cap-drop",
                 "ALL",
                 "--security-opt",
@@ -313,7 +200,7 @@ class DockerPythonValidator:
                 "--cpus",
                 self.settings.cpu_limit,
                 "--mount",
-                f"type=bind,src={project},dst=/source,readonly",
+                f"type=bind,src={staged_project},dst=/source,readonly",
                 "--mount",
                 (
                     f"type=bind,src={self._container_runner},"
@@ -321,6 +208,10 @@ class DockerPythonValidator:
                 ),
                 "--env",
                 f"PYTHON_VALIDATOR_READY_TOKEN={ready_token}",
+                "--env",
+                "HOME=/tmp/home",
+                "--env",
+                "PYTHONUSERBASE=/tmp/python-user",
                 self.settings.python_image,
                 "python",
                 "/validator/runner.py",
@@ -428,17 +319,13 @@ class DockerPythonValidator:
                 self._sleep(self.settings.startup_grace_seconds)
                 final_state = self._state(container_name)
                 logs = self._logs(container_name)
-                running = bool(
-                    final_state and final_state.get("Running", False)
-                )
+                running = bool(final_state and final_state.get("Running", False))
                 exited_cleanly = bool(
                     final_state
                     and final_state.get("Status") == "exited"
                     and final_state.get("ExitCode") == 0
                 )
-                process_ok = running or (
-                    not expect_long_running and exited_cleanly
-                )
+                process_ok = running or (not expect_long_running and exited_cleanly)
                 steps.append(
                     {
                         "name": "process_started",
@@ -454,15 +341,18 @@ class DockerPythonValidator:
                 final_state = self._state(container_name)
                 logs = self._logs(container_name)
         finally:
-            if container_created:
-                removed, cleanup_detail = self._remove_container(container_name)
-                steps.append(
-                    {
-                        "name": "container_removed",
-                        "success": removed,
-                        "detail": cleanup_detail,
-                    }
-                )
+            try:
+                if container_created:
+                    removed, cleanup_detail = self._remove_container(container_name)
+                    steps.append(
+                        {
+                            "name": "container_removed",
+                            "success": removed,
+                            "detail": cleanup_detail,
+                        }
+                    )
+            finally:
+                staging_directory.cleanup()
 
         return self._result(
             success,
@@ -494,10 +384,18 @@ class DockerPythonValidator:
             "success": success,
             "project_path": project_path,
             "python_image": self.settings.python_image,
+            "validator_policy": {
+                "image_pinned": is_pinned_image(self.settings.python_image),
+                "require_pinned_image": self.settings.require_pinned_image,
+                "network_mode": self.settings.network_mode,
+                "source_mount": "sanitized-read-only",
+                "container_user": "65532:65532",
+                "root_filesystem": "read-only",
+            },
             "start": {
                 "entrypoint_type": entrypoint_type,
                 "entrypoint": entrypoint,
-                "arguments": arguments,
+                "argument_count": len(arguments),
                 "expect_long_running": expect_long_running,
             },
             "steps": steps,
@@ -523,7 +421,5 @@ class DockerPythonValidator:
         status = state.get("Status", "unknown")
         exit_code = state.get("ExitCode")
         if status == "exited" and exit_code == 0 and expect_long_running:
-            return (
-                "Prozess wurde fehlerfrei beendet, sollte aber dauerhaft laufen."
-            )
+            return "Prozess wurde fehlerfrei beendet, sollte aber dauerhaft laufen."
         return f"Containerstatus={status}, ExitCode={exit_code}"

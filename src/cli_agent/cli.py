@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import sys
 import traceback
 from dataclasses import replace
 from pathlib import Path
@@ -9,11 +11,76 @@ from pathlib import Path
 from .config import AppConfig, McpServerConfig, default_config_file, load_config
 from .logging_setup import configure_logging
 from .model_factory import create_model_client
+from .python_validator_types import is_pinned_image
 from .web_context_agent import WebContextCliAgent
-
 
 OS_MCP_SERVER_NAME = "os"
 PYTHON_VALIDATOR_MCP_SERVER_NAME = "python-validator"
+
+
+SENSITIVE_ARGUMENT_MARKERS = (
+    "auth",
+    "api_key",
+    "apikey",
+    "authorization",
+    "credential",
+    "password",
+    "secret",
+    "token",
+)
+
+
+def _is_sensitive_argument_name(name: str) -> bool:
+    normalized = name.casefold().replace("-", "_")
+    return normalized in {
+        "arguments",
+        "body",
+        "content",
+        "data",
+        "env",
+        "headers",
+        "payload",
+    } or any(marker in normalized for marker in SENSITIVE_ARGUMENT_MARKERS)
+
+
+def _approval_value(name: str, value: object) -> object:
+    if _is_sensitive_argument_name(name):
+        if isinstance(value, (str, bytes, list, tuple, dict)):
+            return f"<{len(value)} Elemente verborgen>"
+        return "<verborgen>"
+    if isinstance(value, dict):
+        return {
+            str(key): _approval_value(str(key), item) for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_approval_value(name, item) for item in value]
+    if isinstance(value, str) and len(value) > 160:
+        return f"<{len(value)} Zeichen>"
+    return value
+
+
+def _approval_arguments(arguments: dict[str, object]) -> str:
+    """Return a reviewable summary without printing file contents or secrets."""
+    summary = {
+        str(name): _approval_value(str(name), value)
+        for name, value in arguments.items()
+    }
+    return json.dumps(summary, ensure_ascii=False, sort_keys=True)
+
+
+async def approve_tool_call(
+    tool_name: str,
+    arguments: dict[str, object],
+) -> bool:
+    """Ask the local operator before a mutating MCP tool is executed."""
+    if not sys.stdin.isatty():
+        return False
+    print(
+        "\nExplizite Freigabe erforderlich: "
+        f"{tool_name}({_approval_arguments(arguments)})"
+    )
+    answer = await asyncio.to_thread(input, "Aktion ausführen? [j/N] ")
+    return answer.strip().lower() in {"j", "ja", "y", "yes"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,10 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=None,
-        help=(
-            "Configuration file "
-            f"(default: {default_config_file()})"
-        ),
+        help=(f"Configuration file (default: {default_config_file()})"),
     )
     parser.add_argument(
         "--model",
@@ -71,9 +135,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--with-python-validator",
         action="store_true",
         help=(
-            "Enable the built-in Python validator MCP server. Overrides a "
-            "'python-validator' MCP server from the config."
+            "Enable the built-in Python validator MCP server. Requires "
+            "--python-validator-image and overrides a 'python-validator' "
+            "MCP server from the config."
         ),
+    )
+    parser.add_argument(
+        "--python-validator-image",
+        default=None,
+        help=(
+            "Required with --with-python-validator. Use a local image with a "
+            "sha256 digest."
+        ),
+    )
+    parser.add_argument(
+        "--require-pinned-validator-image",
+        action="store_true",
+        help=("Compatibility flag; validator image pinning is always required"),
     )
     parser.add_argument(
         "--debug",
@@ -102,24 +180,43 @@ def _os_mcp_server_config(access: str) -> McpServerConfig:
             access,
         ),
         config={"allow_write_files": access == "write"},
+        built_in=True,
     )
 
 
-def _python_validator_mcp_server_config() -> McpServerConfig:
+def _python_validator_mcp_server_config(
+    *,
+    python_image: str | None = None,
+) -> McpServerConfig:
+    if not python_image or not python_image.strip():
+        raise ValueError(
+            "Der Python-Validator benötigt ein explizit angegebenes, "
+            "gepinntes Image (--python-validator-image)."
+        )
+    selected_image = python_image.strip()
+    if not is_pinned_image(selected_image):
+        raise ValueError(
+            "Das Validator-Image muss als vollständiger sha256-Digest angegeben werden."
+        )
+    args = [
+        "-m",
+        "cli_agent.python_validator_mcp",
+        "--project-directory",
+        "{workspace_directory}",
+        "--python-image",
+        selected_image,
+        "--config-file",
+        "{config_file}",
+        "--network-mode",
+        "none",
+        "--require-pinned-image",
+    ]
     return McpServerConfig(
         name=PYTHON_VALIDATOR_MCP_SERVER_NAME,
         transport="stdio",
         command="{python}",
-        args=(
-            "-m",
-            "cli_agent.python_validator_mcp",
-            "--project-directory",
-            "{workspace_directory}",
-            "--python-image",
-            "python:3.12-slim",
-            "--config-file",
-            "{config_file}",
-        ),
+        args=tuple(args),
+        built_in=True,
     )
 
 
@@ -128,6 +225,8 @@ def apply_mcp_cli_overrides(
     *,
     os_access: str | None,
     with_python_validator: bool = False,
+    python_validator_image: str | None = None,
+    require_pinned_validator_image: bool = False,
 ) -> AppConfig:
     """Apply command-line MCP settings with precedence over file config."""
     servers = config.mcp_servers
@@ -135,18 +234,24 @@ def apply_mcp_cli_overrides(
 
     if os_access is not None:
         servers = tuple(
-            server
-            for server in servers
-            if server.name != OS_MCP_SERVER_NAME
+            server for server in servers if server.name != OS_MCP_SERVER_NAME
         ) + (_os_mcp_server_config(os_access),)
         changed = True
 
-    if with_python_validator:
+    if (
+        with_python_validator
+        or python_validator_image is not None
+        or require_pinned_validator_image
+    ):
         servers = tuple(
             server
             for server in servers
             if server.name != PYTHON_VALIDATOR_MCP_SERVER_NAME
-        ) + (_python_validator_mcp_server_config(),)
+        ) + (
+            _python_validator_mcp_server_config(
+                python_image=python_validator_image,
+            ),
+        )
         changed = True
 
     if not changed:
@@ -193,12 +298,14 @@ async def run(args: argparse.Namespace) -> None:
         config,
         os_access=args.os_access,
         with_python_validator=args.with_python_validator,
+        python_validator_image=args.python_validator_image,
+        require_pinned_validator_image=args.require_pinned_validator_image,
     )
     configure_logging(config.logging)
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
-    model_client = create_model_client(config.model)
+    model_client = create_model_client(config.model, network=config.network)
     agent = WebContextCliAgent(
         workspace,
         model_client,
@@ -206,7 +313,9 @@ async def run(args: argparse.Namespace) -> None:
         logging_config=config.logging,
         config_file=args.config or default_config_file(),
         dump_llm_context=config.dump_llm_context,
-        okf=config.okf
+        network=config.network,
+        approval_callback=approve_tool_call,
+        okf=config.okf,
     )
 
     print(f"Arbeitsordner: {workspace}")
@@ -215,16 +324,14 @@ async def run(args: argparse.Namespace) -> None:
         + (", ".join(server.name for server in config.mcp_servers) or "(keine)")
     )
     print(
-    f"Modell: {config.model.model} "
-    f"({config.model.provider}, {config.model.base_url})"
-)
+        f"Modell: {config.model.model} "
+        f"({config.model.provider}, {config.model.base_url})"
+    )
     if config.logging.enabled:
         print(f"Logdatei: {config.logging.file}")
 
     if config.okf:
-        print(
-            f"OKF-Repository: {config.okf.repository}"
-        )
+        print(f"OKF-Repository: {config.okf.repository}")
 
     async with agent:
         if args.prompt:

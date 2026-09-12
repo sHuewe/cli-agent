@@ -13,5 +13,4 @@ class ModelClient(Protocol):
         tools: list[dict[str, Any]],
         *,
         think: bool | None = None,
-    ) -> dict[str, Any]:
-        ...
+    ) -> dict[str, Any]: ...
