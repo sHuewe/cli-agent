@@ -11,12 +11,9 @@ from pathlib import Path
 from .config import AppConfig, McpServerConfig, default_config_file, load_config
 from .logging_setup import configure_logging
 from .model_factory import create_model_client
-from .python_validator_types import is_pinned_image
 from .web_context_agent import WebContextCliAgent
 
 OS_MCP_SERVER_NAME = "os"
-PYTHON_VALIDATOR_MCP_SERVER_NAME = "python-validator"
-
 
 SENSITIVE_ARGUMENT_MARKERS = (
     "auth",
@@ -49,9 +46,7 @@ def _approval_value(name: str, value: object) -> object:
             return f"<{len(value)} Elemente verborgen>"
         return "<verborgen>"
     if isinstance(value, dict):
-        return {
-            str(key): _approval_value(str(key), item) for key, item in value.items()
-        }
+        return {str(key): _approval_value(str(key), item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_approval_value(name, item) for item in value]
     if isinstance(value, str) and len(value) > 160:
@@ -61,24 +56,15 @@ def _approval_value(name: str, value: object) -> object:
 
 def _approval_arguments(arguments: dict[str, object]) -> str:
     """Return a reviewable summary without printing file contents or secrets."""
-    summary = {
-        str(name): _approval_value(str(name), value)
-        for name, value in arguments.items()
-    }
+    summary = {str(name): _approval_value(str(name), value) for name, value in arguments.items()}
     return json.dumps(summary, ensure_ascii=False, sort_keys=True)
 
 
-async def approve_tool_call(
-    tool_name: str,
-    arguments: dict[str, object],
-) -> bool:
-    """Ask the local operator before a mutating MCP tool is executed."""
+async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> bool:
+    """Ask the local operator before a protected MCP tool is executed."""
     if not sys.stdin.isatty():
         return False
-    print(
-        "\nExplizite Freigabe erforderlich: "
-        f"{tool_name}({_approval_arguments(arguments)})"
-    )
+    print("\nExplizite Freigabe erforderlich: " f"{tool_name}({_approval_arguments(arguments)})")
     answer = await asyncio.to_thread(input, "Aktion ausführen? [j/N] ")
     return answer.strip().lower() in {"j", "ja", "y", "yes"}
 
@@ -88,83 +74,32 @@ def build_parser() -> argparse.ArgumentParser:
         prog="cli-agent",
         description="General local agent using configurable MCP servers",
     )
-    parser.add_argument(
-        "prompt",
-        nargs="*",
-        help="Optional one-shot prompt; omit it for interactive mode",
-    )
-    parser.add_argument(
-        "--workspace",
-        type=Path,
-        default=Path.cwd(),
-        help="Fixed workspace directory (default: current directory)",
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help=(f"Configuration file (default: {default_config_file()})"),
-    )
-    parser.add_argument(
-        "--model",
-        default=None,
-        help="Override model.model from the configuration file",
-    )
+    parser.add_argument("prompt", nargs="*", help="Optional one-shot prompt; omit it for interactive mode")
+    parser.add_argument("--workspace", type=Path, default=Path.cwd(), help="Fixed workspace directory (default: current directory)")
+    parser.add_argument("--config", type=Path, default=None, help=f"Configuration file (default: {default_config_file()})")
+    parser.add_argument("--model", default=None, help="Override model.model from the configuration file")
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument(
         "--with-os-read",
         action="store_const",
         const="read",
         dest="os_access",
-        help=(
-            "Enable the built-in workspace OS MCP server with read-only "
-            "access. Overrides an 'os' MCP server from the config."
-        ),
+        help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.",
     )
     os_access.add_argument(
         "--with-os-write",
         action="store_const",
         const="write",
         dest="os_access",
-        help=(
-            "Enable the built-in workspace OS MCP server with read and write "
-            "access. Overrides an 'os' MCP server from the config."
-        ),
+        help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.",
     )
-    parser.add_argument(
-        "--with-python-validator",
-        action="store_true",
-        help=(
-            "Enable the built-in Python validator MCP server. Requires "
-            "--python-validator-image and overrides a 'python-validator' "
-            "MCP server from the config."
-        ),
-    )
-    parser.add_argument(
-        "--python-validator-image",
-        default=None,
-        help=(
-            "Required with --with-python-validator. Use a local image with a "
-            "sha256 digest."
-        ),
-    )
-    parser.add_argument(
-        "--require-pinned-validator-image",
-        action="store_true",
-        help=("Compatibility flag; validator image pinning is always required"),
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Show a complete traceback when an error occurs",
-    )
+    parser.add_argument("--debug", action="store_true", help="Show a complete traceback when an error occurs")
     return parser
 
 
 def _os_mcp_server_config(access: str) -> McpServerConfig:
     if access not in {"read", "write"}:
         raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
-
     return McpServerConfig(
         name=OS_MCP_SERVER_NAME,
         transport="stdio",
@@ -184,78 +119,11 @@ def _os_mcp_server_config(access: str) -> McpServerConfig:
     )
 
 
-def _python_validator_mcp_server_config(
-    *,
-    python_image: str | None = None,
-) -> McpServerConfig:
-    if not python_image or not python_image.strip():
-        raise ValueError(
-            "Der Python-Validator benötigt ein explizit angegebenes, "
-            "gepinntes Image (--python-validator-image)."
-        )
-    selected_image = python_image.strip()
-    if not is_pinned_image(selected_image):
-        raise ValueError(
-            "Das Validator-Image muss als vollständiger sha256-Digest angegeben werden."
-        )
-    args = [
-        "-m",
-        "cli_agent.python_validator_mcp",
-        "--project-directory",
-        "{workspace_directory}",
-        "--python-image",
-        selected_image,
-        "--config-file",
-        "{config_file}",
-        "--network-mode",
-        "none",
-        "--require-pinned-image",
-    ]
-    return McpServerConfig(
-        name=PYTHON_VALIDATOR_MCP_SERVER_NAME,
-        transport="stdio",
-        command="{python}",
-        args=tuple(args),
-        built_in=True,
-    )
-
-
-def apply_mcp_cli_overrides(
-    config: AppConfig,
-    *,
-    os_access: str | None,
-    with_python_validator: bool = False,
-    python_validator_image: str | None = None,
-    require_pinned_validator_image: bool = False,
-) -> AppConfig:
+def apply_mcp_cli_overrides(config: AppConfig, *, os_access: str | None) -> AppConfig:
     """Apply command-line MCP settings with precedence over file config."""
-    servers = config.mcp_servers
-    changed = False
-
-    if os_access is not None:
-        servers = tuple(
-            server for server in servers if server.name != OS_MCP_SERVER_NAME
-        ) + (_os_mcp_server_config(os_access),)
-        changed = True
-
-    if (
-        with_python_validator
-        or python_validator_image is not None
-        or require_pinned_validator_image
-    ):
-        servers = tuple(
-            server
-            for server in servers
-            if server.name != PYTHON_VALIDATOR_MCP_SERVER_NAME
-        ) + (
-            _python_validator_mcp_server_config(
-                python_image=python_validator_image,
-            ),
-        )
-        changed = True
-
-    if not changed:
+    if os_access is None:
         return config
+    servers = tuple(server for server in config.mcp_servers if server.name != OS_MCP_SERVER_NAME) + (_os_mcp_server_config(os_access),)
     return replace(config, mcp_servers=servers)
 
 
@@ -294,13 +162,7 @@ def print_error(exc: BaseException, *, debug: bool) -> None:
 async def run(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     config = apply_model_cli_override(config, model=args.model)
-    config = apply_mcp_cli_overrides(
-        config,
-        os_access=args.os_access,
-        with_python_validator=args.with_python_validator,
-        python_validator_image=args.python_validator_image,
-        require_pinned_validator_image=args.require_pinned_validator_image,
-    )
+    config = apply_mcp_cli_overrides(config, os_access=args.os_access)
     configure_logging(config.logging)
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
@@ -319,17 +181,10 @@ async def run(args: argparse.Namespace) -> None:
     )
 
     print(f"Arbeitsordner: {workspace}")
-    print(
-        "MCP-Server: "
-        + (", ".join(server.name for server in config.mcp_servers) or "(keine)")
-    )
-    print(
-        f"Modell: {config.model.model} "
-        f"({config.model.provider}, {config.model.base_url})"
-    )
+    print("MCP-Server: " + (", ".join(server.name for server in config.mcp_servers) or "(keine)"))
+    print(f"Modell: {config.model.model} ({config.model.provider}, {config.model.base_url})")
     if config.logging.enabled:
         print(f"Logdatei: {config.logging.file}")
-
     if config.okf:
         print(f"OKF-Repository: {config.okf.repository}")
 
@@ -337,12 +192,10 @@ async def run(args: argparse.Namespace) -> None:
         if args.prompt:
             print(await agent.ask(" ".join(args.prompt)))
             return
-
         print(
-            "Interaktiver Modus; 'enable <server>' und 'disable <server>' "
-            "steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, "
-            "'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des "
-            "letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung."
+            "Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, "
+            "'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, "
+            "'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung."
         )
         while True:
             try:

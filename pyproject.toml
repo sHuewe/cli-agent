@@ -25,7 +25,6 @@ dev = [
 
 [project.scripts]
 cli-agent = "cli_agent.cli:main"
-cli-agent-compose-mcp = "cli_agent.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cli_agent"]

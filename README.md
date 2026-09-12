@@ -2,208 +2,42 @@
 
 ## 1. Überblick
 
-`cli-agent` ist ein lokaler Kommandozeilen-Agent für LLM-basierte Aufgaben mit
-Conversation History, konfigurierbaren MCP-Servern, optionalem OKF-Retrieval und
-explizit ladbarem Web-Kontext. Verfügbare Fähigkeiten werden über Konfiguration
-und CLI-Optionen gezielt freigeschaltet; optionale Context Dumps halten die an
-das Modell übergebenen Kontexte, Tool-Aufrufe und Retrieval-Ergebnisse fest und
-machen damit nachvollziehbar, welche Informationen und Aktionen zu einem
-Agentenergebnis geführt haben.
-
-Der Agent verwaltet die Modellnachrichten und den Sitzungszustand, hält
-MCP-Verbindungen offen, stellt die jeweils aktiven Tooldefinitionen bereit,
-routet Tool-Aufrufe an die zuständigen MCP-Server und führt nach jedem
-Tool-Ergebnis den Modelllauf fort.
+`cli-agent` ist ein lokaler Kommandozeilen-Agent für LLM-basierte Aufgaben mit Conversation History, konfigurierbaren MCP-Servern, optionalem OKF-Retrieval und explizit ladbarem Web-Kontext. Der Agent verwaltet Modellnachrichten und Sitzungszustand, hält MCP-Verbindungen offen, routet Tool-Aufrufe und führt nach Tool-Ergebnissen den Modelllauf fort.
 
 ```text
 User -> CLI Agent -> [optional: OKF Retrieval] -> LLM <-> MCP Tools -> Antwort
 ```
 
-MCP-Fähigkeiten sind standardmäßig deaktiviert. Eine neu angelegte
-Standardkonfiguration enthält keine aktiven MCP-Server und kein OKF-Repository.
-Damit startet `cli-agent` ohne zusätzliche CLI-Flags zunächst ohne Tools.
+MCP-Fähigkeiten sind standardmäßig deaktiviert. Eine neu angelegte Standardkonfiguration enthält keine aktiven MCP-Server und kein OKF-Repository.
+
+Docker Compose und der Docker-basierte Python Validator gehören bewusst **nicht mehr zum cli-agent-Kern**. Sie liegen im separaten Repository `sHuewe/cli-agent-mcp`, weil Docker-/Prozessausführung eine zusätzliche Security-Grenze darstellt, die für viele cli-agent-Anwendungsfälle nicht benötigt wird und daher separat geprüft und freigegeben werden sollte.
 
 ## 2. Setup / Installation
 
 ### Voraussetzung
 
-Python 3.11 oder neuer muss installiert sein. Unter Windows sollte Python über
-`py` oder `python` aufrufbar sein.
+Python 3.11 oder neuer muss installiert sein. Docker wird für den Grundbetrieb von `cli-agent` nicht benötigt.
 
-Docker wird für den Grundbetrieb nicht benötigt. Es ist nur erforderlich, wenn
-der Compose-MCP oder der Python-Validator verwendet werden soll.
-
-### 1. pipx installieren
-
-`cli-agent` wird mit [pipx](https://pipx.pypa.io/) installiert. Unter Windows
-kann pipx direkt über die vorhandene Python-Installation eingerichtet werden:
+Unter Windows kann pipx so eingerichtet werden:
 
 ```powershell
 py -m pip install pipx
 py -m pipx ensurepath
 ```
 
-Falls `py` nicht verfügbar ist, kann stattdessen `python` verwendet werden:
-
-```powershell
-python -m pip install pipx
-python -m pipx ensurepath
-```
-
-Nach `ensurepath` muss das Terminal gegebenenfalls geschlossen und neu geöffnet
-werden, damit die von pipx installierten Programme über `PATH` gefunden werden.
-
-### 2. cli-agent installieren
-
-Im Verzeichnis des ausgecheckten Repositories:
+Installation im ausgecheckten Repository:
 
 ```powershell
 py -m pipx install .
 ```
 
-Falls `py` nicht verfügbar ist:
-
-```powershell
-python -m pipx install .
-```
-
-Danach steht der Befehl `cli-agent` unabhängig vom aktuellen Verzeichnis zur
-Verfügung.
-
-### 3. Standardkonfiguration anlegen
-
-Nach der Installation `cli-agent` einmal starten:
-
-```powershell
-cli-agent
-```
-
-Beim ersten Start wird automatisch die Standardkonfiguration angelegt. Unter
-Windows liegt sie hier:
+Beim ersten Start legt `cli-agent` automatisch eine sichere Standardkonfiguration an. Unter Windows liegt sie unter:
 
 ```text
 %LOCALAPPDATA%\cli-agent\config.toml
 ```
 
-### 4. LLM konfigurieren
-
-Vor der eigentlichen Nutzung muss die erzeugte `config.toml` in einem Texteditor
-geöffnet und der Abschnitt `[model]` an den verwendeten LLM-Endpunkt angepasst
-werden. Beispielsweise für ein lokales Ollama-Modell:
-
-```toml
-[model]
-provider = "ollama"
-model = "qwen3.5:9b"
-base_url = "http://localhost:11434"
-timeout = 120
-```
-
-Network-capable features use exact host allowlists. Model and MCP access allow
-only local endpoints by default. Web retrieval is disabled until its hosts are
-explicitly configured:
-
-```toml
-[network]
-model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
-mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
-web_allowed_hosts = []
-```
-
-Web-Kontext bleibt mit `web_allowed_hosts = []` standardmäßig deaktiviert;
-trage dort nur explizit benötigte interne Dokumentationshosts ein.
-
-Für einen OpenAI-kompatiblen Endpunkt müssen insbesondere `provider`, `model`
-und `base_url` angepasst werden. Optional kann `api_key_env` auf den Namen einer
-Umgebungsvariable gesetzt werden, die den API-Key enthält. Ist die Variable
-nicht gesetzt oder `api_key_env` nicht konfiguriert, verwendet der Agent den
-Wert `dummy` als Bearer-Token. Das ist für interne oder lokale
-OpenAI-kompatible Endpunkte nützlich, die zwar einen Authorization-Header
-erwarten, den Schlüssel aber nicht prüfen.
-
-Weitere Beispiele stehen im Abschnitt [Konfiguration](#3-konfiguration).
-
-### 5. Agent in einem Projekt starten
-
-Ohne `--workspace` verwendet `cli-agent` das aktuelle Arbeitsverzeichnis als
-Workspace. Der übliche projektbezogene Workflow ist daher, zuerst in das
-Projektverzeichnis zu wechseln und den Agenten dort zu starten:
-
-```powershell
-cd C:\Projekte\mein-projekt
-cli-agent
-```
-
-Falls ein Projekt eine eigene Konfiguration benötigt, kann diese direkt im
-Projektverzeichnis liegen und beispielsweise zusammen mit dem Projekt in Git
-versioniert werden. Relative Pfade bei `--config` werden relativ zum aktuellen
-Arbeitsverzeichnis aufgelöst:
-
-```powershell
-cd C:\Projekte\mein-projekt
-cli-agent --config mein_config.toml
-```
-
-Ein expliziter Workspace ist nur erforderlich, wenn der Agent für einen anderen
-Ordner arbeiten soll als das aktuelle Arbeitsverzeichnis:
-
-```powershell
-cli-agent --workspace C:\Projekte\mein-projekt
-```
-
-Auch einmalige Anfragen können direkt aus dem Projektverzeichnis gestartet
-werden:
-
-```powershell
-cli-agent --config mein_config.toml "Welche Services laufen?"
-```
-
-### Entwicklung und Tests
-
-Für eine lokale Entwicklungsinstallation mit Testabhängigkeiten kann alternativ
-eine virtuelle Umgebung verwendet werden:
-
-```powershell
-python -m pip install -e ".[dev]"
-pytest
-```
-
-## 3. Konfiguration
-
-### Standarddatei
-
-Die Standardkonfiguration liegt unter Windows in:
-
-```text
-%LOCALAPPDATA%\cli-agent\config.toml
-```
-
-Unter anderen Plattformen wird `XDG_STATE_HOME` beziehungsweise
-`~/.cli-agent` verwendet.
-
-Existiert die Standarddatei beim ersten Start noch nicht, kopiert der Agent die
-mit dem Paket ausgelieferte sichere Vorlage automatisch an diese Stelle.
-Vorhandene Konfigurationen werden dabei nicht überschrieben.
-
-Die Vorlage ist zusätzlich im Repository als
-[`config.example.toml`](config.example.toml) verfügbar. Sie enthält bewusst
-**keine aktivierten MCP-Server und keine aktivierte OKF-Konfiguration**. Die
-mitgelieferten Server sind vollständig auskommentiert enthalten und können bei
-Bedarf blockweise aktiviert werden.
-
-Eine andere Konfigurationsdatei kann explizit ausgewählt werden. Absolute und
-relative Pfade sind möglich; relative Pfade beziehen sich auf das aktuelle
-Arbeitsverzeichnis:
-
-```powershell
-cli-agent --config mein_config.toml
-cli-agent --config C:\Pfad\config.toml
-```
-
-Ein nicht vorhandener expliziter `--config`-Pfad wird nicht automatisch
-angelegt.
-
-### Modell
+### LLM konfigurieren
 
 Beispiel für Ollama:
 
@@ -215,20 +49,48 @@ base_url = "http://localhost:11434"
 timeout = 120
 ```
 
-Beispiel für einen OpenAI-kompatiblen Endpunkt:
+Netzwerkfähige Funktionen verwenden exakte Host-Allowlisten:
 
 ```toml
-[model]
-provider = "openai"
-model = "NAME-DES-MODELLS"
-base_url = "https://llm.example.org/v1"
-api_key_env = "LLM_API_KEY"
-timeout = 120
+[network]
+model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+web_allowed_hosts = []
 ```
 
-`api_key_env` ist optional. Wenn die konfigurierte Umgebungsvariable nicht
-existiert oder kein `api_key_env` angegeben ist, verwendet der Agent `dummy` als
-API-Key.
+Für einen OpenAI-kompatiblen Endpunkt kann optional `api_key_env` gesetzt werden. Ist die Variable nicht vorhanden oder nicht konfiguriert, verwendet der Agent `dummy` als Bearer-Token.
+
+### Agent in einem Projekt starten
+
+Ohne `--workspace` ist das aktuelle Arbeitsverzeichnis der Workspace:
+
+```powershell
+cd C:\Projekte\mein-projekt
+cli-agent
+```
+
+Eine projektbezogene Konfiguration kann relativ angegeben werden:
+
+```powershell
+cli-agent --config mein_config.toml
+```
+
+Ein expliziter Workspace ist ebenfalls möglich:
+
+```powershell
+cli-agent --workspace C:\Projekte\mein-projekt
+```
+
+### Entwicklung und Tests
+
+```powershell
+python -m pip install -e ".[dev]"
+pytest
+```
+
+## 3. Konfiguration
+
+### Modell
 
 Der Modellname kann für einen einzelnen Start überschrieben werden:
 
@@ -236,13 +98,11 @@ Der Modellname kann für einen einzelnen Start überschrieben werden:
 cli-agent --model anderes-modell
 ```
 
-`--model` ersetzt ausschließlich `model.model`; Provider, Base-URL, Header,
-Timeout und die übrige Konfiguration bleiben erhalten.
+`--model` ersetzt ausschließlich `model.model`; Provider, Base-URL, Header, Timeout und übrige Modellkonfiguration bleiben erhalten.
 
 ### MCP-Server
 
-Persistente MCP-Verbindungen werden über `[[mcp_servers]]` konfiguriert.
-Unterstützt werden `stdio` und Streamable HTTP.
+Persistente MCP-Verbindungen werden über `[[mcp_servers]]` konfiguriert. Unterstützt werden `stdio` und Streamable HTTP.
 
 Beispiel für einen externen `stdio`-Server:
 
@@ -250,17 +110,14 @@ Beispiel für einen externen `stdio`-Server:
 [[mcp_servers]]
 name = "example"
 transport = "stdio"
-command = "{python}"
-args = ["-m", "example_mcp", "--root", "{workspace_directory}"]
+command = "example-mcp"
+args = ["--root", "{workspace_directory}"]
 
 [mcp_servers.config]
 allow_untrusted_stdio = true
 ```
 
-`allow_untrusted_stdio` ist eine bewusste Vertrauensfreigabe: Der Prozess
-läuft mit den Berechtigungen des Benutzers und benötigt zusätzlich eine
-separate OS-/Container-Sandbox. Alle seine Tool-Aufrufe bleiben
-freigabepflichtig.
+`allow_untrusted_stdio` bestätigt bewusst, dass der externe Prozess gestartet werden darf. Es ist keine Sandbox. User-provided MCP-Tools sind nach der aktuellen Security-Policy zusätzlich pro Tool-Aufruf freigabepflichtig.
 
 Beispiel für Streamable HTTP:
 
@@ -269,52 +126,33 @@ Beispiel für Streamable HTTP:
 name = "external"
 transport = "streamable_http"
 url = "http://127.0.0.1:8001/mcp"
-
-[mcp_servers.headers]
-Authorization = "Bearer example-token"
 ```
 
 Für `stdio`-Server stehen folgende Platzhalter zur Verfügung:
 
 - `{python}`: aktuell laufender Python-Interpreter
-- `{workspace_directory}`: beim Agentenstart festgelegter Workspace
+- `{workspace_directory}`: festgelegter Workspace
 - `{project_directory}`: Alias für `{workspace_directory}`
 - `{config_file}`: tatsächlich verwendete Konfigurationsdatei
 
-Zwei mitgelieferte Server können für einen einzelnen Agentenstart ohne
-persistente Konfigurationsänderung zugeschaltet werden:
+### Eingebauter Workspace-OS-MCP
+
+Der im Kern enthaltene Workspace-OS-MCP kann für einen einzelnen Start aktiviert werden:
 
 ```powershell
 cli-agent --with-os-read
 cli-agent --with-os-write
-cli-agent --with-python-validator `
-  --python-validator-image registry.intern/cli-agent/python@sha256:<64-hex-zeichen>
 ```
 
-Für Validierungen von untrusted Bring-in-Code sollte das Validator-Image lokal
-gespiegelt und unveränderlich per Digest referenziert werden:
+`--with-os-read` stellt ausschließlich lesende Workspace-Operationen bereit. `--with-os-write` ergänzt schreibende Operationen; diese unterliegen der Freigabelogik des Agenten.
 
-```powershell
-cli-agent --with-python-validator `
-  --python-validator-image registry.intern/cli-agent/python@sha256:<64-hex-zeichen> `
-  --require-pinned-validator-image
-```
+Details: [Workspace OS MCP](docs/mcp-os.md).
 
-Das Validator-Image muss immer über `--python-validator-image` als vollständiger
-Digest angegeben werden; ein veränderliches Tag wird abgewiesen.
+### Optionale Docker-MCPs
 
-Die CLI-Varianten ersetzen einen eventuell gleichnamigen Server aus der
-Konfigurationsdatei durch die eingebaute Definition. Die ausgewählte globale
-Konfigurationsdatei wird an den gestarteten MCP-Prozess weitergegeben.
-
-Ohne `[[mcp_servers]]` und ohne diese CLI-Flags werden in der Main-Phase keine
-MCP-Tools bereitgestellt. Insbesondere erhält ein ohne weitere Parameter aus
-einer Taskleiste oder einem Terminal gestarteter Agent dadurch keinen
-Dateisystemzugriff über den Workspace-OS-MCP.
+Docker Compose und Python Validator werden separat unter `sHuewe/cli-agent-mcp` gepflegt. Wer diese Fähigkeiten benötigt, installiert das optionale Paket und bindet den gewünschten Server als normalen externen MCP ein. Dadurch gehören Docker-Daemon-Zugriff, Container-Ausführung und die zugehörigen Abhängigkeiten nicht zur allgemeinen Installation oder Security-Betrachtung des `cli-agent`.
 
 ### OKF-Knowledge-Phase
-
-Die optionale OKF-Integration wird separat konfiguriert:
 
 ```toml
 [okf]
@@ -325,8 +163,7 @@ compress_min_chars = 20000
 required = true
 ```
 
-Sie ist in der ausgelieferten Standardkonfiguration deaktiviert. Technische
-Details stehen unter [docs/mcp-okf.md](docs/mcp-okf.md).
+Details: [OKF MCP](docs/mcp-okf.md).
 
 ### Logging und Context Dumps
 
@@ -342,47 +179,31 @@ max_bytes = 5000000
 backup_count = 3
 ```
 
-Mit
+`dump_llm_context = true` schreibt Diagnoseinformationen unter `<workspace>/.cli-agent/`. Diese Option ist standardmäßig deaktiviert.
 
-```toml
-dump_llm_context = true
-```
+## 4. Mitgelieferte MCP-Fähigkeiten
 
-schreibt der Agent zusätzliche Diagnoseinformationen unter
-`<workspace>/.cli-agent/`.
+| MCP-Server | Zweck | Aktivierung |
+| --- | --- | --- |
+| Workspace OS | Workspace-relative Dateioperationen | `--with-os-read`, `--with-os-write` oder `[[mcp_servers]]` |
+| OKF | Read-only Retrieval aus einem Open-Knowledge-Format-Repository | `[okf]` |
 
-## 4. Mitgelieferte MCP-Server
+Weitere MCP-Server können über `stdio` oder Streamable HTTP angebunden werden. Docker-bezogene optionale Server werden im separaten Repository `cli-agent-mcp` gepflegt.
 
-| MCP-Server | Zweck | Aktivierung | Dokumentation |
-| --- | --- | --- | --- |
-| Docker Compose | Compose-Datei, Service-Status, Logs und optional Service-Steuerung | `[[mcp_servers]]` | [Compose MCP](docs/mcp-compose.md) |
-| Workspace OS | Workspace-relative Dateioperationen, optional mit Schreibzugriff | `[[mcp_servers]]`, `--with-os-read`, `--with-os-write` | [Workspace OS MCP](docs/mcp-os.md) |
-| Python Validator | Python-Projekte in einem kurzlebigen Docker-Container installieren und starten | `[[mcp_servers]]`, `--with-python-validator` | [Python Validator MCP](docs/mcp-python-validator.md) |
-| OKF | Read-only Retrieval aus einem Open-Knowledge-Format-Repository | `[okf]` | [OKF MCP](docs/mcp-okf.md) |
-
-Die Server sind in `config.example.toml` als auskommentierte Konfigurationsblöcke
-enthalten. Zusätzliche externe MCP-Server können unabhängig davon über `stdio`
-oder Streamable HTTP angebunden werden.
-
-Während einer interaktiven Sitzung können bereits verbundene normale MCP-Server
-für folgende Modellaufrufe deaktiviert beziehungsweise erneut aktiviert werden:
+Während einer interaktiven Sitzung können normale MCP-Server deaktiviert und wieder aktiviert werden:
 
 ```text
-disable compose
-enable compose
+disable example
+enable example
 ```
 
-Beim Deaktivieren wird die MCP-Verbindung geschlossen und der Serverprozess
-beendet. Beim erneuten Aktivieren wird eine frische Verbindung aufgebaut; nur
-die Tools und `instructions` des aktiven Servers werden dem Modell angeboten.
+Beim Deaktivieren wird die MCP-Verbindung geschlossen und der Serverprozess beendet. Beim erneuten Aktivieren wird eine frische Verbindung aufgebaut.
 
-## 5. Technischer Ablauf des Agenten
+## 5. Technischer Ablauf
 
 ### Session und Conversation History
 
-`CliAgent.history` enthält die abgeschlossenen User-/Assistant-Turns der
-aktuellen Sitzung. Für jeden neuen Prompt wird daraus ein separater
-`working_messages`-Kontext erzeugt.
+`CliAgent.history` enthält die abgeschlossenen User-/Assistant-Turns. Für jeden Prompt wird daraus ein separater Arbeitskontext erzeugt:
 
 ```text
 System-Prompt
@@ -392,110 +213,41 @@ System-Prompt
 + optionaler Web-Kontext
 ```
 
-Tool-Aufrufe und Tool-Ergebnisse eines laufenden Turns werden nur in
-`working_messages` ergänzt. Nach einer finalen Modellantwort werden die
-ursprüngliche User-Nachricht und die Endantwort in `history` übernommen; die
-Tool-Zwischenschritte werden nicht in die persistierte Conversation History
-kopiert.
+Tool-Aufrufe und Tool-Ergebnisse eines laufenden Turns werden nur im Arbeitskontext ergänzt. Nach einer finalen Modellantwort werden die ursprüngliche User-Nachricht und die Endantwort in `history` übernommen.
 
-### System-Prompt und Tooldefinitionen
+### MCP-Verbindungen und Tool-Loop
 
-Der Main-System-Prompt wird für jeden Turn neu aufgebaut. Er enthält unter
-anderem den festgelegten Workspace, das aktuelle Datum, die Namen der aktuell
-verfügbaren Tools sowie `instructions` der aktiven MCP-Server.
+Beim Start öffnet der Agent für jeden konfigurierten normalen MCP-Server eine Session und ruft `initialize` sowie `list_tools` auf. Toolnamen werden gegenüber dem Modell als `<server>__<tool>` exponiert. Nach einem Tool-Ergebnis wird das Modell mit dem erweiterten Arbeitskontext erneut aufgerufen, bis eine finale Antwort oder das Tool-Call-Limit erreicht ist.
 
-Die vollständigen Toolschemas werden nicht als Text in den System-Prompt
-kopiert. Sie werden separat über die Tool-/Function-Schnittstelle des
-Model-Clients übertragen.
-
-MCP-`instructions` werden als serverbezogene Hinweise eingebunden. Sie dürfen
-die zentralen Agentenregeln, Benutzeranweisungen und Berechtigungsgrenzen nicht
-überschreiben.
-
-### MCP-Verbindungen und Modell-Tool-Loop
-
-Beim Start öffnet der Agent für jeden konfigurierten normalen MCP-Server eine
-Session und ruft `initialize` sowie `list_tools` auf. Die Verbindung bleibt für
-die gesamte Agentensitzung bestehen.
-
-Toolnamen werden gegenüber dem Modell als `<server>__<tool>` exponiert. Damit
-bleiben gleichnamige Tools unterschiedlicher Server eindeutig routbar.
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant A as CLI Agent
-    participant L as LLM
-    participant M as MCP Server
-
-    U->>A: Prompt
-    A->>L: System + History + User + Tools
-    L-->>A: Tool Call
-    A->>M: MCP tool(arguments)
-    M-->>A: Tool Result
-    A->>L: Working Messages + Tool Result
-    L-->>A: weiterer Tool Call oder finale Antwort
-    A-->>U: finale Antwort
-```
-
-Bei einem Tool-Aufruf prüft der Agent den exponierten Toolnamen und den Status
-des zugehörigen Servers, führt den MCP-Aufruf aus und fügt das Ergebnis als
-`role: tool` in den aktuellen Arbeitskontext ein. Danach wird das Modell erneut
-mit dem erweiterten Kontext aufgerufen. Dieser Ablauf wiederholt sich bis zu
-einer finalen Textantwort oder bis ein konfiguriertes Tool-Call-Limit erreicht
-ist.
+MCP-`instructions` werden als serverbezogene Hinweise in den Systemkontext eingebunden, dürfen aber zentrale Agentenregeln, Benutzeranweisungen oder Berechtigungsgrenzen nicht überschreiben.
 
 ### Separate OKF-Retrieval-Phase
 
-Wenn `[okf]` konfiguriert ist, wird vor dem Main-Agentenlauf ein separater
-Retrieval-Kontext aufgebaut. Dieser verwendet einen eigenen System-Prompt und
-sieht ausschließlich die read-only Tools `knowledge_index` und
-`knowledge_read` des internen OKF-MCP-Servers.
-
-Der Agent lädt den Root-Index, begrenzt die Navigation auf tatsächlich vom
-Repository angebotene Pfade und validiert die finale Concept-Auswahl über
-agentenseitig vergebene Selection-Tokens. Nur die ausgewählten, vollständig
-gelesenen Concepts werden anschließend als Referenzkontext in die Main-Phase
-übernommen.
-
-Details zu Limits, Navigation und Auswahlvalidierung stehen in
-[docs/mcp-okf.md](docs/mcp-okf.md).
+Wenn `[okf]` konfiguriert ist, läuft vor der Main-Phase ein separater Retrieval-Kontext mit ausschließlich den read-only Tools `knowledge_index` und `knowledge_read`. Navigation wird auf tatsächlich vom Repository angebotene Pfade begrenzt; die finale Concept-Auswahl wird über agentenseitig vergebene Tokens validiert.
 
 ### Web-Kontext
 
-Im interaktiven Modus können Webseiten explizit als Session-Kontext geladen
-werden:
+Im interaktiven Modus können Webseiten explizit geladen werden:
 
 ```text
 add_web_context https://example.org/docs
 clear_web_context
 ```
 
-Der Agent lädt ausschließlich die angegebene `http`- oder `https`-URL. Bei
-HTML-Seiten extrahiert Trafilatura den relevanten Hauptinhalt und reduziert
-dabei typischen Boilerplate-Inhalt wie Navigation, Footer oder Seitenteaser.
-Geladene Web-Kontexte werden separat von `history` gehalten und bei jedem
-folgenden normalen Turn erneut in die aktuelle User-Nachricht des
-Arbeitskontexts eingebaut.
+Nur Hosts aus `network.web_allowed_hosts` sind zulässig; Redirects werden ebenfalls gegen diese Allowlist geprüft. Geladene Inhalte gelten als nicht vertrauenswürdige Referenzdaten.
 
-`clear_web_context` entfernt alle Web-Kontexte aus dem Session-State. Inhalte
-geladener Webseiten gelten als nicht vertrauenswürdige Referenzdaten und dürfen
-keine zusätzlichen Netzwerkzugriffe auslösen. Nur Hosts aus
-`network.web_allowed_hosts` sind für den expliziten `add_web_context`-Befehl
-zulässig; Redirects werden ebenfalls gegen diese Allowlist geprüft.
+### Token Usage
 
-### Context Dumps
+Mit
 
-Mit `dump_llm_context = true` werden unter `<workspace>/.cli-agent/` unter
-anderem folgende Dateien geschrieben:
+```text
+tokens
+```
 
-- `history.json`
-- `main_system_prompt.json`
-- `main_working_messages.json`
-- `knowledge_system_prompt.json`
-- `knowledge_working_messages.json`
-- `knowledge_selection.json`
-- `knowledge_result.json`
+kann die Usage des letzten Agentenlaufs angezeigt werden. Optional kann `model.context_length` als zusätzlicher Guard konfiguriert werden.
 
-Die Dumps bilden die vom Agenten erzeugten Nachrichtenkontexte und die Übergabe
-zwischen Retrieval- und Main-Phase ab.
+## 6. Security
+
+Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md).
+
+Die Auslagerung optionaler Docker-MCPs reduziert bewusst den Freigabeumfang des Kernprojekts: Eine allgemeine Bewertung von `cli-agent` muss keine Docker-Daemon- oder Container-Ausführungsrisiken einschließen, solange das separate optionale Paket nicht installiert beziehungsweise angebunden wird.
