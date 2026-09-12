@@ -10,6 +10,7 @@ from typing import Any
 
 from mcp import ClientSession
 
+from .admin_config import McpPolicy
 from .config import LoggingConfig, McpServerConfig
 from .model import ModelClient
 from .network_policy import NetworkConfig
@@ -43,7 +44,7 @@ abschließend knapp und in der Sprache des Benutzers.
 
 
 class CliAgent(McpLifecycleMixin, ConversationMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, network: NetworkConfig | None = None, approval_callback: ApprovalCallback | None = None, okf: OkfConfigLike | str | Path | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, okf: OkfConfigLike | str | Path | None = None) -> None:
         self.workspace_directory = workspace_directory.resolve()
         self.model_client = model_client
         self.mcp_servers = mcp_servers
@@ -52,6 +53,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self.config_file = config_file
         self.dump_llm_context = dump_llm_context
         self.network = network or NetworkConfig()
+        self.mcp_policy = mcp_policy or McpPolicy()
         self.approval_callback = approval_callback
         self._okf_options = self._normalize_okf_config(okf)
         self.history: list[dict[str, Any]] = []
@@ -150,10 +152,9 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
     def _model_tools(self) -> list[dict[str, Any]]:
         return [tool for server_name, tools in self._server_tools.items() if server_name in self._active_servers for tool in tools]
 
-    @staticmethod
-    def _requires_approval(server_config: ServerConfig, tool_name: str) -> bool:
-        # User-provided MCP servers are not a security boundary. Their metadata
-        # cannot be trusted to describe the implementation's actual effects.
+    def _requires_approval(self, server_config: ServerConfig, tool_name: str, exposed_name: str | None = None) -> bool:
+        if exposed_name is not None and exposed_name in self.mcp_policy.auto_approve_tools:
+            return False
         if not getattr(server_config, "built_in", False):
             return True
         if tool_name in WRITE_TOOLS:

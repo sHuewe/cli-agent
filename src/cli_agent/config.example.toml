@@ -1,8 +1,8 @@
 # cli-agent configuration template
 #
-# This file is used as the initial default configuration. No MCP server and no
-# OKF repository are enabled by default. Enable only the capabilities that are
-# required for a specific use case.
+# This is the user/project configuration. Security policy is intentionally kept
+# separate in the machine-wide admin_config.toml. In particular, [network] is
+# not valid here and cannot override administrator allowlists.
 
 dump_llm_context = false
 
@@ -21,13 +21,7 @@ provider = "ollama"
 model = "qwen3.5:9b"
 base_url = "http://localhost:11434"
 timeout = 120
-# Optional hard guard based on provider-reported input-token usage.
 # context_length = 24576
-
-[network]
-model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
-mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
-web_allowed_hosts = []
 
 # OpenAI-compatible model endpoint:
 # [model]
@@ -39,11 +33,10 @@ web_allowed_hosts = []
 # context_length = 262144
 
 # -----------------------------------------------------------------------------
-# Built-in Workspace OS MCP
+# Optional MCP servers
 # -----------------------------------------------------------------------------
-# It can alternatively be enabled for one invocation with --with-os-read or
-# --with-os-write.
 
+# Workspace OS MCP - read-only by default
 # [[mcp_servers]]
 # name = "os"
 # transport = "stdio"
@@ -59,12 +52,16 @@ web_allowed_hosts = []
 #
 # [mcp_servers.config]
 # allow_write_files = false
-# allow_untrusted_stdio = true # audited built-in process only
 
-# -----------------------------------------------------------------------------
-# Optional external MCP server
-# -----------------------------------------------------------------------------
+# External stdio MCP. Starting untrusted stdio is controlled exclusively by the
+# machine-wide admin policy; it cannot be enabled here.
+# [[mcp_servers]]
+# name = "external-stdio"
+# transport = "stdio"
+# command = "external-mcp"
+# args = []
 
+# External Streamable HTTP MCP. Its host must be permitted by admin_config.toml.
 # [[mcp_servers]]
 # name = "external"
 # transport = "streamable_http"
@@ -73,14 +70,9 @@ web_allowed_hosts = []
 # [mcp_servers.headers]
 # Authorization = "Bearer example-token"
 
-# Optional Docker Compose and Python validator MCP servers are maintained in
-# https://github.com/sHuewe/cli-agent-mcp and can be configured as external MCP
-# servers when explicitly required.
-
 # -----------------------------------------------------------------------------
 # Optional OKF knowledge repository
 # -----------------------------------------------------------------------------
-
 # [okf]
 # repository = "C:/dev/knowledge/okf/bundle"
 # max_tool_calls = 200

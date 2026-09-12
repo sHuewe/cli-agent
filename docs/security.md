@@ -1,49 +1,42 @@
-# Security Baseline
+# Security
 
-`cli-agent` is designed for local and on-premise use. It is not a guarantee that a model, MCP server, or project is trustworthy. The shipped defaults reduce accidental data disclosure and require network destinations to be explicit.
+`cli-agent` trennt Funktionskonfiguration und administrative Security-Policy.
 
-## Scope
+## Maschinenweite Admin-Policy
 
-The core package contains the generic agent/MCP integration, the Workspace OS MCP and the internal OKF retrieval server. Docker Compose and the Docker-based Python Validator are intentionally maintained in the separate `sHuewe/cli-agent-mcp` repository. Their Docker daemon and code-execution risks are therefore outside the core `cli-agent` security boundary unless an operator explicitly installs and configures those external MCP servers.
+Die normale Benutzer-/Projektkonfiguration kann keine Netzwerk-Allowlist und keine Freigabe für untrusted stdio-MCPs setzen. Diese Entscheidungen werden ausschließlich aus der maschinenweiten `admin_config.toml` geladen:
 
-This separation is deliberate: many `cli-agent` use cases do not require Docker or arbitrary project execution, so those risks should not unnecessarily broaden a general approval of the core agent.
+- Windows: `C:\ProgramData\cli-agent\admin_config.toml`
+- Linux: `/etc/cli-agent/admin_config.toml`
 
-## Network policy
+Fehlt die Datei, gelten deny-by-default-orientierte Defaults: Modell und HTTP-MCP nur localhost, Web aus, externe stdio-MCPs aus, keine externen Tool-Auto-Approvals.
 
-Model endpoints and streamable HTTP MCP servers are checked against separate exact host allowlists. Their default allowlist contains only `localhost`, `127.0.0.1`, and `::1`. Web context fetches are disabled by default.
+Unter Windows kann `scripts/setup-admin-config.ps1` in einer administrativen PowerShell verwendet werden. Das Skript setzt ACLs so, dass normale Benutzer die Policy lesen, aber nicht ohne Elevation verändern können. Entwickler mit lokalen Adminrechten können die Policy bewusst ändern; eine solche Änderung ist eine administrative Security-Entscheidung und liegt außerhalb der normalen Agentenkonfiguration.
 
-```toml
-[network]
-model_allowed_hosts = ["localhost", "127.0.0.1", "::1", "llm.internal.example"]
-mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1", "tools.internal.example"]
-web_allowed_hosts = ["docs.internal.example"]
-```
+## Netzwerk
 
-Web redirects are validated one hop at a time. Model clients do not follow HTTP redirects. Unencrypted HTTP is accepted only for local hosts; remote allowlisted endpoints must use HTTPS.
+`model_allowed_hosts`, `mcp_allowed_hosts` und `web_allowed_hosts` existieren ausschließlich in der Admin-Policy. URLs werden gegen exakte Hostnamen validiert. Remote-Ziele benötigen HTTPS; HTTP ist nur für lokale Hosts zulässig. HTTP-Clients verwenden `follow_redirects=False` beziehungsweise validieren Web-Redirects erneut und verwenden `trust_env=False`.
 
-## MCP process boundary
+## MCP
 
-`stdio` MCP processes receive a minimal runtime environment. The complete parent environment is not inherited, so tokens such as `LLM_API_KEY` are not automatically exposed. Additional variables are passed only when explicitly configured.
+Externe stdio-MCPs werden nur gestartet, wenn `[mcp].allow_untrusted_stdio = true` in der Admin-Policy gesetzt ist. Ein gleichnamiger Wert in der Userconfig wird abgewiesen.
 
-User-provided MCP server metadata is not trusted as a security boundary. External stdio servers are refused unless their configuration explicitly sets `allow_untrusted_stdio = true`; that setting is an acknowledgement, not a sandbox. Under the current policy, calls to user-provided MCP tools require explicit operator approval.
+User-provided MCP-Tools benötigen standardmäßig eine interaktive Zustimmung. Administratoren können einzelne Tools über exakte exponierte Namen in `[mcp.approval].auto_approve_tools` freigeben, beispielsweise `continuous__search`. Wildcards werden nicht unterstützt. Eingebaute mutierende Workspace-OS-Tools behalten ihre eigene Freigabelogik.
 
-Approval protects calls routed through the agent, not arbitrary work performed by an MCP process during startup or in the background. Configure only reviewed stdio servers and use an OS/container sandbox where appropriate.
+stdio-Prozesse erhalten nur eine reduzierte Umgebung; zusätzliche Werte müssen explizit über die MCP-Konfiguration übergeben werden.
 
-## Workspace OS MCP
+## Workspace OS
 
-The Workspace OS server resolves paths below the fixed workspace, rejects absolute/drive paths and `..`, and prevents symlink escapes. Reads refuse `.env*`, common credential files, private-key files, `.git`/`.cli-agent` artifacts, log files and oversized files. Write access is not enabled by default and requires explicit `--with-os-write` activation.
+Workspace-Pfade werden auf den festgelegten Workspace begrenzt. Absolute Pfade, `..` und Symlink-Escapes werden abgewiesen. Lesezugriffe auf bekannte Secret-/Credential-Dateien werden blockiert. Schreibzugriff ist standardmäßig aus und muss explizit über `--with-os-write` aktiviert werden.
 
-## Logs and context
+## Web-Kontext
 
-Prompt logging, tool-call argument logging, model-message logging, tool-result logging and context dumps are disabled by default. Enabling them can persist confidential source code, prompts, credentials or tool output locally.
+Webzugriff ist ohne `web_allowed_hosts` deaktiviert. Geladener Webinhalt ist nicht vertrauenswürdiger Referenzinhalt und darf keine weiteren Netzwerkzugriffe oder Berechtigungsänderungen auslösen.
 
-## Deployment checklist
+## Logging
 
-1. Use an internal model endpoint and list its exact host in `model_allowed_hosts`.
-2. Keep HTTP MCP and web context disabled unless their exact internal hosts are required and allowlisted.
-3. Enable only reviewed MCP servers required for the use case.
-4. Keep write-capable MCP capabilities disabled for review-only use.
-5. Keep diagnostic logging and context dumps disabled unless explicitly approved.
-6. Run dependency/vulnerability scans and the automated test suite before release.
-7. Assess optional MCP packages, especially Docker/process-executing servers, independently before installing or configuring them.
-8. Complete the [company deployment checklist](company-deployment-checklist.md) before a corporate rollout.
+Prompts, Toolargumente, Modellnachrichten, Toolresultate und Context Dumps sind standardmäßig nicht für inhaltliches Logging aktiviert. Diagnoseoptionen können sensible Daten enthalten und sollten nur gezielt verwendet werden.
+
+## Optionale Docker-MCPs
+
+Docker Compose und Python Validator sind in `sHuewe/cli-agent-mcp` ausgelagert. Docker-Daemon-/Container-Ausführungsrisiken gehören damit nicht zur allgemeinen Security-Grenze des Core-Agenten, solange dieses optionale Paket nicht installiert und angebunden wird.

@@ -1,6 +1,8 @@
 # cli-agent configuration template
 #
-# No MCP server and no OKF repository are enabled by default.
+# This is the user/project configuration. Security policy is intentionally kept
+# separate in the machine-wide admin_config.toml. In particular, [network] is
+# not valid here and cannot override administrator allowlists.
 
 dump_llm_context = false
 
@@ -21,29 +23,56 @@ base_url = "http://localhost:11434"
 timeout = 120
 # context_length = 24576
 
-[network]
-model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
-mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
-web_allowed_hosts = []
+# OpenAI-compatible model endpoint:
+# [model]
+# provider = "openai"
+# model = "NAME-DES-MODELLS"
+# base_url = "https://llm.example.org/v1"
+# api_key_env = "LLM_API_KEY"
+# timeout = 120
+# context_length = 262144
+
+# -----------------------------------------------------------------------------
+# Optional MCP servers
+# -----------------------------------------------------------------------------
 
 # Workspace OS MCP - read-only by default
 # [[mcp_servers]]
 # name = "os"
 # transport = "stdio"
 # command = "{python}"
-# args = ["-m", "cli_agent.os_mcp_server", "--project-directory", "{workspace_directory}", "--config-file", "{config_file}"]
+# args = [
+#     "-m",
+#     "cli_agent.os_mcp_server",
+#     "--project-directory",
+#     "{workspace_directory}",
+#     "--config-file",
+#     "{config_file}",
+# ]
 #
 # [mcp_servers.config]
 # allow_write_files = false
 
-# Optional Docker Compose and Python validator MCP servers are maintained in
-# https://github.com/sHuewe/cli-agent-mcp and can be configured as external MCPs.
+# External stdio MCP. Starting untrusted stdio is controlled exclusively by the
+# machine-wide admin policy; it cannot be enabled here.
+# [[mcp_servers]]
+# name = "external-stdio"
+# transport = "stdio"
+# command = "external-mcp"
+# args = []
 
+# External Streamable HTTP MCP. Its host must be permitted by admin_config.toml.
 # [[mcp_servers]]
 # name = "external"
 # transport = "streamable_http"
 # url = "http://127.0.0.1:8001/mcp"
+#
+# [mcp_servers.headers]
+# Authorization = "Bearer example-token"
 
+# -----------------------------------------------------------------------------
+# Optional OKF knowledge repository
+# -----------------------------------------------------------------------------
 # [okf]
 # repository = "C:/dev/knowledge/okf/bundle"
 # max_tool_calls = 200

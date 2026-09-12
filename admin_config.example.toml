@@ -1,0 +1,20 @@
+# cli-agent machine-wide security policy
+#
+# Windows: C:\ProgramData\cli-agent\admin_config.toml
+# Linux:   /etc/cli-agent/admin_config.toml
+#
+# This file is intentionally separate from the user/project config. Network
+# allowlists and MCP trust/approval decisions are administrator policy and
+# cannot be overridden from config.toml.
+
+[network]
+model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+web_allowed_hosts = []
+
+[mcp]
+allow_untrusted_stdio = false
+
+[mcp.approval]
+# Use exact exposed names (<server>__<tool>). No wildcards are supported.
+auto_approve_tools = []
