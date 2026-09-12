@@ -35,7 +35,7 @@ function Normalize-Hosts([string[]]$Hosts, [switch]$IncludeLocal) {
     if ($IncludeLocal) {
         $values += @("localhost", "127.0.0.1", "::1")
     }
-    foreach ($hostName in $Hosts) {
+    foreach ($hostName in @($Hosts)) {
         if (-not [string]::IsNullOrWhiteSpace($hostName)) {
             $values += $hostName.Trim().TrimEnd(".").ToLowerInvariant()
         }
@@ -47,8 +47,12 @@ function Toml-String([string]$Value) {
     return '"' + $Value.Replace('\', '\\').Replace('"', '\"') + '"'
 }
 
-function Toml-Array([string[]]$Values) {
-    return "[" + (($Values | ForEach-Object { Toml-String $_ }) -join ", ") + "]"
+function Toml-Array([AllowNull()][string[]]$Values) {
+    $items = @($Values | Where-Object { $null -ne $_ -and $_ -ne "" })
+    if ($items.Count -eq 0) {
+        return "[]"
+    }
+    return "[" + (($items | ForEach-Object { Toml-String $_ }) -join ", ") + "]"
 }
 
 function Invoke-Icacls([string[]]$Arguments, [string]$Description) {
@@ -62,9 +66,9 @@ if ([string]::IsNullOrWhiteSpace($LlmHost)) {
     $LlmHost = Read-Host "Zusaetzlich erlaubter LLM-Host (leer = nur localhost)"
 }
 
-$modelHosts = Normalize-Hosts -Hosts @($LlmHost) -IncludeLocal
-$mcpAllowedHosts = Normalize-Hosts -Hosts $McpHosts -IncludeLocal
-$webAllowedHosts = Normalize-Hosts -Hosts $WebHosts
+$modelHosts = @(Normalize-Hosts -Hosts @($LlmHost) -IncludeLocal)
+$mcpAllowedHosts = @(Normalize-Hosts -Hosts $McpHosts -IncludeLocal)
+$webAllowedHosts = @(Normalize-Hosts -Hosts $WebHosts)
 $autoApprove = @($AutoApproveTools | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Select-Object -Unique)
 $stdioValue = if ($AllowUntrustedStdio) { "true" } else { "false" }
 
