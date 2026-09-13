@@ -7,6 +7,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from .mcp_contracts import validate_tool_contract_fingerprint
 from .network_policy import LOCAL_HOSTS, NetworkConfig
 
 
@@ -56,6 +57,14 @@ class ModelCredentialRule:
 
 
 @dataclass(frozen=True)
+class TrustedMcpToolApproval:
+    """Persistent approval for one exact MCP tool contract."""
+
+    name: str
+    contract_sha256: str
+
+
+@dataclass(frozen=True)
 class TrustedMcpServer:
     """Administrator-defined MCP identity with optional trusted capabilities."""
 
@@ -66,7 +75,7 @@ class TrustedMcpServer:
     args: tuple[str, ...] = ()
     env: tuple[tuple[str, str], ...] = ()
     headers: tuple[tuple[str, str], ...] = ()
-    auto_approve_tools: tuple[str, ...] = ()
+    auto_approve_tools: tuple[TrustedMcpToolApproval, ...] = ()
     trust_instructions: bool = False
 
 
@@ -128,6 +137,47 @@ def _model_credential_rule(values: dict[str, Any], index: int) -> ModelCredentia
     return ModelCredentialRule(provider=provider, host=host, allowed_api_key_envs=allowed)
 
 
+def _trusted_tool_approvals(values: dict[str, Any], *, section: str) -> tuple[TrustedMcpToolApproval, ...]:
+    raw = values.get("auto_approve_tools", [])
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(
+            f"{section}.auto_approve_tools muss über "
+            "[[mcp.trusted_servers.auto_approve_tools]]-Tabellen definiert werden."
+        )
+    if raw and all(isinstance(value, str) for value in raw):
+        raise ValueError(
+            f"{section}.auto_approve_tools unterstützt keine name-only Freigaben mehr. "
+            "Erzeuge einen gepinnten Tool-Contract mit "
+            "'cli-agent admin trust-tool <server> <tool> --config <config>'."
+        )
+    if not all(isinstance(value, dict) for value in raw):
+        raise ValueError(
+            f"{section}.auto_approve_tools muss eine Liste von Tabellen sein."
+        )
+
+    approvals: list[TrustedMcpToolApproval] = []
+    for index, approval_values in enumerate(raw):
+        approval_section = f"{section}.auto_approve_tools #{index + 1}"
+        name = str(approval_values.get("name", "")).strip()
+        contract = str(approval_values.get("contract_sha256", "")).strip()
+        if not name:
+            raise ValueError(f"{approval_section}.name darf nicht leer sein.")
+        contract = validate_tool_contract_fingerprint(
+            contract,
+            section=approval_section,
+        )
+        approvals.append(
+            TrustedMcpToolApproval(name=name, contract_sha256=contract)
+        )
+
+    names = [approval.name for approval in approvals]
+    if len(names) != len(set(names)):
+        raise ValueError(f"{section}.auto_approve_tools darf Toolnamen nicht doppelt enthalten.")
+    return tuple(approvals)
+
+
 def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
     section = f"[[mcp.trusted_servers]] #{index + 1}"
     name = str(values.get("name", "")).strip()
@@ -137,7 +187,7 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
     if transport not in {"stdio", "streamable_http"}:
         raise ValueError(f"{section}.transport muss 'stdio' oder 'streamable_http' sein.")
 
-    tools = _string_list(values, "auto_approve_tools", (), section=section)
+    tools = _trusted_tool_approvals(values, section=section)
     trust_instructions = _bool_value(values, "trust_instructions", False, section=section)
     raw_args = values.get("args", [])
     if not isinstance(raw_args, list) or not all(isinstance(value, str) for value in raw_args):

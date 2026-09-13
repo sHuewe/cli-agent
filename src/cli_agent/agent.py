@@ -12,6 +12,7 @@ from mcp import ClientSession
 
 from .admin_config import McpPolicy, TrustedMcpServer, _normalize_mcp_url
 from .config import LoggingConfig, McpServerConfig
+from .mcp_contracts import tool_contract_fingerprint
 from .model import ModelClient
 from .network_policy import NetworkConfig
 from .agent_conversation import ConversationMixin
@@ -212,12 +213,48 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             for trusted in self.mcp_policy.trusted_servers
         )
 
+    def _current_tool_contract(self, server_name: str, tool_name: str) -> str | None:
+        exposed_name = f"{server_name}__{tool_name}"
+        for tool in self._server_tools.get(server_name, ()):
+            function = tool.get("function", {})
+            if function.get("name") != exposed_name:
+                continue
+            return tool_contract_fingerprint(
+                tool_name,
+                function.get("parameters", {}),
+            )
+        return None
+
     def _is_admin_auto_approved(self, server_config: ServerConfig, tool_name: str) -> bool:
         for trusted in self.mcp_policy.trusted_servers:
-            if tool_name not in trusted.auto_approve_tools:
+            approval = next(
+                (
+                    item
+                    for item in trusted.auto_approve_tools
+                    if item.name == tool_name
+                ),
+                None,
+            )
+            if approval is None or not self._trusted_server_matches(server_config, trusted):
                 continue
-            if self._trusted_server_matches(server_config, trusted):
-                return True
+            current_contract = self._current_tool_contract(server_config.name, tool_name)
+            if current_contract is None:
+                logger.warning(
+                    "mcp_auto_approval_contract_missing server=%s tool=%s",
+                    server_config.name,
+                    tool_name,
+                )
+                return False
+            if current_contract != approval.contract_sha256:
+                logger.warning(
+                    "mcp_auto_approval_contract_mismatch server=%s tool=%s expected=%s actual=%s",
+                    server_config.name,
+                    tool_name,
+                    approval.contract_sha256,
+                    current_contract,
+                )
+                return False
+            return True
         return False
 
     def _requires_approval(self, server_config: ServerConfig, tool_name: str, exposed_name: str | None = None) -> bool:
