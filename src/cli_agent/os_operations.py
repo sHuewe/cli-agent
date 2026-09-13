@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 
 from .config import McpServerConfig
+from .filesystem_security import regular_file_has_multiple_links
 
 TEXT_SUFFIXES = frozenset(
     {
@@ -155,6 +156,20 @@ class Workspace:
             )
 
     @staticmethod
+    def _reject_hardlinked_file(path: Path) -> None:
+        try:
+            hardlinked = regular_file_has_multiple_links(path)
+        except OSError as exc:
+            raise WorkspaceError(
+                f"Dateimetadaten konnten nicht sicher geprüft werden: {path.name!r}"
+            ) from exc
+        if hardlinked:
+            raise WorkspaceError(
+                "Dateien mit mehreren Hardlinks werden vom Workspace-OS-Server "
+                "aus Sicherheitsgründen nicht verarbeitet."
+            )
+
+    @staticmethod
     def _existing_line_ending(path: Path) -> str:
         """Return the dominant line ending, defaulting to LF on ties."""
         if not path.exists():
@@ -194,6 +209,7 @@ class Workspace:
         file_path = self.resolve_path(path)
         if not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
+        self._reject_hardlinked_file(file_path)
         if self._is_sensitive_file(file_path):
             raise WorkspaceError(
                 "Das Lesen von Secret-/Credential-Dateien ist über den "
@@ -227,6 +243,7 @@ class Workspace:
         file_path = self.resolve_path(path)
         if not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
+        self._reject_hardlinked_file(file_path)
         self._reject_sensitive_mutation(file_path)
 
         try:
@@ -243,6 +260,7 @@ class Workspace:
         src_path = self.resolve_path(path_src)
         if not src_path.is_file():
             raise WorkspaceError(f"Quellpfad ist keine Datei: {path_src!r}")
+        self._reject_hardlinked_file(src_path)
         if self._is_sensitive_file(src_path):
             raise WorkspaceError(
                 "Das Kopieren von Secret-/Credential-Dateien über den "
@@ -253,13 +271,20 @@ class Workspace:
         self._reject_sensitive_mutation(dst_path)
         if dst_path.exists() and not dst_path.is_file():
             raise WorkspaceError(f"Zielpfad ist keine Datei: {path_dst!r}")
+        if dst_path.exists():
+            self._reject_hardlinked_file(dst_path)
         if not dst_path.parent.is_dir():
             raise WorkspaceError(
                 f"Zielordner existiert nicht: "
                 f"{dst_path.parent.relative_to(self.directory).as_posix()!r}"
             )
 
-        shutil.copy2(src_path, dst_path)
+        try:
+            shutil.copy2(src_path, dst_path)
+        except OSError as exc:
+            raise WorkspaceError(
+                f"Datei konnte nicht kopiert werden: {path_src!r} -> {path_dst!r}: {exc}"
+            ) from exc
 
         relative = dst_path.relative_to(self.directory).as_posix()
         return f"Datei kopiert: {relative} "
@@ -288,6 +313,8 @@ class Workspace:
         self._reject_sensitive_mutation(file_path)
         if file_path.exists() and not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
+        if file_path.exists():
+            self._reject_hardlinked_file(file_path)
         if not self._is_text_file(file_path):
             raise WorkspaceError(
                 f"Dateityp darf nicht als Text geschrieben werden: {path!r}"

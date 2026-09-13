@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..filesystem_security import regular_file_has_multiple_links
 from .workspace import WorkspacePathError, WorkspaceRoot
 from .repository_support import OkfRepositoryError, RepositoryMetadataMixin
 
@@ -182,10 +183,18 @@ class OkfRepository(RepositoryMetadataMixin):
 
     def _read_text(self, file_path: Path) -> str:
         try:
+            if regular_file_has_multiple_links(file_path):
+                raise OkfRepositoryError(
+                    "OKF-Dateien mit mehreren Hardlinks werden aus "
+                    "Sicherheitsgründen nicht gelesen: "
+                    f"{self.workspace.relative(file_path)}"
+                )
             size = file_path.stat().st_size
+        except OkfRepositoryError:
+            raise
         except OSError as exc:
             raise OkfRepositoryError(
-                f"Dateigröße konnte nicht gelesen werden: "
+                f"Dateigröße konnte nicht sicher gelesen werden: "
                 f"{self.workspace.relative(file_path)}"
             ) from exc
         if size > self.max_read_bytes:
