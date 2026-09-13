@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import platform
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -37,8 +37,16 @@ def _string_map(values: Any, *, section: str, key: str) -> tuple[tuple[str, str]
         return ()
     if not isinstance(values, dict):
         raise ValueError(f"{section}.{key} muss eine Tabelle sein.")
-    normalized = tuple(sorted((str(name), str(value)) for name, value in values.items()))
-    return normalized
+    return tuple(sorted((str(name), str(value)) for name, value in values.items()))
+
+
+@dataclass(frozen=True)
+class ModelCredentialRule:
+    """Administrator-approved environment-variable names for one model host/provider."""
+
+    provider: str
+    host: str
+    allowed_api_key_envs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,16 +74,12 @@ class McpPolicy:
 @dataclass(frozen=True)
 class AdminConfig:
     network: NetworkConfig = NetworkConfig()
+    model_credentials: tuple[ModelCredentialRule, ...] = ()
     mcp: McpPolicy = McpPolicy()
 
 
 def default_admin_config_file() -> Path:
-    """Return the fixed machine-wide security-policy path.
-
-    On Windows the policy location is deliberately independent of environment
-    variables such as PROGRAMDATA, because those can be changed by the caller
-    and therefore must not select a security-policy file.
-    """
+    """Return the fixed machine-wide security-policy path."""
     if platform.system() == "Windows":
         return Path(r"C:\ProgramData\cli-agent\admin_config.toml")
     return Path("/etc/cli-agent/admin_config.toml")
@@ -106,6 +110,18 @@ def _host_list(values: dict[str, Any], key: str, default: tuple[str, ...]) -> tu
     if len(normalized) != len(set(normalized)):
         raise ValueError(f"[network].{key} darf keine doppelten Hosts enthalten.")
     return normalized
+
+
+def _model_credential_rule(values: dict[str, Any], index: int) -> ModelCredentialRule:
+    section = f"[[model.credentials]] #{index + 1}"
+    provider = str(values.get("provider", "")).strip().lower()
+    host = str(values.get("host", "")).strip().lower().rstrip(".")
+    if provider != "openai":
+        raise ValueError(f"{section}.provider muss derzeit 'openai' sein.")
+    if not host or "://" in host or "/" in host:
+        raise ValueError(f"{section}.host muss ein einzelner Hostname ohne Schema oder Pfad sein.")
+    allowed = _string_list(values, "allowed_api_key_envs", (), section=section)
+    return ModelCredentialRule(provider=provider, host=host, allowed_api_key_envs=allowed)
 
 
 def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
@@ -154,13 +170,7 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
 
 
 def load_admin_config(path: Path | None = None) -> AdminConfig:
-    """Load the machine-wide security policy or safe built-in defaults.
-
-    The normal user configuration never participates in this policy. If the
-    machine-wide file does not exist, only local model/MCP endpoints are allowed,
-    web access is disabled, untrusted stdio MCPs are denied, and no external MCP
-    tool is auto-approved.
-    """
+    """Load the machine-wide security policy or safe built-in defaults."""
     config_file = default_admin_config_file() if path is None else path.expanduser()
     if not config_file.exists():
         return AdminConfig()
@@ -171,13 +181,34 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
     network_values = values.get("network", {})
     if not isinstance(network_values, dict):
         raise ValueError("[network] in admin_config.toml muss eine Tabelle sein.")
+    network = NetworkConfig(
+        model_allowed_hosts=_host_list(network_values, "model_allowed_hosts", LOCAL_HOSTS),
+        mcp_allowed_hosts=_host_list(network_values, "mcp_allowed_hosts", LOCAL_HOSTS),
+        web_allowed_hosts=_host_list(network_values, "web_allowed_hosts", ()),
+    )
+
+    model_values = values.get("model", {})
+    if not isinstance(model_values, dict):
+        raise ValueError("[model] in admin_config.toml muss eine Tabelle sein.")
+    raw_credentials = model_values.get("credentials", [])
+    if not isinstance(raw_credentials, list) or not all(isinstance(value, dict) for value in raw_credentials):
+        raise ValueError("[[model.credentials]] muss eine Liste von Tabellen sein.")
+    model_credentials = tuple(
+        _model_credential_rule(credential_values, index)
+        for index, credential_values in enumerate(raw_credentials)
+    )
+    credential_keys = [(rule.provider, rule.host) for rule in model_credentials]
+    if len(credential_keys) != len(set(credential_keys)):
+        raise ValueError("[[model.credentials]] darf dieselbe Provider-/Host-Kombination nicht doppelt enthalten.")
+    for rule in model_credentials:
+        if rule.host not in network.model_allowed_hosts:
+            raise ValueError(
+                f"[[model.credentials]] Host {rule.host!r} muss auch in network.model_allowed_hosts erlaubt sein."
+            )
 
     mcp_values = values.get("mcp", {})
     if not isinstance(mcp_values, dict):
         raise ValueError("[mcp] in admin_config.toml muss eine Tabelle sein.")
-
-    # The legacy name-only approval mechanism is intentionally rejected. A
-    # persistent approval must identify the server as well as the tool.
     if "approval" in mcp_values:
         raise ValueError(
             "[mcp.approval] ist nicht mehr unterstützt. Permanente Freigaben "
@@ -198,11 +229,8 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
         raise ValueError("[[mcp.trusted_servers]].name darf nicht doppelt vorkommen.")
 
     return AdminConfig(
-        network=NetworkConfig(
-            model_allowed_hosts=_host_list(network_values, "model_allowed_hosts", LOCAL_HOSTS),
-            mcp_allowed_hosts=_host_list(network_values, "mcp_allowed_hosts", LOCAL_HOSTS),
-            web_allowed_hosts=_host_list(network_values, "web_allowed_hosts", ()),
-        ),
+        network=network,
+        model_credentials=model_credentials,
         mcp=McpPolicy(
             allow_untrusted_stdio=_bool_value(
                 mcp_values,

@@ -3,14 +3,21 @@
 # Windows: C:\ProgramData\cli-agent\admin_config.toml
 # Linux:   /etc/cli-agent/admin_config.toml
 #
-# This file is intentionally separate from the user/project config. Network
-# allowlists and MCP trust/approval decisions are administrator policy and
-# cannot be overridden from config.toml.
+# This file is intentionally separate from the user/project config. Network,
+# model credential selection and MCP trust decisions are administrator policy.
 
 [network]
 model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 web_allowed_hosts = []
+
+# For remote OpenAI-compatible model hosts, a project/user config may only use
+# environment-variable names that are explicitly bound to that provider+host.
+# Localhost remains developer-controlled because no secret leaves the machine.
+# [[model.credentials]]
+# provider = "openai"
+# host = "llm.intern.firma.de"
+# allowed_api_key_envs = ["LLM_API_KEY"]
 
 [mcp]
 allow_untrusted_stdio = false
@@ -19,14 +26,12 @@ allow_untrusted_stdio = false
 # server identity. The user-configured MCP must match name, transport and the
 # complete endpoint identity before one of these tools can run without approval.
 #
-# Example HTTP MCP:
 # [[mcp.trusted_servers]]
 # name = "continuous"
 # transport = "streamable_http"
 # url = "https://mcp.intern.firma.de/mcp"
 # auto_approve_tools = ["search"]
 #
-# Example stdio MCP:
 # [[mcp.trusted_servers]]
 # name = "local-audited-tool"
 # transport = "stdio"

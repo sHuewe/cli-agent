@@ -50,26 +50,14 @@ async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> boo
     if not sys.stdin.isatty():
         return False
     print("\nExplizite Freigabe erforderlich: " f"{tool_name}({_approval_arguments(arguments)})")
-    answer = await asyncio.to_thread(
-        input,
-        "Aktion ausführen? [j]a / [s] dieses Tool für die Session / [N]ein ",
-    )
+    answer = await asyncio.to_thread(input, "Aktion ausführen? [j]a / [s] dieses Tool für die Session / [N]ein ")
     normalized = answer.strip().casefold()
     if normalized in {"s", "session"}:
         return "session"
     return normalized in {"j", "ja", "y", "yes"}
 
 
-def build_approval_callback(
-    preapproved_tools: Iterable[str],
-) -> Callable[[str, dict[str, object]], Awaitable[bool | str]]:
-    """Return the approval callback for one process run.
-
-    CLI pre-approvals are exact exposed tool names. They intentionally bypass
-    only the interactive confirmation for those tools; all server, workspace,
-    network and sensitive-path restrictions remain enforced elsewhere.
-    """
-
+def build_approval_callback(preapproved_tools: Iterable[str]) -> Callable[[str, dict[str, object]], Awaitable[bool | str]]:
     approved = frozenset(preapproved_tools)
 
     async def callback(tool_name: str, arguments: dict[str, object]) -> bool | str:
@@ -90,26 +78,8 @@ def build_parser() -> argparse.ArgumentParser:
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
-    parser.add_argument(
-        "--approve-tool",
-        action="append",
-        default=[],
-        metavar="TOOL",
-        help=(
-            "Pre-approve one exact exposed tool name for this process run; "
-            "repeat the option for multiple tools. Intended for trusted automation."
-        ),
-    )
-    parser.add_argument(
-        "--add-web-context",
-        action="append",
-        default=[],
-        metavar="URL",
-        help=(
-            "Load a web URL before processing the prompt; repeat the option "
-            "for multiple URLs. The normal web allowlist and redirect checks apply."
-        ),
-    )
+    parser.add_argument("--approve-tool", action="append", default=[], metavar="TOOL", help="Pre-approve one exact exposed tool name for this process run; repeat for multiple tools.")
+    parser.add_argument("--add-web-context", action="append", default=[], metavar="URL", help="Load a web URL before processing the prompt; repeat for multiple URLs.")
     parser.add_argument("--debug", action="store_true", help="Show a complete traceback when an error occurs")
     return parser
 
@@ -171,7 +141,11 @@ async def run(args: argparse.Namespace) -> None:
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
-    model_client = create_model_client(config.model, network=admin_config.network)
+    model_client = create_model_client(
+        config.model,
+        network=admin_config.network,
+        credential_rules=admin_config.model_credentials,
+    )
     approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
     agent = WebContextCliAgent(
         workspace,
