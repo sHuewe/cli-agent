@@ -10,14 +10,16 @@ from cli_agent.config import load_config
 from cli_agent.logging_setup import configure_logging
 
 
-def test_load_logging_config(tmp_path: Path) -> None:
+def test_load_logging_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(config_module, "application_directory", lambda: state_dir)
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """
 [logging]
 enabled = true
 level = "DEBUG"
-file = "agent.log"
+file = "logs/agent.log"
 log_prompts = false
 log_model_messages = true
 log_tool_results = true
@@ -28,7 +30,7 @@ backup_count = 2
     )
     config = load_config(config_file)
     assert config.logging.level == "DEBUG"
-    assert config.logging.file == Path("agent.log")
+    assert config.logging.file == (state_dir / "logs" / "agent.log").resolve()
     assert config.logging.log_prompts is False
     assert config.logging.log_tool_calls is False
     assert config.logging.log_model_messages is True
@@ -36,6 +38,23 @@ backup_count = 2
     assert config.logging.max_bytes == 1234
     assert config.logging.backup_count == 2
     assert config.mcp_servers == ()
+
+
+def test_logging_file_rejects_absolute_paths(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        f'[logging]\nfile = "{(tmp_path / "outside.log").as_posix()}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="relativer Pfad"):
+        load_config(config_file)
+
+
+def test_logging_file_rejects_parent_traversal(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text('[logging]\nfile = "../outside.log"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="\.\."):
+        load_config(config_file)
 
 
 def test_load_model_context_length(tmp_path: Path) -> None:
@@ -84,12 +103,14 @@ allow_write_files = "false"
         load_config(mcp_config_file)
 
 
-def test_configure_logging_writes_file(tmp_path: Path) -> None:
+def test_configure_logging_writes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(config_module, "application_directory", lambda: state_dir)
     config_file = tmp_path / "config.toml"
-    log_file = tmp_path / "agent.log"
-    config_file.write_text(f'[logging]\nfile = "{log_file.as_posix()}"\n', encoding="utf-8")
+    config_file.write_text('[logging]\nfile = "agent.log"\n', encoding="utf-8")
     configure_logging(load_config(config_file).logging)
     logging.getLogger("cli_agent.test").info("tool_call name=example")
+    log_file = state_dir / "agent.log"
     assert "tool_call name=example" in log_file.read_text(encoding="utf-8")
 
 
