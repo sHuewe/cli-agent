@@ -17,6 +17,7 @@ from .agent_knowledge import (
     _normalize_knowledge_path,
     tool_result_text,
 )
+from .mcp_limits import enforce_mcp_tool_result_limit
 
 logger = logging.getLogger("cli_agent.agent_tool_calls")
 
@@ -218,8 +219,6 @@ async def process_tool_calls(
         try:
             result = await session.call_tool(original_name, arguments)
         except Exception as exc:
-            # MCP error strings can contain returned data; do not persist them
-            # in the default local log.
             logger.error(
                 "tool_call_failed phase=%s name=%s error_type=%s",
                 phase,
@@ -255,7 +254,7 @@ async def process_tool_calls(
             knowledge_state.seen_calls.add(knowledge_call_key)
             knowledge_state.successful_followup_calls += 1
 
-        raw_result_text = tool_result_text(result)
+        raw_result_text = enforce_mcp_tool_result_limit(tool_result_text(result))
         model_result_text = raw_result_text
         compressed = False
 
