@@ -200,7 +200,11 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
     assert captured["model_client"].base_url == "https://llm.internal/v1"
     assert captured["network"] is admin_config.network
     assert captured["mcp_policy"] is admin_config.mcp
-    assert captured["prompts"] == ["add_web_context https://docs.internal/reference", "hello"]
+    assert captured["prompts"] == [
+        "add_web_context https://docs.internal/reference",
+        "hello",
+        "tokens",
+    ]
     assert asyncio.run(captured["approval_callback"]("continuous__search", {"query": "test"})) is True
 
 
