@@ -105,7 +105,10 @@ class McpLifecycleMixin:
         except BaseException:
             await server_stack.aclose(); raise
         self._sessions[server_config.name] = session; self._server_stacks[server_config.name] = server_stack; self._server_configs[server_config.name] = server_config; self._server_tools[server_config.name] = server_tools; self._tool_routes.update(routes)
-        if instructions: self._server_instructions[server_config.name] = instructions
+        if instructions and self._instructions_are_trusted(server_config):
+            self._server_instructions[server_config.name] = instructions
+        elif instructions:
+            logger.info("mcp_server_instructions_ignored name=%s reason=not_admin_trusted", server_config.name)
         parent_stack.push_async_callback(server_stack.aclose)
         logger.info("mcp_server_connected name=%s transport=%s tools=%s", server_config.name, server_config.transport, json.dumps(tool_names, ensure_ascii=False))
 
@@ -140,10 +143,6 @@ class McpLifecycleMixin:
         safe_names = ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP", "LANG", "LC_ALL", "PYTHONIOENCODING")
         environment = {name: os.environ[name] for name in safe_names if os.environ.get(name) is not None}
         if built_in:
-            # Python 3.11+ honors PYTHONSAFEPATH like -P: the child process does
-            # not prepend the workspace/current directory to sys.path. Together
-            # with the reduced environment (no PYTHONPATH), this prevents a
-            # repository-local cli_agent package from shadowing built-in MCP code.
             environment["PYTHONSAFEPATH"] = "1"
         return environment
 
@@ -154,7 +153,6 @@ class McpLifecycleMixin:
             environment = self._stdio_environment(built_in=built_in)
             environment.update({key: self._resolve(value) for key, value in server_config.env.items()})
             if built_in:
-                # Built-in trust must not be weakened by a runtime config env.
                 environment["PYTHONSAFEPATH"] = "1"
             parameters = StdioServerParameters(command=self._resolve(server_config.command), args=[self._resolve(value) for value in server_config.args], env=environment)
             read_stream, write_stream = await stack.enter_async_context(stdio_client(parameters))
