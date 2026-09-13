@@ -16,15 +16,20 @@ web_allowed_hosts = []
 [mcp]
 allow_untrusted_stdio = false
 
-# Persistent MCP auto-approvals require a concrete server identity.
+# Persistent MCP auto-approvals and trusted MCP instructions require a concrete
+# server identity. trust_instructions defaults to false. Enable it only for
+# reviewed MCP servers whose server-level instructions are intentionally part of
+# the agent's trusted operating guidance.
+#
 # For stdio, trusted commands must be absolute executables. The special
 # {python} placeholder is also accepted because it resolves to sys.executable
 # of the managed cli-agent installation. Bare PATH commands are rejected.
 #
 # [[mcp.trusted_servers]]
-# name = "continuous"
+# name = "fachsoftware"
 # transport = "streamable_http"
 # url = "https://mcp.intern.firma.de/mcp"
+# trust_instructions = true
 # auto_approve_tools = ["search"]
 #
 # [[mcp.trusted_servers]]
@@ -32,4 +37,5 @@ allow_untrusted_stdio = false
 # transport = "stdio"
 # command = "C:/Program Files/Company/audited-mcp.exe"
 # args = ["--stdio"]
+# trust_instructions = false
 # auto_approve_tools = ["search"]
