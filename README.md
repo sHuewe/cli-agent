@@ -164,17 +164,9 @@ Der Tool-Contract ist ein SHA-256-Fingerprint über den nativen Toolnamen und da
 
 Toolbeschreibung und MCP-Instructions sind bewusst nicht Bestandteil dieses Contract-Fingerprints. `trust_instructions` wird separat an die MCP-Serveridentität gebunden.
 
-Name-only Freigaben wie
-
-```toml
-auto_approve_tools = ["search"]
-```
-
-werden nicht mehr akzeptiert.
-
 ### CLI-Workflow zum Prüfen und Freigeben eines Tools
 
-Die neuen `admin`-Kommandos dienen ausschließlich zum **Lesen und Generieren**. Sie verändern `admin_config.toml` niemals selbst und benötigen deshalb auch keine administrativen Schreibrechte. Die eigentliche Vertrauensentscheidung bleibt ein manueller administrativer Schritt.
+Die `admin`-Kommandos dienen ausschließlich zum **Lesen und Generieren**. Sie verändern `admin_config.toml` niemals selbst und benötigen deshalb auch keine administrativen Schreibrechte. Die eigentliche Vertrauensentscheidung bleibt ein manueller administrativer Schritt.
 
 #### 1. Tool und Schema ansehen
 
@@ -245,7 +237,7 @@ cli-agent admin trust-tool fachsoftware search --config config.toml --update
 
 `--update` schreibt ebenfalls nichts. Das Kommando vergleicht den aktuell angebotenen Contract mit dem bereits administrativ gepinnten Contract. Bei einer Änderung zeigt es den neuen Contract und erzeugt einen Ersatzblock zum manuellen Kopieren.
 
-Solange der neue Block nicht administrativ übernommen wurde, greift die alte permanente Auto-Freigabe nicht mehr und das Tool verlangt wieder eine normale Benutzerbestätigung.
+Solange der neue Block nicht administrativ übernommen wurde, greift die bestehende permanente Auto-Freigabe nicht und das Tool verlangt wieder eine normale Benutzerbestätigung.
 
 ### Tool-Freigaben für Skripte / One-Shot-Aufrufe
 
