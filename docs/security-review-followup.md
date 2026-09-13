@@ -30,7 +30,7 @@ Damit können eigene Fachsoftware-MCPs weiterhin umfangreiche und für die Tooln
 
 **Status:** behoben.
 
-Für nichtlokale OpenAI-kompatible Modellziele muss die Maschinenpolicy die verwendbare Credential-Environment-Variable an Provider und Zielhost binden:
+Wenn für einen nichtlokalen OpenAI-kompatiblen Modell-Endpunkt `api_key_env` verwendet wird, muss die Maschinenpolicy die verwendbare Credential-Environment-Variable an Provider und Zielhost binden:
 
 ```toml
 [[model.credentials]]
@@ -39,7 +39,7 @@ host = "llm.intern.firma.de"
 allowed_api_key_envs = ["LLM_API_KEY"]
 ```
 
-Eine normale Projektkonfiguration kann damit nicht mehr beispielsweise `AWS_SECRET_ACCESS_KEY` als Credential für einen lediglich netzwerkseitig freigegebenen Remote-LLM-Host auswählen. Lokale Modellziele bleiben bewusst flexibel.
+Eine normale Projektkonfiguration kann damit nicht mehr beispielsweise `AWS_SECRET_ACCESS_KEY` als Credential für einen lediglich netzwerkseitig freigegebenen Remote-LLM-Host auswählen. `api_key_env` selbst bleibt optional; ohne Angabe verwendet der OpenAI-kompatible Client den Dummy-Key `dummy`. Lokale Modellziele bleiben bewusst flexibel.
 
 ## F-05: Trusted stdio und PATH-Auflösung
 
@@ -93,3 +93,28 @@ Damit bleibt eine projektbezogene Unterstruktur wie `logs/projekt-a.log` möglic
 Die CI installiert nun eine fest angegebene `uv`-Version, prüft `uv.lock` mit `uv lock --check`, synchronisiert Projekt- und Testabhängigkeiten mit `uv sync --frozen --extra dev` und führt pytest aus genau dieser gesperrten Umgebung aus. Dadurch schlägt CI fehl, wenn `pyproject.toml` und Lockfile nicht zusammenpassen, und der getestete Dependency-Stand wird durch `uv.lock` bestimmt.
 
 Der normale lokale `pipx`-Installationsweg bleibt aus Bedienbarkeitsgründen bestehen. Für reproduzierbare Reviews, CI und Freigabebuilds ist dagegen das Lockfile der maßgebliche Dependency-Stand. Vulnerability-Scanning und eine formale Artefakt-/SBOM-Pipeline bleiben separate Release- beziehungsweise Unternehmensmaßnahmen.
+
+## Zusätzliche Härtung: Contract-Pinning für permanente MCP-Auto-Approvals
+
+**Status:** umgesetzt.
+
+Eine permanente MCP-Auto-Freigabe ist nicht mehr nur an Serveridentität und Toolname gebunden. Zusätzlich wird das vollständige aktuelle `inputSchema` des MCP-Tools gepinnt. Der Fingerprint wird als SHA-256 über eine kanonische JSON-Darstellung aus nativem Toolnamen und Input-Schema gebildet.
+
+Damit verliert eine bestehende Auto-Freigabe automatisch ihre Wirkung, wenn ein MCP-Update beispielsweise einen neuen Parameter ergänzt, Parametertypen verändert oder Required-Felder ändert. Das Tool wird in diesem Fall nicht blockiert, sondern fällt auf die normale interaktive Benutzerfreigabe zurück.
+
+Name-only Freigaben wie `auto_approve_tools = ["search"]` werden in der Admin-Policy abgewiesen. Stattdessen wird ein gepinnter Eintrag verwendet:
+
+```toml
+[[mcp.trusted_servers.auto_approve_tools]]
+name = "search"
+contract_sha256 = "sha256:..."
+```
+
+Die Hashwerte sollen nicht manuell erzeugt werden. Die CLI bietet dafür zwei read-only Hilfsbefehle:
+
+```text
+cli-agent admin inspect-tool <server> <tool> --config <config.toml>
+cli-agent admin trust-tool <server> <tool> --config <config.toml>
+```
+
+`inspect-tool` zeigt den aktuell angebotenen Tool-Contract. `trust-tool` gibt nach derselben Prüfung einen kopierbaren TOML-Block aus. Keiner der Befehle schreibt in `admin_config.toml`; die administrative Vertrauensentscheidung bleibt ein manueller Copy-/Review-Schritt. Mit `--update` kann ein bestehender gepinnter Contract mit dem aktuell angebotenen Contract verglichen und ein Ersatzblock erzeugt werden.
