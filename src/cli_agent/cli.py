@@ -15,10 +15,14 @@ from .admin_config import AdminConfig, default_admin_config_file, load_admin_con
 from .agent import CliAgent
 from .approval_display import approval_arguments as _approval_arguments
 from .config import AppConfig, McpServerConfig, default_config_file, load_config
+from .file_context import (
+    ContextFileCliAgent as WebContextCliAgent,
+    is_local_agent_command,
+    prepare_file_options,
+)
 from .logging_setup import configure_logging
 from .mcp_contracts import tool_contract_fingerprint
 from .model_factory import create_model_client
-from .web_context_agent import WebContextCliAgent
 
 OS_MCP_SERVER_NAME = "os"
 logger = logging.getLogger("cli_agent.cli")
@@ -76,6 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
+    parser.add_argument("--context-file", type=Path, default=None, metavar="FILE", help="Add one explicit UTF-8 text file from the workspace as untrusted reference context. Requires --with-os-read or --with-os-write.")
+    parser.add_argument("--output", type=Path, default=None, metavar="FILE", help="Write the latest model answer to a workspace-local UTF-8 text file in addition to stdout.")
+    parser.add_argument("--overwrite-output", action="store_true", help="Allow --output to replace an existing regular file. Requires --output.")
     parser.add_argument("--approve-tool", action="append", default=[], metavar="TOOL", help="Pre-approve one exact exposed tool name for this process run; repeat for multiple tools.")
     parser.add_argument("--add-web-context", action="append", default=[], metavar="URL", help="Load a web URL before processing the prompt; repeat for multiple URLs.")
     parser.add_argument("--debug", action="store_true", help="Show a complete traceback when an error occurs")
@@ -214,13 +221,23 @@ async def run(args: argparse.Namespace) -> None:
     admin_config: AdminConfig = load_admin_config()
     config = apply_model_cli_override(config, model=args.model)
     config = apply_mcp_cli_overrides(config, os_access=args.os_access)
-    configure_logging(config.logging)
+
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
+
+    file_context, output_target = prepare_file_options(
+        workspace,
+        context_file=getattr(args, "context_file", None),
+        output=getattr(args, "output", None),
+        overwrite_output=bool(getattr(args, "overwrite_output", False)),
+        os_access=args.os_access,
+    )
+
+    configure_logging(config.logging)
     model_client = create_model_client(config.model, network=admin_config.network, credential_rules=admin_config.model_credentials)
     approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
-    agent = WebContextCliAgent(workspace, model_client, config.mcp_servers, logging_config=config.logging, config_file=args.config or default_config_file(), dump_llm_context=config.dump_llm_context, network=admin_config.network, mcp_policy=admin_config.mcp, approval_callback=approval_callback, okf=config.okf)
+    agent = WebContextCliAgent(workspace, model_client, config.mcp_servers, logging_config=config.logging, config_file=args.config or default_config_file(), dump_llm_context=config.dump_llm_context, network=admin_config.network, mcp_policy=admin_config.mcp, approval_callback=approval_callback, okf=config.okf, file_context=file_context)
     print(f"Arbeitsordner: {workspace}")
     print(f"Admin-Policy: {default_admin_config_file()}")
     print("MCP-Server: " + (", ".join(server.name for server in config.mcp_servers) or "(keine)"))
@@ -229,11 +246,22 @@ async def run(args: argparse.Namespace) -> None:
         print(f"Logdatei: {config.logging.file}")
     if config.okf:
         print(f"OKF-Repository: {config.okf.repository}")
+    if file_context is not None:
+        print(f"Context-Datei: {file_context.relative_path} ({len(file_context.content)} Zeichen)")
+    if output_target is not None:
+        print(f"Output-Datei: {output_target.path}")
+
+    def emit_answer(prompt: str, answer: str) -> None:
+        print(answer)
+        if output_target is not None and not is_local_agent_command(prompt):
+            output_target.write_text(answer)
+
     async with agent:
         for url in getattr(args, "add_web_context", ()):
             print(await agent.ask(f"add_web_context {url}"))
         if args.prompt:
-            print(await agent.ask(" ".join(args.prompt)))
+            prompt = " ".join(args.prompt)
+            emit_answer(prompt, await agent.ask(prompt))
             return
         print("Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung.")
         while True:
@@ -247,7 +275,7 @@ async def run(args: argparse.Namespace) -> None:
             if not prompt:
                 continue
             try:
-                print(await agent.ask(prompt))
+                emit_answer(prompt, await agent.ask(prompt))
             except Exception as exc:
                 print_error(exc, debug=args.debug)
 
