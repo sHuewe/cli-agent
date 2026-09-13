@@ -15,6 +15,21 @@ web_allowed_hosts = []
 [mcp]
 allow_untrusted_stdio = false
 
-[mcp.approval]
-# Use exact exposed names (<server>__<tool>). No wildcards are supported.
-auto_approve_tools = []
+# Persistent MCP auto-approvals are bound to a concrete administrator-defined
+# server identity. The user-configured MCP must match name, transport and the
+# complete endpoint identity before one of these tools can run without approval.
+#
+# Example HTTP MCP:
+# [[mcp.trusted_servers]]
+# name = "continuous"
+# transport = "streamable_http"
+# url = "https://mcp.intern.firma.de/mcp"
+# auto_approve_tools = ["search"]
+#
+# Example stdio MCP:
+# [[mcp.trusted_servers]]
+# name = "local-audited-tool"
+# transport = "stdio"
+# command = "C:/Program Files/Company/audited-mcp.exe"
+# args = ["--stdio"]
+# auto_approve_tools = ["search"]
