@@ -7,7 +7,8 @@ model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 web_allowed_hosts = []
 
-# Remote model credentials are bound to provider + host.
+# Optional remote model credentials are bound to provider + host. This section
+# is only needed when the user config actually sets model.api_key_env.
 # [[model.credentials]]
 # provider = "openai"
 # host = "llm.intern.firma.de"
@@ -21,6 +22,16 @@ allow_untrusted_stdio = false
 # reviewed MCP servers whose server-level instructions are intentionally part of
 # the agent's trusted operating guidance.
 #
+# Persistent auto-approvals additionally pin the complete MCP inputSchema of the
+# approved tool. Do not calculate contract_sha256 manually. Use:
+#
+#   cli-agent admin inspect-tool fachsoftware search --config config.toml
+#   cli-agent admin trust-tool fachsoftware search --config config.toml
+#
+# The second command prints a TOML fragment. It NEVER modifies this file. Review
+# the displayed schema and copy the generated fragment manually into the matching
+# [[mcp.trusted_servers]] entry.
+#
 # For stdio, trusted commands must be absolute executables. The special
 # {python} placeholder is also accepted because it resolves to sys.executable
 # of the managed cli-agent installation. Bare PATH commands are rejected.
@@ -30,7 +41,10 @@ allow_untrusted_stdio = false
 # transport = "streamable_http"
 # url = "https://mcp.intern.firma.de/mcp"
 # trust_instructions = true
-# auto_approve_tools = ["search"]
+#
+# [[mcp.trusted_servers.auto_approve_tools]]
+# name = "search"
+# contract_sha256 = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 #
 # [[mcp.trusted_servers]]
 # name = "local-audited-tool"
@@ -38,4 +52,3 @@ allow_untrusted_stdio = false
 # command = "C:/Program Files/Company/audited-mcp.exe"
 # args = ["--stdio"]
 # trust_instructions = false
-# auto_approve_tools = ["search"]
