@@ -77,3 +77,19 @@ Die Defaults sind absichtlich weit oberhalb normaler MCP-Nutzung angesetzt und d
 - maximal 10.000.000 Zeichen pro Tool-Ergebnis.
 
 Damit sollen realistische, auch umfangreiche Fachsoftware-MCPs nicht eingeschränkt werden. Die Limits verhindern vielmehr, dass ein Server unbegrenzt Speicher und Modellkontext über Metadaten oder einzelne Antworten belegt. Regressionstests prüfen sowohl großzügige realistische Eingaben als auch alle Grenzverletzungen.
+
+## F-08: Frei konfigurierbarer Logpfad
+
+**Status:** pragmatisch behoben.
+
+Ein Projekt kann den Logpfad nicht mehr auf eine beliebige absolute Datei umlenken. Falls `[logging].file` gesetzt wird, muss der Wert relativ zum normalen cli-agent-State-Verzeichnis sein. Absolute Windows-/POSIX-Pfade, `..`-Traversal und aufgelöste Ziele außerhalb des State-Verzeichnisses werden abgewiesen.
+
+Damit bleibt eine projektbezogene Unterstruktur wie `logs/projekt-a.log` möglich, während Logrotation nicht mehr versehentlich eine beliebige benutzerschreibbare Datei außerhalb des cli-agent-Bereichs ersetzen oder umbenennen kann. Der Standardpfad bleibt unverändert im cli-agent-State-Verzeichnis.
+
+## F-10: Lockfile wird in CI nicht erzwungen
+
+**Status:** behoben für den CI-/Review-Pfad.
+
+Die CI installiert nun eine fest angegebene `uv`-Version, prüft `uv.lock` mit `uv lock --check`, synchronisiert Projekt- und Testabhängigkeiten mit `uv sync --frozen --extra dev` und führt pytest aus genau dieser gesperrten Umgebung aus. Dadurch schlägt CI fehl, wenn `pyproject.toml` und Lockfile nicht zusammenpassen, und der getestete Dependency-Stand wird durch `uv.lock` bestimmt.
+
+Der normale lokale `pipx`-Installationsweg bleibt aus Bedienbarkeitsgründen bestehen. Für reproduzierbare Reviews, CI und Freigabebuilds ist dagegen das Lockfile der maßgebliche Dependency-Stand. Vulnerability-Scanning und eine formale Artefakt-/SBOM-Pipeline bleiben separate Release- beziehungsweise Unternehmensmaßnahmen.
