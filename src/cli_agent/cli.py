@@ -273,6 +273,7 @@ async def run(args: argparse.Namespace) -> None:
             print(await agent.ask(f"add_web_context {url}"))
         if one_shot_prompt is not None:
             emit_answer(one_shot_prompt, await agent.ask(one_shot_prompt))
+            print(await agent.ask("tokens"))
             return
         print("Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung.")
         while True:
