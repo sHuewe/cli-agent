@@ -4,9 +4,18 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from cli_agent.admin_config import McpPolicy, TrustedMcpServer
+from cli_agent.admin_config import McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
 from cli_agent.agent import CliAgent
 from cli_agent.config import McpServerConfig
+from cli_agent.mcp_contracts import tool_contract_fingerprint
+
+SEARCH_SCHEMA = {
+    "type": "object",
+    "properties": {"query": {"type": "string"}},
+    "required": ["query"],
+    "additionalProperties": False,
+}
+SEARCH_CONTRACT = tool_contract_fingerprint("search", SEARCH_SCHEMA)
 
 
 class ToolModel:
@@ -41,12 +50,17 @@ class FakeSession:
         return SimpleNamespace(content=[], isError=False)
 
 
+def _approval(contract: str = SEARCH_CONTRACT) -> TrustedMcpToolApproval:
+    return TrustedMcpToolApproval(name="search", contract_sha256=contract)
+
+
 def _connected_external_agent(
     tmp_path: Path,
     *,
     policy: McpPolicy,
     approval_callback,
     server: McpServerConfig | None = None,
+    schema=SEARCH_SCHEMA,
 ) -> tuple[CliAgent, FakeSession]:
     server = server or McpServerConfig(name="continuous", command="unused")
     model = ToolModel("continuous__search")
@@ -61,7 +75,15 @@ def _connected_external_agent(
     agent._exit_stack = SimpleNamespace()
     agent._active_servers = {"continuous"}
     agent._server_tools = {
-        "continuous": [{"function": {"name": "continuous__search"}}]
+        "continuous": [
+            {
+                "function": {
+                    "name": "continuous__search",
+                    "description": "Search",
+                    "parameters": schema,
+                }
+            }
+        ]
     }
     agent._tool_routes = {
         "continuous__search": (session, "search", server),
@@ -87,7 +109,7 @@ def test_external_tool_without_auto_approval_uses_callback(tmp_path: Path) -> No
     assert session.calls == [("search", {"query": "x"})]
 
 
-def test_admin_auto_approved_external_tool_skips_callback(tmp_path: Path) -> None:
+def test_matching_server_tool_and_contract_skip_callback(tmp_path: Path) -> None:
     async def must_not_be_called(_name, _arguments):
         raise AssertionError("approval callback must not run for auto-approved tool")
 
@@ -97,7 +119,7 @@ def test_admin_auto_approved_external_tool_skips_callback(tmp_path: Path) -> Non
                 name="continuous",
                 transport="stdio",
                 command="unused",
-                auto_approve_tools=("search",),
+                auto_approve_tools=(_approval(),),
             ),
         )
     )
@@ -111,9 +133,45 @@ def test_admin_auto_approved_external_tool_skips_callback(tmp_path: Path) -> Non
     assert session.calls == [("search", {"query": "x"})]
 
 
-def test_same_server_and_tool_name_with_different_stdio_command_is_not_auto_approved(
-    tmp_path: Path,
-) -> None:
+def test_changed_tool_schema_falls_back_to_interactive_approval(tmp_path: Path) -> None:
+    approvals = []
+
+    async def approve(name, arguments):
+        approvals.append((name, arguments))
+        return True
+
+    changed_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "workspace_data": {"type": "string"},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="continuous",
+                transport="stdio",
+                command="unused",
+                auto_approve_tools=(_approval(),),
+            ),
+        )
+    )
+    agent, session = _connected_external_agent(
+        tmp_path,
+        policy=policy,
+        approval_callback=approve,
+        schema=changed_schema,
+    )
+
+    assert asyncio.run(agent.ask("search")) == "done"
+    assert approvals == [("continuous__search", {"query": "x"})]
+    assert session.calls == [("search", {"query": "x"})]
+
+
+def test_same_server_and_tool_name_with_different_stdio_command_is_not_auto_approved(tmp_path: Path) -> None:
     approvals = []
 
     async def approve(name, arguments):
@@ -126,7 +184,7 @@ def test_same_server_and_tool_name_with_different_stdio_command_is_not_auto_appr
                 name="continuous",
                 transport="stdio",
                 command="trusted-server",
-                auto_approve_tools=("search",),
+                auto_approve_tools=(_approval(),),
             ),
         )
     )
@@ -143,9 +201,7 @@ def test_same_server_and_tool_name_with_different_stdio_command_is_not_auto_appr
     assert session.calls == [("search", {"query": "x"})]
 
 
-def test_same_server_and_tool_name_with_different_http_url_is_not_auto_approved(
-    tmp_path: Path,
-) -> None:
+def test_same_server_and_tool_name_with_different_http_url_is_not_auto_approved(tmp_path: Path) -> None:
     approvals = []
 
     async def approve(name, arguments):
@@ -158,7 +214,7 @@ def test_same_server_and_tool_name_with_different_http_url_is_not_auto_approved(
                 name="continuous",
                 transport="streamable_http",
                 url="https://trusted.example/mcp",
-                auto_approve_tools=("search",),
+                auto_approve_tools=(_approval(),),
             ),
         )
     )

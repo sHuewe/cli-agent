@@ -1,8 +1,9 @@
 from pathlib import Path
 
-from cli_agent.admin_config import McpPolicy, TrustedMcpServer
+from cli_agent.admin_config import McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
 from cli_agent.agent import CliAgent
 from cli_agent.config import McpServerConfig
+from cli_agent.mcp_contracts import tool_contract_fingerprint
 
 
 class DummyModel:
@@ -56,19 +57,21 @@ def test_session_approval_applies_to_built_in_write_tool(tmp_path: Path) -> None
 
 
 def test_admin_auto_approval_stays_external_only(tmp_path: Path) -> None:
+    search_contract = tool_contract_fingerprint("search", {})
+    write_contract = tool_contract_fingerprint("write_file", {})
     policy = McpPolicy(
         trusted_servers=(
             TrustedMcpServer(
                 name="external",
                 transport="stdio",
                 command="unused",
-                auto_approve_tools=("search",),
+                auto_approve_tools=(TrustedMcpToolApproval("search", search_contract),),
             ),
             TrustedMcpServer(
                 name="os",
                 transport="stdio",
                 command="unused",
-                auto_approve_tools=("write_file",),
+                auto_approve_tools=(TrustedMcpToolApproval("write_file", write_contract),),
             ),
         )
     )
@@ -78,6 +81,9 @@ def test_admin_auto_approval_stays_external_only(tmp_path: Path) -> None:
         (),
         mcp_policy=policy,
     )
+    agent._server_tools = {
+        "external": [{"function": {"name": "external__search", "parameters": {}}}],
+    }
     writable = McpServerConfig(
         name="os",
         built_in=True,

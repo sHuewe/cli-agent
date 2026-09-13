@@ -9,6 +9,8 @@ import cli_agent.admin_config as admin_config_module
 from cli_agent.admin_config import default_admin_config_file, load_admin_config
 from cli_agent.config import load_config
 
+VALID_CONTRACT = "sha256:" + "a" * 64
+
 
 def test_admin_config_defaults_are_restrictive(tmp_path: Path) -> None:
     config = load_admin_config(tmp_path / "missing.toml")
@@ -26,7 +28,7 @@ def test_windows_admin_config_path_ignores_programdata_environment(monkeypatch: 
     assert PureWindowsPath(default_admin_config_file()) == PureWindowsPath(r"C:\ProgramData\cli-agent\admin_config.toml")
 
 
-def test_admin_config_loads_network_model_credentials_and_mcp_policy(tmp_path: Path) -> None:
+def test_admin_config_loads_network_model_credentials_and_pinned_mcp_policy(tmp_path: Path) -> None:
     executable = str((tmp_path / "trusted-mcp").resolve())
     path = tmp_path / "admin.toml"
     path.write_text(f'''
@@ -47,12 +49,64 @@ allow_untrusted_stdio = true
 name = "continuous"
 transport = "stdio"
 command = {json.dumps(executable)}
-auto_approve_tools = ["search"]
+
+[[mcp.trusted_servers.auto_approve_tools]]
+name = "search"
+contract_sha256 = "{VALID_CONTRACT}"
 '''.strip(), encoding="utf-8")
     config = load_admin_config(path)
+    trusted = config.mcp.trusted_servers[0]
     assert config.network.model_allowed_hosts == ("llm.internal",)
     assert config.model_credentials[0].host == "llm.internal"
-    assert config.mcp.trusted_servers[0].command == executable
+    assert trusted.command == executable
+    assert trusted.auto_approve_tools[0].name == "search"
+    assert trusted.auto_approve_tools[0].contract_sha256 == VALID_CONTRACT
+
+
+def test_name_only_auto_approval_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text('''
+[[mcp.trusted_servers]]
+name = "continuous"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+auto_approve_tools = ["search"]
+'''.strip(), encoding="utf-8")
+    with pytest.raises(ValueError, match="name-only|trust-tool"):
+        load_admin_config(path)
+
+
+def test_invalid_contract_hash_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text('''
+[[mcp.trusted_servers]]
+name = "continuous"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+[[mcp.trusted_servers.auto_approve_tools]]
+name = "search"
+contract_sha256 = "sha256:bad"
+'''.strip(), encoding="utf-8")
+    with pytest.raises(ValueError, match="contract_sha256"):
+        load_admin_config(path)
+
+
+def test_duplicate_pinned_tool_approvals_are_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text(f'''
+[[mcp.trusted_servers]]
+name = "continuous"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+[[mcp.trusted_servers.auto_approve_tools]]
+name = "search"
+contract_sha256 = "{VALID_CONTRACT}"
+[[mcp.trusted_servers.auto_approve_tools]]
+name = "search"
+contract_sha256 = "{VALID_CONTRACT}"
+'''.strip(), encoding="utf-8")
+    with pytest.raises(ValueError, match="Toolnamen.*doppelt"):
+        load_admin_config(path)
 
 
 def test_model_credential_host_must_also_be_allowlisted(tmp_path: Path) -> None:
@@ -76,7 +130,6 @@ def test_trusted_stdio_rejects_path_resolved_bare_command(tmp_path: Path) -> Non
 name = "tool"
 transport = "stdio"
 command = "python"
-auto_approve_tools = ["search"]
 '''.strip(), encoding="utf-8")
     with pytest.raises(ValueError, match="absoluter|PATH"):
         load_admin_config(path)
@@ -90,7 +143,6 @@ name = "tool"
 transport = "stdio"
 command = "{python}"
 args = ["-m", "company_tool"]
-auto_approve_tools = ["search"]
 '''.strip(), encoding="utf-8")
     assert load_admin_config(path).mcp.trusted_servers[0].command == "{python}"
 
