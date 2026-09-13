@@ -4,7 +4,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 
@@ -135,13 +135,38 @@ def _bool_value(values: dict[str, Any], key: str, default: bool, *, section: str
     return value
 
 
+def _logging_file(values: dict[str, Any], defaults: LoggingConfig) -> Path:
+    if "file" not in values:
+        return defaults.file
+
+    raw = str(values["file"]).strip()
+    if not raw:
+        raise ValueError("[logging].file darf nicht leer sein.")
+    relative = Path(raw)
+    if relative.is_absolute() or PureWindowsPath(raw).is_absolute():
+        raise ValueError(
+            "[logging].file muss ein relativer Pfad innerhalb des cli-agent-State-Verzeichnisses sein."
+        )
+    if any(part == ".." for part in relative.parts):
+        raise ValueError("[logging].file darf das cli-agent-State-Verzeichnis nicht mit '..' verlassen.")
+
+    base = application_directory().expanduser().resolve()
+    target = (base / relative).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(
+            "[logging].file muss innerhalb des cli-agent-State-Verzeichnisses liegen."
+        ) from exc
+    return target
+
+
 def _logging_config(values: dict[str, Any]) -> LoggingConfig:
     defaults = LoggingConfig()
-    configured_file = values.get("file", defaults.file)
     return LoggingConfig(
         enabled=_bool_value(values, "enabled", defaults.enabled, section="[logging]"),
         level=str(values.get("level", defaults.level)).upper(),
-        file=Path(configured_file).expanduser(),
+        file=_logging_file(values, defaults),
         log_prompts=_bool_value(values, "log_prompts", defaults.log_prompts, section="[logging]"),
         log_tool_calls=_bool_value(values, "log_tool_calls", defaults.log_tool_calls, section="[logging]"),
         log_model_messages=_bool_value(values, "log_model_messages", defaults.log_model_messages, section="[logging]"),
