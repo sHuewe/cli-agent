@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.admin_config import McpPolicy
+from cli_agent.admin_config import McpPolicy, TrustedMcpServer
 from cli_agent.agent import CliAgent
 from cli_agent.config import McpServerConfig
 from cli_agent.ollama import OllamaClient
@@ -92,12 +92,25 @@ def test_external_mcp_tools_require_approval_by_default(tmp_path: Path) -> None:
     assert agent._requires_approval(external, "delete", "external__delete") is True
 
 
-def test_auto_approval_matches_exact_exposed_tool_name(tmp_path: Path) -> None:
-    agent = make_agent(tmp_path, mcp_policy=McpPolicy(auto_approve_tools=("continuous__search",)))
+def test_auto_approval_requires_matching_server_identity_and_tool(tmp_path: Path) -> None:
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="continuous",
+                transport="stdio",
+                command="external-mcp",
+                auto_approve_tools=("search",),
+            ),
+        )
+    )
+    agent = make_agent(tmp_path, mcp_policy=policy)
     continuous = McpServerConfig(name="continuous", command="external-mcp")
+    same_name_wrong_command = McpServerConfig(name="continuous", command="other-mcp")
     other = McpServerConfig(name="other", command="external-mcp")
+
     assert agent._requires_approval(continuous, "search", "continuous__search") is False
     assert agent._requires_approval(continuous, "read", "continuous__read") is True
+    assert agent._requires_approval(same_name_wrong_command, "search", "continuous__search") is True
     assert agent._requires_approval(other, "search", "other__search") is True
 
 
@@ -111,8 +124,18 @@ def test_built_in_os_approval_depends_on_write_capability(tmp_path: Path) -> Non
 
 
 def test_admin_auto_approval_cannot_bypass_built_in_write_approval(tmp_path: Path) -> None:
-    agent = make_agent(tmp_path, mcp_policy=McpPolicy(auto_approve_tools=("os__write_file",)))
-    writable = McpServerConfig(name="os", built_in=True, config={"allow_write_files": True})
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="os",
+                transport="stdio",
+                command="unused",
+                auto_approve_tools=("write_file",),
+            ),
+        )
+    )
+    agent = make_agent(tmp_path, mcp_policy=policy)
+    writable = McpServerConfig(name="os", command="unused", built_in=True, config={"allow_write_files": True})
     assert agent._requires_approval(writable, "write_file", "os__write_file") is True
 
 
