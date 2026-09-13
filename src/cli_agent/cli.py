@@ -11,14 +11,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from .admin_config import (
-    AdminConfig,
-    McpPolicy,
-    TrustedMcpServer,
-    default_admin_config_file,
-    load_admin_config,
-)
+from .admin_config import AdminConfig, default_admin_config_file, load_admin_config
 from .agent import CliAgent
+from .approval_display import approval_arguments as _approval_arguments
 from .config import AppConfig, McpServerConfig, default_config_file, load_config
 from .logging_setup import configure_logging
 from .mcp_contracts import tool_contract_fingerprint
@@ -26,8 +21,6 @@ from .model_factory import create_model_client
 from .web_context_agent import WebContextCliAgent
 
 OS_MCP_SERVER_NAME = "os"
-SENSITIVE_ARGUMENT_MARKERS = ("auth", "api_key", "apikey", "authorization", "credential", "password", "secret", "token")
-
 logger = logging.getLogger("cli_agent.cli")
 
 
@@ -49,30 +42,6 @@ class _InspectionModel:
 
     async def chat(self, *_args, **_kwargs):
         raise RuntimeError("Der MCP-Inspektionsmodus führt keine Modellaufrufe aus.")
-
-
-def _is_sensitive_argument_name(name: str) -> bool:
-    normalized = name.casefold().replace("-", "_")
-    return normalized in {"arguments", "body", "content", "data", "env", "headers", "payload"} or any(marker in normalized for marker in SENSITIVE_ARGUMENT_MARKERS)
-
-
-def _approval_value(name: str, value: object) -> object:
-    if _is_sensitive_argument_name(name):
-        if isinstance(value, (str, bytes, list, tuple, dict)):
-            return f"<{len(value)} Elemente verborgen>"
-        return "<verborgen>"
-    if isinstance(value, dict):
-        return {str(key): _approval_value(str(key), item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_approval_value(name, item) for item in value]
-    if isinstance(value, str) and len(value) > 160:
-        return f"<{len(value)} Zeichen>"
-    return value
-
-
-def _approval_arguments(arguments: dict[str, object]) -> str:
-    summary = {str(name): _approval_value(str(name), value) for name, value in arguments.items()}
-    return json.dumps(summary, ensure_ascii=False, sort_keys=True)
 
 
 async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> bool | str:
@@ -114,54 +83,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_admin_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="cli-agent admin",
-        description=(
-            "Inspect MCP tool contracts and generate admin-policy fragments. "
-            "These commands never modify admin_config.toml."
-        ),
-    )
+    parser = argparse.ArgumentParser(prog="cli-agent admin", description="Inspect MCP tool contracts and generate admin-policy fragments. These commands never modify admin_config.toml.")
     subparsers = parser.add_subparsers(dest="admin_command", required=True)
-
-    inspect_tool = subparsers.add_parser(
-        "inspect-tool",
-        help="Inspect the current MCP tool schema and contract fingerprint.",
-    )
+    inspect_tool = subparsers.add_parser("inspect-tool", help="Inspect the current MCP tool schema and contract fingerprint.")
     inspect_tool.add_argument("server", help="Configured MCP server name")
     inspect_tool.add_argument("tool", help="Native MCP tool name")
     inspect_tool.add_argument("--config", type=Path, default=None)
     inspect_tool.add_argument("--workspace", type=Path, default=Path.cwd())
-
-    trust_tool = subparsers.add_parser(
-        "trust-tool",
-        help="Generate a pinned auto-approval fragment for one MCP tool.",
-    )
+    trust_tool = subparsers.add_parser("trust-tool", help="Generate a pinned auto-approval fragment for one MCP tool.")
     trust_tool.add_argument("server", help="Configured MCP server name")
     trust_tool.add_argument("tool", help="Native MCP tool name")
     trust_tool.add_argument("--config", type=Path, default=None)
     trust_tool.add_argument("--workspace", type=Path, default=Path.cwd())
-    trust_tool.add_argument(
-        "--update",
-        action="store_true",
-        help=(
-            "Compare against an existing pinned approval and print a replacement "
-            "fragment. The admin policy is never written automatically."
-        ),
-    )
+    trust_tool.add_argument("--update", action="store_true", help="Compare against an existing pinned approval and print a replacement fragment. The admin policy is never written automatically.")
     return parser
 
 
 def _os_mcp_server_config(access: str) -> McpServerConfig:
     if access not in {"read", "write"}:
         raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
-    return McpServerConfig(
-        name=OS_MCP_SERVER_NAME,
-        transport="stdio",
-        command="{python}",
-        args=("-m", "cli_agent.os_mcp_server", "--project-directory", "{workspace_directory}", "--config-file", "{config_file}", "--access", access),
-        config={"allow_write_files": access == "write"},
-        built_in=True,
-    )
+    return McpServerConfig(name=OS_MCP_SERVER_NAME, transport="stdio", command="{python}", args=("-m", "cli_agent.os_mcp_server", "--project-directory", "{workspace_directory}", "--config-file", "{config_file}", "--access", access), config={"allow_write_files": access == "write"}, built_in=True)
 
 
 def apply_mcp_cli_overrides(config: AppConfig, *, os_access: str | None) -> AppConfig:
@@ -199,97 +140,36 @@ def print_error(exc: BaseException, *, debug: bool) -> None:
         print(f"Fehler: {exception_details(exc)}")
 
 
-async def _inspect_mcp_tool(
-    *,
-    server: McpServerConfig,
-    tool_name: str,
-    workspace: Path,
-    config_file: Path,
-    admin_config: AdminConfig,
-) -> McpToolInspection:
+async def _inspect_mcp_tool(*, server: McpServerConfig, tool_name: str, workspace: Path, config_file: Path, admin_config: AdminConfig) -> McpToolInspection:
     if getattr(server, "built_in", False):
         raise ValueError("Built-in MCP-Tools werden nicht über permanente Admin-Auto-Approvals freigegeben.")
-
     native_tool_name = tool_name.strip()
     exposed_prefix = f"{server.name}__"
     if native_tool_name.startswith(exposed_prefix):
         native_tool_name = native_tool_name[len(exposed_prefix):]
     if not native_tool_name:
         raise ValueError("Toolname darf nicht leer sein.")
-
-    agent = CliAgent(
-        workspace,
-        _InspectionModel(),
-        (server,),
-        config_file=config_file,
-        network=admin_config.network,
-        mcp_policy=admin_config.mcp,
-    )
+    agent = CliAgent(workspace, _InspectionModel(), (server,), config_file=config_file, network=admin_config.network, mcp_policy=admin_config.mcp)
     async with agent:
         exposed_name = f"{server.name}__{native_tool_name}"
-        tool_metadata = next(
-            (
-                tool
-                for tool in agent._server_tools.get(server.name, ())
-                if tool.get("function", {}).get("name") == exposed_name
-            ),
-            None,
-        )
+        tool_metadata = next((tool for tool in agent._server_tools.get(server.name, ()) if tool.get("function", {}).get("name") == exposed_name), None)
         if tool_metadata is None:
-            available = [
-                tool.get("function", {}).get("name", "")
-                for tool in agent._server_tools.get(server.name, ())
-            ]
-            raise ValueError(
-                f"MCP-Server {server.name!r} bietet Tool {native_tool_name!r} nicht an. "
-                f"Verfügbare Tools: {', '.join(name for name in available if name) or '(keine)'}"
-            )
-
+            available = [tool.get("function", {}).get("name", "") for tool in agent._server_tools.get(server.name, ())]
+            raise ValueError(f"MCP-Server {server.name!r} bietet Tool {native_tool_name!r} nicht an. Verfügbare Tools: {', '.join(name for name in available if name) or '(keine)'}")
         function = tool_metadata.get("function", {})
         schema = function.get("parameters", {})
         contract = tool_contract_fingerprint(native_tool_name, schema)
-        trusted = next(
-            (
-                item
-                for item in admin_config.mcp.trusted_servers
-                if agent._trusted_server_matches(server, item)
-            ),
-            None,
-        )
+        trusted = next((item for item in admin_config.mcp.trusted_servers if agent._trusted_server_matches(server, item)), None)
         existing = None
         if trusted is not None:
-            existing_approval = next(
-                (
-                    approval
-                    for approval in trusted.auto_approve_tools
-                    if approval.name == native_tool_name
-                ),
-                None,
-            )
+            existing_approval = next((approval for approval in trusted.auto_approve_tools if approval.name == native_tool_name), None)
             if existing_approval is not None:
                 existing = existing_approval.contract_sha256
-
-        return McpToolInspection(
-            server_name=server.name,
-            transport=server.transport,
-            tool_name=native_tool_name,
-            description=str(function.get("description") or ""),
-            input_schema=schema,
-            contract_sha256=contract,
-            trusted_server_found=trusted is not None,
-            existing_contract_sha256=existing,
-        )
+        return McpToolInspection(server_name=server.name, transport=server.transport, tool_name=native_tool_name, description=str(function.get("description") or ""), input_schema=schema, contract_sha256=contract, trusted_server_found=trusted is not None, existing_contract_sha256=existing)
 
 
 def _render_tool_approval_fragment(inspection: McpToolInspection) -> str:
-    return "\n".join(
-        [
-            "# Unter dem zugehörigen [[mcp.trusted_servers]]-Eintrag einfügen:",
-            "[[mcp.trusted_servers.auto_approve_tools]]",
-            f"name = {json.dumps(inspection.tool_name, ensure_ascii=False)}",
-            f"contract_sha256 = {json.dumps(inspection.contract_sha256)}",
-        ]
-    )
+    return "\n".join(["# Unter dem zugehörigen [[mcp.trusted_servers]]-Eintrag einfügen:", "[[mcp.trusted_servers.auto_approve_tools]]", f"name = {json.dumps(inspection.tool_name, ensure_ascii=False)}", f"contract_sha256 = {json.dumps(inspection.contract_sha256)}"])
 
 
 async def run_admin(args: argparse.Namespace) -> None:
@@ -298,22 +178,11 @@ async def run_admin(args: argparse.Namespace) -> None:
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
-    server = next(
-        (item for item in config.mcp_servers if item.name == args.server),
-        None,
-    )
+    server = next((item for item in config.mcp_servers if item.name == args.server), None)
     if server is None:
         raise ValueError(f"MCP-Server {args.server!r} ist in der Benutzerkonfiguration nicht definiert.")
-
     config_file = args.config or default_config_file()
-    inspection = await _inspect_mcp_tool(
-        server=server,
-        tool_name=args.tool,
-        workspace=workspace,
-        config_file=config_file,
-        admin_config=admin_config,
-    )
-
+    inspection = await _inspect_mcp_tool(server=server, tool_name=args.tool, workspace=workspace, config_file=config_file, admin_config=admin_config)
     print(f"MCP-Server: {inspection.server_name} ({inspection.transport})")
     print(f"Tool: {inspection.tool_name}")
     if inspection.description:
@@ -321,32 +190,20 @@ async def run_admin(args: argparse.Namespace) -> None:
     print(f"Contract: {inspection.contract_sha256}")
     print("Input-Schema:")
     print(json.dumps(inspection.input_schema, ensure_ascii=False, indent=2, sort_keys=True))
-
     if args.admin_command == "inspect-tool":
         return
-
     if args.update:
         if not inspection.trusted_server_found:
-            raise ValueError(
-                "--update benötigt einen identitätsgleichen [[mcp.trusted_servers]]-Eintrag "
-                "in der maschinenweiten Admin-Policy."
-            )
+            raise ValueError("--update benötigt einen identitätsgleichen [[mcp.trusted_servers]]-Eintrag in der maschinenweiten Admin-Policy.")
         if inspection.existing_contract_sha256 is None:
-            raise ValueError(
-                "--update benötigt bereits eine gepinnte Auto-Freigabe für dieses Tool."
-            )
+            raise ValueError("--update benötigt bereits eine gepinnte Auto-Freigabe für dieses Tool.")
         print(f"Bisheriger Contract: {inspection.existing_contract_sha256}")
         if inspection.existing_contract_sha256 == inspection.contract_sha256:
             print("Der Tool-Contract ist unverändert.")
         else:
             print("Der Tool-Contract hat sich geändert. Prüfe das Schema vor einer erneuten Freigabe.")
     elif not inspection.trusted_server_found:
-        print(
-            "Hinweis: In der aktuellen Admin-Policy existiert noch kein identitätsgleicher "
-            "[[mcp.trusted_servers]]-Eintrag. Der folgende Contract kann vorbereitet werden, "
-            "greift aber erst zusammen mit einer passenden administrativen Serveridentität."
-        )
-
+        print("Hinweis: In der aktuellen Admin-Policy existiert noch kein identitätsgleicher [[mcp.trusted_servers]]-Eintrag. Der folgende Contract kann vorbereitet werden, greift aber erst zusammen mit einer passenden administrativen Serveridentität.")
     print("\nDie Admin-Konfiguration wurde NICHT geändert.")
     print("Prüfe Tool und Schema und kopiere danach bei bewusster Freigabe diesen Block manuell in die Admin-Policy:\n")
     print(_render_tool_approval_fragment(inspection))
@@ -361,24 +218,9 @@ async def run(args: argparse.Namespace) -> None:
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
-    model_client = create_model_client(
-        config.model,
-        network=admin_config.network,
-        credential_rules=admin_config.model_credentials,
-    )
+    model_client = create_model_client(config.model, network=admin_config.network, credential_rules=admin_config.model_credentials)
     approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
-    agent = WebContextCliAgent(
-        workspace,
-        model_client,
-        config.mcp_servers,
-        logging_config=config.logging,
-        config_file=args.config or default_config_file(),
-        dump_llm_context=config.dump_llm_context,
-        network=admin_config.network,
-        mcp_policy=admin_config.mcp,
-        approval_callback=approval_callback,
-        okf=config.okf,
-    )
+    agent = WebContextCliAgent(workspace, model_client, config.mcp_servers, logging_config=config.logging, config_file=args.config or default_config_file(), dump_llm_context=config.dump_llm_context, network=admin_config.network, mcp_policy=admin_config.mcp, approval_callback=approval_callback, okf=config.okf)
     print(f"Arbeitsordner: {workspace}")
     print(f"Admin-Policy: {default_admin_config_file()}")
     print("MCP-Server: " + (", ".join(server.name for server in config.mcp_servers) or "(keine)"))
