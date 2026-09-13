@@ -10,7 +10,7 @@ from typing import Any
 
 from mcp import ClientSession
 
-from .admin_config import McpPolicy
+from .admin_config import McpPolicy, TrustedMcpServer, _normalize_mcp_url
 from .config import LoggingConfig, McpServerConfig
 from .model import ModelClient
 from .network_policy import NetworkConfig
@@ -159,11 +159,63 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
     def _model_tools(self) -> list[dict[str, Any]]:
         return [tool for server_name, tools in self._server_tools.items() if server_name in self._active_servers for tool in tools]
 
+    def _trusted_server_matches(self, server_config: ServerConfig, trusted: TrustedMcpServer) -> bool:
+        if getattr(server_config, "built_in", False):
+            return False
+        if server_config.name != trusted.name or server_config.transport != trusted.transport:
+            return False
+
+        if server_config.transport == "streamable_http":
+            if server_config.url is None or trusted.url is None:
+                return False
+            try:
+                configured_url = _normalize_mcp_url(
+                    self._resolve(server_config.url), section=f"MCP-Server {server_config.name!r}"
+                )
+                trusted_url = _normalize_mcp_url(
+                    self._resolve(trusted.url), section=f"Trusted MCP-Server {trusted.name!r}"
+                )
+            except ValueError:
+                return False
+            configured_headers = tuple(
+                sorted((key, self._resolve(value)) for key, value in server_config.headers.items())
+            )
+            trusted_headers = tuple(
+                sorted((key, self._resolve(value)) for key, value in trusted.headers)
+            )
+            return configured_url == trusted_url and configured_headers == trusted_headers
+
+        if server_config.command is None or trusted.command is None:
+            return False
+        configured_command = self._resolve(server_config.command)
+        trusted_command = self._resolve(trusted.command)
+        configured_args = tuple(self._resolve(value) for value in server_config.args)
+        trusted_args = tuple(self._resolve(value) for value in trusted.args)
+        configured_env = tuple(
+            sorted((key, self._resolve(value)) for key, value in server_config.env.items())
+        )
+        trusted_env = tuple(
+            sorted((key, self._resolve(value)) for key, value in trusted.env)
+        )
+        return (
+            configured_command == trusted_command
+            and configured_args == trusted_args
+            and configured_env == trusted_env
+        )
+
+    def _is_admin_auto_approved(self, server_config: ServerConfig, tool_name: str) -> bool:
+        for trusted in self.mcp_policy.trusted_servers:
+            if tool_name not in trusted.auto_approve_tools:
+                continue
+            if self._trusted_server_matches(server_config, trusted):
+                return True
+        return False
+
     def _requires_approval(self, server_config: ServerConfig, tool_name: str, exposed_name: str | None = None) -> bool:
         if exposed_name is not None and exposed_name in self._session_approved_tools:
             return False
         if not getattr(server_config, "built_in", False):
-            if exposed_name is not None and exposed_name in self.mcp_policy.auto_approve_tools:
+            if self._is_admin_auto_approved(server_config, tool_name):
                 return False
             return True
         if tool_name in WRITE_TOOLS:
