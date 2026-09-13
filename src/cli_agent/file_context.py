@@ -29,6 +29,13 @@ class FileContext:
     source_path: Path = field(repr=False, compare=False)
 
 
+@dataclass(frozen=True)
+class PromptFile:
+    relative_path: str
+    content: str
+    source_path: Path = field(repr=False, compare=False)
+
+
 @dataclass
 class OutputTarget:
     path: Path
@@ -100,23 +107,23 @@ def prepare_file_options(
     workspace: Path,
     *,
     context_file: Path | None,
+    prompt_file: Path | None,
     output: Path | None,
     overwrite_output: bool,
-    os_access: str | None,
-) -> tuple[FileContext | None, OutputTarget | None]:
+) -> tuple[FileContext | None, PromptFile | None, OutputTarget | None]:
     """Validate all local file CLI options before any agent/model loop starts."""
 
-    if context_file is not None and os_access not in {"read", "write"}:
-        raise ValueError(
-            "--context-file ist nur zusammen mit --with-os-read oder "
-            "--with-os-write erlaubt."
-        )
     if overwrite_output and output is None:
         raise ValueError("--overwrite-output ist nur zusammen mit --output erlaubt.")
 
     prepared_context = (
         prepare_context_file(workspace, context_file)
         if context_file is not None
+        else None
+    )
+    prepared_prompt = (
+        prepare_prompt_file(workspace, prompt_file)
+        if prompt_file is not None
         else None
     )
     prepared_output = (
@@ -127,29 +134,78 @@ def prepare_file_options(
 
     if (
         prepared_context is not None
-        and prepared_output is not None
-        and prepared_context.source_path == prepared_output.path
+        and prepared_prompt is not None
+        and prepared_context.source_path == prepared_prompt.source_path
     ):
         raise ValueError(
-            "--context-file und --output dürfen nicht auf dieselbe Datei verweisen."
+            "--context-file und --prompt-file dürfen nicht auf dieselbe Datei verweisen."
         )
 
-    return prepared_context, prepared_output
+    if prepared_output is not None:
+        if (
+            prepared_context is not None
+            and prepared_context.source_path == prepared_output.path
+        ):
+            raise ValueError(
+                "--context-file und --output dürfen nicht auf dieselbe Datei verweisen."
+            )
+        if (
+            prepared_prompt is not None
+            and prepared_prompt.source_path == prepared_output.path
+        ):
+            raise ValueError(
+                "--prompt-file und --output dürfen nicht auf dieselbe Datei verweisen."
+            )
+
+    return prepared_context, prepared_prompt, prepared_output
 
 
 def prepare_context_file(workspace: Path, path: Path) -> FileContext:
+    relative, resolved, content = _prepare_llm_input_file(
+        workspace,
+        path,
+        purpose="Context-Datei",
+    )
+    return FileContext(
+        relative_path=relative,
+        content=content,
+        source_path=resolved,
+    )
+
+
+def prepare_prompt_file(workspace: Path, path: Path) -> PromptFile:
+    relative, resolved, content = _prepare_llm_input_file(
+        workspace,
+        path,
+        purpose="Prompt-Datei",
+    )
+    if not content.strip():
+        raise ValueError("Prompt-Datei darf nicht leer sein.")
+    return PromptFile(
+        relative_path=relative,
+        content=content,
+        source_path=resolved,
+    )
+
+
+def _prepare_llm_input_file(
+    workspace: Path,
+    path: Path,
+    *,
+    purpose: str,
+) -> tuple[str, Path, str]:
     resolved = _resolve_workspace_path(
         workspace,
         path,
         must_exist=True,
-        purpose="Context-Datei",
+        purpose=purpose,
     )
     if not resolved.is_file():
-        raise ValueError(f"Context-Pfad ist keine reguläre Datei: {resolved}")
-    _reject_hardlinked_file(resolved, purpose="Context-Datei")
+        raise ValueError(f"{purpose}-Pfad ist keine reguläre Datei: {resolved}")
+    _reject_hardlinked_file(resolved, purpose=purpose)
     if Workspace._is_sensitive_file(resolved):
         raise ValueError(
-            "Context-Datei ist als Secret-/Credential- oder interner "
+            f"{purpose} ist als Secret-/Credential- oder interner "
             f"Workspace-Pfad geschützt: {resolved}"
         )
 
@@ -157,19 +213,15 @@ def prepare_context_file(workspace: Path, path: Path) -> FileContext:
         content = resolved.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ValueError(
-            f"Context-Datei ist nicht als UTF-8-Text lesbar: {resolved}"
+            f"{purpose} ist nicht als UTF-8-Text lesbar: {resolved}"
         ) from exc
     except OSError as exc:
         raise ValueError(
-            f"Context-Datei konnte nicht gelesen werden: {resolved}: {exc}"
+            f"{purpose} konnte nicht gelesen werden: {resolved}: {exc}"
         ) from exc
 
     relative = resolved.relative_to(workspace.resolve()).as_posix()
-    return FileContext(
-        relative_path=relative,
-        content=content,
-        source_path=resolved,
-    )
+    return relative, resolved, content
 
 
 def prepare_output_target(
@@ -252,7 +304,9 @@ def _resolve_workspace_path(
 def _reject_parent_reference(path: Path) -> None:
     text = str(path)
     if ".." in PurePath(text).parts or ".." in PureWindowsPath(text).parts:
-        raise ValueError("Dateipfade für --context-file/--output dürfen '..' nicht enthalten.")
+        raise ValueError(
+            "Dateipfade für --context-file/--prompt-file/--output dürfen '..' nicht enthalten."
+        )
 
 
 def _reject_hardlinked_file(path: Path, *, purpose: str) -> None:

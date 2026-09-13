@@ -80,7 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
-    parser.add_argument("--context-file", type=Path, default=None, metavar="FILE", help="Add one explicit UTF-8 text file from the workspace as untrusted reference context. Requires --with-os-read or --with-os-write.")
+    parser.add_argument("--context-file", type=Path, default=None, metavar="FILE", help="Add one explicit UTF-8 text file from the workspace as untrusted reference context.")
+    parser.add_argument("--prompt-file", type=Path, default=None, metavar="FILE", help="Read the one-shot user prompt from one explicit UTF-8 text file inside the workspace.")
     parser.add_argument("--output", type=Path, default=None, metavar="FILE", help="Write the latest model answer to a workspace-local UTF-8 text file in addition to stdout.")
     parser.add_argument("--overwrite-output", action="store_true", help="Allow --output to replace an existing regular file. Requires --output.")
     parser.add_argument("--approve-tool", action="append", default=[], metavar="TOOL", help="Pre-approve one exact exposed tool name for this process run; repeat for multiple tools.")
@@ -226,12 +227,21 @@ async def run(args: argparse.Namespace) -> None:
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
 
-    file_context, output_target = prepare_file_options(
+    prompt_file_arg = getattr(args, "prompt_file", None)
+    if prompt_file_arg is not None and args.prompt:
+        raise ValueError("--prompt-file darf nicht zusammen mit einem positional Prompt verwendet werden.")
+
+    file_context, prompt_file, output_target = prepare_file_options(
         workspace,
         context_file=getattr(args, "context_file", None),
+        prompt_file=prompt_file_arg,
         output=getattr(args, "output", None),
         overwrite_output=bool(getattr(args, "overwrite_output", False)),
-        os_access=args.os_access,
+    )
+    one_shot_prompt = (
+        prompt_file.content
+        if prompt_file is not None
+        else (" ".join(args.prompt) if args.prompt else None)
     )
 
     configure_logging(config.logging)
@@ -248,6 +258,8 @@ async def run(args: argparse.Namespace) -> None:
         print(f"OKF-Repository: {config.okf.repository}")
     if file_context is not None:
         print(f"Context-Datei: {file_context.relative_path} ({len(file_context.content)} Zeichen)")
+    if prompt_file is not None:
+        print(f"Prompt-Datei: {prompt_file.relative_path} ({len(prompt_file.content)} Zeichen)")
     if output_target is not None:
         print(f"Output-Datei: {output_target.path}")
 
@@ -259,9 +271,8 @@ async def run(args: argparse.Namespace) -> None:
     async with agent:
         for url in getattr(args, "add_web_context", ()):
             print(await agent.ask(f"add_web_context {url}"))
-        if args.prompt:
-            prompt = " ".join(args.prompt)
-            emit_answer(prompt, await agent.ask(prompt))
+        if one_shot_prompt is not None:
+            emit_answer(one_shot_prompt, await agent.ask(one_shot_prompt))
             return
         print("Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung.")
         while True:
