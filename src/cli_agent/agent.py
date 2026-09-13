@@ -12,6 +12,7 @@ from mcp import ClientSession
 
 from .admin_config import McpPolicy, TrustedMcpServer, _normalize_mcp_url
 from .config import LoggingConfig, McpServerConfig
+from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
 from .mcp_contracts import tool_contract_fingerprint
 from .model import ModelClient
 from .network_policy import NetworkConfig
@@ -109,24 +110,62 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 raise ValueError(f"OKF-Konfigurationswert {name!r} muss positiv sein.")
         return options
 
+    def _safe_dump_path(self, filename: str) -> Path:
+        if Path(filename).name != filename or not filename:
+            raise RuntimeError("Ungültiger Dateiname für LLM-Context-Dump.")
+        dump_directory = self.workspace_directory / ".cli-agent"
+        if dump_directory.exists() and path_entry_is_symlink_or_reparse(dump_directory):
+            raise RuntimeError(
+                "LLM-Context-Dump verweigert: .cli-agent darf kein Symlink oder Reparse Point sein."
+            )
+        dump_directory.mkdir(parents=True, exist_ok=True)
+        if path_entry_is_symlink_or_reparse(dump_directory):
+            raise RuntimeError(
+                "LLM-Context-Dump verweigert: .cli-agent darf kein Symlink oder Reparse Point sein."
+            )
+        try:
+            dump_directory.resolve(strict=True).relative_to(self.workspace_directory)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RuntimeError(
+                "LLM-Context-Dump verweigert: .cli-agent liegt nicht sicher im Workspace."
+            ) from exc
+        dump_file = dump_directory / filename
+        if dump_file.exists():
+            if path_entry_is_symlink_or_reparse(dump_file):
+                raise RuntimeError(
+                    f"LLM-Context-Dump verweigert: {filename!r} darf kein Symlink oder Reparse Point sein."
+                )
+            try:
+                if regular_file_has_multiple_links(dump_file):
+                    raise RuntimeError(
+                        f"LLM-Context-Dump verweigert: {filename!r} besitzt mehrere Hardlinks."
+                    )
+            except OSError as exc:
+                raise RuntimeError(
+                    f"LLM-Context-Dump-Datei {filename!r} konnte nicht sicher geprüft werden."
+                ) from exc
+        return dump_file
+
+    def _write_dump_json(self, filename: str, value: Any) -> None:
+        self._safe_dump_path(filename).write_text(
+            json.dumps(value, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     def _dump_context(self, working_messages: list[dict[str, Any]], *, phase: str) -> None:
         if not self.dump_llm_context:
             return
-        dump_directory = self.workspace_directory / ".cli-agent"
-        dump_directory.mkdir(parents=True, exist_ok=True)
         history_json = json.dumps(self.history, ensure_ascii=False, indent=2)
         if history_json != self._dumped_history_json:
-            (dump_directory / "history.json").write_text(history_json, encoding="utf-8")
+            self._write_dump_json("history.json", self.history)
             self._dumped_history_json = history_json
-        (dump_directory / f"{phase}_working_messages.json").write_text(json.dumps(working_messages, ensure_ascii=False, indent=2), encoding="utf-8")
-        (dump_directory / f"{phase}_system_prompt.json").write_text(json.dumps(working_messages[0]["content"], ensure_ascii=False, indent=2), encoding="utf-8")
+        self._write_dump_json(f"{phase}_working_messages.json", working_messages)
+        self._write_dump_json(f"{phase}_system_prompt.json", working_messages[0]["content"])
 
     def _dump_value(self, filename: str, value: Any) -> None:
         if not self.dump_llm_context:
             return
-        dump_directory = self.workspace_directory / ".cli-agent"
-        dump_directory.mkdir(parents=True, exist_ok=True)
-        (dump_directory / filename).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._write_dump_json(filename, value)
 
     def _resolve(self, value: str) -> str:
         return value.replace("{python}", sys.executable).replace("{workspace_directory}", str(self.workspace_directory)).replace("{project_directory}", str(self.workspace_directory)).replace("{config_file}", str(self.config_file))
@@ -171,20 +210,12 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             if server_config.url is None or trusted.url is None:
                 return False
             try:
-                configured_url = _normalize_mcp_url(
-                    self._resolve(server_config.url), section=f"MCP-Server {server_config.name!r}"
-                )
-                trusted_url = _normalize_mcp_url(
-                    self._resolve(trusted.url), section=f"Trusted MCP-Server {trusted.name!r}"
-                )
+                configured_url = _normalize_mcp_url(self._resolve(server_config.url), section=f"MCP-Server {server_config.name!r}")
+                trusted_url = _normalize_mcp_url(self._resolve(trusted.url), section=f"Trusted MCP-Server {trusted.name!r}")
             except ValueError:
                 return False
-            configured_headers = tuple(
-                sorted((key, self._resolve(value)) for key, value in server_config.headers.items())
-            )
-            trusted_headers = tuple(
-                sorted((key, self._resolve(value)) for key, value in trusted.headers)
-            )
+            configured_headers = tuple(sorted((key, self._resolve(value)) for key, value in server_config.headers.items()))
+            trusted_headers = tuple(sorted((key, self._resolve(value)) for key, value in trusted.headers))
             return configured_url == trusted_url and configured_headers == trusted_headers
 
         if server_config.command is None or trusted.command is None:
@@ -193,25 +224,14 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         trusted_command = self._resolve(trusted.command)
         configured_args = tuple(self._resolve(value) for value in server_config.args)
         trusted_args = tuple(self._resolve(value) for value in trusted.args)
-        configured_env = tuple(
-            sorted((key, self._resolve(value)) for key, value in server_config.env.items())
-        )
-        trusted_env = tuple(
-            sorted((key, self._resolve(value)) for key, value in trusted.env)
-        )
-        return (
-            configured_command == trusted_command
-            and configured_args == trusted_args
-            and configured_env == trusted_env
-        )
+        configured_env = tuple(sorted((key, self._resolve(value)) for key, value in server_config.env.items()))
+        trusted_env = tuple(sorted((key, self._resolve(value)) for key, value in trusted.env))
+        return configured_command == trusted_command and configured_args == trusted_args and configured_env == trusted_env
 
     def _instructions_are_trusted(self, server_config: ServerConfig) -> bool:
         if getattr(server_config, "built_in", False):
             return True
-        return any(
-            trusted.trust_instructions and self._trusted_server_matches(server_config, trusted)
-            for trusted in self.mcp_policy.trusted_servers
-        )
+        return any(trusted.trust_instructions and self._trusted_server_matches(server_config, trusted) for trusted in self.mcp_policy.trusted_servers)
 
     def _current_tool_contract(self, server_name: str, tool_name: str) -> str | None:
         exposed_name = f"{server_name}__{tool_name}"
@@ -219,40 +239,20 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             function = tool.get("function", {})
             if function.get("name") != exposed_name:
                 continue
-            return tool_contract_fingerprint(
-                tool_name,
-                function.get("parameters", {}),
-            )
+            return tool_contract_fingerprint(tool_name, function.get("parameters", {}))
         return None
 
     def _is_admin_auto_approved(self, server_config: ServerConfig, tool_name: str) -> bool:
         for trusted in self.mcp_policy.trusted_servers:
-            approval = next(
-                (
-                    item
-                    for item in trusted.auto_approve_tools
-                    if item.name == tool_name
-                ),
-                None,
-            )
+            approval = next((item for item in trusted.auto_approve_tools if item.name == tool_name), None)
             if approval is None or not self._trusted_server_matches(server_config, trusted):
                 continue
             current_contract = self._current_tool_contract(server_config.name, tool_name)
             if current_contract is None:
-                logger.warning(
-                    "mcp_auto_approval_contract_missing server=%s tool=%s",
-                    server_config.name,
-                    tool_name,
-                )
+                logger.warning("mcp_auto_approval_contract_missing server=%s tool=%s", server_config.name, tool_name)
                 return False
             if current_contract != approval.contract_sha256:
-                logger.warning(
-                    "mcp_auto_approval_contract_mismatch server=%s tool=%s expected=%s actual=%s",
-                    server_config.name,
-                    tool_name,
-                    approval.contract_sha256,
-                    current_contract,
-                )
+                logger.warning("mcp_auto_approval_contract_mismatch server=%s tool=%s expected=%s actual=%s", server_config.name, tool_name, approval.contract_sha256, current_contract)
                 return False
             return True
         return False
