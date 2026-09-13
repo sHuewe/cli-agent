@@ -34,7 +34,10 @@ jobs:
         run: python -m pip install uv==0.12.13
 
       - name: Verify lockfile is current
-        run: uv lock --check
+        shell: bash
+        run: |
+          uv lock
+          git diff --exit-code -- uv.lock
 
       - name: Sync locked project and test dependencies
         run: uv sync --frozen --extra dev
