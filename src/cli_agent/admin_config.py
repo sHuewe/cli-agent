@@ -2,11 +2,57 @@ from __future__ import annotations
 
 import platform
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from .network_policy import LOCAL_HOSTS, NetworkConfig
+
+
+def _normalize_mcp_url(value: str, *, section: str) -> str:
+    raw = value.strip()
+    parsed = urlsplit(raw)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError(f"{section}.url muss eine http:// oder https:// URL sein.")
+    if not parsed.hostname:
+        raise ValueError(f"{section}.url enthält keinen Hostnamen.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"Credentials in {section}.url werden nicht unterstützt.")
+    if parsed.fragment:
+        raise ValueError(f"{section}.url darf keinen Fragment-Teil enthalten.")
+
+    host = parsed.hostname.lower().rstrip(".")
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    path = parsed.path or "/"
+    return urlunsplit((scheme, host, path, parsed.query, ""))
+
+
+def _string_map(values: Any, *, section: str, key: str) -> tuple[tuple[str, str], ...]:
+    if values is None:
+        return ()
+    if not isinstance(values, dict):
+        raise ValueError(f"{section}.{key} muss eine Tabelle sein.")
+    normalized = tuple(sorted((str(name), str(value)) for name, value in values.items()))
+    return normalized
+
+
+@dataclass(frozen=True)
+class TrustedMcpServer:
+    """Administrator-defined MCP identity that may receive persistent approvals."""
+
+    name: str
+    transport: str
+    url: str | None = None
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    env: tuple[tuple[str, str], ...] = ()
+    headers: tuple[tuple[str, str], ...] = ()
+    auto_approve_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -14,7 +60,7 @@ class McpPolicy:
     """Administrator-controlled policy for MCP process and tool execution."""
 
     allow_untrusted_stdio: bool = False
-    auto_approve_tools: tuple[str, ...] = ()
+    trusted_servers: tuple[TrustedMcpServer, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,6 +108,51 @@ def _host_list(values: dict[str, Any], key: str, default: tuple[str, ...]) -> tu
     return normalized
 
 
+def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
+    section = f"[[mcp.trusted_servers]] #{index + 1}"
+    name = str(values.get("name", "")).strip()
+    transport = str(values.get("transport", "")).strip().lower()
+    if not name:
+        raise ValueError(f"{section}.name darf nicht leer sein.")
+    if transport not in {"stdio", "streamable_http"}:
+        raise ValueError(f"{section}.transport muss 'stdio' oder 'streamable_http' sein.")
+
+    tools = _string_list(values, "auto_approve_tools", (), section=section)
+    raw_args = values.get("args", [])
+    if not isinstance(raw_args, list) or not all(isinstance(value, str) for value in raw_args):
+        raise ValueError(f"{section}.args muss eine String-Liste sein.")
+
+    url_value = values.get("url")
+    command_value = values.get("command")
+    url = str(url_value).strip() if url_value is not None else None
+    command = str(command_value).strip() if command_value is not None else None
+    env = _string_map(values.get("env", {}), section=section, key="env")
+    headers = _string_map(values.get("headers", {}), section=section, key="headers")
+
+    if transport == "streamable_http":
+        if not url:
+            raise ValueError(f"{section} benötigt für streamable_http eine url.")
+        if command or raw_args or env:
+            raise ValueError(f"{section} darf für streamable_http kein command, args oder env enthalten.")
+        url = _normalize_mcp_url(url, section=section)
+    else:
+        if not command:
+            raise ValueError(f"{section} benötigt für stdio ein command.")
+        if url or headers:
+            raise ValueError(f"{section} darf für stdio keine url oder headers enthalten.")
+
+    return TrustedMcpServer(
+        name=name,
+        transport=transport,
+        url=url,
+        command=command,
+        args=tuple(raw_args),
+        env=env,
+        headers=headers,
+        auto_approve_tools=tools,
+    )
+
+
 def load_admin_config(path: Path | None = None) -> AdminConfig:
     """Load the machine-wide security policy or safe built-in defaults.
 
@@ -85,9 +176,26 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
     if not isinstance(mcp_values, dict):
         raise ValueError("[mcp] in admin_config.toml muss eine Tabelle sein.")
 
-    approval_values = mcp_values.get("approval", {})
-    if not isinstance(approval_values, dict):
-        raise ValueError("[mcp.approval] in admin_config.toml muss eine Tabelle sein.")
+    # The legacy name-only approval mechanism is intentionally rejected. A
+    # persistent approval must identify the server as well as the tool.
+    if "approval" in mcp_values:
+        raise ValueError(
+            "[mcp.approval] ist nicht mehr unterstützt. Permanente Freigaben "
+            "müssen über [[mcp.trusted_servers]] an eine Serveridentität gebunden werden."
+        )
+
+    raw_trusted_servers = mcp_values.get("trusted_servers", [])
+    if not isinstance(raw_trusted_servers, list) or not all(
+        isinstance(value, dict) for value in raw_trusted_servers
+    ):
+        raise ValueError("[[mcp.trusted_servers]] muss eine Liste von Tabellen sein.")
+    trusted_servers = tuple(
+        _trusted_server(server_values, index)
+        for index, server_values in enumerate(raw_trusted_servers)
+    )
+    names = [server.name for server in trusted_servers]
+    if len(names) != len(set(names)):
+        raise ValueError("[[mcp.trusted_servers]].name darf nicht doppelt vorkommen.")
 
     return AdminConfig(
         network=NetworkConfig(
@@ -102,11 +210,6 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
                 False,
                 section="[mcp]",
             ),
-            auto_approve_tools=_string_list(
-                approval_values,
-                "auto_approve_tools",
-                (),
-                section="[mcp.approval]",
-            ),
+            trusted_servers=trusted_servers,
         ),
     )
