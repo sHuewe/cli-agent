@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from cli_agent import cli as cli_module
-from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
+from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
 from cli_agent.cli import (
     _approval_arguments,
     apply_mcp_cli_overrides,
@@ -15,11 +15,12 @@ from cli_agent.cli import (
     build_parser,
 )
 from cli_agent.config import AppConfig, McpServerConfig, ModelConfig
+from cli_agent.mcp_contracts import tool_contract_fingerprint
 from cli_agent.network_policy import NetworkConfig
 from cli_agent.os_mcp_server import resolve_mcp_config
 
 
-def test_approval_summary_hides_sensitive_tool_arguments() -> None:
+def test_approval_summary_shows_payload_but_hides_credentials() -> None:
     summary = _approval_arguments(
         {
             "path": "src/main.py",
@@ -29,10 +30,19 @@ def test_approval_summary_hides_sensitive_tool_arguments() -> None:
         }
     )
     assert "src/main.py" in summary
-    assert "confidential source" not in summary
+    assert "confidential source" in summary
     assert "confidential-token" not in summary
     assert "nested-secret" not in summary
     assert "verborgen" in summary
+
+
+def test_approval_summary_truncates_long_payload_with_head_and_tail() -> None:
+    content = "A" * 1500 + "MIDDLE" * 500 + "Z" * 500
+    summary = _approval_arguments({"content": content})
+    assert "A" * 100 in summary
+    assert "Z" * 100 in summary
+    assert "Zeichen gekürzt" in summary
+    assert len(summary) < len(content)
 
 
 def test_os_cli_flags_are_mutually_exclusive() -> None:
@@ -91,10 +101,7 @@ def test_cli_automation_options_are_repeatable() -> None:
         ]
     )
     assert args.approve_tool == ["os__write_file", "external__run"]
-    assert args.add_web_context == [
-        "https://docs.example/a",
-        "https://docs.example/b",
-    ]
+    assert args.add_web_context == ["https://docs.example/a", "https://docs.example/b"]
     assert args.prompt == ["prompt"]
 
 
@@ -133,6 +140,8 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
             base_url="https://llm.internal/v1",
         )
     )
+    schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+    contract = tool_contract_fingerprint("search", schema)
     admin_config = AdminConfig(
         network=NetworkConfig(
             model_allowed_hosts=("llm.internal",),
@@ -146,7 +155,7 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
                     name="continuous",
                     transport="streamable_http",
                     url="https://mcp.internal/mcp",
-                    auto_approve_tools=("search",),
+                    auto_approve_tools=(TrustedMcpToolApproval("search", contract),),
                 ),
             ),
         ),
@@ -191,13 +200,8 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
     assert captured["model_client"].base_url == "https://llm.internal/v1"
     assert captured["network"] is admin_config.network
     assert captured["mcp_policy"] is admin_config.mcp
-    assert captured["prompts"] == [
-        "add_web_context https://docs.internal/reference",
-        "hello",
-    ]
-    assert asyncio.run(
-        captured["approval_callback"]("continuous__search", {"query": "test"})
-    ) is True
+    assert captured["prompts"] == ["add_web_context https://docs.internal/reference", "hello"]
+    assert asyncio.run(captured["approval_callback"]("continuous__search", {"query": "test"})) is True
 
 
 def test_model_cli_override_replaces_only_model_name() -> None:
