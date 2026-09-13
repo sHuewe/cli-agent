@@ -47,6 +47,7 @@ Ein `[network]`-Abschnitt oder `allow_untrusted_stdio` in der Benutzerkonfigurat
 Im Repository liegt `admin_config.example.toml`. Unter Windows wird die Policy bewusst nicht während der normalen `pipx`-Installation erzeugt. Ein Administrator richtet sie explizit mit einer als Administrator gestarteten PowerShell ein:
 
 ```powershell
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 .\scripts\setup-admin-config.ps1 -LlmHost "llm.intern.firma.de"
 ```
 
