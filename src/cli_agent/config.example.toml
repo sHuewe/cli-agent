@@ -9,6 +9,9 @@ dump_llm_context = false
 [logging]
 enabled = true
 level = "INFO"
+# Optional relative path below the cli-agent state directory. Absolute paths and
+# '..' are rejected so a project config cannot redirect log rotation elsewhere.
+# file = "logs/cli-agent.log"
 log_prompts = false
 log_tool_calls = false
 log_model_messages = false
