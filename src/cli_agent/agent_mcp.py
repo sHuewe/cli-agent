@@ -136,14 +136,26 @@ class McpLifecycleMixin:
         logger.info("knowledge_server_connected repository=%s tools=%s", options.repository, json.dumps([tool["function"]["name"] for tool in knowledge_tools], ensure_ascii=False))
 
     @staticmethod
-    def _stdio_environment() -> dict[str, str]:
+    def _stdio_environment(*, built_in: bool = False) -> dict[str, str]:
         safe_names = ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP", "LANG", "LC_ALL", "PYTHONIOENCODING")
-        return {name: os.environ[name] for name in safe_names if os.environ.get(name) is not None}
+        environment = {name: os.environ[name] for name in safe_names if os.environ.get(name) is not None}
+        if built_in:
+            # Python 3.11+ honors PYTHONSAFEPATH like -P: the child process does
+            # not prepend the workspace/current directory to sys.path. Together
+            # with the reduced environment (no PYTHONPATH), this prevents a
+            # repository-local cli_agent package from shadowing built-in MCP code.
+            environment["PYTHONSAFEPATH"] = "1"
+        return environment
 
     async def _connect_server(self, stack: AsyncExitStack, server_config: ServerConfig) -> tuple[ClientSession, str | None]:
         if server_config.transport == "stdio":
             if server_config.command is None: raise ValueError(f"stdio-MCP-Server {server_config.name!r} ohne command.")
-            environment = self._stdio_environment(); environment.update({key: self._resolve(value) for key, value in server_config.env.items()})
+            built_in = bool(getattr(server_config, "built_in", False))
+            environment = self._stdio_environment(built_in=built_in)
+            environment.update({key: self._resolve(value) for key, value in server_config.env.items()})
+            if built_in:
+                # Built-in trust must not be weakened by a runtime config env.
+                environment["PYTHONSAFEPATH"] = "1"
             parameters = StdioServerParameters(command=self._resolve(server_config.command), args=[self._resolve(value) for value in server_config.args], env=environment)
             read_stream, write_stream = await stack.enter_async_context(stdio_client(parameters))
         elif server_config.transport == "streamable_http":
