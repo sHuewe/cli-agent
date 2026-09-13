@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from cli_agent.admin_config import McpPolicy
+from cli_agent.admin_config import McpPolicy, TrustedMcpServer
 from cli_agent.agent import CliAgent
 from cli_agent.config import McpServerConfig
 
@@ -56,15 +56,32 @@ def test_session_approval_applies_to_built_in_write_tool(tmp_path: Path) -> None
 
 
 def test_admin_auto_approval_stays_external_only(tmp_path: Path) -> None:
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="external",
+                transport="stdio",
+                command="unused",
+                auto_approve_tools=("search",),
+            ),
+            TrustedMcpServer(
+                name="os",
+                transport="stdio",
+                command="unused",
+                auto_approve_tools=("write_file",),
+            ),
+        )
+    )
     agent = CliAgent(
         tmp_path,
         DummyModel(),
         (),
-        mcp_policy=McpPolicy(auto_approve_tools=("os__write_file", "external__search")),
+        mcp_policy=policy,
     )
     writable = McpServerConfig(
         name="os",
         built_in=True,
+        command="unused",
         config={"allow_write_files": True},
     )
     external = McpServerConfig(name="external", command="unused")
