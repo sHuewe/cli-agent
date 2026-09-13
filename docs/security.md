@@ -14,7 +14,7 @@
 
 **Problem:** Eine Sicherheits-Allowlist in derselben `config.toml` wie die funktionale Projektkonfiguration wäre keine belastbare administrative Grenze, wenn der Benutzer sie selbst erweitern kann.
 
-**Gelöst:** Security-relevante Netzwerkregeln, `allow_untrusted_stdio` und permanente Tool-Auto-Approvals wurden in eine separate `admin_config.toml` verschoben. Der Agent liest sie ausschließlich aus dem festen maschinenweiten Pfad (`C:\ProgramData\cli-agent\admin_config.toml` beziehungsweise `/etc/cli-agent/admin_config.toml`); die normale `config.toml` kann diese Regeln nicht überschreiben und entsprechende Security-Felder werden dort abgewiesen. Fehlt die Admin-Datei, greifen restriktive Defaults. `tests/test_admin_config.py` und `tests/test_cli.py` prüfen die Trennung und Weitergabe der Policy.
+**Gelöst:** Security-relevante Netzwerkregeln, `allow_untrusted_stdio` und permanente Tool-Auto-Approvals wurden in eine separate `admin_config.toml` verschoben. Permanente Tool-Auto-Approvals sind zusätzlich an eine konkrete, administrativ definierte MCP-Serveridentität unter `[[mcp.trusted_servers]]` gebunden. Der Agent liest die Policy ausschließlich aus dem festen maschinenweiten Pfad (`C:\ProgramData\cli-agent\admin_config.toml` beziehungsweise `/etc/cli-agent/admin_config.toml`); die normale `config.toml` kann diese Regeln nicht überschreiben und entsprechende Security-Felder werden dort abgewiesen. Fehlt die Admin-Datei, greifen restriktive Defaults. `tests/test_admin_config.py` und `tests/test_cli.py` prüfen die Trennung und Weitergabe der Policy.
 
 ### Schutz der Windows-Admin-Policy
 
@@ -28,17 +28,19 @@
 
 **Gelöst:** Nicht eingebaute stdio-MCPs starten nur, wenn die Admin-Policy `[mcp].allow_untrusted_stdio = true` setzt. Die Userconfig kann diese Freigabe nicht setzen. stdio-Prozesse erhalten außerdem eine reduzierte Umgebung; zusätzliche Werte müssen explizit über die MCP-Konfiguration übergeben werden. Tests prüfen sowohl deny-by-default als auch die explizite administrative Freigabe und das Nicht-Vererben von `LLM_API_KEY`.
 
-### Unkontrollierte Tool-Ausführung
+### Unkontrollierte Tool-Ausführung / MCP-Identität
 
-**Problem:** Tool-Metadaten und Tool-Aufrufe stammen aus nicht vollständig vertrauenswürdigen Komponenten. Insbesondere externe MCP-Tools sollten nicht ohne eine eigene Freigabegrenze ausgeführt werden.
+**Problem:** Tool-Metadaten und Tool-Aufrufe stammen aus nicht vollständig vertrauenswürdigen Komponenten. Insbesondere externe MCP-Tools sollten nicht ohne eine eigene Freigabegrenze ausgeführt werden. Eine dauerhafte Freigabe darf außerdem nicht allein an den frei wählbaren String `<server>__<tool>` gebunden sein, da ein Benutzer sonst einen anderen MCP-Server mit demselben Namen und Toolnamen konfigurieren könnte.
 
-**Gelöst:** Externe MCP-Tools benötigen standardmäßig eine interaktive Benutzerfreigabe. Administratoren können nur exakte exponierte externe Toolnamen über `[mcp.approval].auto_approve_tools` dauerhaft freigeben; Wildcards gibt es nicht. Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses Tool nur für den laufenden Prozess freigeben. Für vertrauenswürdige Skripte kann dieselbe prozesslokale Vertrauensentscheidung vor dem Start mit wiederholbarem `--approve-tool <exposed_name>` explizit getroffen werden. Diese CLI-Freigabe verwendet ebenfalls nur exakte Toolnamen, kennt kein `approve-all` und ersetzt ausschließlich die interaktive Nachfrage; Serveraktivierung, Admin-Policy, Netzwerk-, Workspace- und Sensitive-Path-Grenzen bleiben bestehen. Ohne TTY und ohne passende CLI-Vorabfreigabe wird weiterhin fail-closed abgelehnt. Unbekannte Tools, ungültige JSON-Argumente und Tools deaktivierter Server werden vor der Ausführung abgewiesen. Die Approval-Anzeige redigiert sensitive Argumentnamen und große Inhalte. `tests/test_mcp_policy.py`, `tests/test_session_approval.py`, `tests/test_agent_tool_calls.py` und `tests/test_cli.py` decken diese Grenzen ab.
+**Gelöst:** Externe MCP-Tools benötigen standardmäßig eine interaktive Benutzerfreigabe. Dauerhafte administrative Auto-Approvals werden nur über `[[mcp.trusted_servers]]` vergeben und an eine konkrete Serveridentität gebunden. Bei HTTP-MCPs müssen Name, Transport, vollständiger normalisierter Endpoint und konfigurierte Header mit der Admin-Policy übereinstimmen; bei stdio-MCPs Name, Transport, Command, Args und explizite Environment-Werte. Erst danach wird geprüft, ob der konkrete MCP-Toolname in `auto_approve_tools` dieses Trusted-Server-Eintrags steht. Der alte name-only Mechanismus `[mcp.approval].auto_approve_tools = ["server__tool"]` wird absichtlich als ungültige Policy abgewiesen.
+
+Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses exponierte Tool nur für den laufenden Prozess freigeben. Für vertrauenswürdige Skripte kann dieselbe prozesslokale Vertrauensentscheidung vor dem Start mit wiederholbarem `--approve-tool <exposed_name>` explizit getroffen werden. Diese CLI-Freigabe verwendet ebenfalls nur exakte Toolnamen, kennt kein `approve-all` und ersetzt ausschließlich die interaktive Nachfrage; Serveraktivierung, Admin-Policy, Netzwerk-, Workspace- und Sensitive-Path-Grenzen bleiben bestehen. Ohne TTY und ohne passende CLI-Vorabfreigabe wird weiterhin fail-closed abgelehnt. Unbekannte Tools, ungültige JSON-Argumente und Tools deaktivierter Server werden vor der Ausführung abgewiesen. Die Approval-Anzeige redigiert sensitive Argumentnamen und große Inhalte. `tests/test_mcp_policy.py`, `tests/test_session_approval.py`, `tests/test_agent_tool_calls.py`, `tests/test_admin_config.py` und `tests/test_cli.py` decken diese Grenzen ab.
 
 ### Built-in-OS-Schreiboperationen
 
 **Problem:** Schreibzugriff auf den Workspace ist eine höhere Fähigkeit als Lesen und darf weder implizit aktiv sein noch durch eine externe Tool-Auto-Approval-Regel versehentlich freigeschaltet werden.
 
-**Gelöst:** Der eingebaute OS-MCP ist standardmäßig read-only; Schreiben wird explizit über `--with-os-write` aktiviert. Mutierende Built-in-Tools (`write_file`, `delete_file`, `make_directory`, `copy_file`) benötigen dann weiterhin Zustimmung. Administrative `auto_approve_tools` gelten absichtlich nur für externe MCPs und können diese Built-in-Regel nicht umgehen. Der Benutzer kann ein konkretes Built-in-Write-Tool bewusst für die aktuelle Session oder mit `--approve-tool` für genau den aktuellen Prozesslauf freigeben; ein anderes Write-Tool bleibt separat zustimmungspflichtig. Workspace-Containment und Sensitive-Path-Schutz werden dadurch nicht umgangen. Diese Policy ist in `tests/test_agent.py`, `tests/test_session_approval.py` und `tests/test_cli.py` abgesichert.
+**Gelöst:** Der eingebaute OS-MCP ist standardmäßig read-only; Schreiben wird explizit über `--with-os-write` aktiviert. Mutierende Built-in-Tools (`write_file`, `delete_file`, `make_directory`, `copy_file`) benötigen dann weiterhin Zustimmung. Administrative Trusted-Server-Auto-Approvals gelten absichtlich nur für externe MCPs und können diese Built-in-Regel nicht umgehen. Der Benutzer kann ein konkretes Built-in-Write-Tool bewusst für die aktuelle Session oder mit `--approve-tool` für genau den aktuellen Prozesslauf freigeben; ein anderes Write-Tool bleibt separat zustimmungspflichtig. Workspace-Containment und Sensitive-Path-Schutz werden dadurch nicht umgangen. Diese Policy ist in `tests/test_agent.py`, `tests/test_session_approval.py` und `tests/test_cli.py` abgesichert.
 
 ### Workspace-Escape und Secret-Zugriff
 
@@ -84,14 +86,14 @@
 
 ## Maschinenweite Admin-Policy
 
-Die normale Benutzer-/Projektkonfiguration kann keine Netzwerk-Allowlist und keine Freigabe für untrusted stdio-MCPs setzen. Diese Entscheidungen werden ausschließlich aus der maschinenweiten `admin_config.toml` geladen:
+Die normale Benutzer-/Projektkonfiguration kann keine Netzwerk-Allowlist und keine Freigabe für untrusted stdio-MCPs setzen. Auch permanente externe MCP-Auto-Approvals werden ausschließlich in der maschinenweiten `admin_config.toml` als identitätsgebundene `[[mcp.trusted_servers]]`-Einträge definiert:
 
 - Windows: `C:\ProgramData\cli-agent\admin_config.toml`
 - Linux: `/etc/cli-agent/admin_config.toml`
 
 Fehlt die Datei, gelten deny-by-default-orientierte Defaults: Modell und HTTP-MCP nur localhost, Web aus, externe stdio-MCPs aus, keine externen Tool-Auto-Approvals.
 
-Unter Windows kann `scripts/setup-admin-config.ps1` in einer administrativen PowerShell verwendet werden. Das Skript schützt sowohl Policy-Datei als auch Policy-Verzeichnis. Normale Benutzer können die Policy lesen, aber nicht ohne Elevation verändern. Entwickler mit lokalen Adminrechten können die Policy bewusst ändern; eine solche Änderung ist eine administrative Security-Entscheidung und liegt außerhalb der normalen Agentenkonfiguration.
+Unter Windows kann `scripts/setup-admin-config.ps1` in einer administrativen PowerShell verwendet werden. Das Skript schützt sowohl Policy-Datei als auch Policy-Verzeichnis. Normale Benutzer können die Policy lesen, aber nicht ohne Elevation verändern. Entwickler mit lokalen Adminrechten können die Policy bewusst ändern; eine solche Änderung ist eine administrative Security-Entscheidung und liegt außerhalb der normalen Agentenkonfiguration. Trusted-Server-Einträge werden bewusst nicht vom Convenience-Skript erzeugt, sondern nach Prüfung des konkreten MCP-Endpunkts administrativ ergänzt.
 
 ## Netzwerk
 
@@ -101,7 +103,7 @@ URLs werden gegen exakte Hostnamen aus der Admin-Policy validiert. Remote-Ziele 
 
 Externe stdio-MCPs werden nur gestartet, wenn `[mcp].allow_untrusted_stdio = true` in der Admin-Policy gesetzt ist. Ein gleichnamiger Wert in der Userconfig wird abgewiesen.
 
-Externe MCP-Tools benötigen standardmäßig eine interaktive Zustimmung. Administratoren können einzelne externe Tools über exakte exponierte Namen in `[mcp.approval].auto_approve_tools` freigeben. Bei einer interaktiven Nachfrage kann `[s]` genau dieses Tool für die aktuelle Session freigeben; diese Entscheidung wird nicht persistiert. Für vertrauenswürdige Automation kann `--approve-tool` einen exakten Toolnamen für den aktuellen Prozess vorab freigeben. Diese Option ist keine dauerhafte Policy und umgeht keine anderen Security-Grenzen. Eingebaute mutierende Workspace-OS-Tools können nicht über die Admin-Auto-Approval-Liste freigeschaltet werden.
+Externe MCP-Tools benötigen standardmäßig eine interaktive Zustimmung. Administratoren können einzelne externe Tools nur über einen passenden `[[mcp.trusted_servers]]`-Eintrag dauerhaft freigeben. Der Benutzer kann den MCP-Namen oder Toolnamen nicht nutzen, um eine Freigabe auf eine andere Serverkonfiguration zu übertragen: die aktuelle Serveridentität muss zusätzlich zur Toolfreigabe mit der Admin-Policy übereinstimmen. Bei einer interaktiven Nachfrage kann `[s]` genau dieses exponierte Tool für die aktuelle Session freigeben; diese Entscheidung wird nicht persistiert. Für vertrauenswürdige Automation kann `--approve-tool` einen exakten Toolnamen für den aktuellen Prozess vorab freigeben. Diese Option ist keine dauerhafte Policy und umgeht keine anderen Security-Grenzen. Eingebaute mutierende Workspace-OS-Tools können nicht über Trusted-Server-Auto-Approvals freigeschaltet werden.
 
 stdio-Prozesse erhalten nur eine reduzierte Umgebung; zusätzliche Werte müssen explizit über die MCP-Konfiguration übergeben werden.
 
