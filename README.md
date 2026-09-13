@@ -62,8 +62,6 @@ Optional können weitere administrativ freizugebende Netzwerkziele beziehungswei
 
 `-AllowUntrustedStdio` erlaubt externe stdio-MCP-Prozesse. Diese Freigabe ist administrativ und kann nicht aus `config.toml` gesetzt werden. Das Setup-Skript fragt vor dem Ersetzen einer vorhandenen Policy nach; `-Force` überspringt diese Rückfrage. Verzeichnis und Datei werden mit ACLs geschützt: Administrators und SYSTEM erhalten Full Control, normale Users nur Leserechte.
 
-Permanente Tool-Auto-Approvals werden bewusst nicht mehr als reine Toolnamen konfiguriert. Sie müssen an eine konkrete, administrativ definierte MCP-Serveridentität gebunden werden. Das Convenience-Skript erzeugt solche Einträge nicht automatisch; ein Administrator ergänzt sie nach Review des konkreten Servers direkt in `admin_config.toml`.
-
 Eine Admin-Policy kann beispielsweise so aussehen:
 
 ```toml
@@ -76,19 +74,21 @@ web_allowed_hosts = ["docs.intern.firma.de"]
 allow_untrusted_stdio = false
 
 [[mcp.trusted_servers]]
-name = "continuous"
+name = "fachsoftware"
 transport = "streamable_http"
 url = "https://mcp.intern.firma.de/mcp"
-auto_approve_tools = ["search"]
+trust_instructions = true
 ```
 
 Die Netzwerklisten enthalten Hosts, keine vollständigen URLs. Modell- und MCP-URLs bleiben Teil der normalen Benutzerkonfiguration, ihre Hosts müssen aber von der Admin-Policy erlaubt sein.
 
 ### Remote-Modell-Credentials
 
-Für nichtlokale OpenAI-kompatible Modellziele reicht die Freigabe des Hosts in `model_allowed_hosts` allein nicht aus. Die Admin-Policy muss zusätzlich festlegen, **welche Environment-Variable für welchen Provider und Modell-Host als API-Key verwendet werden darf**. Dadurch kann eine normale Projektkonfiguration nicht versehentlich eine beliebige Prozess-Umgebungsvariable als Credential an einen freigegebenen Remote-LLM-Endpunkt senden.
+`api_key_env` ist optional. Wenn in der normalen Modellkonfiguration **kein** `api_key_env` gesetzt ist, ist keine `[[model.credentials]]`-Regel erforderlich; bei OpenAI-kompatiblen Endpunkten verwendet `cli-agent` dann intern den Dummy-Key `dummy`.
 
-Beispiel für einen internen OpenAI-kompatiblen Endpunkt:
+Wenn für einen nichtlokalen OpenAI-kompatiblen Modell-Endpunkt hingegen `api_key_env` verwendet wird, muss die Admin-Policy festlegen, welche Environment-Variable für diesen Provider und Host zulässig ist. Dadurch kann eine normale Projektkonfiguration nicht versehentlich eine beliebige Prozess-Umgebungsvariable als Credential an einen freigegebenen Remote-LLM-Endpunkt senden.
+
+Beispiel:
 
 ```toml
 [network]
@@ -100,7 +100,7 @@ host = "llm.intern.firma.de"
 allowed_api_key_envs = ["LLM_API_KEY"]
 ```
 
-Die zugehörige Benutzer-/Projektkonfiguration kann dann beispielsweise so aussehen:
+Die zugehörige Benutzerkonfiguration:
 
 ```toml
 [model]
@@ -110,35 +110,7 @@ base_url = "https://llm.intern.firma.de/v1"
 api_key_env = "LLM_API_KEY"
 ```
 
-Für OpenRouter muss entsprechend sowohl der Host als auch die verwendete Credential-Variable administrativ freigegeben werden:
-
-```toml
-[network]
-model_allowed_hosts = ["localhost", "127.0.0.1", "::1", "openrouter.ai"]
-
-[[model.credentials]]
-provider = "openai"
-host = "openrouter.ai"
-allowed_api_key_envs = ["OPENROUTER_API_KEY"]
-```
-
-Die normale Konfiguration dazu ist beispielsweise:
-
-```toml
-[model]
-provider = "openai"
-model = "openai/gpt-5"
-base_url = "https://openrouter.ai/api/v1"
-api_key_env = "OPENROUTER_API_KEY"
-```
-
-Die eigentliche Secret-Zeichenfolge steht weiterhin nur in der Environment-Variable; `admin_config.toml` enthält lediglich den **Namen** der erlaubten Variable. Fehlt für einen nichtlokalen Modell-Host eine passende `[[model.credentials]]`-Regel oder ist `api_key_env` dort nicht aufgeführt, bricht `cli-agent` absichtlich mit `PermissionError` ab, zum Beispiel mit `Die Credential-Umgebungsvariable 'OPENROUTER_API_KEY' ist für Modell-Host 'openrouter.ai' nicht administrativ freigegeben.`
-
-Lokale Modellziele (`localhost`, `127.0.0.1`, `::1`) bleiben von dieser zusätzlichen Credential-Bindung ausgenommen.
-
-Für permanente MCP-Auto-Approvals gilt zusätzlich eine strengere Identitätsprüfung: Der benutzerkonfigurierte Server muss mit einem Eintrag unter `[[mcp.trusted_servers]]` übereinstimmen. Bei HTTP-MCPs werden Name, Transport, vollständiger normalisierter Endpoint und konfigurierte Header verglichen; bei stdio-MCPs Name, Transport, Command, Args und explizite Environment-Werte. Nur dann kann ein in `auto_approve_tools` genannter MCP-Toolname ohne Nachfrage ausgeführt werden. Ein anderer Server mit demselben Namen und Toolnamen erbt die Freigabe nicht.
-
-Der alte Abschnitt `[mcp.approval]` mit globalen exponierten Toolnamen wird absichtlich abgewiesen, weil er keine belastbare Serveridentität enthält.
+Die eigentliche Secret-Zeichenfolge steht weiterhin nur in der Environment-Variable; `admin_config.toml` enthält lediglich den **Namen** der erlaubten Variable. Lokale Modellziele (`localhost`, `127.0.0.1`, `::1`) bleiben von dieser zusätzlichen Credential-Bindung ausgenommen.
 
 ## Benutzer-/Projektkonfiguration
 
@@ -154,13 +126,13 @@ timeout = 120
 context_length = 262144
 ```
 
-Die `base_url` bleibt Benutzerkonfiguration, ihr Host muss aber in `admin_config.toml` freigegeben sein. Für nichtlokale OpenAI-kompatible Hosts muss außerdem die verwendete `api_key_env` über eine passende `[[model.credentials]]`-Regel administrativ erlaubt sein. `--model` überschreibt nur `model.model`.
+Die `base_url` bleibt Benutzerkonfiguration, ihr Host muss aber in `admin_config.toml` freigegeben sein. Für nichtlokale OpenAI-kompatible Hosts muss eine konfigurierte `api_key_env` zusätzlich über eine passende `[[model.credentials]]`-Regel administrativ erlaubt sein. `--model` überschreibt nur `model.model`.
 
 Persistente MCP-Verbindungen werden über `[[mcp_servers]]` konfiguriert:
 
 ```toml
 [[mcp_servers]]
-name = "external"
+name = "fachsoftware"
 transport = "streamable_http"
 url = "https://mcp.intern.firma.de/mcp"
 ```
@@ -179,13 +151,101 @@ Bei einer solchen Nachfrage stehen drei Entscheidungen zur Verfügung:
 [N]ein    -> Aufruf ablehnen (Default)
 ```
 
-Eine Session-Freigabe gilt für den **exakten exponierten Toolnamen**. Wird beispielsweise `continuous__search` für die Session freigegeben, dürfen weitere Aufrufe dieses Tools auch mit anderen Argumenten ohne erneute Nachfrage ausgeführt werden. `continuous__read` bleibt davon unberührt. Die Freigabe wird ausschließlich im Speicher gehalten und endet mit dem `cli-agent`-Prozess; sie wird weder in `config.toml` noch in `admin_config.toml` persistiert.
+Eine Session-Freigabe gilt für den **exakten exponierten Toolnamen**. Wird beispielsweise `fachsoftware__search` für die Session freigegeben, dürfen weitere Aufrufe dieses Tools auch mit anderen Argumenten ohne erneute Nachfrage ausgeführt werden. Andere Tools bleiben davon unberührt. Die Freigabe wird ausschließlich im Speicher gehalten und endet mit dem `cli-agent`-Prozess.
 
-Das gilt auch für bestätigungspflichtige Built-in-OS-Schreibtools: Eine Session-Freigabe für `os__write_file` betrifft nur `os__write_file`; `os__delete_file` benötigt weiterhin eine eigene Freigabe. Die zusätzlichen Workspace- und Sensitive-Path-Schutzmechanismen der Built-in-Tools bleiben dabei unverändert aktiv.
+### Permanente Auto-Approvals: Serveridentität + Tool-Contract
 
-Für häufig verwendete **externe** Tools kann ein Administrator die interaktive Nachfrage dauerhaft über `[[mcp.trusted_servers]]` vermeiden. Eine solche Freigabe gilt nur, wenn die aktuelle MCP-Konfiguration der administrativ festgelegten Serveridentität entspricht und der konkrete MCP-Toolname in `auto_approve_tools` enthalten ist. Built-in-Tools werden dadurch nicht freigeschaltet.
+Permanente Auto-Approvals für externe MCP-Tools sind absichtlich strenger als Session-Freigaben. Eine dauerhafte Freigabe gilt nur, wenn **beides** übereinstimmt:
 
-Damit ergeben sich für externe Tools folgende Stufen: identitätsgebunden administrativ auto-approved -> direkt ausführen; für die Session freigegeben -> direkt ausführen; andernfalls interaktiv nachfragen.
+1. die administrativ definierte MCP-Serveridentität und
+2. der gepinnte Contract des konkreten Tools.
+
+Der Tool-Contract ist ein SHA-256-Fingerprint über den nativen Toolnamen und das vollständige MCP-`inputSchema`. Ändert ein MCP-Update das Schema – zum Beispiel durch einen zusätzlichen Parameter, einen anderen Typ oder geänderte Required-Felder – stimmt der Fingerprint nicht mehr. Das Tool wird dann **nicht blockiert**, sondern fällt sicher auf die normale interaktive Bestätigung zurück.
+
+Toolbeschreibung und MCP-Instructions sind bewusst nicht Bestandteil dieses Contract-Fingerprints. `trust_instructions` wird separat an die MCP-Serveridentität gebunden.
+
+Name-only Freigaben wie
+
+```toml
+auto_approve_tools = ["search"]
+```
+
+werden nicht mehr akzeptiert.
+
+### CLI-Workflow zum Prüfen und Freigeben eines Tools
+
+Die neuen `admin`-Kommandos dienen ausschließlich zum **Lesen und Generieren**. Sie verändern `admin_config.toml` niemals selbst und benötigen deshalb auch keine administrativen Schreibrechte. Die eigentliche Vertrauensentscheidung bleibt ein manueller administrativer Schritt.
+
+#### 1. Tool und Schema ansehen
+
+```powershell
+cli-agent admin inspect-tool fachsoftware search --config config.toml
+```
+
+Alternativ kann auch der exponierte Name angegeben werden:
+
+```powershell
+cli-agent admin inspect-tool fachsoftware fachsoftware__search --config config.toml
+```
+
+Das Kommando verbindet sich mit dem konfigurierten MCP-Server und zeigt unter anderem:
+
+```text
+MCP-Server: fachsoftware (streamable_http)
+Tool: search
+Beschreibung: ...
+Contract: sha256:...
+Input-Schema:
+{
+  ...
+}
+```
+
+Dabei findet **kein Modellaufruf** statt. Es werden nur MCP-Metadaten gelesen. Netzwerk- und stdio-Grenzen aus der Admin-Policy gelten weiterhin.
+
+#### 2. Kopierbaren Auto-Approval-Block erzeugen
+
+Nach Prüfung des Schemas:
+
+```powershell
+cli-agent admin trust-tool fachsoftware search --config config.toml
+```
+
+Das Kommando zeigt erneut das aktuelle Schema und gibt anschließend einen TOML-Block aus, zum Beispiel:
+
+```toml
+[[mcp.trusted_servers.auto_approve_tools]]
+name = "search"
+contract_sha256 = "sha256:..."
+```
+
+Dieser Block wird **nicht** automatisch gespeichert. Der Administrator kopiert ihn nach Prüfung manuell unter den passenden `[[mcp.trusted_servers]]`-Eintrag in `admin_config.toml`:
+
+```toml
+[[mcp.trusted_servers]]
+name = "fachsoftware"
+transport = "streamable_http"
+url = "https://mcp.intern.firma.de/mcp"
+trust_instructions = true
+
+[[mcp.trusted_servers.auto_approve_tools]]
+name = "search"
+contract_sha256 = "sha256:..."
+```
+
+Damit ist `search` nur dann dauerhaft auto-approved, wenn Serveridentität **und** Tool-Contract exakt passen.
+
+#### 3. Contract nach einem MCP-Update prüfen
+
+Wenn sich der MCP-Server geändert hat und eine bestehende Freigabe überprüft werden soll:
+
+```powershell
+cli-agent admin trust-tool fachsoftware search --config config.toml --update
+```
+
+`--update` schreibt ebenfalls nichts. Das Kommando vergleicht den aktuell angebotenen Contract mit dem bereits administrativ gepinnten Contract. Bei einer Änderung zeigt es den neuen Contract und erzeugt einen Ersatzblock zum manuellen Kopieren.
+
+Solange der neue Block nicht administrativ übernommen wurde, greift die alte permanente Auto-Freigabe nicht mehr und das Tool verlangt wieder eine normale Benutzerbestätigung.
 
 ### Tool-Freigaben für Skripte / One-Shot-Aufrufe
 
@@ -204,7 +264,7 @@ cli-agent `
   "Führe die Auswertung aus"
 ```
 
-`--approve-tool` interpretiert keine Wildcards und ist bewusst **kein** `--approve-all`. Die Freigabe betrifft alle Aufrufe genau dieses Tools während des aktuellen Prozesses, unabhängig von dessen Argumenten. Sie ersetzt nur die interaktive Bestätigung. Sie aktiviert keinen MCP-Server und umgeht weder `--with-os-write` noch Admin-Policy, Netzwerk-Allowlist, Workspace-Containment oder Sensitive-Path-Schutz. Ohne passende Vorabfreigabe werden bestätigungspflichtige Tool-Aufrufe bei nicht-interaktivem `stdin` weiterhin abgelehnt. Die Verwendung von `--approve-tool` wird im Log als CLI-Vorabfreigabe protokolliert.
+`--approve-tool` interpretiert keine Wildcards und ist bewusst **kein** `--approve-all`. Die Freigabe betrifft alle Aufrufe genau dieses Tools während des aktuellen Prozesses, unabhängig von dessen Argumenten. Sie ersetzt nur die interaktive Bestätigung. Sie aktiviert keinen MCP-Server und umgeht weder `--with-os-write` noch Admin-Policy, Netzwerk-Allowlist, Workspace-Containment oder Sensitive-Path-Schutz. Ohne passende Vorabfreigabe werden bestätigungspflichtige Tool-Aufrufe bei nicht-interaktivem `stdin` weiterhin abgelehnt.
 
 ## Start / Workspace
 
@@ -282,10 +342,12 @@ log_tool_results = false
 
 Der Agent hält MCP-Sessions offen, exponiert Tools als `<server>__<tool>` und führt nach Tool-Ergebnissen den Modelllauf fort. MCP-`instructions` von Built-in-MCPs gelten als Teil des ausgelieferten Agenten und werden in den Systemprompt aufgenommen. Instructions externer MCPs werden dagegen nur dann in den Systemprompt übernommen, wenn die konkrete Serveridentität in `admin_config.toml` mit `trust_instructions = true` freigegeben wurde. Sie dürfen zentrale Agent-Regeln oder Berechtigungsgrenzen dennoch nicht überschreiben.
 
+Permanente externe Auto-Approvals werden zusätzlich gegen den administrativ gepinnten Tool-Contract geprüft. Ein Schema-Drift führt nicht zur automatischen Ausführung, sondern zurück zur normalen Approval-Abfrage.
+
 Wenn `[okf]` konfiguriert ist, läuft vor der Main-Phase ein separater Retrieval-Kontext mit den read-only Tools `knowledge_index` und `knowledge_read`.
 
 Mit `tokens` kann die Usage des letzten Agentenlaufs angezeigt werden.
 
 ## Security
 
-Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, externe stdio-MCPs und identitätsgebundene administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern. Session- und CLI-Vorabfreigaben sind dagegen bewusste, nicht persistente Benutzerentscheidungen für genau benannte Tools innerhalb des laufenden Prozesses.
+Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, externe stdio-MCPs und identitäts- sowie contractgebundene administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern. Session- und CLI-Vorabfreigaben sind dagegen bewusste, nicht persistente Benutzerentscheidungen für genau benannte Tools innerhalb des laufenden Prozesses.
