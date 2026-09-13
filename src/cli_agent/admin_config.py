@@ -57,7 +57,7 @@ class ModelCredentialRule:
 
 @dataclass(frozen=True)
 class TrustedMcpServer:
-    """Administrator-defined MCP identity that may receive persistent approvals."""
+    """Administrator-defined MCP identity with optional trusted capabilities."""
 
     name: str
     transport: str
@@ -67,6 +67,7 @@ class TrustedMcpServer:
     env: tuple[tuple[str, str], ...] = ()
     headers: tuple[tuple[str, str], ...] = ()
     auto_approve_tools: tuple[str, ...] = ()
+    trust_instructions: bool = False
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,7 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
         raise ValueError(f"{section}.transport muss 'stdio' oder 'streamable_http' sein.")
 
     tools = _string_list(values, "auto_approve_tools", (), section=section)
+    trust_instructions = _bool_value(values, "trust_instructions", False, section=section)
     raw_args = values.get("args", [])
     if not isinstance(raw_args, list) or not all(isinstance(value, str) for value in raw_args):
         raise ValueError(f"{section}.args muss eine String-Liste sein.")
@@ -162,10 +164,20 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
         if not _trusted_stdio_command_is_deterministic(command):
             raise ValueError(
                 f"{section}.command muss für einen trusted stdio-MCP ein absoluter "
-                "Executable-Pfad oder exakt '{python}' sein; PATH-basierte Commands sind nicht zulässig."
+                "Executable-Pfad oder exakt '{{python}}' sein; PATH-basierte Commands sind nicht zulässig."
             )
 
-    return TrustedMcpServer(name=name, transport=transport, url=url, command=command, args=tuple(raw_args), env=env, headers=headers, auto_approve_tools=tools)
+    return TrustedMcpServer(
+        name=name,
+        transport=transport,
+        url=url,
+        command=command,
+        args=tuple(raw_args),
+        env=env,
+        headers=headers,
+        auto_approve_tools=tools,
+        trust_instructions=trust_instructions,
+    )
 
 
 def load_admin_config(path: Path | None = None) -> AdminConfig:
