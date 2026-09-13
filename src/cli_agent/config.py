@@ -8,6 +8,38 @@ from pathlib import Path
 from typing import Any
 
 
+_FORBIDDEN_ROUTING_HEADERS = frozenset(
+    {
+        "host",
+        ":authority",
+        "forwarded",
+        "connection",
+        "proxy-connection",
+        "proxy-authorization",
+        "upgrade",
+        "x-original-host",
+    }
+)
+
+
+def _validated_user_headers(values: Any, *, section: str) -> dict[str, str]:
+    if not isinstance(values, dict):
+        raise ValueError(f"{section} muss eine Tabelle sein.")
+    result: dict[str, str] = {}
+    for raw_name, raw_value in values.items():
+        name = str(raw_name).strip()
+        if not name:
+            raise ValueError(f"{section} enthält einen leeren Headernamen.")
+        normalized = name.casefold()
+        if normalized in _FORBIDDEN_ROUTING_HEADERS or normalized.startswith("x-forwarded-"):
+            raise ValueError(
+                f"{section} darf den routing-/proxyrelevanten Header {name!r} nicht setzen. "
+                "Host und Routing werden ausschließlich aus der geprüften URL abgeleitet."
+            )
+        result[name] = str(raw_value)
+    return result
+
+
 def application_directory() -> Path:
     local_app_data = os.getenv("LOCALAPPDATA")
     if local_app_data:
@@ -133,8 +165,7 @@ def _model_config(values: dict[str, Any]) -> ModelConfig:
     api_key_env_value = values.get("api_key_env")
     api_key_env = str(api_key_env_value).strip() if api_key_env_value is not None else None
     raw_headers = values.get("headers", {})
-    if not isinstance(raw_headers, dict):
-        raise ValueError("[model].headers muss eine Tabelle sein.")
+    headers = _validated_user_headers(raw_headers, section="[model].headers")
     raw_context_length = values.get("context_length")
     if raw_context_length is None:
         context_length = None
@@ -148,7 +179,7 @@ def _model_config(values: dict[str, Any]) -> ModelConfig:
         base_url=base_url.rstrip("/"),
         api_key_env=api_key_env,
         timeout=float(values.get("timeout", defaults.timeout)),
-        headers={str(key): str(value) for key, value in raw_headers.items()},
+        headers=headers,
         context_length=context_length,
     )
 
@@ -179,7 +210,6 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     raw_config = values.get("config", {})
     if not isinstance(raw_config, dict):
         raise ValueError(f"config von MCP-Server {name!r} muss eine Tabelle sein.")
-    # Security policy must never be smuggled back into the user configuration.
     forbidden_policy_keys = {"allow_untrusted_stdio"}
     found_policy_keys = forbidden_policy_keys.intersection(raw_config)
     if found_policy_keys:
@@ -194,8 +224,7 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     if not isinstance(raw_env, dict):
         raise ValueError(f"env von MCP-Server {name!r} muss eine Tabelle sein.")
     raw_headers = values.get("headers", {})
-    if not isinstance(raw_headers, dict):
-        raise ValueError(f"headers von MCP-Server {name!r} muss eine Tabelle sein.")
+    headers = _validated_user_headers(raw_headers, section=f"headers von MCP-Server {name!r}")
     command_value = values.get("command")
     command = str(command_value).strip() if command_value is not None else None
     url_value = values.get("url")
@@ -223,7 +252,7 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
         args=tuple(raw_args),
         env={str(key): str(value) for key, value in raw_env.items()},
         url=url,
-        headers={str(key): str(value) for key, value in raw_headers.items()},
+        headers=headers,
         config=raw_config,
         compress_result=compress_result,
         compress_min_chars=compress_min_chars,
