@@ -89,7 +89,7 @@ def test_start_server_rejects_duplicate_connection(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_start_server_registers_tools_and_instructions(tmp_path: Path) -> None:
+def test_start_server_registers_tools_and_trusted_instructions(tmp_path: Path) -> None:
     class Session:
         async def list_tools(self):
             return SimpleNamespace(
@@ -103,10 +103,7 @@ def test_start_server_registers_tools_and_instructions(tmp_path: Path) -> None:
             )
 
     async def exercise() -> None:
-        agent = make_agent(
-            tmp_path,
-            mcp_policy=McpPolicy(allow_untrusted_stdio=True),
-        )
+        agent = make_agent(tmp_path)
         parent = AsyncExitStack()
         await parent.__aenter__()
 
@@ -114,7 +111,7 @@ def test_start_server_registers_tools_and_instructions(tmp_path: Path) -> None:
             return Session(), "Use carefully"
 
         agent._connect_server = connect
-        config = McpServerConfig(name="docs", command="unused")
+        config = McpServerConfig(name="docs", command="unused", built_in=True)
         await agent._start_server(config, parent)
         assert "docs__search" in agent._tool_routes
         assert agent._server_tools["docs"][0]["function"]["name"] == "docs__search"
