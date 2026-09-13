@@ -50,17 +50,18 @@ Im Repository liegt `admin_config.example.toml`. Unter Windows wird die Policy b
 .\scripts\setup-admin-config.ps1 -LlmHost "llm.intern.firma.de"
 ```
 
-Optional können weitere administrativ freizugebende Ziele beziehungsweise Fähigkeiten angegeben werden:
+Optional können weitere administrativ freizugebende Netzwerkziele beziehungsweise Fähigkeiten angegeben werden:
 
 ```powershell
 .\scripts\setup-admin-config.ps1 `
   -LlmHost "llm.intern.firma.de" `
   -McpHosts "mcp.intern.firma.de" `
-  -WebHosts "docs.intern.firma.de" `
-  -AutoApproveTools "continuous__search"
+  -WebHosts "docs.intern.firma.de"
 ```
 
 `-AllowUntrustedStdio` erlaubt externe stdio-MCP-Prozesse. Diese Freigabe ist administrativ und kann nicht aus `config.toml` gesetzt werden. Das Setup-Skript fragt vor dem Ersetzen einer vorhandenen Policy nach; `-Force` überspringt diese Rückfrage. Verzeichnis und Datei werden mit ACLs geschützt: Administrators und SYSTEM erhalten Full Control, normale Users nur Leserechte.
+
+Permanente Tool-Auto-Approvals werden bewusst nicht mehr als reine Toolnamen konfiguriert. Sie müssen an eine konkrete, administrativ definierte MCP-Serveridentität gebunden werden. Das Convenience-Skript erzeugt solche Einträge nicht automatisch; ein Administrator ergänzt sie nach Review des konkreten Servers direkt in `admin_config.toml`.
 
 Eine Admin-Policy kann beispielsweise so aussehen:
 
@@ -73,11 +74,18 @@ web_allowed_hosts = ["docs.intern.firma.de"]
 [mcp]
 allow_untrusted_stdio = false
 
-[mcp.approval]
-auto_approve_tools = ["continuous__search"]
+[[mcp.trusted_servers]]
+name = "continuous"
+transport = "streamable_http"
+url = "https://mcp.intern.firma.de/mcp"
+auto_approve_tools = ["search"]
 ```
 
-Die Netzwerklisten enthalten Hosts, keine vollständigen URLs. Modell- und MCP-URLs bleiben Teil der normalen Benutzerkonfiguration, ihre Hosts müssen aber von der Admin-Policy erlaubt sein. `auto_approve_tools` verwendet ausschließlich exakte exponierte Toolnamen `<server>__<tool>`; Wildcards werden nicht interpretiert. Administrative Auto-Approvals gelten nur für externe MCP-Tools und können die Approval-Regeln eingebauter Tools nicht umgehen.
+Die Netzwerklisten enthalten Hosts, keine vollständigen URLs. Modell- und MCP-URLs bleiben Teil der normalen Benutzerkonfiguration, ihre Hosts müssen aber von der Admin-Policy erlaubt sein.
+
+Für permanente MCP-Auto-Approvals gilt zusätzlich eine strengere Identitätsprüfung: Der benutzerkonfigurierte Server muss mit einem Eintrag unter `[[mcp.trusted_servers]]` übereinstimmen. Bei HTTP-MCPs werden Name, Transport, vollständiger normalisierter Endpoint und konfigurierte Header verglichen; bei stdio-MCPs Name, Transport, Command, Args und explizite Environment-Werte. Nur dann kann ein in `auto_approve_tools` genannter MCP-Toolname ohne Nachfrage ausgeführt werden. Ein anderer Server mit demselben Namen und Toolnamen erbt die Freigabe nicht.
+
+Der alte Abschnitt `[mcp.approval]` mit globalen exponierten Toolnamen wird absichtlich abgewiesen, weil er keine belastbare Serveridentität enthält.
 
 ## Benutzer-/Projektkonfiguration
 
@@ -122,7 +130,9 @@ Eine Session-Freigabe gilt für den **exakten exponierten Toolnamen**. Wird beis
 
 Das gilt auch für bestätigungspflichtige Built-in-OS-Schreibtools: Eine Session-Freigabe für `os__write_file` betrifft nur `os__write_file`; `os__delete_file` benötigt weiterhin eine eigene Freigabe. Die zusätzlichen Workspace- und Sensitive-Path-Schutzmechanismen der Built-in-Tools bleiben dabei unverändert aktiv.
 
-Für häufig verwendete **externe** Tools kann ein Administrator die interaktive Nachfrage dauerhaft über `[mcp.approval].auto_approve_tools` vermeiden. Damit ergeben sich für externe Tools folgende Stufen: administrativ auto-approved -> direkt ausführen; für die Session freigegeben -> direkt ausführen; andernfalls interaktiv nachfragen. Built-in-Tools werden nicht durch `auto_approve_tools` freigeschaltet.
+Für häufig verwendete **externe** Tools kann ein Administrator die interaktive Nachfrage dauerhaft über `[[mcp.trusted_servers]]` vermeiden. Eine solche Freigabe gilt nur, wenn die aktuelle MCP-Konfiguration der administrativ festgelegten Serveridentität entspricht und der konkrete MCP-Toolname in `auto_approve_tools` enthalten ist. Built-in-Tools werden dadurch nicht freigeschaltet.
+
+Damit ergeben sich für externe Tools folgende Stufen: identitätsgebunden administrativ auto-approved -> direkt ausführen; für die Session freigegeben -> direkt ausführen; andernfalls interaktiv nachfragen.
 
 ### Tool-Freigaben für Skripte / One-Shot-Aufrufe
 
@@ -223,4 +233,4 @@ Mit `tokens` kann die Usage des letzten Agentenlaufs angezeigt werden.
 
 ## Security
 
-Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, externe stdio-MCPs und administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern. Session- und CLI-Vorabfreigaben sind dagegen bewusste, nicht persistente Benutzerentscheidungen für genau benannte Tools innerhalb des laufenden Prozesses.
+Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, externe stdio-MCPs und identitätsgebundene administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern. Session- und CLI-Vorabfreigaben sind dagegen bewusste, nicht persistente Benutzerentscheidungen für genau benannte Tools innerhalb des laufenden Prozesses.
