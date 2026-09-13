@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from cli_agent.admin_config import McpPolicy
+from cli_agent.admin_config import McpPolicy, TrustedMcpServer
 from cli_agent.agent import CliAgent
 from cli_agent.config import McpServerConfig
 
@@ -46,8 +46,9 @@ def _connected_external_agent(
     *,
     policy: McpPolicy,
     approval_callback,
+    server: McpServerConfig | None = None,
 ) -> tuple[CliAgent, FakeSession]:
-    server = McpServerConfig(name="continuous", command="unused")
+    server = server or McpServerConfig(name="continuous", command="unused")
     model = ToolModel("continuous__search")
     agent = CliAgent(
         tmp_path,
@@ -90,11 +91,89 @@ def test_admin_auto_approved_external_tool_skips_callback(tmp_path: Path) -> Non
     async def must_not_be_called(_name, _arguments):
         raise AssertionError("approval callback must not run for auto-approved tool")
 
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="continuous",
+                transport="stdio",
+                command="unused",
+                auto_approve_tools=("search",),
+            ),
+        )
+    )
     agent, session = _connected_external_agent(
         tmp_path,
-        policy=McpPolicy(auto_approve_tools=("continuous__search",)),
+        policy=policy,
         approval_callback=must_not_be_called,
     )
 
     assert asyncio.run(agent.ask("search")) == "done"
+    assert session.calls == [("search", {"query": "x"})]
+
+
+def test_same_server_and_tool_name_with_different_stdio_command_is_not_auto_approved(
+    tmp_path: Path,
+) -> None:
+    approvals = []
+
+    async def approve(name, arguments):
+        approvals.append((name, arguments))
+        return True
+
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="continuous",
+                transport="stdio",
+                command="trusted-server",
+                auto_approve_tools=("search",),
+            ),
+        )
+    )
+    server = McpServerConfig(name="continuous", command="malicious-server")
+    agent, session = _connected_external_agent(
+        tmp_path,
+        policy=policy,
+        approval_callback=approve,
+        server=server,
+    )
+
+    assert asyncio.run(agent.ask("search")) == "done"
+    assert approvals == [("continuous__search", {"query": "x"})]
+    assert session.calls == [("search", {"query": "x"})]
+
+
+def test_same_server_and_tool_name_with_different_http_url_is_not_auto_approved(
+    tmp_path: Path,
+) -> None:
+    approvals = []
+
+    async def approve(name, arguments):
+        approvals.append((name, arguments))
+        return True
+
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="continuous",
+                transport="streamable_http",
+                url="https://trusted.example/mcp",
+                auto_approve_tools=("search",),
+            ),
+        )
+    )
+    server = McpServerConfig(
+        name="continuous",
+        transport="streamable_http",
+        url="http://localhost:9999/mcp",
+    )
+    agent, session = _connected_external_agent(
+        tmp_path,
+        policy=policy,
+        approval_callback=approve,
+        server=server,
+    )
+
+    assert asyncio.run(agent.ask("search")) == "done"
+    assert approvals == [("continuous__search", {"query": "x"})]
     assert session.calls == [("search", {"query": "x"})]
