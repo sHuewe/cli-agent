@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from cli_agent import cli as cli_module
-from cli_agent.admin_config import AdminConfig, McpPolicy
+from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
 from cli_agent.cli import (
     _approval_arguments,
     apply_mcp_cli_overrides,
@@ -141,7 +141,14 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
         ),
         mcp=McpPolicy(
             allow_untrusted_stdio=True,
-            auto_approve_tools=("continuous__search",),
+            trusted_servers=(
+                TrustedMcpServer(
+                    name="continuous",
+                    transport="streamable_http",
+                    url="https://mcp.internal/mcp",
+                    auto_approve_tools=("search",),
+                ),
+            ),
         ),
     )
     captured = {}
