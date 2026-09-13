@@ -16,7 +16,7 @@ def test_admin_config_defaults_are_restrictive(tmp_path: Path) -> None:
     assert config.network.mcp_allowed_hosts == config.network.model_allowed_hosts
     assert config.network.web_allowed_hosts == ()
     assert config.mcp.allow_untrusted_stdio is False
-    assert config.mcp.auto_approve_tools == ()
+    assert config.mcp.trusted_servers == ()
 
 
 def test_windows_admin_config_path_ignores_programdata_environment(
@@ -42,8 +42,11 @@ web_allowed_hosts = ["docs.internal"]
 [mcp]
 allow_untrusted_stdio = true
 
-[mcp.approval]
-auto_approve_tools = ["continuous__search"]
+[[mcp.trusted_servers]]
+name = "continuous"
+transport = "streamable_http"
+url = "https://MCP.INTERNAL./mcp"
+auto_approve_tools = ["search"]
 """.strip(),
         encoding="utf-8",
     )
@@ -54,7 +57,12 @@ auto_approve_tools = ["continuous__search"]
     assert config.network.mcp_allowed_hosts == ("mcp.internal",)
     assert config.network.web_allowed_hosts == ("docs.internal",)
     assert config.mcp.allow_untrusted_stdio is True
-    assert config.mcp.auto_approve_tools == ("continuous__search",)
+    assert len(config.mcp.trusted_servers) == 1
+    trusted = config.mcp.trusted_servers[0]
+    assert trusted.name == "continuous"
+    assert trusted.transport == "streamable_http"
+    assert trusted.url == "https://mcp.internal/mcp"
+    assert trusted.auto_approve_tools == ("search",)
 
 
 def test_admin_config_accepts_empty_optional_lists(tmp_path: Path) -> None:
@@ -68,9 +76,6 @@ web_allowed_hosts = []
 
 [mcp]
 allow_untrusted_stdio = false
-
-[mcp.approval]
-auto_approve_tools = []
 """.strip(),
         encoding="utf-8",
     )
@@ -79,7 +84,42 @@ auto_approve_tools = []
 
     assert "openrouter.ai" in config.network.model_allowed_hosts
     assert config.network.web_allowed_hosts == ()
-    assert config.mcp.auto_approve_tools == ()
+    assert config.mcp.trusted_servers == ()
+
+
+def test_admin_config_rejects_legacy_name_only_auto_approval(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        """
+[mcp.approval]
+auto_approve_tools = ["continuous__search"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="trusted_servers"):
+        load_admin_config(path)
+
+
+def test_admin_config_rejects_duplicate_trusted_server_names(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        """
+[[mcp.trusted_servers]]
+name = "continuous"
+transport = "streamable_http"
+url = "https://mcp.internal/a"
+
+[[mcp.trusted_servers]]
+name = "continuous"
+transport = "streamable_http"
+url = "https://mcp.internal/b"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="doppelt"):
+        load_admin_config(path)
 
 
 @pytest.mark.parametrize(
@@ -88,12 +128,12 @@ auto_approve_tools = []
         ("[network]\nmodel_allowed_hosts = \"llm.internal\"\n", "model_allowed_hosts"),
         ("[mcp]\nallow_untrusted_stdio = \"true\"\n", "allow_untrusted_stdio"),
         (
-            "[mcp.approval]\nauto_approve_tools = [\"x__read\", \"x__read\"]\n",
-            "doppelten",
-        ),
-        (
             "[network]\nmodel_allowed_hosts = [\"LLM.INTERNAL\", \"llm.internal.\"]\n",
             "doppelten Hosts",
+        ),
+        (
+            "[[mcp.trusted_servers]]\nname = \"x\"\ntransport = \"streamable_http\"\nurl = \"ftp://example.org/mcp\"\n",
+            "http",
         ),
     ],
 )
