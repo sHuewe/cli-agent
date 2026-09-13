@@ -12,6 +12,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
 from .agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS, ServerConfig, ToolRoute, _RuntimeMcpServerConfig
+from .mcp_limits import validate_mcp_server_metadata
 from .network_policy import validate_http_url
 
 logger = logging.getLogger("cli_agent.agent_mcp")
@@ -94,6 +95,11 @@ class McpLifecycleMixin:
         try:
             session, instructions = await self._connect_server(server_stack, server_config)
             listed = await session.list_tools()
+            validate_mcp_server_metadata(
+                server_name=server_config.name,
+                instructions=instructions,
+                tools=list(listed.tools),
+            )
             tool_names: list[str] = []; server_tools: list[dict[str, Any]] = []; routes: dict[str, ToolRoute] = {}
             for tool in listed.tools:
                 exposed_name = f"{server_config.name}__{tool.name}"
@@ -123,7 +129,13 @@ class McpLifecycleMixin:
         knowledge_stack = AsyncExitStack(); await knowledge_stack.__aenter__()
         try:
             session, instructions = await self._connect_server(knowledge_stack, server_config)
-            listed = await session.list_tools(); available_names = {tool.name for tool in listed.tools}
+            listed = await session.list_tools()
+            validate_mcp_server_metadata(
+                server_name=server_config.name,
+                instructions=instructions,
+                tools=list(listed.tools),
+            )
+            available_names = {tool.name for tool in listed.tools}
             if available_names != EXPECTED_KNOWLEDGE_TOOLS:
                 raise RuntimeError(f"Der OKF-MCP-Server muss exakt die Tools {sorted(EXPECTED_KNOWLEDGE_TOOLS)} anbieten; erhalten: {sorted(available_names)}.")
             knowledge_tools: list[dict[str, Any]] = []; knowledge_routes: dict[str, ToolRoute] = {}
