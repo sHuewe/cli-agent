@@ -60,3 +60,20 @@ Normale Authentifizierungs- und Anwendungsheader wie `Authorization` oder projek
 Die Web-Redirect-Logik wurde bewusst nicht eingeschränkt: Redirects bleiben erlaubt, sofern jedes Redirect-Ziel selbst in `web_allowed_hosts` freigegeben ist. Ein Redirect von `faz.de` auf `faz.net` funktioniert also nur, wenn beide Hosts administrativ erlaubt sind.
 
 Eine zusätzliche DNS-/IP-basierte Netzpolicy ist weiterhin optionales Defense-in-Depth und wurde nicht als notwendige Produktgrenze umgesetzt.
+
+## F-07: Unbegrenzte MCP-Metadaten und Tool-Ergebnisse
+
+**Status:** behoben mit bewusst großzügigen Sicherheitsgrenzen.
+
+MCP-Server werden nun gegen feste Obergrenzen für Toolanzahl, Instructions, einzelne Toolbeschreibungen und Schemas sowie die Gesamtmenge der Tool-Metadaten geprüft. Zusätzlich wird die Textgröße eines einzelnen Tool-Ergebnisses begrenzt, bevor es an das Modell beziehungsweise die Komprimierung weitergegeben wird.
+
+Die Defaults sind absichtlich weit oberhalb normaler MCP-Nutzung angesetzt und dienen nur als Notbremse gegen defekte oder kompromittierte Server:
+
+- maximal 1.024 Tools pro MCP-Server,
+- maximal 2.000.000 Zeichen Server-Instructions,
+- maximal 250.000 Zeichen Beschreibung pro Tool,
+- maximal 2.000.000 Zeichen Input-Schema pro Tool,
+- maximal 20.000.000 Zeichen Tool-Metadaten pro Server insgesamt,
+- maximal 10.000.000 Zeichen pro Tool-Ergebnis.
+
+Damit sollen realistische, auch umfangreiche Fachsoftware-MCPs nicht eingeschränkt werden. Die Limits verhindern vielmehr, dass ein Server unbegrenzt Speicher und Modellkontext über Metadaten oder einzelne Antworten belegt. Regressionstests prüfen sowohl großzügige realistische Eingaben als auch alle Grenzverletzungen.
