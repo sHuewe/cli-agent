@@ -3,7 +3,7 @@ from __future__ import annotations
 import platform
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -38,6 +38,12 @@ def _string_map(values: Any, *, section: str, key: str) -> tuple[tuple[str, str]
     if not isinstance(values, dict):
         raise ValueError(f"{section}.{key} muss eine Tabelle sein.")
     return tuple(sorted((str(name), str(value)) for name, value in values.items()))
+
+
+def _trusted_stdio_command_is_deterministic(command: str) -> bool:
+    if command == "{python}":
+        return True
+    return Path(command).is_absolute() or PureWindowsPath(command).is_absolute()
 
 
 @dataclass(frozen=True)
@@ -79,7 +85,6 @@ class AdminConfig:
 
 
 def default_admin_config_file() -> Path:
-    """Return the fixed machine-wide security-policy path."""
     if platform.system() == "Windows":
         return Path(r"C:\ProgramData\cli-agent\admin_config.toml")
     return Path("/etc/cli-agent/admin_config.toml")
@@ -94,9 +99,7 @@ def _bool_value(values: dict[str, Any], key: str, default: bool, *, section: str
 
 def _string_list(values: dict[str, Any], key: str, default: tuple[str, ...], *, section: str) -> tuple[str, ...]:
     raw_values = values.get(key, list(default))
-    if not isinstance(raw_values, list) or not all(
-        isinstance(value, str) and value.strip() for value in raw_values
-    ):
+    if not isinstance(raw_values, list) or not all(isinstance(value, str) and value.strip() for value in raw_values):
         raise ValueError(f"{section}.{key} muss eine Liste nichtleerer Strings sein.")
     normalized = tuple(value.strip() for value in raw_values)
     if len(normalized) != len(set(normalized)):
@@ -156,25 +159,19 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
             raise ValueError(f"{section} benötigt für stdio ein command.")
         if url or headers:
             raise ValueError(f"{section} darf für stdio keine url oder headers enthalten.")
+        if not _trusted_stdio_command_is_deterministic(command):
+            raise ValueError(
+                f"{section}.command muss für einen trusted stdio-MCP ein absoluter "
+                "Executable-Pfad oder exakt '{python}' sein; PATH-basierte Commands sind nicht zulässig."
+            )
 
-    return TrustedMcpServer(
-        name=name,
-        transport=transport,
-        url=url,
-        command=command,
-        args=tuple(raw_args),
-        env=env,
-        headers=headers,
-        auto_approve_tools=tools,
-    )
+    return TrustedMcpServer(name=name, transport=transport, url=url, command=command, args=tuple(raw_args), env=env, headers=headers, auto_approve_tools=tools)
 
 
 def load_admin_config(path: Path | None = None) -> AdminConfig:
-    """Load the machine-wide security policy or safe built-in defaults."""
     config_file = default_admin_config_file() if path is None else path.expanduser()
     if not config_file.exists():
         return AdminConfig()
-
     with config_file.open("rb") as handle:
         values = tomllib.load(handle)
 
@@ -193,37 +190,23 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
     raw_credentials = model_values.get("credentials", [])
     if not isinstance(raw_credentials, list) or not all(isinstance(value, dict) for value in raw_credentials):
         raise ValueError("[[model.credentials]] muss eine Liste von Tabellen sein.")
-    model_credentials = tuple(
-        _model_credential_rule(credential_values, index)
-        for index, credential_values in enumerate(raw_credentials)
-    )
+    model_credentials = tuple(_model_credential_rule(v, i) for i, v in enumerate(raw_credentials))
     credential_keys = [(rule.provider, rule.host) for rule in model_credentials]
     if len(credential_keys) != len(set(credential_keys)):
         raise ValueError("[[model.credentials]] darf dieselbe Provider-/Host-Kombination nicht doppelt enthalten.")
     for rule in model_credentials:
         if rule.host not in network.model_allowed_hosts:
-            raise ValueError(
-                f"[[model.credentials]] Host {rule.host!r} muss auch in network.model_allowed_hosts erlaubt sein."
-            )
+            raise ValueError(f"[[model.credentials]] Host {rule.host!r} muss auch in network.model_allowed_hosts erlaubt sein.")
 
     mcp_values = values.get("mcp", {})
     if not isinstance(mcp_values, dict):
         raise ValueError("[mcp] in admin_config.toml muss eine Tabelle sein.")
     if "approval" in mcp_values:
-        raise ValueError(
-            "[mcp.approval] ist nicht mehr unterstützt. Permanente Freigaben "
-            "müssen über [[mcp.trusted_servers]] an eine Serveridentität gebunden werden."
-        )
-
+        raise ValueError("[mcp.approval] ist nicht mehr unterstützt. Permanente Freigaben müssen über [[mcp.trusted_servers]] an eine Serveridentität gebunden werden.")
     raw_trusted_servers = mcp_values.get("trusted_servers", [])
-    if not isinstance(raw_trusted_servers, list) or not all(
-        isinstance(value, dict) for value in raw_trusted_servers
-    ):
+    if not isinstance(raw_trusted_servers, list) or not all(isinstance(value, dict) for value in raw_trusted_servers):
         raise ValueError("[[mcp.trusted_servers]] muss eine Liste von Tabellen sein.")
-    trusted_servers = tuple(
-        _trusted_server(server_values, index)
-        for index, server_values in enumerate(raw_trusted_servers)
-    )
+    trusted_servers = tuple(_trusted_server(v, i) for i, v in enumerate(raw_trusted_servers))
     names = [server.name for server in trusted_servers]
     if len(names) != len(set(names)):
         raise ValueError("[[mcp.trusted_servers]].name darf nicht doppelt vorkommen.")
@@ -232,12 +215,7 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
         network=network,
         model_credentials=model_credentials,
         mcp=McpPolicy(
-            allow_untrusted_stdio=_bool_value(
-                mcp_values,
-                "allow_untrusted_stdio",
-                False,
-                section="[mcp]",
-            ),
+            allow_untrusted_stdio=_bool_value(mcp_values, "allow_untrusted_stdio", False, section="[mcp]"),
             trusted_servers=trusted_servers,
         ),
     )

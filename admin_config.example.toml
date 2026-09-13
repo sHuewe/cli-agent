@@ -1,19 +1,13 @@
 # cli-agent machine-wide security policy
-#
 # Windows: C:\ProgramData\cli-agent\admin_config.toml
 # Linux:   /etc/cli-agent/admin_config.toml
-#
-# This file is intentionally separate from the user/project config. Network,
-# model credential selection and MCP trust decisions are administrator policy.
 
 [network]
 model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 web_allowed_hosts = []
 
-# For remote OpenAI-compatible model hosts, a project/user config may only use
-# environment-variable names that are explicitly bound to that provider+host.
-# Localhost remains developer-controlled because no secret leaves the machine.
+# Remote model credentials are bound to provider + host.
 # [[model.credentials]]
 # provider = "openai"
 # host = "llm.intern.firma.de"
@@ -22,9 +16,10 @@ web_allowed_hosts = []
 [mcp]
 allow_untrusted_stdio = false
 
-# Persistent MCP auto-approvals are bound to a concrete administrator-defined
-# server identity. The user-configured MCP must match name, transport and the
-# complete endpoint identity before one of these tools can run without approval.
+# Persistent MCP auto-approvals require a concrete server identity.
+# For stdio, trusted commands must be absolute executables. The special
+# {python} placeholder is also accepted because it resolves to sys.executable
+# of the managed cli-agent installation. Bare PATH commands are rejected.
 #
 # [[mcp.trusted_servers]]
 # name = "continuous"

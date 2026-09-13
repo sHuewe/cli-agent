@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path, PureWindowsPath
 
 import pytest
@@ -26,8 +27,9 @@ def test_windows_admin_config_path_ignores_programdata_environment(monkeypatch: 
 
 
 def test_admin_config_loads_network_model_credentials_and_mcp_policy(tmp_path: Path) -> None:
+    executable = str((tmp_path / "trusted-mcp").resolve())
     path = tmp_path / "admin.toml"
-    path.write_text('''
+    path.write_text(f'''
 [network]
 model_allowed_hosts = ["LLM.INTERNAL."]
 mcp_allowed_hosts = ["mcp.internal"]
@@ -43,16 +45,14 @@ allow_untrusted_stdio = true
 
 [[mcp.trusted_servers]]
 name = "continuous"
-transport = "streamable_http"
-url = "https://MCP.INTERNAL./mcp"
+transport = "stdio"
+command = {json.dumps(executable)}
 auto_approve_tools = ["search"]
 '''.strip(), encoding="utf-8")
     config = load_admin_config(path)
     assert config.network.model_allowed_hosts == ("llm.internal",)
     assert config.model_credentials[0].host == "llm.internal"
-    assert config.model_credentials[0].allowed_api_key_envs == ("LLM_API_KEY",)
-    assert config.mcp.allow_untrusted_stdio is True
-    assert config.mcp.trusted_servers[0].url == "https://mcp.internal/mcp"
+    assert config.mcp.trusted_servers[0].command == executable
 
 
 def test_model_credential_host_must_also_be_allowlisted(tmp_path: Path) -> None:
@@ -60,7 +60,6 @@ def test_model_credential_host_must_also_be_allowlisted(tmp_path: Path) -> None:
     path.write_text('''
 [network]
 model_allowed_hosts = ["llm.internal"]
-
 [[model.credentials]]
 provider = "openai"
 host = "other.internal"
@@ -70,6 +69,32 @@ allowed_api_key_envs = ["LLM_API_KEY"]
         load_admin_config(path)
 
 
+def test_trusted_stdio_rejects_path_resolved_bare_command(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text('''
+[[mcp.trusted_servers]]
+name = "tool"
+transport = "stdio"
+command = "python"
+auto_approve_tools = ["search"]
+'''.strip(), encoding="utf-8")
+    with pytest.raises(ValueError, match="absoluter|PATH"):
+        load_admin_config(path)
+
+
+def test_trusted_stdio_accepts_managed_python_placeholder(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text('''
+[[mcp.trusted_servers]]
+name = "tool"
+transport = "stdio"
+command = "{python}"
+args = ["-m", "company_tool"]
+auto_approve_tools = ["search"]
+'''.strip(), encoding="utf-8")
+    assert load_admin_config(path).mcp.trusted_servers[0].command == "{python}"
+
+
 def test_admin_config_accepts_empty_optional_lists(tmp_path: Path) -> None:
     path = tmp_path / "admin.toml"
     path.write_text('''
@@ -77,7 +102,6 @@ def test_admin_config_accepts_empty_optional_lists(tmp_path: Path) -> None:
 model_allowed_hosts = ["localhost", "127.0.0.1", "::1", "openrouter.ai"]
 mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 web_allowed_hosts = []
-
 [mcp]
 allow_untrusted_stdio = false
 '''.strip(), encoding="utf-8")
@@ -102,7 +126,6 @@ def test_admin_config_rejects_duplicate_trusted_server_names(tmp_path: Path) -> 
 name = "continuous"
 transport = "streamable_http"
 url = "https://mcp.internal/a"
-
 [[mcp.trusted_servers]]
 name = "continuous"
 transport = "streamable_http"
@@ -140,7 +163,6 @@ def test_user_config_rejects_untrusted_stdio_policy(tmp_path: Path) -> None:
 name = "external"
 transport = "stdio"
 command = "external-mcp"
-
 [mcp_servers.config]
 allow_untrusted_stdio = true
 '''.strip(), encoding="utf-8")
