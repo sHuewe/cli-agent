@@ -84,6 +84,58 @@ auto_approve_tools = ["search"]
 
 Die Netzwerklisten enthalten Hosts, keine vollständigen URLs. Modell- und MCP-URLs bleiben Teil der normalen Benutzerkonfiguration, ihre Hosts müssen aber von der Admin-Policy erlaubt sein.
 
+### Remote-Modell-Credentials
+
+Für nichtlokale OpenAI-kompatible Modellziele reicht die Freigabe des Hosts in `model_allowed_hosts` allein nicht aus. Die Admin-Policy muss zusätzlich festlegen, **welche Environment-Variable für welchen Provider und Modell-Host als API-Key verwendet werden darf**. Dadurch kann eine normale Projektkonfiguration nicht versehentlich eine beliebige Prozess-Umgebungsvariable als Credential an einen freigegebenen Remote-LLM-Endpunkt senden.
+
+Beispiel für einen internen OpenAI-kompatiblen Endpunkt:
+
+```toml
+[network]
+model_allowed_hosts = ["localhost", "127.0.0.1", "::1", "llm.intern.firma.de"]
+
+[[model.credentials]]
+provider = "openai"
+host = "llm.intern.firma.de"
+allowed_api_key_envs = ["LLM_API_KEY"]
+```
+
+Die zugehörige Benutzer-/Projektkonfiguration kann dann beispielsweise so aussehen:
+
+```toml
+[model]
+provider = "openai"
+model = "NAME-DES-MODELLS"
+base_url = "https://llm.intern.firma.de/v1"
+api_key_env = "LLM_API_KEY"
+```
+
+Für OpenRouter muss entsprechend sowohl der Host als auch die verwendete Credential-Variable administrativ freigegeben werden:
+
+```toml
+[network]
+model_allowed_hosts = ["localhost", "127.0.0.1", "::1", "openrouter.ai"]
+
+[[model.credentials]]
+provider = "openai"
+host = "openrouter.ai"
+allowed_api_key_envs = ["OPENROUTER_API_KEY"]
+```
+
+Die normale Konfiguration dazu ist beispielsweise:
+
+```toml
+[model]
+provider = "openai"
+model = "openai/gpt-5"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+```
+
+Die eigentliche Secret-Zeichenfolge steht weiterhin nur in der Environment-Variable; `admin_config.toml` enthält lediglich den **Namen** der erlaubten Variable. Fehlt für einen nichtlokalen Modell-Host eine passende `[[model.credentials]]`-Regel oder ist `api_key_env` dort nicht aufgeführt, bricht `cli-agent` absichtlich mit `PermissionError` ab, zum Beispiel mit `Die Credential-Umgebungsvariable 'OPENROUTER_API_KEY' ist für Modell-Host 'openrouter.ai' nicht administrativ freigegeben.`
+
+Lokale Modellziele (`localhost`, `127.0.0.1`, `::1`) bleiben von dieser zusätzlichen Credential-Bindung ausgenommen.
+
 Für permanente MCP-Auto-Approvals gilt zusätzlich eine strengere Identitätsprüfung: Der benutzerkonfigurierte Server muss mit einem Eintrag unter `[[mcp.trusted_servers]]` übereinstimmen. Bei HTTP-MCPs werden Name, Transport, vollständiger normalisierter Endpoint und konfigurierte Header verglichen; bei stdio-MCPs Name, Transport, Command, Args und explizite Environment-Werte. Nur dann kann ein in `auto_approve_tools` genannter MCP-Toolname ohne Nachfrage ausgeführt werden. Ein anderer Server mit demselben Namen und Toolnamen erbt die Freigabe nicht.
 
 Der alte Abschnitt `[mcp.approval]` mit globalen exponierten Toolnamen wird absichtlich abgewiesen, weil er keine belastbare Serveridentität enthält.
@@ -102,7 +154,7 @@ timeout = 120
 context_length = 262144
 ```
 
-Die `base_url` bleibt Benutzerkonfiguration, ihr Host muss aber in `admin_config.toml` freigegeben sein. `--model` überschreibt nur `model.model`.
+Die `base_url` bleibt Benutzerkonfiguration, ihr Host muss aber in `admin_config.toml` freigegeben sein. Für nichtlokale OpenAI-kompatible Hosts muss außerdem die verwendete `api_key_env` über eine passende `[[model.credentials]]`-Regel administrativ erlaubt sein. `--model` überschreibt nur `model.model`.
 
 Persistente MCP-Verbindungen werden über `[[mcp_servers]]` konfiguriert:
 
@@ -222,11 +274,13 @@ log_model_messages = false
 log_tool_results = false
 ```
 
+`[logging].file` ist optional und wird relativ zum lokalen `cli-agent`-State-Verzeichnis aufgelöst. Absolute Pfade und `..` sind nicht zulässig. Beispielsweise schreibt `file = "logs/projekt-a.log"` unter `<cli-agent-state>/logs/projekt-a.log`.
+
 `dump_llm_context = true` schreibt Diagnoseinformationen unter `<workspace>/.cli-agent/` und ist standardmäßig deaktiviert.
 
 ## Technischer Ablauf
 
-Der Agent hält MCP-Sessions offen, exponiert Tools als `<server>__<tool>` und führt nach Tool-Ergebnissen den Modelllauf fort. MCP-`instructions` sind nicht vertrauenswürdiger als die jeweilige MCP-Quelle und dürfen zentrale Regeln oder Berechtigungsgrenzen nicht überschreiben.
+Der Agent hält MCP-Sessions offen, exponiert Tools als `<server>__<tool>` und führt nach Tool-Ergebnissen den Modelllauf fort. MCP-`instructions` von Built-in-MCPs gelten als Teil des ausgelieferten Agenten und werden in den Systemprompt aufgenommen. Instructions externer MCPs werden dagegen nur dann in den Systemprompt übernommen, wenn die konkrete Serveridentität in `admin_config.toml` mit `trust_instructions = true` freigegeben wurde. Sie dürfen zentrale Agent-Regeln oder Berechtigungsgrenzen dennoch nicht überschreiben.
 
 Wenn `[okf]` konfiguriert ist, läuft vor der Main-Phase ein separater Retrieval-Kontext mit den read-only Tools `knowledge_index` und `knowledge_read`.
 
