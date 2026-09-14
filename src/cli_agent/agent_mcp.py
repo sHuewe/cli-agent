@@ -154,8 +154,7 @@ class McpLifecycleMixin:
     def _stdio_environment(*, built_in: bool = False) -> dict[str, str]:
         safe_names = ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP", "LANG", "LC_ALL", "PYTHONIOENCODING")
         environment = {name: os.environ[name] for name in safe_names if os.environ.get(name) is not None}
-        if built_in:
-            environment["PYTHONSAFEPATH"] = "1"
+        environment["PYTHONSAFEPATH"] = "1"
         return environment
 
     async def _connect_server(self, stack: AsyncExitStack, server_config: ServerConfig) -> tuple[ClientSession, str | None]:
@@ -164,8 +163,6 @@ class McpLifecycleMixin:
             built_in = bool(getattr(server_config, "built_in", False))
             environment = self._stdio_environment(built_in=built_in)
             environment.update({key: self._resolve(value) for key, value in server_config.env.items()})
-            if built_in:
-                environment["PYTHONSAFEPATH"] = "1"
             parameters = StdioServerParameters(command=self._resolve(server_config.command), args=[self._resolve(value) for value in server_config.args], env=environment)
             read_stream, write_stream = await stack.enter_async_context(stdio_client(parameters))
         elif server_config.transport == "streamable_http":
