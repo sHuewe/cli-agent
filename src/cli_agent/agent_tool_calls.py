@@ -17,7 +17,7 @@ from .agent_knowledge import (
     _normalize_knowledge_path,
     tool_result_text,
 )
-from .mcp_limits import enforce_mcp_tool_result_limit
+from .mcp_limits import enforce_mcp_tool_result_limit, validate_mcp_tool_arguments
 
 logger = logging.getLogger("cli_agent.agent_tool_calls")
 
@@ -126,6 +126,37 @@ async def process_tool_calls(
                 "Tool aus der aktuellen Toolliste.",
             )
             transient_rejections.append((assistant_message, tool_call, tool_message))
+            continue
+
+        input_schema = agent._tool_input_schema(exposed_name, phase=phase)
+        if input_schema is None:
+            logger.error(
+                "tool_call_schema_missing phase=%s name=%s",
+                phase,
+                exposed_name,
+            )
+            raise RuntimeError(
+                f"Für das MCP-Tool {exposed_name!r} ist kein registriertes Input-Schema verfügbar."
+            )
+        validation_error = validate_mcp_tool_arguments(
+            tool_name=str(exposed_name),
+            schema=input_schema,
+            arguments=arguments,
+        )
+        if validation_error is not None:
+            tool_message = agent._append_tool_error(
+                messages,
+                tool_call,
+                exposed_name,
+                "Die Tool-Argumente entsprechen nicht dem vom MCP-Server "
+                f"angebotenen Input-Schema: {validation_error}",
+            )
+            transient_rejections.append((assistant_message, tool_call, tool_message))
+            logger.info(
+                "tool_call_schema_rejected phase=%s name=%s",
+                phase,
+                exposed_name,
+            )
             continue
 
         if agent._requires_approval(

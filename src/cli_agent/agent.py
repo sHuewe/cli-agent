@@ -200,6 +200,16 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
     def _model_tools(self) -> list[dict[str, Any]]:
         return [tool for server_name, tools in self._server_tools.items() if server_name in self._active_servers for tool in tools]
 
+    def _tool_input_schema(self, exposed_name: str, *, phase: str) -> dict[str, Any] | None:
+        tools = self._knowledge_tools if phase == "knowledge" else self._model_tools()
+        for tool in tools:
+            function = tool.get("function", {})
+            if function.get("name") != exposed_name:
+                continue
+            parameters = function.get("parameters")
+            return parameters if isinstance(parameters, dict) else None
+        return None
+
     def _trusted_server_matches(self, server_config: ServerConfig, trusted: TrustedMcpServer) -> bool:
         if getattr(server_config, "built_in", False):
             return False

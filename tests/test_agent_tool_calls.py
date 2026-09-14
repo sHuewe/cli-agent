@@ -25,9 +25,10 @@ class FakeSession:
 
 
 class ToolAgent:
-    def __init__(self, *, approval=True) -> None:
+    def __init__(self, *, approval=True, schemas=None) -> None:
         self.logging_config = LoggingConfig()
         self.approval = approval
+        self.schemas = schemas or {}
         self.approvals: list[tuple[str, dict]] = []
         self.dumps = []
         self.compressions = []
@@ -43,6 +44,10 @@ class ToolAgent:
             tool_message["tool_name"] = str(tool_name)
         messages.append(tool_message)
         return tool_message
+
+    def _tool_input_schema(self, exposed_name, *, phase):
+        del phase
+        return self.schemas.get(exposed_name, {"type": "object"})
 
     def _requires_approval(self, server_config, tool_name, exposed_name=None):
         return not getattr(server_config, "built_in", False)
@@ -127,6 +132,27 @@ def test_disabled_server_tool_is_rejected() -> None:
     assert session.calls == []
     assert transient
     assert "deaktiviert" in messages[-1]["content"]
+
+
+def test_schema_invalid_arguments_are_rejected_before_approval_and_execution() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    agent = ToolAgent(approval=True, schemas={"external__search": schema})
+    session = FakeSession()
+    config = McpServerConfig(name="external", command="unused")
+    routes = {"external__search": (session, "search", config)}
+    call = _tool_call("external__search", {"query": "test", "extra": "data"})
+
+    _result, messages, transient = _run(agent=agent, tool_calls=[call], routes=routes)
+
+    assert session.calls == []
+    assert agent.approvals == []
+    assert transient
+    assert "Input-Schema" in messages[-1]["content"]
 
 
 def test_external_tool_requires_approval_and_denial_prevents_execution() -> None:

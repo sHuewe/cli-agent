@@ -120,6 +120,47 @@ def test_start_server_registers_tools_and_trusted_instructions(tmp_path: Path) -
     asyncio.run(exercise())
 
 
+def test_start_server_rejects_duplicate_native_tool_names(tmp_path: Path) -> None:
+    class Session:
+        async def list_tools(self):
+            return SimpleNamespace(
+                tools=[
+                    SimpleNamespace(
+                        name="search",
+                        description="first",
+                        inputSchema={"type": "object"},
+                    ),
+                    SimpleNamespace(
+                        name="search",
+                        description="second",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                        },
+                    ),
+                ]
+            )
+
+    async def exercise() -> None:
+        agent = make_agent(tmp_path)
+        parent = AsyncExitStack()
+        await parent.__aenter__()
+
+        async def connect(_stack, _config):
+            return Session(), None
+
+        agent._connect_server = connect
+        config = McpServerConfig(name="docs", command="unused", built_in=True)
+        try:
+            with pytest.raises(RuntimeError, match="mehrfach"):
+                await agent._start_server(config, parent)
+            assert "docs" not in agent._sessions
+            assert "docs__search" not in agent._tool_routes
+        finally:
+            await parent.aclose()
+    asyncio.run(exercise())
+
+
 def test_optional_missing_knowledge_repository_is_ignored(tmp_path: Path) -> None:
     async def exercise() -> None:
         agent = make_agent(tmp_path)

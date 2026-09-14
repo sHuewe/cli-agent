@@ -71,6 +71,70 @@ def test_description_and_schema_limits_are_enforced(monkeypatch: pytest.MonkeyPa
         )
 
 
+def test_duplicate_tool_names_are_rejected() -> None:
+    with pytest.raises(RuntimeError, match="mehrfach"):
+        limits.validate_mcp_server_metadata(
+            server_name="broken",
+            instructions=None,
+            tools=[tool(name="search"), tool(name="search")],
+        )
+
+
+def test_invalid_and_external_ref_schemas_are_rejected() -> None:
+    with pytest.raises(RuntimeError, match="gültiges JSON-Schema"):
+        limits.validate_mcp_server_metadata(
+            server_name="broken",
+            instructions=None,
+            tools=[tool(schema={"type": "definitely-not-a-json-schema-type"})],
+        )
+
+    with pytest.raises(RuntimeError, match="externe JSON-Schema-Referenz"):
+        limits.validate_mcp_server_metadata(
+            server_name="broken",
+            instructions=None,
+            tools=[tool(schema={"$ref": "https://example.invalid/schema.json"})],
+        )
+
+
+def test_tool_arguments_are_validated_against_schema() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="server__search",
+            schema=schema,
+            arguments={"query": "test"},
+        )
+        is None
+    )
+    assert "Additional properties" in str(
+        limits.validate_mcp_tool_arguments(
+            tool_name="server__search",
+            schema=schema,
+            arguments={"query": "test", "extra": "unexpected"},
+        )
+    )
+    assert "not of type 'string'" in str(
+        limits.validate_mcp_tool_arguments(
+            tool_name="server__search",
+            schema=schema,
+            arguments={"query": 123},
+        )
+    )
+    assert "required property" in str(
+        limits.validate_mcp_tool_arguments(
+            tool_name="server__search",
+            schema=schema,
+            arguments={},
+        )
+    )
+
+
 def test_total_metadata_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_TOTAL_TOOL_METADATA_CHARS", 50)
 

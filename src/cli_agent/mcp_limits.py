@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from jsonschema.exceptions import SchemaError
+from jsonschema.validators import validator_for
+
 # These limits are intentionally generous. They are last-resort safety bounds
 # against broken or compromised MCP servers, not normal application quotas.
 MAX_MCP_TOOLS_PER_SERVER = 1_024
@@ -11,6 +14,65 @@ MAX_MCP_TOOL_DESCRIPTION_CHARS = 250_000
 MAX_MCP_TOOL_SCHEMA_CHARS = 2_000_000
 MAX_MCP_TOTAL_TOOL_METADATA_CHARS = 20_000_000
 MAX_MCP_TOOL_RESULT_CHARS = 10_000_000
+
+
+def _reject_external_schema_references(schema: Any, *, tool_name: str) -> None:
+    stack = [schema]
+    reference_keys = {"$ref", "$dynamicRef", "$recursiveRef"}
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if key in reference_keys:
+                    if not isinstance(value, str) or not value.startswith("#"):
+                        raise RuntimeError(
+                            f"MCP-Tool {tool_name} verwendet eine externe JSON-Schema-Referenz. "
+                            "Nur lokale Schema-Referenzen sind zulässig."
+                        )
+                stack.append(value)
+        elif isinstance(current, list):
+            stack.extend(current)
+
+
+def _schema_validator(schema: dict[str, Any], *, tool_name: str):
+    _reject_external_schema_references(schema, tool_name=tool_name)
+    try:
+        validator_class = validator_for(schema)
+        validator_class.check_schema(schema)
+    except SchemaError as exc:
+        raise RuntimeError(
+            f"MCP-Tool {tool_name} liefert kein gültiges JSON-Schema."
+        ) from exc
+    return validator_class(schema)
+
+
+def validate_mcp_tool_arguments(
+    *,
+    tool_name: str,
+    schema: dict[str, Any],
+    arguments: dict[str, Any],
+) -> str | None:
+    """Return a concise validation error, or ``None`` for valid arguments."""
+
+    validator = _schema_validator(schema, tool_name=tool_name)
+    errors = sorted(
+        validator.iter_errors(arguments),
+        key=lambda error: (
+            tuple(str(part) for part in error.absolute_path),
+            str(error.validator),
+            error.message,
+        ),
+    )
+    if not errors:
+        return None
+    error = errors[0]
+    location = "$"
+    for part in error.absolute_path:
+        if isinstance(part, int):
+            location += f"[{part}]"
+        else:
+            location += f".{part}"
+    return f"{location}: {error.message}"
 
 
 def validate_mcp_server_metadata(
@@ -31,17 +93,29 @@ def validate_mcp_server_metadata(
         )
 
     total_metadata_chars = 0
+    seen_tool_names: set[str] = set()
     for tool in tools:
         tool_name = str(getattr(tool, "name", "<unbekannt>"))
+        if tool_name in seen_tool_names:
+            raise RuntimeError(
+                f"MCP-Server {server_name!r} bietet den Toolnamen {tool_name!r} mehrfach an."
+            )
+        seen_tool_names.add(tool_name)
+
         description = str(getattr(tool, "description", None) or "")
         if len(description) > MAX_MCP_TOOL_DESCRIPTION_CHARS:
             raise RuntimeError(
                 f"MCP-Tool {server_name}__{tool_name} hat eine zu große Beschreibung "
                 f"({len(description)} > {MAX_MCP_TOOL_DESCRIPTION_CHARS} Zeichen)."
             )
+        schema = getattr(tool, "inputSchema", {})
+        if not isinstance(schema, dict):
+            raise RuntimeError(
+                f"MCP-Tool {server_name}__{tool_name} liefert kein JSON-Objekt als Input-Schema."
+            )
         try:
             schema_text = json.dumps(
-                getattr(tool, "inputSchema", {}),
+                schema,
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
@@ -54,6 +128,7 @@ def validate_mcp_server_metadata(
                 f"MCP-Tool {server_name}__{tool_name} hat ein zu großes Schema "
                 f"({len(schema_text)} > {MAX_MCP_TOOL_SCHEMA_CHARS} Zeichen)."
             )
+        _schema_validator(schema, tool_name=f"{server_name}__{tool_name}")
         total_metadata_chars += len(description) + len(schema_text)
         if total_metadata_chars > MAX_MCP_TOTAL_TOOL_METADATA_CHARS:
             raise RuntimeError(
