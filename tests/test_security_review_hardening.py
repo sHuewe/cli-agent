@@ -100,6 +100,24 @@ def test_context_dump_rejects_symlink_directory(tmp_path: Path) -> None:
     assert list(outside.iterdir()) == []
 
 
+def test_context_dump_rejects_dangling_symlink_file(tmp_path: Path) -> None:
+    dump = tmp_path / ".cli-agent"
+    dump.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-history.json"
+    link = dump / "history.json"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks sind in dieser Testumgebung nicht verfügbar")
+
+    assert not link.exists()
+    agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
+    agent._exit_stack = SimpleNamespace()
+    with pytest.raises(RuntimeError, match="Symlink|Reparse"):
+        asyncio.run(agent.ask("Hallo"))
+    assert not outside.exists()
+
+
 def test_context_dump_rejects_hardlinked_existing_dump_file(tmp_path: Path) -> None:
     dump = tmp_path / ".cli-agent"
     dump.mkdir()

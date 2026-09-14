@@ -130,11 +130,11 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 "LLM-Context-Dump verweigert: .cli-agent liegt nicht sicher im Workspace."
             ) from exc
         dump_file = dump_directory / filename
+        if path_entry_is_symlink_or_reparse(dump_file):
+            raise RuntimeError(
+                f"LLM-Context-Dump verweigert: {filename!r} darf kein Symlink oder Reparse Point sein."
+            )
         if dump_file.exists():
-            if path_entry_is_symlink_or_reparse(dump_file):
-                raise RuntimeError(
-                    f"LLM-Context-Dump verweigert: {filename!r} darf kein Symlink oder Reparse Point sein."
-                )
             try:
                 if regular_file_has_multiple_links(dump_file):
                     raise RuntimeError(
