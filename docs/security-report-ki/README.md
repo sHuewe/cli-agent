@@ -66,6 +66,14 @@ Aus der Überschneidung und technischen Konkretheit der Berichte ergeben sich in
 
 Diese Liste ist **keine automatisch übernommene Security-Finding-Liste**. Sie dient als Priorisierung für reproduzierbare Tests und die anschließende menschliche Bewertung.
 
+## Inzwischen gelöste Findings
+
+Die folgende Tabelle dokumentiert Findings aus den eingefrorenen Review-Berichten, für die auf dem Branch inzwischen eine konkrete Lösung implementiert wurde. Die ursprünglichen Reports bleiben unverändert, damit nachvollziehbar bleibt, was die Modelle am Snapshot `93cc5b20c99a73e22f52144e306608577f0e3f65` tatsächlich gemeldet haben.
+
+| Finding | Meldende KI | Commit mit Lösung |
+|---|---|---|
+| Externe Python-stdio-MCPs können bei `{python} -m <modul>` durch gleichnamige Module aus dem Workspace beschattet werden. `PYTHONSAFEPATH=1` wird nun für alle stdio-Kindprozesse gesetzt; das Working Directory bleibt bewusst der Workspace. Ein Regressionstest prüft sowohl den weiterhin erhaltenen Workspace-CWD als auch, dass das Workspace-Modul nicht importiert wird. | GPT-6 Astra (F-01) | `a8491af24534a9d761927f81a699bc57abb4ff70` |
+
 ## Interpretation der Ergebnisse
 
 Die Anzahl der Findings eines Modells sollte nicht als Qualitätsmetrik verstanden werden. Ein Modell kann ein relevantes Problem übersehen, ein anderes kann ein bewusst akzeptiertes Restrisiko als Vulnerability klassifizieren oder ein operatives Thema zu hoch bewerten.
