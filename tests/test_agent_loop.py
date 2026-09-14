@@ -45,6 +45,10 @@ class LoopAgent:
         messages.append(message)
         return message
 
+    def _tool_input_schema(self, exposed_name, *, phase):
+        del exposed_name, phase
+        return {"type": "object"}
+
 
 def _run(agent, *, phase="main", state=None, tools=None, routes=None, max_concept_reads=10):
     return asyncio.run(
