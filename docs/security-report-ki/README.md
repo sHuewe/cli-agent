@@ -59,7 +59,7 @@ Aus der Überschneidung und technischen Konkretheit der Berichte ergeben sich in
 - **Python-stdio Workspace-Shadowing:** inzwischen gelöst in `a8491af24534a9d761927f81a699bc57abb4ff70`. `PYTHONSAFEPATH=1` wird für alle stdio-Kindprozesse gesetzt; das Working Directory bleibt weiterhin der Workspace.
 - **MCP-Contract-Durchsetzung:** inzwischen gelöst in `28084cdd6177a48bee7a112ee7cd0ed688d3095a`. Tool-Argumente werden vor Approval und Ausführung gegen das registrierte `inputSchema` validiert; doppelte native Toolnamen eines Servers sowie ungültige bzw. extern referenzierende Schemas werden fail-closed abgewiesen.
 - **Granularität von `allow_untrusted_stdio`:** Bewerten, ob ein administrativ freigegebener stdio-Server gestartet werden können soll, ohne damit beliebige stdio-Prozesse aus normaler Projektkonfiguration zu erlauben.
-- **Context-Dump-Symlink:** GPT-6s Finding zu dangling Symlinks mit einem kleinen reproduzierbaren Test bestätigen oder widerlegen.
+- **Context-Dump-Symlink:** inzwischen gelöst in `7f5800a8fef691441a3c5fd2b91781b14dc47843`. Ein dangling Symlink auf eine Dump-Datei wird nun unabhängig von `Path.exists()` über den Verzeichniseintrag erkannt und fail-closed abgewiesen; ein Regressionstest stellt sicher, dass das externe Ziel nicht erzeugt wird.
 - **Context-Preflight:** Vor großen Modellanfragen prüfen, ob Systemprompt, History, expliziter Datei-Kontext und erwartetes Output-Budget in das konfigurierte Modellfenster passen.
 - **`okf.required`:** Prüfen, ob unvollständiges Retrieval tatsächlich in die Main-Phase fällt und ob synthetische Indexeinträge vollständig navigierbar sind.
 - **Windows-Policy-Pfad:** Claudes Hypothese zur Erzeugbarkeit von `C:\ProgramData\cli-agent` durch einen normalen Benutzer auf den tatsächlich eingesetzten Windows-Systemen verifizieren.
@@ -68,12 +68,13 @@ Diese Liste ist **keine automatisch übernommene Security-Finding-Liste**. Sie d
 
 ## Inzwischen gelöste Findings
 
-Die folgende Tabelle dokumentiert Findings aus den eingefrorenen Review-Berichten, für die auf dem Branch inzwischen eine konkrete Lösung implementiert wurde. Die ursprünglichen Reports bleiben unverändert, damit nachvollziehbar bleibt, was die Modelle am Snapshot `93cc5b20c99a73e22f52144e306608577f0e3f65` tatsächlich gemeldet haben.
+Die folgende Tabelle dokumentiert Findings aus den eingefrorenen Review-Berichten, für die inzwischen eine konkrete Lösung implementiert wurde. Die ursprünglichen Reports bleiben unverändert, damit nachvollziehbar bleibt, was die Modelle am Snapshot `93cc5b20c99a73e22f52144e306608577f0e3f65` tatsächlich gemeldet haben.
 
 | Finding | Meldende KI | Commit mit Lösung |
 |---|---|---|
 | Externe Python-stdio-MCPs können bei `{python} -m <modul>` durch gleichnamige Module aus dem Workspace beschattet werden. `PYTHONSAFEPATH=1` wird nun für alle stdio-Kindprozesse gesetzt; das Working Directory bleibt bewusst der Workspace. Ein Regressionstest prüft sowohl den weiterhin erhaltenen Workspace-CWD als auch, dass das Workspace-Modul nicht importiert wird. | GPT-6 Astra (F-01) | `a8491af24534a9d761927f81a699bc57abb4ff70` |
 | MCP-Tool-Aufrufe wurden nicht gegen das vom Server veröffentlichte `inputSchema` validiert; zudem konnten doppelte native Toolnamen zu uneindeutiger Zuordnung von Schema, Contract und Route führen. Argumente werden nun vor Approval/Ausführung lokal validiert und doppelte Toolnamen werden bereits beim Registrieren der Server-Metadaten abgewiesen. | GPT-6 Astra (F-02) | `28084cdd6177a48bee7a112ee7cd0ed688d3095a` |
+| Ein dangling Symlink auf eine Context-Dump-Datei konnte die bisherige `exists()`-Prüfung umgehen; das anschließende Schreiben folgte dem Link und konnte ein Ziel außerhalb des Workspaces erzeugen oder überschreiben. Dump-Dateien werden nun unabhängig von `exists()` auf Symlink/Reparse-Point geprüft; der Fall ist durch einen Regressionstest abgedeckt. | GPT-6 Astra (F-03) | `7f5800a8fef691441a3c5fd2b91781b14dc47843` |
 
 ## Interpretation der Ergebnisse
 
