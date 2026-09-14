@@ -292,7 +292,7 @@ Wichtige Grundannahmen:
 - Web-, Datei- und OKF-Inhalte sind nicht vertrauenswürdige Referenzdaten.
 - Externe MCP-Server bilden eine eigene Trust Boundary.
 - Normale Benutzerkonfiguration darf keine administrativen Netzwerk- oder Trust-Grenzen erweitern.
-- Tool- und Dateisystemgrenzen werden deterministisch im Host-Code geprüft.
+- Vom Host verwaltete Dateizugriffe – insbesondere der eingebaute OS-MCP sowie Datei-Kontext und Output – werden deterministisch auf die vorgesehenen Workspace-Grenzen geprüft. Externe MCP-Server sind eigenständige Prozesse bzw. Dienste; ihre internen Datei- oder Systemzugriffe kann `cli-agent` nicht auf den Workspace beschränken.
 
 Weitere Details stehen in [`security.md`](security.md) und [`company-deployment-checklist.md`](company-deployment-checklist.md).
 
