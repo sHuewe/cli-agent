@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .repository import OkfRepository, OkfRepositoryError
-from ..config import McpServerConfig, load_config
+from ..config import load_config
 from ..logging_setup import configure_logging
+from .repository import OkfRepository, OkfRepositoryError
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +93,11 @@ def parse_args() -> argparse.Namespace:
         default="INFO",
     )
     parser.add_argument(
-            "--config-file",
-            type=Path,
-            default=None,
-            help="Configuration file",
-        )
+        "--config-file",
+        type=Path,
+        default=None,
+        help="Configuration file",
+    )
     return parser.parse_args()
 
 
@@ -107,14 +106,14 @@ def main() -> None:
     config = load_config(path=args.config_file)
     configure_logging(
         config.logging,
-        logger = logger,
+        logger=logger,
         default_filename="cli-agent-knowledge.log",
     )
-    #logging.basicConfig(
+    # logging.basicConfig(
     #    level=getattr(logging, args.log_level),
     #    stream=sys.stderr,
     #    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    #)
+    # )
     try:
         repository = OkfRepository.from_directory(
             args.project_directory,

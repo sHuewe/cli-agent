@@ -53,11 +53,18 @@ def test_extract_plain_text_is_unchanged_except_normalization() -> None:
     assert content == "First line\n\nSecond line"
 
 
-def test_validate_web_url_allows_local_and_private_hosts() -> None:
-    assert _validate_web_url("http://localhost:8080/docs") == (
-        "http://localhost:8080/docs"
+def test_validate_web_url_requires_explicit_hosts() -> None:
+    with pytest.raises(ValueError, match="nicht erlaubt"):
+        _validate_web_url("http://localhost:8080/docs")
+    with pytest.raises(ValueError, match="nicht erlaubt"):
+        _validate_web_url("http://10.1.2.3/docs")
+    assert (
+        _validate_web_url(
+            "http://localhost:8080/docs",
+            allowed_hosts=("localhost",),
+        )
+        == "http://localhost:8080/docs"
     )
-    assert _validate_web_url("http://10.1.2.3/docs") == "http://10.1.2.3/docs"
 
 
 @pytest.mark.parametrize(
@@ -126,7 +133,7 @@ def test_add_web_context_is_session_command_not_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_fetch(url: str) -> WebContext:
+    async def fake_fetch(url: str, **_: object) -> WebContext:
         return example_context(url)
 
     monkeypatch.setattr("cli_agent.web_context_agent.fetch_web_context", fake_fetch)
@@ -139,7 +146,9 @@ def test_add_web_context_is_session_command_not_history(
     assert agent.history == []
 
 
-def test_web_context_is_added_to_working_message_but_not_history(tmp_path: Path) -> None:
+def test_web_context_is_added_to_working_message_but_not_history(
+    tmp_path: Path,
+) -> None:
     model = RecordingModel()
     agent = make_agent(tmp_path, model)
     agent._web_contexts.append(example_context())

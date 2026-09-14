@@ -1,0 +1,54 @@
+# cli-agent machine-wide security policy
+# Windows: C:\ProgramData\cli-agent\admin_config.toml
+# Linux:   /etc/cli-agent/admin_config.toml
+
+[network]
+model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+web_allowed_hosts = []
+
+# Optional remote model credentials are bound to provider + host. This section
+# is only needed when the user config actually sets model.api_key_env.
+# [[model.credentials]]
+# provider = "openai"
+# host = "llm.intern.firma.de"
+# allowed_api_key_envs = ["LLM_API_KEY"]
+
+[mcp]
+allow_untrusted_stdio = false
+
+# Persistent MCP auto-approvals and trusted MCP instructions require a concrete
+# server identity. trust_instructions defaults to false. Enable it only for
+# reviewed MCP servers whose server-level instructions are intentionally part of
+# the agent's trusted operating guidance.
+#
+# Persistent auto-approvals additionally pin the complete MCP inputSchema of the
+# approved tool. Do not calculate contract_sha256 manually. Use:
+#
+#   cli-agent admin inspect-tool fachsoftware search --config config.toml
+#   cli-agent admin trust-tool fachsoftware search --config config.toml
+#
+# The second command prints a TOML fragment. It NEVER modifies this file. Review
+# the displayed schema and copy the generated fragment manually into the matching
+# [[mcp.trusted_servers]] entry.
+#
+# For stdio, trusted commands must be absolute executables. The special
+# {python} placeholder is also accepted because it resolves to sys.executable
+# of the managed cli-agent installation. Bare PATH commands are rejected.
+#
+# [[mcp.trusted_servers]]
+# name = "fachsoftware"
+# transport = "streamable_http"
+# url = "https://mcp.intern.firma.de/mcp"
+# trust_instructions = true
+#
+# [[mcp.trusted_servers.auto_approve_tools]]
+# name = "search"
+# contract_sha256 = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+#
+# [[mcp.trusted_servers]]
+# name = "local-audited-tool"
+# transport = "stdio"
+# command = "C:/Program Files/Company/audited-mcp.exe"
+# args = ["--stdio"]
+# trust_instructions = false

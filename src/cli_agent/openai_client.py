@@ -6,10 +6,44 @@ from typing import Any
 import httpx
 
 from .model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
+from .network_policy import LOCAL_HOSTS, validate_http_url
+
+
+MAX_HTTP_ERROR_DETAIL_CHARS = 4_000
 
 
 class OpenAIError(RuntimeError):
     pass
+
+
+def _safe_http_error_detail(response: httpx.Response) -> str:
+    """Return a bounded, terminal-safe response body for diagnostics."""
+
+    try:
+        detail = response.text.strip()
+    except Exception:
+        return ""
+
+    if not detail:
+        return ""
+
+    safe: list[str] = []
+    for char in detail:
+        codepoint = ord(char)
+        if char in {"\n", "\r", "\t"} or (codepoint >= 32 and codepoint != 127):
+            safe.append(char)
+        else:
+            safe.append(f"\\x{codepoint:02x}")
+
+    normalized = "".join(safe).replace("\r\n", "\n").replace("\r", "\n")
+    if len(normalized) <= MAX_HTTP_ERROR_DETAIL_CHARS:
+        return normalized
+
+    omitted = len(normalized) - MAX_HTTP_ERROR_DETAIL_CHARS
+    return (
+        normalized[:MAX_HTTP_ERROR_DETAIL_CHARS]
+        + f"... [{omitted} Zeichen gekürzt]"
+    )
 
 
 class OpenAIClient:
@@ -31,9 +65,7 @@ class OpenAIClient:
 
                 for tool_call in tool_calls:
                     converted_call = dict(tool_call)
-                    function = dict(
-                        converted_call.get("function", {})
-                    )
+                    function = dict(converted_call.get("function", {}))
 
                     arguments = function.get("arguments")
                     if isinstance(arguments, dict):
@@ -66,9 +98,7 @@ class OpenAIClient:
 
             for tool_call in tool_calls:
                 normalized_call = dict(tool_call)
-                function = dict(
-                    normalized_call.get("function", {})
-                )
+                function = dict(normalized_call.get("function", {}))
 
                 arguments = function.get("arguments", {})
                 if isinstance(arguments, str):
@@ -117,8 +147,13 @@ class OpenAIClient:
         timeout: float = 120.0,
         headers: dict[str, str] | None = None,
         context_length: int | None = None,
+        allowed_hosts: tuple[str, ...] = LOCAL_HOSTS,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_http_url(
+            base_url,
+            allowed_hosts=allowed_hosts,
+            purpose="OpenAI-Modell",
+        ).rstrip("/")
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
@@ -190,7 +225,9 @@ class OpenAIClient:
         self.last_usage = None
         try:
             async with httpx.AsyncClient(
-                timeout=self.timeout
+                timeout=self.timeout,
+                follow_redirects=False,
+                trust_env=False,
             ) as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
@@ -198,6 +235,13 @@ class OpenAIClient:
                     json=payload,
                 )
                 response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = _safe_http_error_detail(exc.response)
+            suffix = f": {detail}" if detail else ""
+            raise OpenAIError(
+                f"OpenAI-kompatibles Modell unter {self.base_url} hat die Anfrage "
+                f"mit HTTP {exc.response.status_code} abgelehnt{suffix}"
+            ) from exc
         except httpx.HTTPError as exc:
             raise OpenAIError(
                 f"OpenAI-kompatibles Modell unter "
@@ -212,8 +256,6 @@ class OpenAIClient:
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise OpenAIError(
-                f"Unerwartete Modellantwort: {data}"
-            ) from exc
+            raise OpenAIError(f"Unerwartete Modellantwort: {data}") from exc
 
         return self._normalize_message(message)

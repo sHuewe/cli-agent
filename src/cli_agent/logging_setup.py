@@ -10,9 +10,9 @@ from .config import LoggingConfig
 def configure_logging(
     config: LoggingConfig,
     *,
-    logger = None,
+    logger=None,
     default_filename: str | None = None,
-    ) -> None:
+) -> None:
     if logger is None:
         logger = logging.getLogger("cli_agent")
     logger.handlers.clear()
