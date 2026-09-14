@@ -56,7 +56,7 @@ Trotz deutlich unterschiedlicher Detailtiefe und Severity-Einstufung ergibt sich
 
 Aus der Überschneidung und technischen Konkretheit der Berichte ergeben sich insbesondere folgende Kandidaten für gezielte Regressionstests und Codeprüfung:
 
-- **Python-stdio Workspace-Shadowing:** Prüfen, ob ein extern konfigurierter `{python} -m <modul>`-Server ein gleichnamiges Modul aus dem Workspace importieren kann.
+- **Python-stdio Workspace-Shadowing:** inzwischen gelöst in `a8491af24534a9d761927f81a699bc57abb4ff70`. `PYTHONSAFEPATH=1` wird für alle stdio-Kindprozesse gesetzt; das Working Directory bleibt weiterhin der Workspace.
 - **MCP-Contract-Durchsetzung:** Tool-Argumente gegen das tatsächlich registrierte/gepinnte JSON-Schema validieren und doppelte Toolnamen innerhalb einer Serverantwort testen.
 - **Granularität von `allow_untrusted_stdio`:** Bewerten, ob ein administrativ freigegebener stdio-Server gestartet werden können soll, ohne damit beliebige stdio-Prozesse aus normaler Projektkonfiguration zu erlauben.
 - **Context-Dump-Symlink:** GPT-6s Finding zu dangling Symlinks mit einem kleinen reproduzierbaren Test bestätigen oder widerlegen.
