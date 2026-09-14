@@ -57,7 +57,7 @@ Trotz deutlich unterschiedlicher Detailtiefe und Severity-Einstufung ergibt sich
 Aus der Überschneidung und technischen Konkretheit der Berichte ergeben sich insbesondere folgende Kandidaten für gezielte Regressionstests und Codeprüfung:
 
 - **Python-stdio Workspace-Shadowing:** inzwischen gelöst in `a8491af24534a9d761927f81a699bc57abb4ff70`. `PYTHONSAFEPATH=1` wird für alle stdio-Kindprozesse gesetzt; das Working Directory bleibt weiterhin der Workspace.
-- **MCP-Contract-Durchsetzung:** Tool-Argumente gegen das tatsächlich registrierte/gepinnte JSON-Schema validieren und doppelte Toolnamen innerhalb einer Serverantwort testen.
+- **MCP-Contract-Durchsetzung:** inzwischen gelöst in `28084cdd6177a48bee7a112ee7cd0ed688d3095a`. Tool-Argumente werden vor Approval und Ausführung gegen das registrierte `inputSchema` validiert; doppelte native Toolnamen eines Servers sowie ungültige bzw. extern referenzierende Schemas werden fail-closed abgewiesen.
 - **Granularität von `allow_untrusted_stdio`:** Bewerten, ob ein administrativ freigegebener stdio-Server gestartet werden können soll, ohne damit beliebige stdio-Prozesse aus normaler Projektkonfiguration zu erlauben.
 - **Context-Dump-Symlink:** GPT-6s Finding zu dangling Symlinks mit einem kleinen reproduzierbaren Test bestätigen oder widerlegen.
 - **Context-Preflight:** Vor großen Modellanfragen prüfen, ob Systemprompt, History, expliziter Datei-Kontext und erwartetes Output-Budget in das konfigurierte Modellfenster passen.
@@ -73,6 +73,7 @@ Die folgende Tabelle dokumentiert Findings aus den eingefrorenen Review-Berichte
 | Finding | Meldende KI | Commit mit Lösung |
 |---|---|---|
 | Externe Python-stdio-MCPs können bei `{python} -m <modul>` durch gleichnamige Module aus dem Workspace beschattet werden. `PYTHONSAFEPATH=1` wird nun für alle stdio-Kindprozesse gesetzt; das Working Directory bleibt bewusst der Workspace. Ein Regressionstest prüft sowohl den weiterhin erhaltenen Workspace-CWD als auch, dass das Workspace-Modul nicht importiert wird. | GPT-6 Astra (F-01) | `a8491af24534a9d761927f81a699bc57abb4ff70` |
+| MCP-Tool-Aufrufe wurden nicht gegen das vom Server veröffentlichte `inputSchema` validiert; zudem konnten doppelte native Toolnamen zu uneindeutiger Zuordnung von Schema, Contract und Route führen. Argumente werden nun vor Approval/Ausführung lokal validiert und doppelte Toolnamen werden bereits beim Registrieren der Server-Metadaten abgewiesen. | GPT-6 Astra (F-02) | `28084cdd6177a48bee7a112ee7cd0ed688d3095a` |
 
 ## Interpretation der Ergebnisse
 
