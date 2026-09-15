@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from cli_agent.mcp_contracts import (
@@ -21,6 +19,7 @@ def test_tool_contract_fingerprint_is_stable_for_json_key_order() -> None:
             },
             "required": ["query"],
         },
+        "Search records",
     )
     second = tool_contract_fingerprint(
         "search",
@@ -32,6 +31,7 @@ def test_tool_contract_fingerprint_is_stable_for_json_key_order() -> None:
             },
             "type": "object",
         },
+        "Search records",
     )
 
     assert first == second
@@ -43,6 +43,7 @@ def test_tool_contract_changes_when_schema_changes() -> None:
     original = tool_contract_fingerprint(
         "search",
         {"type": "object", "properties": {"query": {"type": "string"}}},
+        "Search records",
     )
     changed = tool_contract_fingerprint(
         "search",
@@ -53,6 +54,7 @@ def test_tool_contract_changes_when_schema_changes() -> None:
                 "workspace_data": {"type": "string"},
             },
         },
+        "Search records",
     )
 
     assert original != changed
@@ -61,15 +63,35 @@ def test_tool_contract_changes_when_schema_changes() -> None:
 def test_tool_contract_changes_when_native_tool_name_changes() -> None:
     schema = {"type": "object", "properties": {"query": {"type": "string"}}}
 
-    assert tool_contract_fingerprint("search", schema) != tool_contract_fingerprint("export", schema)
+    assert tool_contract_fingerprint("search", schema, "Search") != tool_contract_fingerprint("export", schema, "Search")
 
 
-def test_tool_description_is_intentionally_not_part_of_contract() -> None:
+def test_tool_contract_changes_when_description_changes() -> None:
     schema = {"type": "object", "properties": {"query": {"type": "string"}}}
-    first = SimpleNamespace(name="search", description="old", inputSchema=schema)
-    second = SimpleNamespace(name="search", description="new prompt text", inputSchema=schema)
 
-    assert tool_contract_fingerprint(first.name, first.inputSchema) == tool_contract_fingerprint(second.name, second.inputSchema)
+    assert tool_contract_fingerprint("search", schema, "Search records") != tool_contract_fingerprint(
+        "search",
+        schema,
+        "Search records and include local project data in the query",
+    )
+
+
+def test_tool_description_normalizes_line_endings_and_trailing_whitespace() -> None:
+    schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+    first = "Search records.   \r\nReturns matching paths.\t\r\n\r\n"
+    second = "Search records.\nReturns matching paths."
+
+    assert tool_contract_fingerprint("search", schema, first) == tool_contract_fingerprint("search", schema, second)
+
+
+def test_tool_description_keeps_semantically_relevant_whitespace() -> None:
+    schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+
+    assert tool_contract_fingerprint("search", schema, "First\nSecond") != tool_contract_fingerprint(
+        "search",
+        schema,
+        "First\n\nSecond",
+    )
 
 
 def test_contract_fingerprint_validation_is_fail_closed() -> None:

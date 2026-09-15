@@ -249,7 +249,11 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             function = tool.get("function", {})
             if function.get("name") != exposed_name:
                 continue
-            return tool_contract_fingerprint(tool_name, function.get("parameters", {}))
+            return tool_contract_fingerprint(
+                tool_name,
+                function.get("parameters", {}),
+                function.get("description"),
+            )
         return None
 
     def _is_admin_auto_approved(self, server_config: ServerConfig, tool_name: str) -> bool:
