@@ -128,6 +128,7 @@ def apply_model_cli_override(config: AppConfig, *, model: str | None) -> AppConf
 
 def exception_details(exc: BaseException) -> str:
     leaves: list[str] = []
+
     def collect(current: BaseException) -> None:
         nested = getattr(current, "exceptions", None)
         if nested:
@@ -137,6 +138,7 @@ def exception_details(exc: BaseException) -> str:
         message = str(current).strip()
         label = type(current).__name__
         leaves.append(f"{label}: {message}" if message else label)
+
     collect(exc)
     return "\n".join(dict.fromkeys(leaves))
 
@@ -166,14 +168,15 @@ async def _inspect_mcp_tool(*, server: McpServerConfig, tool_name: str, workspac
             raise ValueError(f"MCP-Server {server.name!r} bietet Tool {native_tool_name!r} nicht an. Verfügbare Tools: {', '.join(name for name in available if name) or '(keine)'}")
         function = tool_metadata.get("function", {})
         schema = function.get("parameters", {})
-        contract = tool_contract_fingerprint(native_tool_name, schema)
+        description = str(function.get("description") or "")
+        contract = tool_contract_fingerprint(native_tool_name, schema, description)
         trusted = next((item for item in admin_config.mcp.trusted_servers if agent._trusted_server_matches(server, item)), None)
         existing = None
         if trusted is not None:
             existing_approval = next((approval for approval in trusted.auto_approve_tools if approval.name == native_tool_name), None)
             if existing_approval is not None:
                 existing = existing_approval.contract_sha256
-        return McpToolInspection(server_name=server.name, transport=server.transport, tool_name=native_tool_name, description=str(function.get("description") or ""), input_schema=schema, contract_sha256=contract, trusted_server_found=trusted is not None, existing_contract_sha256=existing)
+        return McpToolInspection(server_name=server.name, transport=server.transport, tool_name=native_tool_name, description=description, input_schema=schema, contract_sha256=contract, trusted_server_found=trusted is not None, existing_contract_sha256=existing)
 
 
 def _render_tool_approval_fragment(inspection: McpToolInspection) -> str:
@@ -209,11 +212,11 @@ async def run_admin(args: argparse.Namespace) -> None:
         if inspection.existing_contract_sha256 == inspection.contract_sha256:
             print("Der Tool-Contract ist unverändert.")
         else:
-            print("Der Tool-Contract hat sich geändert. Prüfe das Schema vor einer erneuten Freigabe.")
+            print("Der Tool-Contract hat sich geändert. Prüfe Beschreibung und Schema vor einer erneuten Freigabe.")
     elif not inspection.trusted_server_found:
         print("Hinweis: In der aktuellen Admin-Policy existiert noch kein identitätsgleicher [[mcp.trusted_servers]]-Eintrag. Der folgende Contract kann vorbereitet werden, greift aber erst zusammen mit einer passenden administrativen Serveridentität.")
     print("\nDie Admin-Konfiguration wurde NICHT geändert.")
-    print("Prüfe Tool und Schema und kopiere danach bei bewusster Freigabe diesen Block manuell in die Admin-Policy:\n")
+    print("Prüfe Tool, Beschreibung und Schema und kopiere danach bei bewusster Freigabe diesen Block manuell in die Admin-Policy:\n")
     print(_render_tool_approval_fragment(inspection))
 
 
