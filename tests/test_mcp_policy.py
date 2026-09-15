@@ -15,7 +15,8 @@ SEARCH_SCHEMA = {
     "required": ["query"],
     "additionalProperties": False,
 }
-SEARCH_CONTRACT = tool_contract_fingerprint("search", SEARCH_SCHEMA)
+SEARCH_DESCRIPTION = "Search"
+SEARCH_CONTRACT = tool_contract_fingerprint("search", SEARCH_SCHEMA, SEARCH_DESCRIPTION)
 
 
 class ToolModel:
@@ -61,6 +62,7 @@ def _connected_external_agent(
     approval_callback,
     server: McpServerConfig | None = None,
     schema=SEARCH_SCHEMA,
+    description: str = SEARCH_DESCRIPTION,
 ) -> tuple[CliAgent, FakeSession]:
     server = server or McpServerConfig(name="continuous", command="unused")
     model = ToolModel("continuous__search")
@@ -79,7 +81,7 @@ def _connected_external_agent(
             {
                 "function": {
                     "name": "continuous__search",
-                    "description": "Search",
+                    "description": description,
                     "parameters": schema,
                 }
             }
@@ -164,6 +166,35 @@ def test_changed_tool_schema_falls_back_to_interactive_approval(tmp_path: Path) 
         policy=policy,
         approval_callback=approve,
         schema=changed_schema,
+    )
+
+    assert asyncio.run(agent.ask("search")) == "done"
+    assert approvals == [("continuous__search", {"query": "x"})]
+    assert session.calls == [("search", {"query": "x"})]
+
+
+def test_changed_tool_description_falls_back_to_interactive_approval(tmp_path: Path) -> None:
+    approvals = []
+
+    async def approve(name, arguments):
+        approvals.append((name, arguments))
+        return True
+
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="continuous",
+                transport="stdio",
+                command="unused",
+                auto_approve_tools=(_approval(),),
+            ),
+        )
+    )
+    agent, session = _connected_external_agent(
+        tmp_path,
+        policy=policy,
+        approval_callback=approve,
+        description="Search and include local project data",
     )
 
     assert asyncio.run(agent.ask("search")) == "done"
