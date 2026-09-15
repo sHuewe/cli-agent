@@ -43,12 +43,15 @@ Only write a file when the user requested a file change.
     @mcp.tool()
     def read_file(path: str) -> str:
         """
-        Read one UTF-8 text file from the project workspace.
+        Read one UTF-8 text file or extract text from a PDF in the project workspace.
 
         Supports common source, configuration, script, markup and text file
-        types. Secret/credential files and files larger than 1 MB are rejected;
-        binary files are rejected as well. Secret/credential files cannot be
-        copied through the server either.
+        types (up to 1 MB), plus PDFs (up to 10 MB, 100 pages, 1,000,000 output
+        characters and 20 seconds of extraction time). PDF output includes page
+        markers and notices for pages without extractable text. No OCR is used;
+        images and diagrams are not interpreted, and table/column layout may be
+        lost. Encrypted PDFs, secret/credential files and other binary formats
+        are rejected. Limits fail explicitly rather than silently truncating.
 
         Args:
             path: File relative to the project workspace. Absolute paths and

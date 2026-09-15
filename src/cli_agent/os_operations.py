@@ -6,6 +6,7 @@ from pathlib import Path, PurePath, PureWindowsPath
 
 from .config import McpServerConfig
 from .filesystem_security import regular_file_has_multiple_links
+from .pdf_text import PdfTextError, read_pdf_text
 
 TEXT_SUFFIXES = frozenset(
     {
@@ -314,6 +315,11 @@ class Workspace:
                 "Das Lesen von Secret-/Credential-Dateien ist über den "
                 "Workspace-OS-Server nicht erlaubt."
             )
+        if file_path.suffix.lower() == ".pdf":
+            try:
+                return read_pdf_text(file_path)
+            except PdfTextError as exc:
+                raise WorkspaceError(str(exc)) from exc
         if not self._is_text_file(file_path):
             raise WorkspaceError(
                 f"Dateityp darf nicht als Text gelesen werden: {path!r}"

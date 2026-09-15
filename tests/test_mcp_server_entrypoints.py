@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -187,6 +186,22 @@ def test_os_create_server_read_only_registers_only_read_tools(monkeypatch) -> No
     assert server.tools["list_files"](".") == "listed"
     assert server.tools["read_file"]("README.md") == "contents"
     assert calls == [("list", "."), ("read", "README.md")]
+
+
+def test_os_read_file_contract_and_pdf_description(monkeypatch) -> None:
+    import inspect
+    from typing import get_type_hints
+
+    calls = []
+    monkeypatch.setattr(os_mcp_server, "FastMCP", FakeFastMCP)
+    server = os_mcp_server.create_server(_workspace_stub(calls), McpServerConfig(name="os"))
+    read_file = server.tools["read_file"]
+    assert list(inspect.signature(read_file).parameters) == ["path"]
+    assert get_type_hints(read_file) == {"path": str, "return": str}
+    assert "PDF" in read_file.__doc__
+    assert "No OCR" in read_file.__doc__
+    assert read_file("document.pdf") == "contents"
+    assert calls == [("read", "document.pdf")]
 
 
 def test_os_create_server_write_mode_registers_and_delegates_write_tools(monkeypatch) -> None:
