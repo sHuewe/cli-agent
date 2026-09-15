@@ -47,7 +47,7 @@ def test_admin_cli_parses_inspect_and_trust_tool_commands() -> None:
 
 
 def test_rendered_fragment_contains_only_copyable_pinned_approval() -> None:
-    contract = tool_contract_fingerprint("search", SCHEMA)
+    contract = tool_contract_fingerprint("search", SCHEMA, "Search")
     inspection = McpToolInspection(
         server_name="fachsoftware",
         transport="streamable_http",
@@ -67,7 +67,7 @@ def test_rendered_fragment_contains_only_copyable_pinned_approval() -> None:
     assert "admin_config.toml" not in fragment
 
 
-def test_inspection_uses_live_tool_schema_without_model_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inspection_uses_live_tool_metadata_without_model_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     server = McpServerConfig(
         name="fachsoftware",
         transport="streamable_http",
@@ -123,13 +123,14 @@ def test_inspection_uses_live_tool_schema_without_model_call(tmp_path: Path, mon
     )
 
     assert inspection.tool_name == "search"
+    assert inspection.description == "Search records"
     assert inspection.input_schema == SCHEMA
-    assert inspection.contract_sha256 == tool_contract_fingerprint("search", SCHEMA)
+    assert inspection.contract_sha256 == tool_contract_fingerprint("search", SCHEMA, "Search records")
     assert inspection.trusted_server_found is True
 
 
 def test_inspection_reports_existing_pinned_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    contract = tool_contract_fingerprint("search", SCHEMA)
+    contract = tool_contract_fingerprint("search", SCHEMA, "")
     server = McpServerConfig(name="fachsoftware", command="ignored")
     admin = AdminConfig(
         mcp=McpPolicy(
