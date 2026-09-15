@@ -82,11 +82,15 @@ Die CI installiert eine fest angegebene `uv`-Version, prüft `uv.lock` mit `uv l
 
 ## Zusätzliche Härtung: Contract-Pinning für permanente MCP-Auto-Approvals
 
-**Status:** umgesetzt.
+**Status:** umgesetzt und um Toolbeschreibungen erweitert.
 
-Eine permanente MCP-Auto-Freigabe ist an Serveridentität, Toolname und das vollständige aktuelle `inputSchema` des MCP-Tools gebunden. Der Fingerprint wird als SHA-256 über eine kanonische JSON-Darstellung aus nativem Toolnamen und Input-Schema gebildet.
+Eine permanente MCP-Auto-Freigabe ist an Serveridentität und den vollständigen modell-sichtbaren Tool-Contract gebunden. Der Contract-Fingerprint wird als SHA-256 über eine kanonische JSON-Darstellung aus nativem Toolnamen, normalisierter Toolbeschreibung und vollständigem aktuellem `inputSchema` des MCP-Tools gebildet.
 
-Damit verliert eine bestehende Auto-Freigabe automatisch ihre Wirkung, wenn ein MCP-Update beispielsweise einen neuen Parameter ergänzt, Parametertypen verändert oder Required-Felder ändert. Das Tool fällt dann auf die normale interaktive Benutzerfreigabe zurück.
+Die Toolbeschreibung ist sicherheitsrelevant, weil sie dem Modell erklärt, wofür und wie ein Tool eingesetzt werden soll. Eine inhaltlich veränderte Beschreibung kann daher das Modellverhalten beeinflussen, obwohl Name und technisch aufrufbares Schema unverändert bleiben. Eine solche Änderung invalidiert nun ebenfalls die bestehende permanente Auto-Freigabe und führt zurück zur normalen interaktiven Benutzerfreigabe.
+
+Um rein technische beziehungsweise redaktionell irrelevante Unterschiede nicht unnötig als Contract-Drift zu behandeln, wird die Beschreibung vor dem Hashen eng normalisiert: `CRLF` und `CR` werden zu `LF`, Spaces und Tabs am Zeilenende entfernt und abschließende Leerzeilen ignoriert. Führende Whitespaces, interne Leerzeilen, Groß-/Kleinschreibung, Satzzeichen, Markdown und sonstige inhaltliche Änderungen bleiben dagegen unverändert und beeinflussen den Fingerprint.
+
+Damit verliert eine bestehende Auto-Freigabe automatisch ihre Wirkung, wenn ein MCP-Update beispielsweise die Toolbeschreibung inhaltlich ändert, einen neuen Parameter ergänzt, Parametertypen verändert oder Required-Felder ändert. Der Contract verwendet hierfür die aktuelle Contract-Version 2; ältere Fingerprints gelten nicht weiter.
 
 Die CLI bietet dafür read-only Hilfsbefehle:
 
@@ -95,7 +99,9 @@ cli-agent admin inspect-tool <server> <tool> --config <config.toml>
 cli-agent admin trust-tool <server> <tool> --config <config.toml>
 ```
 
-`inspect-tool` zeigt den aktuell angebotenen Tool-Contract. `trust-tool` gibt nach derselben Prüfung einen kopierbaren TOML-Block aus. Keiner der Befehle schreibt in `admin_config.toml`; die administrative Vertrauensentscheidung bleibt ein manueller Copy-/Review-Schritt. Mit `--update` kann ein bestehender gepinnter Contract mit dem aktuell angebotenen Contract verglichen und ein Ersatzblock erzeugt werden.
+`inspect-tool` zeigt den aktuell angebotenen Tool-Contract einschließlich Toolbeschreibung und Input-Schema. `trust-tool` gibt nach derselben Prüfung einen kopierbaren TOML-Block aus. Keiner der Befehle schreibt in `admin_config.toml`; die administrative Vertrauensentscheidung bleibt ein manueller Copy-/Review-Schritt. Mit `--update` kann ein bestehender gepinnter Contract mit dem aktuell angebotenen Contract verglichen und ein Ersatzblock erzeugt werden.
+
+Regressionstests prüfen neben Schema- und Toolnamenänderungen insbesondere, dass inhaltliche Änderungen der Toolbeschreibung den Contract ändern und eine vorhandene Auto-Freigabe ungültig machen, während reine Unterschiede bei Line-Endings, Trailing Whitespace oder abschließenden Leerzeilen denselben Fingerprint ergeben.
 
 # Follow-up zum Review vom 13.09.2026
 
