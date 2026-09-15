@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
+
+from cli_agent import os_operations
 
 from cli_agent.config import McpServerConfig
 from cli_agent.os_operations import Workspace, WorkspaceError
@@ -14,6 +17,129 @@ def _workspace(tmp_path):
             config={"allow_write_files": True},
         ),
     )
+
+
+def test_list_files_empty_sorted_and_relative(tmp_path):
+    workspace = _workspace(tmp_path)
+    assert workspace.list_files(".") == "(Ordner ist leer)"
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "z.txt").write_text("z")
+    (tmp_path / "nested" / "A.txt").write_text("a")
+    (tmp_path / "nested" / "folder").mkdir()
+    assert workspace.list_files("nested").splitlines() == [
+        "directory\tnested/folder", "file\tnested/A.txt", "file\tnested/z.txt",
+    ]
+
+
+def test_copy_overwrite_and_delete(tmp_path):
+    workspace = _workspace(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_bytes(b"original\r\n")
+    assert "copied.txt" in workspace.copy_file("source.txt", "copied.txt")
+    assert (tmp_path / "copied.txt").read_bytes() == source.read_bytes()
+    source.write_bytes(b"changed\n")
+    workspace.copy_file("source.txt", "copied.txt")
+    assert (tmp_path / "copied.txt").read_bytes() == b"changed\n"
+    assert "copied.txt" in workspace.delete_file("copied.txt")
+    assert not (tmp_path / "copied.txt").exists()
+    assert source.exists()
+
+
+def test_make_nested_directory_is_idempotent(tmp_path):
+    workspace = _workspace(tmp_path)
+    assert "Ordner erstellt" in workspace.make_directory("one/two")
+    (tmp_path / "one/two/keep.txt").write_text("keep")
+    assert "existiert bereits" in workspace.make_directory("one/two")
+    assert (tmp_path / "one/two/keep.txt").read_text() == "keep"
+
+
+@pytest.mark.parametrize("operation,args", [
+    ("list_files", ("file.txt",)), ("read_file", ("folder",)),
+    ("delete_file", ("folder",)), ("copy_file", ("folder", "copy.txt")),
+    ("copy_file", ("file.txt", "folder")), ("write_file", ("folder", "text")),
+    ("make_directory", ("file.txt",)),
+])
+def test_operations_reject_wrong_path_kind(tmp_path, operation, args):
+    (tmp_path / "file.txt").write_text("original")
+    (tmp_path / "folder").mkdir()
+    with pytest.raises(WorkspaceError, match="kein"):
+        getattr(_workspace(tmp_path), operation)(*args)
+    assert (tmp_path / "file.txt").read_text() == "original"
+    assert (tmp_path / "folder").is_dir()
+
+
+@pytest.mark.parametrize("operation,args", [
+    ("copy_file", ("file.txt", "missing/copy.txt")),
+    ("write_file", ("missing/new.txt", "text")),
+])
+def test_file_mutations_require_existing_parent(tmp_path, operation, args):
+    (tmp_path / "file.txt").write_text("original")
+    with pytest.raises(WorkspaceError, match="Zielordner"):
+        getattr(_workspace(tmp_path), operation)(*args)
+    assert not (tmp_path / "missing").exists()
+
+
+@pytest.mark.parametrize("path", ["", "  ", None])
+def test_workspace_rejects_empty_paths(tmp_path, path):
+    with pytest.raises(WorkspaceError, match="leer"):
+        _workspace(tmp_path).resolve_path(path)
+
+
+def test_missing_workspace_is_rejected(tmp_path):
+    with pytest.raises(WorkspaceError, match="Workspace existiert nicht"):
+        _workspace(tmp_path / "missing")
+
+
+def test_symlink_escape_is_rejected_for_reads_and_writes(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("original")
+    (root / "link.txt").symlink_to(outside)
+    workspace = _workspace(root)
+    with pytest.raises(WorkspaceError, match="außerhalb"):
+        workspace.read_file("link.txt")
+    with pytest.raises(WorkspaceError, match="außerhalb"):
+        workspace.write_file("link.txt", "changed")
+    assert outside.read_text() == "original"
+
+
+def test_empty_and_invalid_utf8_files(tmp_path):
+    path = tmp_path / "text.txt"
+    path.write_bytes(b"")
+    assert _workspace(tmp_path).read_file(path.name) == "(Empty file)"
+    path.write_bytes(b"\xff\xfe")
+    with pytest.raises(WorkspaceError, match="UTF-8"):
+        _workspace(tmp_path).read_file(path.name)
+
+
+def test_write_preserves_cr_line_endings(tmp_path):
+    path = tmp_path / "text.txt"
+    path.write_bytes(b"one\rtwo\r")
+    _workspace(tmp_path).write_file(path.name, "one\nchanged\n")
+    assert path.read_bytes() == b"one\rchanged\r"
+
+
+@pytest.mark.parametrize("operation,args,target,method,message", [
+    ("read_file", ("file.txt",), Path, "read_text", "gelesen"),
+    ("write_file", ("file.txt", "replacement"), Path, "write_text", "geschrieben"),
+    ("delete_file", ("file.txt",), Path, "unlink", "gelöscht"),
+    ("copy_file", ("file.txt", "copy.txt"), os_operations.shutil, "copy2", "kopiert"),
+    ("make_directory", ("new",), Path, "mkdir", "erstellt"),
+    ("read_file", ("file.txt",), os_operations, "regular_file_has_multiple_links", "Dateimetadaten"),
+])
+def test_io_failures_are_workspace_errors(tmp_path, monkeypatch, operation, args, target, method, message):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"original")
+
+    def denied(*args, **kwargs):
+        raise PermissionError("access denied")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(target, method, denied)
+        with pytest.raises(WorkspaceError, match=message):
+            getattr(_workspace(tmp_path), operation)(*args)
+    assert path.read_bytes() == b"original"
 
 
 def test_write_file_preserves_lf_line_endings(tmp_path) -> None:

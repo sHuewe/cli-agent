@@ -133,3 +133,66 @@ def test_pdf_keeps_path_and_hardlink_protection(tmp_path):
         _workspace(tmp_path).read_file(str(path))
     with pytest.raises(WorkspaceError, match="enthalten"):
         _workspace(tmp_path).read_file("../document.pdf")
+
+
+@pytest.mark.parametrize("data,message", [
+    (b"invalid PDF", "nicht vollständig"),
+    (_pdf("secret", encrypted=True), "Verschlüsselte"),
+])
+def test_parser_errors_are_sanitized(data, message):
+    with pytest.raises(pdf_text.PdfTextError, match=message) as error:
+        pdf_text._extract_text(data)
+    assert "secret" not in str(error.value)
+
+
+def test_worker_rechecks_input_size(monkeypatch):
+    monkeypatch.setattr(pdf_text, "MAX_PDF_BYTES", 5)
+    with pytest.raises(pdf_text.PdfTextError, match="Leselimit"):
+        pdf_text._extract_text(b"123456")
+
+
+def test_file_growth_after_stat_is_rejected(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = tmp_path / "growing.pdf"
+    path.write_bytes(b"12345")
+    monkeypatch.setattr(pdf_text, "MAX_PDF_BYTES", 5)
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: io.BytesIO(b"123456"))
+    with pytest.raises(pdf_text.PdfTextError, match="Leselimit"):
+        pdf_text.read_pdf_text(path)
+
+
+@pytest.mark.parametrize("failure", ["missing", "startup", "crash"])
+def test_pdf_worker_and_file_failures(tmp_path, monkeypatch, failure):
+    path = tmp_path / "document.pdf"
+    if failure != "missing":
+        path.write_bytes(_pdf("hello"))
+
+    def run(*args, **kwargs):
+        if failure == "startup":
+            raise OSError("cannot launch interpreter")
+        return subprocess.CompletedProcess(args[0], 1, b"", b"")
+
+    monkeypatch.setattr(pdf_text.subprocess, "run", run)
+    with pytest.raises(pdf_text.PdfTextError, match="unerwartet" if failure == "crash" else "nicht gelesen"):
+        pdf_text.read_pdf_text(path)
+
+
+@pytest.mark.parametrize("data,status,expected", [
+    (_pdf("hello"), 0, "--- Seite 1 von 1 ---\nhello"),
+    (b"broken", 2, "PDF konnte nicht vollständig als Text gelesen werden."),
+])
+def test_worker_stdio_protocol(monkeypatch, data, status, expected):
+    import logging
+    from types import SimpleNamespace
+
+    output = io.BytesIO()
+    old_disable = logging.root.manager.disable
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(pdf_text.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(data)))
+            patch.setattr(pdf_text.sys, "stdout", SimpleNamespace(buffer=output))
+            assert pdf_text._main() == status
+        assert output.getvalue().decode("utf-8") == expected
+    finally:
+        logging.disable(old_disable)
