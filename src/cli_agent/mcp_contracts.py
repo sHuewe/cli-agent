@@ -19,7 +19,11 @@ def _normalize_tool_description(description: str | None) -> str:
     return "\n".join(lines)
 
 
-def tool_contract_fingerprint(tool_name: str, description: str | None, input_schema: Any) -> str:
+def tool_contract_fingerprint(
+    tool_name: str,
+    input_schema: Any,
+    description: str | None = None,
+) -> str:
     """Return a stable fingerprint for the model-visible MCP tool contract.
 
     The fingerprint binds the native tool name, normalized model-visible tool
