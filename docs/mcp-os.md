@@ -79,7 +79,7 @@ Immer verfügbar:
 | Tool | Funktion |
 | --- | --- |
 | `list_files(path)` | Listet Dateien und Verzeichnisse direkt unter einem relativen Workspace-Pfad. |
-| `read_file(path)` | Liest eine unterstützte UTF-8-Textdatei. |
+| `read_file(path)` | Liest eine unterstützte UTF-8-Textdatei oder extrahiert PDF-Text mit Seitenmarkierungen. Rückgabe bleibt `str`. |
 
 Nur bei Schreibzugriff:
 
@@ -89,6 +89,25 @@ Nur bei Schreibzugriff:
 | `delete_file(path)` | Löscht eine Datei. |
 | `make_directory(path)` | Erstellt ein Verzeichnis im Workspace. |
 | `copy_file(path_src, path_dst)` | Kopiert eine Datei innerhalb des Workspaces. |
+
+## PDF-Dateien
+
+`read_file("unterlagen/handbuch.pdf")` extrahiert mit `pypdf` vorhandenen Text,
+einschließlich bereits eingebetteter OCR-Textebenen. Es wird keine OCR ausgeführt.
+Jede Seite erhält eine Markierung; Seiten ohne extrahierbaren Text erhalten einen
+expliziten Hinweis. Bilder und Diagramme werden nicht interpretiert, Tabellen
+und Spalten können ihre ursprüngliche Struktur verlieren.
+
+PDFs dürfen maximal 10.000.000 Bytes und 100 Seiten umfassen. Die gesamte Ausgabe
+ist auf 1.000.000 Zeichen begrenzt (inklusive Markierungen). Die Extraktion läuft
+mit 20 Sekunden Timeout in einem separaten Prozess. Dies ist kein hartes
+Speicherlimit: komprimierte PDF-Inhalte können beim Parsen deutlich anwachsen.
+Die Limits stehen zentral in `pdf_text.py`; Überschreitungen liefern einen Fehler,
+keinen still gekürzten Text. Verschlüsselte und nicht lesbare PDFs liefern ebenfalls
+einen Fehler. Die Originaldatei bleibt unverändert; es gibt keine externen Dienste
+oder zusätzlichen Systemprogramme. `pypdf` wird bei der Installation mitinstalliert.
+
+PDF-Unterstützung gilt nur für `read_file`, nicht für `write_file`.
 
 ## Sicherheitsgrenzen
 
@@ -101,9 +120,12 @@ Zusätzlich gelten unter anderem:
 - absolute Tool-Pfade sind verboten,
 - `..` ist in Pfaden verboten,
 - Symlinks dürfen nicht aus dem Workspace herausführen,
-- `read_file` und `write_file` akzeptieren nur bekannte Textdateitypen,
+- `write_file` akzeptiert nur bekannte Textdateitypen; `read_file` zusätzlich PDFs,
+- die Text-Allowlist umfasst gängige Quellcode-, Skript-, Web-, Markup-,
+  Konfigurations- und strukturierte Datenformate,
 - `read_file` und `copy_file` verweigern `.env*`, Credential-/Private-Key-Dateien,
-  `.git`-/`.cli-agent`-Artefakte, Logdateien und Dateien über 1 MB,
+  `.git`-/`.cli-agent`-Artefakte und Logdateien,
+- `read_file` begrenzt Textdateien auf 1 MB; für PDFs gelten die oben genannten Limits,
 - mutierende Operationen verweigern bekannte Secret-/Credential-, `.git`-,
   `.cli-agent`- und Log-Ziele,
 - der Parent-Ordner einer zu schreibenden Datei muss bereits existieren.
