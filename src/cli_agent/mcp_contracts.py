@@ -8,13 +8,24 @@ from typing import Any
 _CONTRACT_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
-def tool_contract_fingerprint(tool_name: str, input_schema: Any) -> str:
-    """Return a stable fingerprint for the callable MCP tool contract.
+def _normalize_tool_description(description: str | None) -> str:
+    """Normalize formatting-only differences in an MCP tool description."""
 
-    Descriptions and server instructions are intentionally not part of this
-    contract. The fingerprint binds the native tool name to its complete JSON
-    input schema so that a persistent auto-approval stops applying when the
-    callable interface changes.
+    text = "" if description is None else str(description)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip(" \t") for line in text.split("\n")]
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+def tool_contract_fingerprint(tool_name: str, description: str | None, input_schema: Any) -> str:
+    """Return a stable fingerprint for the model-visible MCP tool contract.
+
+    The fingerprint binds the native tool name, normalized model-visible tool
+    description and complete JSON input schema. Line-ending differences and
+    trailing spaces or tabs in the description are ignored so formatting-only
+    changes do not invalidate a persistent auto-approval.
     """
 
     name = str(tool_name).strip()
@@ -23,8 +34,9 @@ def tool_contract_fingerprint(tool_name: str, input_schema: Any) -> str:
     try:
         canonical = json.dumps(
             {
-                "version": 1,
+                "version": 2,
                 "tool_name": name,
+                "description": _normalize_tool_description(description),
                 "input_schema": input_schema,
             },
             ensure_ascii=False,
