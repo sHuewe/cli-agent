@@ -79,16 +79,56 @@ Immer verfügbar:
 | Tool | Funktion |
 | --- | --- |
 | `list_files(path)` | Listet Dateien und Verzeichnisse direkt unter einem relativen Workspace-Pfad. |
-| `read_file(path)` | Liest eine unterstützte UTF-8-Textdatei. |
+| `read_file(path)` | Liest eine unterstützte UTF-8-Text-/Quelldatei oder extrahiert Text aus einer PDF-Datei. |
 
 Nur bei Schreibzugriff:
 
 | Tool | Funktion |
 | --- | --- |
-| `write_file(path, content)` | Erstellt oder überschreibt eine UTF-8-Textdatei vollständig. |
+| `write_file(path, content)` | Erstellt oder überschreibt eine unterstützte UTF-8-Textdatei vollständig. PDF-Dateien werden nicht geschrieben. |
 | `delete_file(path)` | Löscht eine Datei. |
 | `make_directory(path)` | Erstellt ein Verzeichnis im Workspace. |
 | `copy_file(path_src, path_dst)` | Kopiert eine Datei innerhalb des Workspaces. |
+
+### Unterstützte Text-/Quelldateien
+
+Die Dateiendungen werden case-insensitive geprüft. Neben den bisherigen Formaten
+werden unter anderem JavaScript-/Web-Formate (`.jsx`, `.mjs`, `.cjs`, `.vue`,
+`.svelte`), weitere Programmiersprachen (`.go`, `.php`, `.rs`, `.rb`, `.lua`,
+`.scala`, `.groovy`, `.swift`, `.dart`, `.fs*`, `.vb`), Shell-/Scriptformate
+(`.ps1`, `.fish`, `.zsh`) sowie Build-/Infra-/Projektformate (`.gradle`, `.tf`,
+`.hcl`, `.proto`, `.graphql`, `.csproj`, `.sln`, `.lock`) unterstützt. Typische
+Dateinamen ohne Endung wie `Dockerfile`, `Makefile`, `Jenkinsfile`, `gradlew`,
+`mvnw`, `README` oder `LICENSE` sind ebenfalls zulässig.
+
+Das bleibt eine explizite Text-Allowlist. Binär-/Containerformate wie DOCX,
+XLSX, PPTX, Bilder, Archive oder Datenbanken werden nicht automatisch als Text
+behandelt.
+
+### PDF-Lesen
+
+PDF-Unterstützung ist bewusst Teil des bestehenden `read_file`-Tools. Nach den
+gemeinsamen Workspace-, Sensitive-Path- und Hardlink-Prüfungen dispatcht die
+Implementierung intern auf einen eigenen PDF-Reader. `write_file` akzeptiert
+PDF-Dateien weiterhin nicht.
+
+Für PDFs gelten zusätzliche Grenzen:
+
+- maximal 20 MB Dateigröße,
+- maximal 200 Seiten,
+- maximal 1.000.000 Zeichen extrahierter Text,
+- Prüfung einer PDF-Signatur vor dem Parsen,
+- verschlüsselte PDFs werden abgewiesen,
+- ausschließlich direkte Textextraktion; es werden keine Links aufgerufen,
+  keine eingebetteten Dateien geöffnet und keine PDF-Skripte ausgeführt.
+
+OCR ist absichtlich nicht Bestandteil des Fallbacks. Enthält eine PDF keinen
+direkt extrahierbaren Text, liefert `read_file` einen Fehler mit entsprechendem
+Hinweis. Ein OCR-Fallback würde zusätzlich PDF-Rendering, Bilddecoder und eine
+OCR-Engine in die vertrauenswürdige lokale Parserkette aufnehmen und damit
+Abhängigkeiten, Ressourcenverbrauch und Angriffsfläche deutlich vergrößern. Falls
+OCR später benötigt wird, sollte diese Fähigkeit separat bewertet und begrenzt
+werden.
 
 ## Sicherheitsgrenzen
 
@@ -101,9 +141,14 @@ Zusätzlich gelten unter anderem:
 - absolute Tool-Pfade sind verboten,
 - `..` ist in Pfaden verboten,
 - Symlinks dürfen nicht aus dem Workspace herausführen,
-- `read_file` und `write_file` akzeptieren nur bekannte Textdateitypen,
+- Dateien mit mehreren Hardlinks werden nicht verarbeitet,
+- `read_file` akzeptiert nur bekannte Textdateitypen sowie PDF für begrenzte
+  direkte Textextraktion; `write_file` bleibt auf bekannte Textdateitypen
+  beschränkt,
+- Textdateien sind beim Lesen auf 1 MB begrenzt; PDFs besitzen separate Datei-,
+  Seiten- und Textlimits,
 - `read_file` und `copy_file` verweigern `.env*`, Credential-/Private-Key-Dateien,
-  `.git`-/`.cli-agent`-Artefakte, Logdateien und Dateien über 1 MB,
+  `.git`-/`.cli-agent`-Artefakte und Logdateien,
 - mutierende Operationen verweigern bekannte Secret-/Credential-, `.git`-,
   `.cli-agent`- und Log-Ziele,
 - der Parent-Ordner einer zu schreibenden Datei muss bereits existieren.

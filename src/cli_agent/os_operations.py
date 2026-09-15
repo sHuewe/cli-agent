@@ -4,53 +4,133 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
+
 from .config import McpServerConfig
 from .filesystem_security import regular_file_has_multiple_links
 
 TEXT_SUFFIXES = frozenset(
     {
+        ".adoc",
+        ".asm",
+        ".bash",
         ".bat",
         ".c",
+        ".cc",
         ".cfg",
+        ".cjs",
+        ".cmake",
         ".conf",
         ".cpp",
+        ".cs",
+        ".csproj",
         ".css",
         ".csv",
+        ".cxx",
+        ".dart",
+        ".editorconfig",
         ".env",
+        ".fish",
+        ".fs",
+        ".fsi",
+        ".fsproj",
+        ".fsx",
+        ".gitattributes",
         ".gitignore",
+        ".go",
+        ".gql",
+        ".gradle",
+        ".graphql",
+        ".groovy",
         ".h",
+        ".hcl",
+        ".hh",
         ".hpp",
         ".html",
+        ".htm",
+        ".hxx",
         ".ini",
+        ".ipynb",
+        ".j2",
         ".java",
         ".js",
         ".json",
+        ".jsp",
+        ".jsx",
         ".kt",
         ".kts",
+        ".less",
+        ".lock",
         ".log",
         ".log.1",
         ".log.2",
+        ".lua",
+        ".m",
         ".md",
+        ".mjs",
+        ".mm",
+        ".mod",
+        ".php",
+        ".pl",
+        ".pm",
         ".properties",
+        ".proto",
         ".py",
+        ".ps1",
+        ".r",
+        ".rb",
+        ".rs",
+        ".rst",
+        ".s",
+        ".sass",
+        ".sc",
+        ".scala",
+        ".scss",
         ".sh",
+        ".sln",
+        ".slnx",
         ".sql",
+        ".sum",
+        ".svelte",
+        ".swift",
+        ".targets",
+        ".tex",
+        ".tf",
+        ".tfvars",
         ".toml",
         ".ts",
         ".tsx",
         ".txt",
+        ".vb",
+        ".vbproj",
+        ".vue",
         ".xml",
         ".yaml",
         ".yml",
+        ".zsh",
     }
 )
 
 TEXT_FILENAMES = frozenset(
     {
+        ".dockerignore",
+        ".editorconfig",
         ".env",
+        ".gitattributes",
         ".gitignore",
+        "changelog",
         "dockerfile",
+        "gemfile",
+        "gradlew",
+        "jenkinsfile",
+        "license",
         "makefile",
+        "mvnw",
+        "notice",
+        "procfile",
+        "rakefile",
+        "readme",
     }
 )
 
@@ -82,6 +162,10 @@ SENSITIVE_DIRECTORY_NAMES = frozenset(
 )
 SENSITIVE_SUFFIXES = frozenset({".key", ".pem", ".p12", ".pfx"})
 MAX_READ_FILE_BYTES = 1_000_000
+MAX_PDF_FILE_BYTES = 20_000_000
+MAX_PDF_PAGES = 200
+MAX_PDF_TEXT_CHARS = 1_000_000
+PDF_HEADER_SCAN_BYTES = 1024
 
 
 class WorkspaceError(RuntimeError):
@@ -136,6 +220,10 @@ class Workspace:
         return name in TEXT_FILENAMES or path.suffix.lower() in TEXT_SUFFIXES
 
     @staticmethod
+    def _is_pdf_file(path: Path) -> bool:
+        return path.suffix.casefold() == ".pdf"
+
+    @staticmethod
     def _is_sensitive_file(path: Path) -> bool:
         name = path.name.casefold()
         return (
@@ -186,6 +274,96 @@ class Workspace:
             return "\r"
         return "\n"
 
+    @staticmethod
+    def _read_text_file(file_path: Path, path: str) -> str:
+        try:
+            if file_path.stat().st_size > MAX_READ_FILE_BYTES:
+                raise WorkspaceError(
+                    f"Datei überschreitet das Leselimit von "
+                    f"{MAX_READ_FILE_BYTES} Bytes: {path!r}"
+                )
+            res = file_path.read_text(encoding="utf-8")
+            if not res:
+                res = "(Empty file)"
+            return res
+        except UnicodeDecodeError as exc:
+            raise WorkspaceError(
+                f"Datei ist nicht als UTF-8-Text lesbar: {path!r}"
+            ) from exc
+        except OSError as exc:
+            raise WorkspaceError(
+                f"Datei konnte nicht gelesen werden: {path!r}: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _read_pdf(file_path: Path, path: str) -> str:
+        try:
+            file_size = file_path.stat().st_size
+            if file_size > MAX_PDF_FILE_BYTES:
+                raise WorkspaceError(
+                    f"PDF-Datei überschreitet das Leselimit von "
+                    f"{MAX_PDF_FILE_BYTES} Bytes: {path!r}"
+                )
+
+            with file_path.open("rb") as handle:
+                header = handle.read(PDF_HEADER_SCAN_BYTES)
+                if b"%PDF-" not in header:
+                    raise WorkspaceError(
+                        f"Datei hat keine gültige PDF-Signatur: {path!r}"
+                    )
+                handle.seek(0)
+
+                reader = PdfReader(handle, strict=True)
+                if reader.is_encrypted:
+                    raise WorkspaceError(
+                        f"Verschlüsselte PDF-Dateien werden nicht unterstützt: {path!r}"
+                    )
+
+                page_count = len(reader.pages)
+                if page_count > MAX_PDF_PAGES:
+                    raise WorkspaceError(
+                        f"PDF-Datei überschreitet das Seitenlimit von "
+                        f"{MAX_PDF_PAGES} Seiten: {path!r}"
+                    )
+
+                parts: list[str] = []
+                text_chars = 0
+                for page_number, page in enumerate(reader.pages, start=1):
+                    page_text = (page.extract_text() or "").strip()
+                    if not page_text:
+                        continue
+                    section = f"--- PDF-Seite {page_number} ---\n{page_text}"
+                    text_chars += len(section)
+                    if parts:
+                        text_chars += 2
+                    if text_chars > MAX_PDF_TEXT_CHARS:
+                        raise WorkspaceError(
+                            f"Extrahierter PDF-Text überschreitet das Leselimit von "
+                            f"{MAX_PDF_TEXT_CHARS} Zeichen: {path!r}"
+                        )
+                    parts.append(section)
+
+            if not parts:
+                raise WorkspaceError(
+                    "PDF-Datei enthält keinen direkt extrahierbaren Text. "
+                    "OCR für bildbasierte oder gescannte PDFs ist nicht aktiviert."
+                )
+            return "\n\n".join(parts)
+        except WorkspaceError:
+            raise
+        except (
+            PdfReadError,
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            IndexError,
+            RecursionError,
+        ) as exc:
+            raise WorkspaceError(
+                f"PDF-Datei konnte nicht sicher gelesen werden: {path!r}"
+            ) from exc
+
     def list_files(self, path: str) -> str:
         directory = self.resolve_path(path)
         if not directory.is_dir():
@@ -215,29 +393,12 @@ class Workspace:
                 "Das Lesen von Secret-/Credential-Dateien ist über den "
                 "Workspace-OS-Server nicht erlaubt."
             )
-        if not self._is_text_file(file_path):
-            raise WorkspaceError(
-                f"Dateityp darf nicht als Text gelesen werden: {path!r}"
-            )
 
-        try:
-            if file_path.stat().st_size > MAX_READ_FILE_BYTES:
-                raise WorkspaceError(
-                    f"Datei überschreitet das Leselimit von "
-                    f"{MAX_READ_FILE_BYTES} Bytes: {path!r}"
-                )
-            res = file_path.read_text(encoding="utf-8")
-            if not res or len(res) == 0:
-                res = "(Empty file)"
-            return res
-        except UnicodeDecodeError as exc:
-            raise WorkspaceError(
-                f"Datei ist nicht als UTF-8-Text lesbar: {path!r}"
-            ) from exc
-        except OSError as exc:
-            raise WorkspaceError(
-                f"Datei konnte nicht gelesen werden: {path!r}: {exc}"
-            ) from exc
+        if self._is_pdf_file(file_path):
+            return self._read_pdf(file_path, path)
+        if self._is_text_file(file_path):
+            return self._read_text_file(file_path, path)
+        raise WorkspaceError(f"Dateityp darf nicht gelesen werden: {path!r}")
 
     def delete_file(self, path: str) -> str:
         file_path = self.resolve_path(path)
