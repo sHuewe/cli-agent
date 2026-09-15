@@ -75,6 +75,41 @@ def test_read_file_rejects_oversized_text(tmp_path) -> None:
         _workspace(tmp_path).read_file("large.txt")
 
 
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "main.go",
+        "index.jsx",
+        "module.mjs",
+        "component.vue",
+        "app.php",
+        "task.rb",
+        "lib.rs",
+        "Program.cs",
+        "script.ps1",
+        "schema.graphql",
+        "deployment.tf",
+        "styles.scss",
+        "README.adoc",
+        "data.tsv",
+        ".editorconfig",
+        ".dockerignore",
+        "Makefile",
+    ],
+)
+def test_read_file_accepts_common_text_file_types(tmp_path, filename) -> None:
+    (tmp_path / filename).write_text("readable content", encoding="utf-8")
+
+    assert _workspace(tmp_path).read_file(filename) == "readable content"
+
+
+def test_read_file_still_rejects_unknown_file_types(tmp_path) -> None:
+    (tmp_path / "artifact.unknown").write_text("text content", encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="Dateityp"):
+        _workspace(tmp_path).read_file("artifact.unknown")
+
+
 def test_copy_file_rejects_sensitive_source(tmp_path) -> None:
     (tmp_path / "credentials.json").write_text("secret", encoding="utf-8")
     with pytest.raises(WorkspaceError, match="Secret-/Credential"):

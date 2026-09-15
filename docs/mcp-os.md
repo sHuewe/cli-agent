@@ -102,6 +102,8 @@ Zusätzlich gelten unter anderem:
 - `..` ist in Pfaden verboten,
 - Symlinks dürfen nicht aus dem Workspace herausführen,
 - `read_file` und `write_file` akzeptieren nur bekannte Textdateitypen,
+- die Text-Allowlist umfasst gängige Quellcode-, Skript-, Web-, Markup-,
+  Konfigurations- und strukturierte Datenformate,
 - `read_file` und `copy_file` verweigern `.env*`, Credential-/Private-Key-Dateien,
   `.git`-/`.cli-agent`-Artefakte, Logdateien und Dateien über 1 MB,
 - mutierende Operationen verweigern bekannte Secret-/Credential-, `.git`-,
