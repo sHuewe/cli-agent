@@ -160,15 +160,15 @@ Permanente Auto-Approvals für externe MCP-Tools sind absichtlich strenger als S
 1. die administrativ definierte MCP-Serveridentität und
 2. der gepinnte Contract des konkreten Tools.
 
-Der Tool-Contract ist ein SHA-256-Fingerprint über den nativen Toolnamen und das vollständige MCP-`inputSchema`. Ändert ein MCP-Update das Schema – zum Beispiel durch einen zusätzlichen Parameter, einen anderen Typ oder geänderte Required-Felder – stimmt der Fingerprint nicht mehr. Das Tool wird dann **nicht blockiert**, sondern fällt sicher auf die normale interaktive Bestätigung zurück.
+Der Tool-Contract ist ein SHA-256-Fingerprint über den nativen Toolnamen, die modell-sichtbare Toolbeschreibung und das vollständige MCP-`inputSchema`. Ändert ein MCP-Update das Schema – zum Beispiel durch einen zusätzlichen Parameter, einen anderen Typ oder geänderte Required-Felder – oder die Toolbeschreibung inhaltlich, stimmt der Fingerprint nicht mehr. Das Tool wird dann **nicht blockiert**, sondern fällt sicher auf die normale interaktive Bestätigung zurück.
 
-Toolbeschreibung und MCP-Instructions sind bewusst nicht Bestandteil dieses Contract-Fingerprints. `trust_instructions` wird separat an die MCP-Serveridentität gebunden.
+Bei der Toolbeschreibung werden ausschließlich Formatunterschiede normalisiert, die den Inhalt nicht verändern: `CRLF`/`CR` werden auf `LF` vereinheitlicht, Leerzeichen und Tabs am Zeilenende entfernt und abschließende leere Zeilen ignoriert. Führende Leerzeichen, interne Leerzeilen, Satzzeichen, Groß-/Kleinschreibung, Markdown und sonstiger Inhalt bleiben Bestandteil des Contracts. MCP-`instructions` sind weiterhin separat über `trust_instructions` an die MCP-Serveridentität gebunden und nicht Bestandteil des Tool-Contracts.
 
 ### CLI-Workflow zum Prüfen und Freigeben eines Tools
 
 Die `admin`-Kommandos dienen ausschließlich zum **Lesen und Generieren**. Sie verändern `admin_config.toml` niemals selbst und benötigen deshalb auch keine administrativen Schreibrechte. Die eigentliche Vertrauensentscheidung bleibt ein manueller administrativer Schritt.
 
-#### 1. Tool und Schema ansehen
+#### 1. Tool, Beschreibung und Schema ansehen
 
 ```powershell
 cli-agent admin inspect-tool fachsoftware search --config config.toml
@@ -197,13 +197,13 @@ Dabei findet **kein Modellaufruf** statt. Es werden nur MCP-Metadaten gelesen. N
 
 #### 2. Kopierbaren Auto-Approval-Block erzeugen
 
-Nach Prüfung des Schemas:
+Nach Prüfung von Toolbeschreibung und Schema:
 
 ```powershell
 cli-agent admin trust-tool fachsoftware search --config config.toml
 ```
 
-Das Kommando zeigt erneut das aktuelle Schema und gibt anschließend einen TOML-Block aus, zum Beispiel:
+Das Kommando zeigt erneut die aktuelle Beschreibung und das Schema und gibt anschließend einen TOML-Block aus, zum Beispiel:
 
 ```toml
 [[mcp.trusted_servers.auto_approve_tools]]
@@ -235,7 +235,7 @@ Wenn sich der MCP-Server geändert hat und eine bestehende Freigabe überprüft 
 cli-agent admin trust-tool fachsoftware search --config config.toml --update
 ```
 
-`--update` schreibt ebenfalls nichts. Das Kommando vergleicht den aktuell angebotenen Contract mit dem bereits administrativ gepinnten Contract. Bei einer Änderung zeigt es den neuen Contract und erzeugt einen Ersatzblock zum manuellen Kopieren.
+`--update` schreibt ebenfalls nichts. Das Kommando vergleicht den aktuell angebotenen Contract mit dem bereits administrativ gepinnten Contract. Bei einer Änderung zeigt es den neuen Contract und erzeugt einen Ersatzblock zum manuellen Kopieren. Geänderte Toolbeschreibungen und geänderte Schemas invalidieren dabei gleichermaßen den bisherigen Contract.
 
 Solange der neue Block nicht administrativ übernommen wurde, greift die bestehende permanente Auto-Freigabe nicht und das Tool verlangt wieder eine normale Benutzerbestätigung.
 
@@ -334,7 +334,7 @@ log_tool_results = false
 
 Der Agent hält MCP-Sessions offen, exponiert Tools als `<server>__<tool>` und führt nach Tool-Ergebnissen den Modelllauf fort. MCP-`instructions` von Built-in-MCPs gelten als Teil des ausgelieferten Agenten und werden in den Systemprompt aufgenommen. Instructions externer MCPs werden dagegen nur dann in den Systemprompt übernommen, wenn die konkrete Serveridentität in `admin_config.toml` mit `trust_instructions = true` freigegeben wurde. Sie dürfen zentrale Agent-Regeln oder Berechtigungsgrenzen dennoch nicht überschreiben.
 
-Permanente externe Auto-Approvals werden zusätzlich gegen den administrativ gepinnten Tool-Contract geprüft. Ein Schema-Drift führt nicht zur automatischen Ausführung, sondern zurück zur normalen Approval-Abfrage.
+Permanente externe Auto-Approvals werden zusätzlich gegen den administrativ gepinnten Tool-Contract geprüft. Ein Drift der modell-sichtbaren Toolbeschreibung oder des `inputSchema` führt nicht zur automatischen Ausführung, sondern zurück zur normalen Approval-Abfrage.
 
 Wenn `[okf]` konfiguriert ist, läuft vor der Main-Phase ein separater Retrieval-Kontext mit den read-only Tools `knowledge_index` und `knowledge_read`.
 
