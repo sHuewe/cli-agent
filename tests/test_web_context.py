@@ -146,7 +146,7 @@ def test_add_web_context_is_session_command_not_history(
     assert agent.history == []
 
 
-def test_web_context_is_added_to_working_message_but_not_history(
+def test_web_context_is_separate_working_message_but_not_history(
     tmp_path: Path,
 ) -> None:
     model = RecordingModel()
@@ -156,10 +156,13 @@ def test_web_context_is_added_to_working_message_but_not_history(
     answer = asyncio.run(agent.ask("Welche API ist beschrieben?"))
 
     assert answer == "ok"
-    current_user_message = model.calls[-1][0][-1]["content"]
-    assert "http://localhost:8080/docs" in current_user_message
-    assert "GET /users" in current_user_message
-    assert "Welche API ist beschrieben?" in current_user_message
+    messages = model.calls[-1][0]
+    assert messages[-1] == {"role": "user", "content": "Welche API ist beschrieben?"}
+    reference_message = messages[-2]
+    assert reference_message["role"] == "user"
+    assert "http://localhost:8080/docs" in reference_message["content"]
+    assert "GET /users" in reference_message["content"]
+    assert "Welche API ist beschrieben?" not in reference_message["content"]
     assert agent.history == [
         {"role": "user", "content": "Welche API ist beschrieben?"},
         {"role": "assistant", "content": "ok"},
