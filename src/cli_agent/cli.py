@@ -20,11 +20,13 @@ from .file_context import (
     is_local_agent_command,
     prepare_file_options,
 )
+from .git_operations import GitWorkspace
 from .logging_setup import configure_logging
 from .mcp_contracts import tool_contract_fingerprint
 from .model_factory import create_model_client
 
 OS_MCP_SERVER_NAME = "os"
+GIT_MCP_SERVER_NAME = "git"
 REDACTED_CONFIG_VALUE = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"
 logger = logging.getLogger("cli_agent.cli")
 
@@ -81,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
+    parser.add_argument("--with-git-read", action="store_true", help="Enable the built-in read-only Git MCP server when at least one validated Git repository is fully contained in the workspace. Overrides a 'git' MCP server from the config.")
     parser.add_argument("--context-file", type=Path, default=None, metavar="FILE", help="Add one explicit UTF-8 text file from the workspace as untrusted reference context.")
     parser.add_argument("--prompt-file", type=Path, default=None, metavar="FILE", help="Read the one-shot user prompt from one explicit UTF-8 text file inside the workspace.")
     parser.add_argument("--output", type=Path, default=None, metavar="FILE", help="Write the latest model answer to a workspace-local UTF-8 text file in addition to stdout.")
@@ -114,11 +117,25 @@ def _os_mcp_server_config(access: str) -> McpServerConfig:
     return McpServerConfig(name=OS_MCP_SERVER_NAME, transport="stdio", command="{python}", args=("-m", "cli_agent.os_mcp_server", "--project-directory", "{workspace_directory}", "--config-file", "{config_file}", "--access", access), config={"allow_write_files": access == "write"}, built_in=True)
 
 
-def apply_mcp_cli_overrides(config: AppConfig, *, os_access: str | None) -> AppConfig:
-    if os_access is None:
-        return config
-    servers = tuple(server for server in config.mcp_servers if server.name != OS_MCP_SERVER_NAME) + (_os_mcp_server_config(os_access),)
-    return replace(config, mcp_servers=servers)
+def _git_mcp_server_config() -> McpServerConfig:
+    return McpServerConfig(name=GIT_MCP_SERVER_NAME, transport="stdio", command="{python}", args=("-m", "cli_agent.git_mcp_server", "--project-directory", "{workspace_directory}", "--config-file", "{config_file}"), built_in=True)
+
+
+def apply_mcp_cli_overrides(config: AppConfig, *, os_access: str | None, git_read: bool = False, workspace: Path | None = None) -> AppConfig:
+    servers = config.mcp_servers
+    changed = False
+    if os_access is not None:
+        servers = tuple(server for server in servers if server.name != OS_MCP_SERVER_NAME) + (_os_mcp_server_config(os_access),)
+        changed = True
+    if git_read:
+        if workspace is None:
+            raise ValueError("--with-git-read benötigt einen aufgelösten Workspace.")
+        servers = tuple(server for server in servers if server.name != GIT_MCP_SERVER_NAME)
+        git_workspace = GitWorkspace.from_directory(workspace)
+        if git_workspace.repositories:
+            servers += (_git_mcp_server_config(),)
+        changed = True
+    return replace(config, mcp_servers=servers) if changed else config
 
 
 def apply_model_cli_override(config: AppConfig, *, model: str | None) -> AppConfig:
@@ -282,14 +299,19 @@ async def run_admin(args: argparse.Namespace) -> None:
 
 
 async def run(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
-    admin_config: AdminConfig = load_admin_config()
-    config = apply_model_cli_override(config, model=args.model)
-    config = apply_mcp_cli_overrides(config, os_access=args.os_access)
-
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
+
+    config = load_config(args.config)
+    admin_config: AdminConfig = load_admin_config()
+    config = apply_model_cli_override(config, model=args.model)
+    config = apply_mcp_cli_overrides(
+        config,
+        os_access=args.os_access,
+        git_read=bool(getattr(args, "with_git_read", False)),
+        workspace=workspace,
+    )
 
     prompt_file_arg = getattr(args, "prompt_file", None)
     if prompt_file_arg is not None and args.prompt:
