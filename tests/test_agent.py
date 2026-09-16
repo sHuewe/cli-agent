@@ -162,28 +162,43 @@ def test_admin_auto_approval_cannot_bypass_built_in_write_approval(tmp_path: Pat
     assert agent._requires_approval(writable, "write_file", "os__write_file") is True
 
 
-def test_untrusted_stdio_server_is_blocked_by_default_admin_policy(tmp_path: Path) -> None:
+def test_external_stdio_server_is_blocked_without_admin_profile(tmp_path: Path) -> None:
     async def exercise() -> None:
         parent = AsyncExitStack(); await parent.__aenter__()
         agent = make_agent(tmp_path)
-        server = McpServerConfig(name="external", command="external-mcp")
-        with pytest.raises(PermissionError, match="Admin-Policy"):
+        server = McpServerConfig(name="external")
+        with pytest.raises(PermissionError, match="trusted_servers"):
             await agent._start_server(server, parent)
         await parent.aclose()
     asyncio.run(exercise())
 
 
-def test_admin_policy_can_allow_untrusted_stdio_server(tmp_path: Path) -> None:
+def test_admin_profile_allows_exact_stdio_server(tmp_path: Path) -> None:
     class Session:
         async def list_tools(self): return SimpleNamespace(tools=[])
     async def exercise() -> None:
         parent = AsyncExitStack(); await parent.__aenter__()
-        agent = make_agent(tmp_path, mcp_policy=McpPolicy(allow_untrusted_stdio=True))
-        server = McpServerConfig(name="external", command="external-mcp")
-        async def fake_connect(_stack, _server_config): return Session(), None
+        policy = McpPolicy(
+            trusted_servers=(
+                TrustedMcpServer(
+                    name="external",
+                    transport="stdio",
+                    command="/trusted/external-mcp",
+                    args=("--project", "{workspace_directory}"),
+                ),
+            )
+        )
+        agent = make_agent(tmp_path, mcp_policy=policy)
+        server = McpServerConfig(name="external")
+        seen = []
+        async def fake_connect(_stack, server_config):
+            seen.append(server_config)
+            return Session(), None
         agent._connect_server = fake_connect
         await agent._start_server(server, parent)
         assert "external" in agent._sessions
+        assert seen[0].command == "/trusted/external-mcp"
+        assert seen[0].args == ("--project", "{workspace_directory}")
         await parent.aclose()
     asyncio.run(exercise())
 
@@ -248,8 +263,17 @@ def test_disabling_server_closes_transport_and_reenable_reconnects(tmp_path: Pat
         async def list_tools(self): return SimpleNamespace(tools=[])
     async def exercise() -> None:
         parent = AsyncExitStack(); await parent.__aenter__()
-        agent = make_agent(tmp_path, mcp_policy=McpPolicy(allow_untrusted_stdio=True)); agent._exit_stack = parent
-        config = McpServerConfig(name="external", command="external-mcp"); resources: list[Resource] = []
+        policy = McpPolicy(
+            trusted_servers=(
+                TrustedMcpServer(
+                    name="external",
+                    transport="stdio",
+                    command="/trusted/external-mcp",
+                ),
+            )
+        )
+        agent = make_agent(tmp_path, mcp_policy=policy); agent._exit_stack = parent
+        config = McpServerConfig(name="external"); resources: list[Resource] = []
         async def fake_connect(stack, _server_config):
             resource = Resource(); resources.append(resource); await stack.enter_async_context(resource); return Session(), None
         agent._connect_server = fake_connect
