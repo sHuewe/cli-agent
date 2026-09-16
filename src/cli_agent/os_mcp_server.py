@@ -21,7 +21,7 @@ def create_server(
 Use these tools only for files and directories below the project workspace
 fixed when this server started. All tool paths must be relative to that
 workspace. Never use absolute paths or '..'. Read files before changing them.
-Only write a file when the user requested a file change.
+Only write, move or delete a file when the user requested a file change.
 """
     logger.info("MCP server instructions: %s", instructions)
     mcp = FastMCP(
@@ -58,6 +58,52 @@ Only write a file when the user requested a file change.
                 ".." are forbidden.
         """
         return workspace.read_file(path)
+
+    @mcp.tool()
+    def search_text(path: str, text: str, max_results: int = 50) -> str:
+        """
+        Search literal text in allowed UTF-8 text files below a workspace path.
+
+        The search is recursive for directories, does not follow symlinks,
+        excludes sensitive files and directories, skips hardlinked or oversized
+        files, and returns path, line number and line text for each match.
+        Regex is not supported. Results are capped; truncation is reported.
+
+        Args:
+            path: Workspace-relative file or directory to search.
+            text: Literal text to search for.
+            max_results: Maximum number of matches, from 1 to 200.
+        """
+        return workspace.search_text(path, text, max_results)
+
+    @mcp.tool()
+    def find_files(path: str, pattern: str, max_results: int = 100) -> str:
+        """
+        Find files recursively below a workspace-relative path using a glob pattern.
+
+        The pattern is matched against both the file name and workspace-relative
+        path. Symlinks, sensitive paths and hardlinked files are excluded. Results
+        are capped; truncation is reported.
+
+        Args:
+            path: Workspace-relative file or directory to search below.
+            pattern: Glob pattern such as "*.py" or "src/*.java".
+            max_results: Maximum number of files, from 1 to 500.
+        """
+        return workspace.find_files(path, pattern, max_results)
+
+    @mcp.tool()
+    def file_info(path: str) -> str:
+        """
+        Return safe metadata for one workspace-relative file or directory.
+
+        Returns path, type, file size and modification timestamp. Sensitive files,
+        hardlinked files and paths outside the workspace are rejected.
+
+        Args:
+            path: File or directory relative to the project workspace.
+        """
+        return workspace.file_info(path)
 
     if mcp_config.allow_write_files():
 
@@ -111,6 +157,21 @@ Only write a file when the user requested a file change.
                     Absolute paths and ".." are forbidden.
             """
             return workspace.copy_file(path_src, path_dst)
+
+        @mcp.tool()
+        def move_file(path_src: str, path_dst: str) -> str:
+            """
+            Move or rename a file within the project workspace.
+
+            Existing destination files may be replaced, but sensitive files,
+            hardlinked files, paths outside the workspace, absolute paths and
+            ".." are rejected. The destination parent directory must exist.
+
+            Args:
+                path_src: Source file relative to the project workspace.
+                path_dst: Destination file relative to the project workspace.
+            """
+            return workspace.move_file(path_src, path_dst)
 
     return mcp
 
