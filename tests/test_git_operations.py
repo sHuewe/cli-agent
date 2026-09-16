@@ -75,7 +75,7 @@ def test_status_diff_history_and_commit_files(tmp_path: Path) -> None:
     commit = _init_repo(tmp_path)
     workspace = GitWorkspace.from_directory(tmp_path)
 
-    assert "branch" in workspace.git_status(".")
+    assert workspace.git_status(".").startswith("## ")
     history = json.loads(workspace.git_file_history(".", "a.txt"))
     assert history[0]["author"]["name"] == "Test User"
     assert history[0]["commit"]["id"] == commit
