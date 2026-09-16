@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -8,7 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 
 COMMIT_RE = re.compile(r"^[0-9a-fA-F]{4,64}$")
+BLAME_TZ_RE = re.compile(r"^([+-])(\d{2})(\d{2})$")
 MAX_OUTPUT = 500_000
+MAX_GREP_RESULTS = 200
+MAX_GREP_TEXT_LENGTH = 4_096
+MAX_BLAME_LINES = 200
 
 
 class GitWorkspaceError(RuntimeError):
@@ -107,7 +112,12 @@ class GitWorkspace:
         return env
 
     @classmethod
-    def _git(cls, directory: Path, *args: str) -> str:
+    def _git(
+        cls,
+        directory: Path,
+        *args: str,
+        allowed_returncodes: tuple[int, ...] = (0,),
+    ) -> str:
         command = [
             "git", "-C", str(directory), "--no-pager",
             "-c", "color.ui=false",
@@ -123,7 +133,7 @@ class GitWorkspace:
             raise GitWorkspaceError("Git ist nicht installiert oder nicht über PATH erreichbar.") from exc
         except subprocess.TimeoutExpired as exc:
             raise GitWorkspaceError("Git-Aufruf hat das Zeitlimit überschritten.") from exc
-        if result.returncode != 0:
+        if result.returncode not in allowed_returncodes:
             detail = (result.stderr or result.stdout or f"Exit-Code {result.returncode}").strip()
             raise GitWorkspaceError(f"Git-Aufruf fehlgeschlagen: {detail[:2000]}")
         if len(result.stdout) > MAX_OUTPUT:
@@ -169,6 +179,26 @@ class GitWorkspace:
             raise GitWorkspaceError("max_count muss zwischen 1 und 200 liegen.")
         return value
 
+    @staticmethod
+    def _grep_limit(value: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_GREP_RESULTS:
+            raise GitWorkspaceError(f"max_results muss zwischen 1 und {MAX_GREP_RESULTS} liegen.")
+        return value
+
+    @staticmethod
+    def _blame_range(start_line: int | None, end_line: int | None) -> tuple[int, int] | None:
+        if start_line is None and end_line is None:
+            return None
+        if start_line is None or end_line is None:
+            raise GitWorkspaceError("start_line und end_line müssen gemeinsam angegeben werden.")
+        if isinstance(start_line, bool) or isinstance(end_line, bool) or not isinstance(start_line, int) or not isinstance(end_line, int):
+            raise GitWorkspaceError("start_line und end_line müssen ganze Zahlen sein.")
+        if start_line < 1 or end_line < start_line:
+            raise GitWorkspaceError("Ungültiger Blame-Zeilenbereich.")
+        if end_line - start_line + 1 > MAX_BLAME_LINES:
+            raise GitWorkspaceError(f"git_blame darf höchstens {MAX_BLAME_LINES} Zeilen pro Aufruf analysieren.")
+        return start_line, end_line
+
     @classmethod
     def _commit(cls, repo: GitRepository, value: str) -> str:
         if not isinstance(value, str) or not COMMIT_RE.fullmatch(value.strip()):
@@ -186,6 +216,99 @@ class GitWorkspace:
             if len(values) != 5:
                 raise GitWorkspaceError("Git-Historie konnte nicht ausgewertet werden.")
             records.append(dict(zip(("id", "author", "email", "date", "message"), values, strict=True)))
+        return records
+
+    @staticmethod
+    def _grep_records(output: str) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        offset = 0
+        while offset < len(output):
+            path_end = output.find("\x00", offset)
+            if path_end < 0:
+                raise GitWorkspaceError("Git-Grep-Ausgabe konnte nicht ausgewertet werden.")
+            line_end = output.find("\x00", path_end + 1)
+            if line_end < 0:
+                raise GitWorkspaceError("Git-Grep-Ausgabe konnte nicht ausgewertet werden.")
+            text_end = output.find("\n", line_end + 1)
+            if text_end < 0:
+                text_end = len(output)
+            line_text = output[path_end + 1:line_end]
+            try:
+                line_number = int(line_text)
+            except ValueError as exc:
+                raise GitWorkspaceError("Git-Grep-Zeilennummer konnte nicht ausgewertet werden.") from exc
+            records.append(
+                {
+                    "path": output[offset:path_end],
+                    "line": line_number,
+                    "text": output[line_end + 1:text_end],
+                }
+            )
+            offset = text_end + 1
+        return records
+
+    @staticmethod
+    def _blame_date(timestamp: str, tz_value: str) -> str:
+        try:
+            timestamp_value = int(timestamp)
+        except ValueError as exc:
+            raise GitWorkspaceError("Git-Blame-Zeitstempel konnte nicht ausgewertet werden.") from exc
+        match = BLAME_TZ_RE.fullmatch(tz_value)
+        if match is None:
+            raise GitWorkspaceError("Git-Blame-Zeitzone konnte nicht ausgewertet werden.")
+        sign = 1 if match.group(1) == "+" else -1
+        minutes = sign * (int(match.group(2)) * 60 + int(match.group(3)))
+        tzinfo = datetime.timezone(datetime.timedelta(minutes=minutes))
+        return datetime.datetime.fromtimestamp(timestamp_value, tz=datetime.UTC).astimezone(tzinfo).isoformat()
+
+    @classmethod
+    def _blame_records(cls, output: str) -> list[dict[str, object]]:
+        lines = output.splitlines()
+        records: list[dict[str, object]] = []
+        index = 0
+        while index < len(lines):
+            header = lines[index].split()
+            if len(header) < 3 or not COMMIT_RE.fullmatch(header[0]):
+                raise GitWorkspaceError("Git-Blame-Ausgabe konnte nicht ausgewertet werden.")
+            try:
+                original_line = int(header[1])
+                final_line = int(header[2])
+            except ValueError as exc:
+                raise GitWorkspaceError("Git-Blame-Zeilennummer konnte nicht ausgewertet werden.") from exc
+            commit_hash = header[0]
+            index += 1
+            metadata: dict[str, str] = {}
+            while index < len(lines) and not lines[index].startswith("\t"):
+                key, separator, value = lines[index].partition(" ")
+                metadata[key] = value if separator else ""
+                index += 1
+            if index >= len(lines):
+                raise GitWorkspaceError("Git-Blame-Ausgabe enthält keinen Quelltext zur Zeile.")
+            text = lines[index][1:]
+            index += 1
+            email = metadata.get("author-mail", "")
+            if email.startswith("<") and email.endswith(">"):
+                email = email[1:-1]
+            if "author-time" not in metadata or "author-tz" not in metadata:
+                raise GitWorkspaceError("Git-Blame-Ausgabe enthält keine vollständigen Autor-Zeitdaten.")
+            records.append(
+                {
+                    "line": final_line,
+                    "original_line": original_line,
+                    "text": text,
+                    "author": {
+                        "name": metadata.get("author", ""),
+                        "email": email,
+                    },
+                    "date": cls._blame_date(metadata["author-time"], metadata["author-tz"]),
+                    "commit": {
+                        "id": commit_hash,
+                        "message": metadata.get("summary", ""),
+                    },
+                    "original_path": metadata.get("filename", ""),
+                    "uncommitted": set(commit_hash) == {"0"},
+                }
+            )
         return records
 
     def git_repositories(self) -> str:
@@ -262,3 +385,85 @@ class GitWorkspace:
             elif line:
                 raise GitWorkspaceError("Commit-Dateiliste konnte nicht ausgewertet werden.")
         return json.dumps(files, ensure_ascii=False, indent=2)
+
+    def git_grep(
+        self,
+        repository: str,
+        text: str,
+        path: str | None = None,
+        max_results: int = 50,
+    ) -> str:
+        if not isinstance(text, str) or not text:
+            raise GitWorkspaceError("text darf nicht leer sein.")
+        if len(text) > MAX_GREP_TEXT_LENGTH:
+            raise GitWorkspaceError(f"text darf höchstens {MAX_GREP_TEXT_LENGTH} Zeichen lang sein.")
+        limit = self._grep_limit(max_results)
+        repo = self._repo(repository)
+
+        file_args = ["grep", "-l", "-z", "-I", "-F", "-e", text]
+        if path is not None:
+            file_args += ["--", self._repo_path(repo, path)]
+        file_output = self._git(repo.root, *file_args, allowed_returncodes=(0, 1))
+        matching_files = [value for value in file_output.split("\x00") if value]
+
+        matches: list[dict[str, object]] = []
+        result_size = 0
+        truncated = False
+        for file_index, filename in enumerate(matching_files):
+            remaining = limit - len(matches)
+            if remaining <= 0:
+                truncated = True
+                break
+            output = self._git(
+                repo.root,
+                "grep",
+                "-n",
+                "-z",
+                "-I",
+                "-F",
+                f"--max-count={remaining + 1}",
+                "-e",
+                text,
+                "--",
+                filename,
+                allowed_returncodes=(0, 1),
+            )
+            file_matches = self._grep_records(output)
+            selected = file_matches[:remaining]
+            for match in selected:
+                result_size += len(str(match["path"])) + len(str(match["text"])) + 64
+                if result_size > MAX_OUTPUT:
+                    raise GitWorkspaceError("Git-Grep-Ergebnis ist zu groß; Suche weiter eingrenzen.")
+                matches.append(match)
+            if len(file_matches) > remaining or (len(matches) >= limit and file_index < len(matching_files) - 1):
+                truncated = True
+                break
+
+        return json.dumps(
+            {"matches": matches, "truncated": truncated},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    def git_blame(
+        self,
+        repository: str,
+        path: str,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> str:
+        repo = self._repo(repository)
+        repo_path = self._repo_path(repo, path)
+        line_range = self._blame_range(start_line, end_line)
+        args = ["blame", "--line-porcelain"]
+        if line_range is None:
+            args += ["-L", f"1,{MAX_BLAME_LINES + 1}"]
+        else:
+            args += ["-L", f"{line_range[0]},{line_range[1]}"]
+        args += ["--", repo_path]
+        records = self._blame_records(self._git(repo.root, *args))
+        if line_range is None and len(records) > MAX_BLAME_LINES:
+            raise GitWorkspaceError(
+                f"Datei hat mehr als {MAX_BLAME_LINES} Zeilen; start_line und end_line müssen angegeben werden."
+            )
+        return json.dumps(records, ensure_ascii=False, indent=2)
