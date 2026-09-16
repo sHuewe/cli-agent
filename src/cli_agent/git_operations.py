@@ -117,7 +117,16 @@ class GitWorkspace:
     @staticmethod
     def _environment() -> dict[str, str]:
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-        env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_OPTIONAL_LOCKS": "0", "GIT_PAGER": "cat", "PAGER": "cat"})
+        env.update(
+            {
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_NO_LAZY_FETCH": "1",
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_PAGER": "cat",
+                "PAGER": "cat",
+            }
+        )
         return env
 
     @classmethod
@@ -233,6 +242,35 @@ class GitWorkspace:
                 raise GitWorkspaceError("Git-Historie konnte nicht ausgewertet werden.")
             records.append(dict(zip(("id", "author", "email", "date", "message"), values, strict=True)))
         return records
+
+    @staticmethod
+    def _name_status_records(output: str) -> list[dict[str, str]]:
+        fields = output.split("\x00")
+        if fields and fields[-1] == "":
+            fields.pop()
+        files: list[dict[str, str]] = []
+        labels = {"A": "added", "C": "copied", "D": "deleted", "M": "modified", "R": "renamed", "T": "type_changed"}
+        index = 0
+        while index < len(fields):
+            status = fields[index]
+            index += 1
+            if not status:
+                raise GitWorkspaceError("Commit-Dateiliste konnte nicht ausgewertet werden.")
+            kind = status[:1]
+            if kind in {"R", "C"}:
+                if index + 1 >= len(fields):
+                    raise GitWorkspaceError("Commit-Dateiliste konnte nicht ausgewertet werden.")
+                old_path = fields[index]
+                path = fields[index + 1]
+                index += 2
+                files.append({"status": labels.get(kind, "unknown"), "old_path": old_path, "path": path})
+                continue
+            if index >= len(fields):
+                raise GitWorkspaceError("Commit-Dateiliste konnte nicht ausgewertet werden.")
+            path = fields[index]
+            index += 1
+            files.append({"status": labels.get(kind, "unknown"), "path": path})
+        return files
 
     @staticmethod
     def _grep_records(output: str) -> list[dict[str, object]]:
@@ -396,21 +434,10 @@ class GitWorkspace:
         commit = self._commit(repo, commit_hash)
         parents = self._commit_parents(repo, commit)
         if len(parents) > 1:
-            output = self._git(repo.root, "diff", "--name-status", "-M", parents[0], commit)
+            output = self._git(repo.root, "diff", "--name-status", "-z", "-M", parents[0], commit)
         else:
-            output = self._git(repo.root, "diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-M", commit)
-        files: list[dict[str, str]] = []
-        labels = {"A": "added", "C": "copied", "D": "deleted", "M": "modified", "R": "renamed", "T": "type_changed"}
-        for line in output.splitlines():
-            parts = line.split("\t")
-            kind = parts[0][:1]
-            if kind in {"R", "C"} and len(parts) == 3:
-                files.append({"status": labels.get(kind, "unknown"), "old_path": parts[1], "path": parts[2]})
-            elif len(parts) == 2:
-                files.append({"status": labels.get(kind, "unknown"), "path": parts[1]})
-            elif line:
-                raise GitWorkspaceError("Commit-Dateiliste konnte nicht ausgewertet werden.")
-        return json.dumps(files, ensure_ascii=False, indent=2)
+            output = self._git(repo.root, "diff-tree", "--root", "--no-commit-id", "--name-status", "-z", "-r", "-M", commit)
+        return json.dumps(self._name_status_records(output), ensure_ascii=False, indent=2)
 
     def git_grep(
         self,
