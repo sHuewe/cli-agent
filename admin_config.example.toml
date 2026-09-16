@@ -14,27 +14,28 @@ web_allowed_hosts = []
 # host = "llm.intern.firma.de"
 # allowed_api_key_envs = ["LLM_API_KEY"]
 
-[mcp]
-allow_untrusted_stdio = false
-
-# Persistent MCP auto-approvals and trusted MCP instructions require a concrete
-# server identity. trust_instructions defaults to false. Enable it only for
-# reviewed MCP servers whose server-level instructions are intentionally part of
-# the agent's trusted operating guidance.
+# Every external stdio MCP must be defined here individually. A project/user
+# config may only reference such a server by name; command, args and env come
+# exclusively from this machine-wide policy. The agent resolves managed
+# placeholders such as {workspace_directory} itself at launch time.
 #
-# Persistent auto-approvals additionally pin the complete MCP inputSchema of the
-# approved tool. Do not calculate contract_sha256 manually. Use:
+# [[mcp.trusted_servers]]
+# name = "local-audited-tool"
+# transport = "stdio"
+# command = "C:/Program Files/Company/audited-mcp.exe"
+# args = ["--project-directory", "{workspace_directory}", "--stdio"]
+# trust_instructions = false
 #
-#   cli-agent admin inspect-tool fachsoftware search --config config.toml
-#   cli-agent admin trust-tool fachsoftware search --config config.toml
+# For stdio, commands must be absolute executables. The special {python}
+# placeholder is also accepted because it resolves to sys.executable of the
+# managed cli-agent installation. Bare PATH commands are rejected.
 #
-# The second command prints a TOML fragment. It NEVER modifies this file. Review
-# the displayed schema and copy the generated fragment manually into the matching
-# [[mcp.trusted_servers]] entry.
-#
-# For stdio, trusted commands must be absolute executables. The special
-# {python} placeholder is also accepted because it resolves to sys.executable
-# of the managed cli-agent installation. Bare PATH commands are rejected.
+# Streamable HTTP MCPs normally need no [[mcp.trusted_servers]] entry: their
+# host only needs to be present in network.mcp_allowed_hosts. Add a trusted
+# server entry for HTTP only when server instructions should be elevated into
+# the system prompt or when pinned permanent tool auto-approvals are required.
+# Untrusted MCP instructions remain available to the model as transient,
+# explicitly untrusted reference context.
 #
 # [[mcp.trusted_servers]]
 # name = "fachsoftware"
@@ -42,13 +43,16 @@ allow_untrusted_stdio = false
 # url = "https://mcp.intern.firma.de/mcp"
 # trust_instructions = true
 #
+# Persistent auto-approvals pin the complete model-visible MCP tool contract.
+# Do not calculate contract_sha256 manually. Use:
+#
+#   cli-agent admin inspect-tool fachsoftware search --config config.toml
+#   cli-agent admin trust-tool fachsoftware search --config config.toml
+#
+# The second command prints a TOML fragment. It NEVER modifies this file. Review
+# the displayed description and schema and copy the generated fragment manually
+# into the matching [[mcp.trusted_servers]] entry.
+#
 # [[mcp.trusted_servers.auto_approve_tools]]
 # name = "search"
 # contract_sha256 = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-#
-# [[mcp.trusted_servers]]
-# name = "local-audited-tool"
-# transport = "stdio"
-# command = "C:/Program Files/Company/audited-mcp.exe"
-# args = ["--stdio"]
-# trust_instructions = false
