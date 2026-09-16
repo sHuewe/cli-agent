@@ -24,7 +24,7 @@ dev = [
 ]
 
 [project.scripts]
-cli-agent = "cli_agent.cli:main"
+cli-agent = "cli_agent.cli_entry:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cli_agent"]
