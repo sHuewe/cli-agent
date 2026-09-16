@@ -19,6 +19,11 @@ def _init_repo(path: Path) -> str:
     _git(path, "init")
     _git(path, "config", "user.name", "Test User")
     _git(path, "config", "user.email", "test@example.org")
+    # GitWorkspace deliberately ignores system/global Git config. Keep the test
+    # repository independent of the host's core.autocrlf setting as well, so
+    # commits created by the fixture and reads performed by GitWorkspace use
+    # the same line-ending semantics on Linux and Windows.
+    _git(path, "config", "core.autocrlf", "false")
     (path / "a.txt").write_text("one\n", encoding="utf-8")
     _git(path, "add", "a.txt")
     _git(path, "commit", "-m", "initial")
