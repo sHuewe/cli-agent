@@ -77,6 +77,7 @@ WRITE_TOOLS = frozenset(
         "delete_file",
         "make_directory",
         "copy_file",
+        "move_file",
     }
 )
 COMPOSE_MUTATING_TOOLS = frozenset(
