@@ -10,9 +10,9 @@ Built-in stdio-MCP-Prozesse setzen `PYTHONSAFEPATH=1` und erben kein `PYTHONPATH
 
 ## F-02: MCP-Instructions als privilegierter Modellkontext
 
-**Status:** gezielt behoben.
+**Status:** gezielt behoben und funktional erweitert.
 
-MCP-Instructions werden nicht mehr automatisch von jedem externen MCP-Server in den Systemprompt übernommen. Standardmäßig bleiben sie außerhalb des Modellkontexts. Ein Administrator kann die Instructions eines konkret identifizierten und geprüften MCP-Servers explizit vertrauen:
+MCP-Instructions externer Server werden nicht automatisch in den Systemprompt übernommen. Ein Administrator kann die Instructions eines konkret identifizierten und geprüften MCP-Servers weiterhin explizit vertrauen:
 
 ```toml
 [[mcp.trusted_servers]]
@@ -22,7 +22,11 @@ url = "https://mcp.intern.firma.de/mcp"
 trust_instructions = true
 ```
 
-Die Vertrauensentscheidung ist an dieselbe konkrete Serveridentität gebunden wie permanente Auto-Approvals. Ein gleichnamiger MCP mit anderem Endpoint, Command, Args, Environment oder Headern erbt die Freigabe nicht. Built-in MCPs bleiben als Teil der verwalteten Anwendung vertrauenswürdig.
+Diese privilegierte Vertrauensentscheidung ist an dieselbe konkrete Serveridentität gebunden wie permanente Auto-Approvals. Ein gleichnamiger HTTP-MCP mit anderem Endpoint oder anderen Headern erbt die Freigabe nicht. Bei stdio stammt die gesamte Launch-Identität ohnehin aus der Maschinenpolicy. Built-in MCPs bleiben als Teil der verwalteten Anwendung vertrauenswürdig.
+
+Nicht administrativ vertraute Instructions werden jedoch nicht mehr vollständig verworfen. Sie werden als explizit **nicht vertrauenswürdiger Referenzkontext** in einer separaten transienten `user`-Message unmittelbar vor der aktuellen echten Benutzeranfrage bereitgestellt. In derselben synthetischen Message befinden sich gegebenenfalls auch OKF-Wissen, Web-Kontext und explizit geladener lokaler Datei-Kontext. Der Systemprompt definiert, dass diese Inhalte als fachliche oder operative Referenz verwendet werden dürfen, aber weder System-/Benutzerregeln noch Berechtigungsgrenzen überschreiben dürfen.
+
+Die synthetische Referenzmessage wird ausschließlich für den aktuellen Modelllauf erzeugt und **nicht in die Conversation History übernommen**. `self.history` enthält weiterhin nur die tatsächlichen Benutzeranfragen und Assistentenantworten; auch die aktuelle Benutzeranfrage bleibt in `working_messages` als separate, unveränderte `user`-Message erhalten.
 
 ## F-04: Beliebige Prozess-Umgebungsvariable als Remote-LLM-Credential
 
@@ -43,7 +47,36 @@ Eine normale Projektkonfiguration kann damit nicht mehr beispielsweise `AWS_SECR
 
 **Status:** behoben.
 
-Ein administrativ als `trusted` definierter stdio-MCP darf nicht mehr über einen Bare Command wie `python`, `node` oder `my-mcp` identifiziert werden. Die Maschinenpolicy akzeptiert für solche Server nur noch einen absoluten Executable-Pfad oder den speziellen Platzhalter `{python}`, der deterministisch auf `sys.executable` der laufenden cli-agent-Installation aufgelöst wird.
+Ein administrativ als `trusted` definierter stdio-MCP darf nicht über einen Bare Command wie `python`, `node` oder `my-mcp` identifiziert werden. Die Maschinenpolicy akzeptiert für solche Server nur einen absoluten Executable-Pfad oder den speziellen Platzhalter `{python}`, der deterministisch auf `sys.executable` der laufenden cli-agent-Installation aufgelöst wird.
+
+## Zusätzliche Härtung: externe stdio-MCPs nur als Admin-Launchprofile
+
+**Status:** behoben.
+
+Die frühere globale Maschinenoption `allow_untrusted_stdio` wurde entfernt. Ein solcher Schalter war zu grob, weil seine Aktivierung normaler Projektkonfiguration grundsätzlich erlaubte, beliebige lokale Executables als stdio-MCP-Prozess zu starten. Tool-Approvals greifen erst nach dem Prozessstart und konnten diese Prozessausführung daher nicht absichern.
+
+Jeder externe stdio-MCP muss nun einzeln in `[[mcp.trusted_servers]]` der maschinenweiten Admin-Policy definiert werden. Die normale Benutzer-/Projektkonfiguration referenziert einen solchen Server ausschließlich über seinen Namen:
+
+```toml
+# config.toml
+[[mcp_servers]]
+name = "compose"
+```
+
+Die vollständige Launch-Konfiguration liegt ausschließlich in der Admin-Policy:
+
+```toml
+# admin_config.toml
+[[mcp.trusted_servers]]
+name = "compose"
+transport = "stdio"
+command = "C:/Program Files/Company/compose-mcp.exe"
+args = ["--project-directory", "{workspace_directory}"]
+```
+
+`command`, `args` und `env` können dadurch nicht durch Projektkonfiguration verändert werden. Der Agent setzt kontrollierte Runtime-Platzhalter wie `{workspace_directory}` selbst ein. Das erhält den für workspacegebundene MCPs gewünschten 1:1-Zusammenhang aus Agent, Workspace und MCP-Prozess, ohne den Workspace als modellkontrollierten Tool-Parameter offenzulegen.
+
+Streamable-HTTP-MCPs benötigen dagegen weiterhin keinen `[[mcp.trusted_servers]]`-Eintrag, solange ihr Host in `network.mcp_allowed_hosts` erlaubt ist und weder permanente Auto-Approvals noch `trust_instructions = true` benötigt werden. Ihre Tool-Aufrufe bleiben standardmäßig interaktiv approval-pflichtig und ihre Instructions werden als untrusted Referenzkontext behandelt.
 
 ## F-06: Routingrelevante HTTP-Header
 
