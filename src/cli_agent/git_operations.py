@@ -62,6 +62,11 @@ class GitWorkspace:
             raise GitWorkspaceError("Repository-Root stimmt nicht mit dem gefundenen .git-Eintrag überein.")
         for label, path in (("Repository-Root", root), ("Git-Verzeichnis", git_dir), ("Git-Common-Verzeichnis", common_dir)):
             cls._inside(workspace, path, label)
+
+        objects_raw = Path(cls._git(candidate, "rev-parse", "--git-path", "objects").strip())
+        objects_dir = objects_raw.resolve(strict=True) if objects_raw.is_absolute() else (candidate / objects_raw).resolve(strict=True)
+        cls._inside(workspace, objects_dir, "Git-Objektverzeichnis")
+        cls._validate_alternates(workspace, objects_dir)
         return GitRepository(root, git_dir, common_dir, root.relative_to(workspace).as_posix() or ".")
 
     @staticmethod
@@ -71,6 +76,30 @@ class GitWorkspace:
         except ValueError as exc:
             raise GitWorkspaceError(f"{label} liegt außerhalb des Projekt-Workspaces.") from exc
 
+    @classmethod
+    def _validate_alternates(cls, workspace: Path, objects_dir: Path) -> None:
+        alternates = objects_dir / "info" / "alternates"
+        if alternates.exists():
+            try:
+                values = alternates.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeDecodeError) as exc:
+                raise GitWorkspaceError("Git-Alternates konnten nicht sicher gelesen werden.") from exc
+            for value in values:
+                value = value.strip()
+                if not value:
+                    continue
+                path = Path(value)
+                resolved = path.resolve(strict=True) if path.is_absolute() else (objects_dir / path).resolve(strict=True)
+                cls._inside(workspace, resolved, "Git-Alternate-Objektverzeichnis")
+        http_alternates = objects_dir / "info" / "http-alternates"
+        if http_alternates.exists():
+            try:
+                content = http_alternates.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeDecodeError) as exc:
+                raise GitWorkspaceError("Git-HTTP-Alternates konnten nicht sicher gelesen werden.") from exc
+            if content:
+                raise GitWorkspaceError("Git-HTTP-Alternates sind nicht erlaubt.")
+
     @staticmethod
     def _environment() -> dict[str, str]:
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -79,17 +108,17 @@ class GitWorkspace:
 
     @classmethod
     def _git(cls, directory: Path, *args: str) -> str:
+        command = [
+            "git", "-C", str(directory), "--no-pager",
+            "-c", "color.ui=false",
+            "-c", "core.quotepath=false",
+            "-c", "core.fsmonitor=false",
+            "-c", f"core.attributesFile={os.devnull}",
+            "-c", f"core.excludesFile={os.devnull}",
+            *args,
+        ]
         try:
-            result = subprocess.run(
-                ["git", "-C", str(directory), "--no-pager", "-c", "color.ui=false", "-c", "core.quotepath=false", *args],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=20,
-                env=cls._environment(),
-                check=False,
-            )
+            result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, env=cls._environment(), check=False)
         except FileNotFoundError as exc:
             raise GitWorkspaceError("Git ist nicht installiert oder nicht über PATH erreichbar.") from exc
         except subprocess.TimeoutExpired as exc:
@@ -168,8 +197,10 @@ class GitWorkspace:
 
     def git_current_branch(self, repository: str) -> str:
         repo = self._repo(repository)
-        result = subprocess.run(["git", "-C", str(repo.root), "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True, env=self._environment(), check=False)
-        return result.stdout.strip() if result.returncode == 0 else f"(detached HEAD at {self._git(repo.root, 'rev-parse', '--short', 'HEAD').strip()})"
+        try:
+            return self._git(repo.root, "symbolic-ref", "--quiet", "--short", "HEAD").strip()
+        except GitWorkspaceError:
+            return f"(detached HEAD at {self._git(repo.root, 'rev-parse', '--short', 'HEAD').strip()})"
 
     def git_branches(self, repository: str) -> str:
         output = self._git(self._repo(repository).root, "branch", "--format=%(refname:short)").strip()
