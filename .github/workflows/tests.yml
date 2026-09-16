@@ -3,6 +3,13 @@ name: Tests
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the built wheel to the configured Python package repository"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -44,3 +51,112 @@ jobs:
           uv run --frozen python -m pytest
           --cov=cli_agent
           --cov-report=term-missing
+
+  package:
+    name: Build wheel and SBOM
+    needs: test
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned uv
+        run: python -m pip install uv==0.12.13
+
+      - name: Verify lockfile is current
+        run: uv lock --check
+
+      - name: Sync locked runtime environment
+        run: uv sync --frozen
+
+      - name: Build wheel
+        run: uv build --wheel --no-sources
+
+      - name: Verify built wheel installs
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -Path dist -Filter *.whl | Select-Object -First 1
+          if (-not $wheel) {
+            throw "No wheel was produced in dist/."
+          }
+          uv run --no-project --with $wheel.FullName python -c "import cli_agent; assert cli_agent.__version__ == '1.0.0'"
+
+      - name: Generate CycloneDX SBOM from locked runtime environment
+        shell: pwsh
+        run: |
+          $pythonPath = uv run --frozen python -c "import sys; print(sys.executable)"
+          uv tool run --from cyclonedx-bom==7.3.1 cyclonedx-py environment `
+            --pyproject pyproject.toml `
+            --output-format JSON `
+            --output-reproducible `
+            --output-file dist/cli-agent.cdx.json `
+            $pythonPath
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path dist -File | Sort-Object Name
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path (Resolve-Path dist) "SHA256SUMS.txt"),
+            $lines,
+            (New-Object System.Text.UTF8Encoding($false))
+          )
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-agent-package-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish wheel
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    needs: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned uv
+        run: python -m pip install uv==0.12.13
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-agent-package-${{ github.sha }}
+          path: package
+
+      - name: Validate publish configuration
+        env:
+          UV_PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
+        run: |
+          if [ -z "$UV_PUBLISH_URL" ]; then
+            echo "Repository variable PYTHON_PUBLISH_URL is not configured." >&2
+            exit 1
+          fi
+
+      - name: Publish wheel
+        env:
+          UV_PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
+          UV_PUBLISH_TOKEN: ${{ secrets.PYTHON_PUBLISH_TOKEN }}
+          UV_PUBLISH_USERNAME: ${{ secrets.PYTHON_PUBLISH_USERNAME }}
+          UV_PUBLISH_PASSWORD: ${{ secrets.PYTHON_PUBLISH_PASSWORD }}
+        run: uv publish --publish-url "$UV_PUBLISH_URL" package/*.whl
