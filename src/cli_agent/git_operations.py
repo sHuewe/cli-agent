@@ -59,17 +59,23 @@ class GitWorkspace:
 
     @classmethod
     def _probe(cls, workspace: Path, candidate: Path) -> GitRepository:
-        root = Path(cls._git(candidate, "rev-parse", "--show-toplevel").strip()).resolve(strict=True)
-        git_dir = Path(cls._git(candidate, "rev-parse", "--absolute-git-dir").strip()).resolve(strict=True)
-        common_raw = Path(cls._git(candidate, "rev-parse", "--git-common-dir").strip())
-        common_dir = common_raw.resolve(strict=True) if common_raw.is_absolute() else (candidate / common_raw).resolve(strict=True)
+        try:
+            root = Path(cls._git(candidate, "rev-parse", "--show-toplevel").strip()).resolve(strict=True)
+            git_dir = Path(cls._git(candidate, "rev-parse", "--absolute-git-dir").strip()).resolve(strict=True)
+            common_raw = Path(cls._git(candidate, "rev-parse", "--git-common-dir").strip())
+            common_dir = common_raw.resolve(strict=True) if common_raw.is_absolute() else (candidate / common_raw).resolve(strict=True)
+        except OSError as exc:
+            raise GitWorkspaceError("Git-Repositorypfade konnten nicht sicher aufgelöst werden.") from exc
         if root != candidate.resolve(strict=True):
             raise GitWorkspaceError("Repository-Root stimmt nicht mit dem gefundenen .git-Eintrag überein.")
         for label, path in (("Repository-Root", root), ("Git-Verzeichnis", git_dir), ("Git-Common-Verzeichnis", common_dir)):
             cls._inside(workspace, path, label)
 
         objects_raw = Path(cls._git(candidate, "rev-parse", "--git-path", "objects").strip())
-        objects_dir = objects_raw.resolve(strict=True) if objects_raw.is_absolute() else (candidate / objects_raw).resolve(strict=True)
+        try:
+            objects_dir = objects_raw.resolve(strict=True) if objects_raw.is_absolute() else (candidate / objects_raw).resolve(strict=True)
+        except OSError as exc:
+            raise GitWorkspaceError("Git-Objektverzeichnis konnte nicht sicher aufgelöst werden.") from exc
         cls._inside(workspace, objects_dir, "Git-Objektverzeichnis")
         cls._validate_alternates(workspace, objects_dir)
         return GitRepository(root, git_dir, common_dir, root.relative_to(workspace).as_posix() or ".")
@@ -94,7 +100,10 @@ class GitWorkspace:
                 if not value:
                     continue
                 path = Path(value)
-                resolved = path.resolve(strict=True) if path.is_absolute() else (objects_dir / path).resolve(strict=True)
+                try:
+                    resolved = path.resolve(strict=True) if path.is_absolute() else (objects_dir / path).resolve(strict=True)
+                except OSError as exc:
+                    raise GitWorkspaceError("Git-Alternate-Objektverzeichnis ist ungültig oder nicht erreichbar.") from exc
                 cls._inside(workspace, resolved, "Git-Alternate-Objektverzeichnis")
         http_alternates = objects_dir / "info" / "http-alternates"
         if http_alternates.exists():
@@ -204,6 +213,13 @@ class GitWorkspace:
         if not isinstance(value, str) or not COMMIT_RE.fullmatch(value.strip()):
             raise GitWorkspaceError("commit_hash muss ein hexadezimaler Git-Commit-Hash sein.")
         return cls._git(repo.root, "rev-parse", "--verify", f"{value.strip()}^{{commit}}").strip()
+
+    @classmethod
+    def _commit_parents(cls, repo: GitRepository, commit: str) -> tuple[str, ...]:
+        values = cls._git(repo.root, "rev-list", "--parents", "-n", "1", commit).strip().split()
+        if not values or values[0] != commit:
+            raise GitWorkspaceError("Commit-Eltern konnten nicht ausgewertet werden.")
+        return tuple(values[1:])
 
     @staticmethod
     def _records(output: str) -> list[dict[str, str]]:
@@ -358,7 +374,12 @@ class GitWorkspace:
 
     def git_commit_diff(self, repository: str, commit_hash: str, path: str | None = None) -> str:
         repo = self._repo(repository)
-        args = ["show", "--format=", "--patch", "--no-ext-diff", "--no-textconv", self._commit(repo, commit_hash)]
+        commit = self._commit(repo, commit_hash)
+        parents = self._commit_parents(repo, commit)
+        if len(parents) > 1:
+            args = ["diff", "--no-ext-diff", "--no-textconv", parents[0], commit]
+        else:
+            args = ["show", "--format=", "--patch", "--no-ext-diff", "--no-textconv", commit]
         if path is not None:
             args += ["--", self._repo_path(repo, path)]
         return self._git(repo.root, *args).strip() or "(commit has no textual diff for this selection)"
@@ -372,7 +393,12 @@ class GitWorkspace:
 
     def git_commit_files(self, repository: str, commit_hash: str) -> str:
         repo = self._repo(repository)
-        output = self._git(repo.root, "diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-M", self._commit(repo, commit_hash))
+        commit = self._commit(repo, commit_hash)
+        parents = self._commit_parents(repo, commit)
+        if len(parents) > 1:
+            output = self._git(repo.root, "diff", "--name-status", "-M", parents[0], commit)
+        else:
+            output = self._git(repo.root, "diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-M", commit)
         files: list[dict[str, str]] = []
         labels = {"A": "added", "C": "copied", "D": "deleted", "M": "modified", "R": "renamed", "T": "type_changed"}
         for line in output.splitlines():
