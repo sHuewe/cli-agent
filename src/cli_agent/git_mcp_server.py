@@ -59,7 +59,12 @@ def create_server(workspace: GitWorkspace) -> FastMCP:
 
     @mcp.tool()
     def git_commit_diff(repository: str, commit_hash: str, path: str | None = None) -> str:
-        """Return a commit patch, optionally limited to one repository-relative path."""
+        """Return a commit patch, optionally limited to one repository-relative path.
+
+        Merge commits are compared with their first parent so the result
+        represents what the merge introduced relative to the branch it merged
+        into.
+        """
         return workspace.git_commit_diff(repository, commit_hash, path)
 
     @mcp.tool()
@@ -69,7 +74,10 @@ def create_server(workspace: GitWorkspace) -> FastMCP:
 
     @mcp.tool()
     def git_commit_files(repository: str, commit_hash: str) -> str:
-        """Return files changed by one commit, including change type and rename source when applicable."""
+        """Return files changed by one commit, including change type and rename source.
+
+        For merge commits, changes are reported relative to the first parent.
+        """
         return workspace.git_commit_files(repository, commit_hash)
 
     @mcp.tool()
