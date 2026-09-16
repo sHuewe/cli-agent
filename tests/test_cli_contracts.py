@@ -68,12 +68,15 @@ def test_rendered_fragment_contains_only_copyable_pinned_approval() -> None:
     assert "admin_config.toml" not in fragment
 
 
-def test_render_trusted_http_server_fragment_is_copyable() -> None:
+def test_render_trusted_http_server_fragment_redacts_header_values() -> None:
     server = McpServerConfig(
         name="fachsoftware",
         transport="streamable_http",
         url="https://mcp.internal/mcp",
-        headers={"Authorization": "Bearer test"},
+        headers={
+            "Authorization": "Bearer live-secret-token",
+            "X-Client": "internal-client",
+        },
     )
 
     fragment = _render_trusted_server_fragment(server)
@@ -81,17 +84,21 @@ def test_render_trusted_http_server_fragment_is_copyable() -> None:
     assert 'name = "fachsoftware"' in fragment
     assert 'transport = "streamable_http"' in fragment
     assert 'url = "https://mcp.internal/mcp"' in fragment
-    assert 'headers = { "Authorization" = "Bearer test" }' in fragment
+    assert '"Authorization" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert '"X-Client" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert "Bearer live-secret-token" not in fragment
+    assert "internal-client" not in fragment
+    assert "Header-Werte werden aus Sicherheitsgründen nicht ausgegeben" in fragment
     assert "trust_instructions = false" in fragment
 
 
-def test_render_trusted_stdio_server_fragment_uses_admin_definition() -> None:
+def test_render_trusted_stdio_server_fragment_redacts_environment_values() -> None:
     server = TrustedMcpServer(
         name="local-tool",
         transport="stdio",
         command="C:/Program Files/Company/tool.exe",
         args=("--stdio",),
-        env=(("MODE", "safe"),),
+        env=(("API_TOKEN", "very-secret"), ("MODE", "safe")),
         trust_instructions=True,
     )
 
@@ -101,7 +108,11 @@ def test_render_trusted_stdio_server_fragment_uses_admin_definition() -> None:
     assert 'transport = "stdio"' in fragment
     assert 'command = "C:/Program Files/Company/tool.exe"' in fragment
     assert 'args = ["--stdio"]' in fragment
-    assert 'env = { "MODE" = "safe" }' in fragment
+    assert '"API_TOKEN" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert '"MODE" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert "very-secret" not in fragment
+    assert '"safe"' not in fragment
+    assert "Environment-Werte werden aus Sicherheitsgründen nicht ausgegeben" in fragment
     assert "trust_instructions = true" in fragment
 
 
@@ -226,6 +237,7 @@ def test_trust_tool_prints_admin_path_server_example_before_auto_approval(
         name="fachsoftware",
         transport="streamable_http",
         url="https://mcp.internal/mcp",
+        headers={"Authorization": "Bearer live-secret-token"},
     )
     config = AppConfig(mcp_servers=(server,))
     admin = AdminConfig(network=NetworkConfig(mcp_allowed_hosts=("mcp.internal",)))
@@ -268,4 +280,6 @@ def test_trust_tool_prints_admin_path_server_example_before_auto_approval(
     assert "[[mcp.trusted_servers]]" in output[server_heading:approval_heading]
     assert "[[mcp.trusted_servers.auto_approve_tools]]" in output[approval_heading:]
     assert 'url = "https://mcp.internal/mcp"' in output
+    assert '"Authorization" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in output
+    assert "Bearer live-secret-token" not in output
     assert "trust_instructions = false" in output
