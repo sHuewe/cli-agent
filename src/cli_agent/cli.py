@@ -170,17 +170,61 @@ async def _inspect_mcp_tool(*, server: McpServerConfig, tool_name: str, workspac
         schema = function.get("parameters", {})
         description = str(function.get("description") or "")
         contract = tool_contract_fingerprint(native_tool_name, schema, description)
-        trusted = next((item for item in admin_config.mcp.trusted_servers if agent._trusted_server_matches(server, item)), None)
+        effective_server = getattr(agent, "_server_configs", {}).get(server.name, server)
+        trusted = next((item for item in admin_config.mcp.trusted_servers if agent._trusted_server_matches(effective_server, item)), None)
         existing = None
         if trusted is not None:
             existing_approval = next((approval for approval in trusted.auto_approve_tools if approval.name == native_tool_name), None)
             if existing_approval is not None:
                 existing = existing_approval.contract_sha256
-        return McpToolInspection(server_name=server.name, transport=server.transport, tool_name=native_tool_name, description=description, input_schema=schema, contract_sha256=contract, trusted_server_found=trusted is not None, existing_contract_sha256=existing)
+        return McpToolInspection(server_name=effective_server.name, transport=effective_server.transport, tool_name=native_tool_name, description=description, input_schema=schema, contract_sha256=contract, trusted_server_found=trusted is not None, existing_contract_sha256=existing)
 
 
 def _render_tool_approval_fragment(inspection: McpToolInspection) -> str:
     return "\n".join(["# Unter dem zugehörigen [[mcp.trusted_servers]]-Eintrag einfügen:", "[[mcp.trusted_servers.auto_approve_tools]]", f"name = {json.dumps(inspection.tool_name, ensure_ascii=False)}", f"contract_sha256 = {json.dumps(inspection.contract_sha256)}"])
+
+
+def _config_pairs(values: Any) -> tuple[tuple[str, str], ...]:
+    if isinstance(values, dict):
+        return tuple(sorted((str(key), str(value)) for key, value in values.items()))
+    return tuple(sorted((str(key), str(value)) for key, value in (values or ())))
+
+
+def _render_inline_toml_table(values: Any) -> str:
+    pairs = _config_pairs(values)
+    return "{ " + ", ".join(
+        f"{json.dumps(key, ensure_ascii=False)} = {json.dumps(value, ensure_ascii=False)}"
+        for key, value in pairs
+    ) + " }"
+
+
+def _render_trusted_server_fragment(server: Any) -> str:
+    name = str(server.name)
+    transport = str(server.transport)
+    lines = [
+        "[[mcp.trusted_servers]]",
+        f"name = {json.dumps(name, ensure_ascii=False)}",
+        f"transport = {json.dumps(transport, ensure_ascii=False)}",
+    ]
+    if transport == "streamable_http":
+        url = getattr(server, "url", None)
+        if url:
+            lines.append(f"url = {json.dumps(str(url), ensure_ascii=False)}")
+        headers = getattr(server, "headers", None)
+        if headers:
+            lines.append(f"headers = {_render_inline_toml_table(headers)}")
+    elif transport == "stdio":
+        command = getattr(server, "command", None)
+        if command:
+            lines.append(f"command = {json.dumps(str(command), ensure_ascii=False)}")
+        args = tuple(str(value) for value in (getattr(server, "args", ()) or ()))
+        if args:
+            lines.append("args = [" + ", ".join(json.dumps(value, ensure_ascii=False) for value in args) + "]")
+        env = getattr(server, "env", None)
+        if env:
+            lines.append(f"env = {_render_inline_toml_table(env)}")
+    lines.append(f"trust_instructions = {'true' if bool(getattr(server, 'trust_instructions', False)) else 'false'}")
+    return "\n".join(lines)
 
 
 async def run_admin(args: argparse.Namespace) -> None:
@@ -215,8 +259,22 @@ async def run_admin(args: argparse.Namespace) -> None:
             print("Der Tool-Contract hat sich geändert. Prüfe Beschreibung und Schema vor einer erneuten Freigabe.")
     elif not inspection.trusted_server_found:
         print("Hinweis: In der aktuellen Admin-Policy existiert noch kein identitätsgleicher [[mcp.trusted_servers]]-Eintrag. Der folgende Contract kann vorbereitet werden, greift aber erst zusammen mit einer passenden administrativen Serveridentität.")
+    trusted_server = next(
+        (
+            item
+            for item in admin_config.mcp.trusted_servers
+            if item.name == inspection.server_name and item.transport == inspection.transport
+        ),
+        None,
+    )
+    fragment_server = trusted_server if inspection.trusted_server_found and trusted_server is not None else server
     print("\nDie Admin-Konfiguration wurde NICHT geändert.")
-    print("Prüfe Tool, Beschreibung und Schema und kopiere danach bei bewusster Freigabe diesen Block manuell in die Admin-Policy:\n")
+    print("Prüfe Tool, Beschreibung und Schema und übernimm die folgenden Blöcke bei bewusster Freigabe manuell in die Admin-Policy.")
+    print("\nPfad zur Admin-Konfiguration:")
+    print(default_admin_config_file())
+    print("\nBeispiel für den Trusted-Server-Eintrag:")
+    print(_render_trusted_server_fragment(fragment_server))
+    print("\nAuto-Approval für dieses Tool:")
     print(_render_tool_approval_fragment(inspection))
 
 
