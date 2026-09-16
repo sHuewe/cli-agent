@@ -260,9 +260,12 @@ def test_trust_tool_prints_admin_path_server_example_before_auto_approval(
     asyncio.run(cli_module.run_admin(args))
     output = capsys.readouterr().out
 
-    path_pos = output.index(str(cli_module.default_admin_config_file()))
-    server_pos = output.index("[[mcp.trusted_servers]]")
-    approval_pos = output.index("[[mcp.trusted_servers.auto_approve_tools]]")
-    assert path_pos < server_pos < approval_pos
+    path_heading = output.index("Pfad zur Admin-Konfiguration:")
+    server_heading = output.index("Beispiel für den Trusted-Server-Eintrag:")
+    approval_heading = output.index("Auto-Approval für dieses Tool:")
+    assert path_heading < server_heading < approval_heading
+    assert str(cli_module.default_admin_config_file()) in output[path_heading:server_heading]
+    assert "[[mcp.trusted_servers]]" in output[server_heading:approval_heading]
+    assert "[[mcp.trusted_servers.auto_approve_tools]]" in output[approval_heading:]
     assert 'url = "https://mcp.internal/mcp"' in output
     assert "trust_instructions = false" in output
