@@ -43,6 +43,19 @@ def test_discovers_nested_repositories(tmp_path: Path) -> None:
     assert [repo.relative_path for repo in workspace.repositories] == ["app", "lib"]
 
 
+def test_invalid_stale_alternate_rejects_only_that_repository(tmp_path: Path) -> None:
+    bad = tmp_path / "bad"
+    good = tmp_path / "good"
+    _init_repo(bad)
+    _init_repo(good)
+    alternates = bad / ".git" / "objects" / "info" / "alternates"
+    alternates.write_text(str(tmp_path / "missing-objects") + "\n", encoding="utf-8")
+
+    workspace = GitWorkspace.from_directory(tmp_path)
+
+    assert [repo.relative_path for repo in workspace.repositories] == ["good"]
+
+
 def test_repository_above_workspace_is_not_discovered(tmp_path: Path) -> None:
     root = tmp_path / "outer"
     _init_repo(root)
@@ -91,6 +104,31 @@ def test_status_diff_history_and_commit_files(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("two\n", encoding="utf-8")
     assert "-one" in workspace.git_diff(".", "a.txt")
     assert "+two" in workspace.git_diff(".", "a.txt")
+
+
+def test_merge_commit_diff_and_files_use_first_parent_semantics(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    default_branch = _git(tmp_path, "branch", "--show-current")
+    _git(tmp_path, "checkout", "-b", "feature")
+    (tmp_path / "feature.txt").write_text("from feature\n", encoding="utf-8")
+    _git(tmp_path, "add", "feature.txt")
+    _git(tmp_path, "commit", "-m", "feature change")
+
+    _git(tmp_path, "checkout", default_branch)
+    (tmp_path / "main.txt").write_text("from main\n", encoding="utf-8")
+    _git(tmp_path, "add", "main.txt")
+    _git(tmp_path, "commit", "-m", "main change")
+    _git(tmp_path, "merge", "--no-ff", "feature", "-m", "merge feature")
+    merge_commit = _git(tmp_path, "rev-parse", "HEAD")
+
+    workspace = GitWorkspace.from_directory(tmp_path)
+    files = json.loads(workspace.git_commit_files(".", merge_commit))
+    diff = workspace.git_commit_diff(".", merge_commit)
+
+    assert files == [{"status": "added", "path": "feature.txt"}]
+    assert "feature.txt" in diff
+    assert "+from feature" in diff
+    assert "main.txt" not in diff
 
 
 def test_git_grep_returns_structured_literal_matches_and_ignores_untracked(tmp_path: Path) -> None:
