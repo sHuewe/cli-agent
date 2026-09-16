@@ -6,6 +6,13 @@ from typing import Any
 import httpx
 
 from .model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
+from .model_http import (
+    MAX_MODEL_ERROR_BODY_BYTES,
+    MAX_MODEL_RESPONSE_BYTES,
+    ModelResponseTooLargeError,
+    read_bounded_json_response,
+    read_response_prefix,
+)
 from .network_policy import LOCAL_HOSTS, validate_http_url
 
 
@@ -16,14 +23,8 @@ class OpenAIError(RuntimeError):
     pass
 
 
-def _safe_http_error_detail(response: httpx.Response) -> str:
-    """Return a bounded, terminal-safe response body for diagnostics."""
-
-    try:
-        detail = response.text.strip()
-    except Exception:
-        return ""
-
+def _safe_http_error_text(detail: str) -> str:
+    detail = detail.strip()
     if not detail:
         return ""
 
@@ -40,10 +41,23 @@ def _safe_http_error_detail(response: httpx.Response) -> str:
         return normalized
 
     omitted = len(normalized) - MAX_HTTP_ERROR_DETAIL_CHARS
-    return (
-        normalized[:MAX_HTTP_ERROR_DETAIL_CHARS]
-        + f"... [{omitted} Zeichen gekürzt]"
-    )
+    return normalized[:MAX_HTTP_ERROR_DETAIL_CHARS] + f"... [{omitted} Zeichen gekürzt]"
+
+
+def _safe_http_error_detail(response: httpx.Response) -> str:
+    """Return a bounded, terminal-safe response body for diagnostics.
+
+    This helper remains useful for already-buffered responses in tests and
+    diagnostics. The normal model request path reads error bodies through
+    ``read_response_prefix`` so a remote endpoint cannot force an unbounded
+    error body into memory first.
+    """
+
+    try:
+        detail = response.text
+    except Exception:
+        return ""
+    return _safe_http_error_text(detail)
 
 
 class OpenAIClient:
@@ -229,18 +243,38 @@ class OpenAIClient:
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
-                response = await client.post(
+                async with client.stream(
+                    "POST",
                     f"{self.base_url}/chat/completions",
                     headers=headers,
                     json=payload,
-                )
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            detail = _safe_http_error_detail(exc.response)
-            suffix = f": {detail}" if detail else ""
+                ) as response:
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        error_body, truncated = await read_response_prefix(
+                            response,
+                            max_bytes=MAX_MODEL_ERROR_BODY_BYTES,
+                        )
+                        detail = _safe_http_error_text(
+                            error_body.decode("utf-8", errors="replace")
+                        )
+                        if truncated and detail:
+                            detail += "... [HTTP-Fehlerantwort gekürzt]"
+                        suffix = f": {detail}" if detail else ""
+                        raise OpenAIError(
+                            f"OpenAI-kompatibles Modell unter {self.base_url} hat die Anfrage "
+                            f"mit HTTP {response.status_code} abgelehnt{suffix}"
+                        ) from exc
+                    data = await read_bounded_json_response(
+                        response,
+                        max_bytes=MAX_MODEL_RESPONSE_BYTES,
+                    )
+        except OpenAIError:
+            raise
+        except ModelResponseTooLargeError as exc:
             raise OpenAIError(
-                f"OpenAI-kompatibles Modell unter {self.base_url} hat die Anfrage "
-                f"mit HTTP {exc.response.status_code} abgelehnt{suffix}"
+                f"OpenAI-kompatibles Modell unter {self.base_url}: {exc}"
             ) from exc
         except httpx.HTTPError as exc:
             raise OpenAIError(
@@ -248,7 +282,8 @@ class OpenAIClient:
                 f"{self.base_url} nicht erreichbar: {exc}"
             ) from exc
 
-        data = response.json()
+        if not isinstance(data, dict):
+            raise OpenAIError("Unerwartete Modellantwort: JSON-Root ist kein Objekt.")
         self.last_usage = self._token_usage(data)
         self.usage_history.append(self.last_usage)
         self._check_context_limit()
