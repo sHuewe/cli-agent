@@ -149,7 +149,6 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
             web_allowed_hosts=("docs.internal",),
         ),
         mcp=McpPolicy(
-            allow_untrusted_stdio=True,
             trusted_servers=(
                 TrustedMcpServer(
                     name="continuous",

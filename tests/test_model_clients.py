@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -12,9 +13,11 @@ from cli_agent.openai_client import OpenAIClient, OpenAIError
 
 
 class FakeResponse:
-    def __init__(self, data, *, error: Exception | None = None):
+    def __init__(self, data, *, error: Exception | None = None, headers: dict[str, str] | None = None):
         self._data = data
         self._error = error
+        self.headers = httpx.Headers(headers or {})
+        self.status_code = 200
 
     def raise_for_status(self):
         if self._error is not None:
@@ -22,6 +25,27 @@ class FakeResponse:
 
     def json(self):
         return self._data
+
+    async def aiter_bytes(self, chunk_size: int | None = None):
+        body = json.dumps(self._data, ensure_ascii=False).encode("utf-8")
+        size = chunk_size or len(body) or 1
+        for offset in range(0, len(body), size):
+            yield body[offset : offset + size]
+
+
+class _FakeStreamContext:
+    def __init__(self, client, response, error):
+        self.client = client
+        self.response = response
+        self.error = error
+
+    async def __aenter__(self):
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+    async def __aexit__(self, *_args):
+        return None
 
 
 class FakeAsyncClient:
@@ -45,6 +69,11 @@ class FakeAsyncClient:
         if type(self).post_error is not None:
             raise type(self).post_error
         return type(self).response
+
+    def stream(self, method, url, **kwargs):
+        assert method == "POST"
+        self.posts.append((url, kwargs))
+        return _FakeStreamContext(self, type(self).response, type(self).post_error)
 
 
 @pytest.fixture(autouse=True)

@@ -13,6 +13,17 @@ from cli_agent.openai_client import (
 )
 
 
+class _ResponseContext:
+    def __init__(self, response: httpx.Response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, *_args):
+        return None
+
+
 class RejectingAsyncClient:
     response: httpx.Response | None = None
 
@@ -25,9 +36,11 @@ class RejectingAsyncClient:
     async def __aexit__(self, *_args):
         return None
 
-    async def post(self, url, **_kwargs):
+    def stream(self, method, url, **_kwargs):
+        assert method == "POST"
+        assert url.endswith("/chat/completions")
         assert self.response is not None
-        return self.response
+        return _ResponseContext(self.response)
 
 
 def _response(status: int, text: str) -> httpx.Response:

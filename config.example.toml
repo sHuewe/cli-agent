@@ -36,32 +36,16 @@ timeout = 120
 # Optional MCP servers
 # -----------------------------------------------------------------------------
 
-# Workspace OS MCP - read-only by default
-# [[mcp_servers]]
-# name = "os"
-# transport = "stdio"
-# command = "{python}"
-# args = [
-#     "-m",
-#     "cli_agent.os_mcp_server",
-#     "--project-directory",
-#     "{workspace_directory}",
-#     "--config-file",
-#     "{config_file}",
-# ]
-#
-# [mcp_servers.config]
-# allow_write_files = false
+# Built-in workspace OS MCP is enabled with --with-os-read or --with-os-write.
 
-# External stdio MCP. Starting untrusted stdio is controlled exclusively by the
-# machine-wide admin policy; it cannot be enabled here.
+# External stdio MCP: select only an administrative server profile by name.
+# command, args and env are defined exclusively in admin_config.toml.
 # [[mcp_servers]]
-# name = "external-stdio"
-# transport = "stdio"
-# command = "external-mcp"
-# args = []
+# name = "local-audited-tool"
 
 # External Streamable HTTP MCP. Its host must be permitted by admin_config.toml.
+# No trusted-server entry is normally needed unless permanent auto-approval or
+# trusted server instructions are required.
 # [[mcp_servers]]
 # name = "external"
 # transport = "streamable_http"

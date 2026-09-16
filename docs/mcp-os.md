@@ -20,57 +20,43 @@ cli-agent --with-os-write
 ```
 
 Die CLI-Varianten ersetzen einen eventuell vorhandenen MCP-Server namens `os`
-aus der Konfigurationsdatei durch die eingebaute Konfiguration. Die ausgewählte
-Konfigurationsdatei wird weiterhin an den MCP-Prozess übergeben.
+aus der Konfigurationsdatei durch die eingebaute OS-MCP-Konfiguration. Die
+ausgewählte Konfigurationsdatei wird weiterhin an den MCP-Prozess übergeben.
 
-## Konfiguration über TOML
+Der eingebaute Workspace-OS-MCP wird bewusst **nicht** über einen vollständigen
+`[[mcp_servers]]`-Block in der normalen Benutzerkonfiguration definiert. Die
+Launchparameter des Built-ins werden vom Agenten selbst erzeugt; insbesondere
+wird der aktuelle Workspace über `{workspace_directory}` außerhalb der
+Modellkontrolle gebunden.
 
-Alternativ kann der Server explizit in der normalen Benutzer-/Projektkonfiguration
-konfiguriert werden:
+Ein `[[mcp_servers]]`-Eintrag mit nur `name = "os"` würde dagegen wie jeder andere
+name-only stdio-Eintrag einen **externen**, administrativ definierten
+`[[mcp.trusted_servers]]`-Server dieses Namens referenzieren. Für den eingebauten
+Workspace-OS-MCP sollen deshalb die CLI-Schalter `--with-os-read` beziehungsweise
+`--with-os-write` verwendet werden.
 
-```toml
-[[mcp_servers]]
-name = "os"
-transport = "stdio"
-command = "{python}"
-args = [
-    "-m",
-    "cli_agent.os_mcp_server",
-    "--project-directory",
-    "{workspace_directory}",
-    "--config-file",
-    "{config_file}",
-]
+Es gibt keinen globalen `allow_untrusted_stdio`-Schalter mehr. Externe
+stdio-MCPs benötigen immer ein einzelnes administratives Launchprofil; dies ist
+vom eingebauten OS-MCP getrennt.
 
-[mcp_servers.config]
-allow_write_files = false
-```
+## Freigaben bei Schreibzugriff
 
-Mit `allow_write_files = true` werden zusätzlich die schreibenden Tools
-registriert.
+Mit `--with-os-read` stehen ausschließlich die eingebauten Read-only-Tools zur
+Verfügung und benötigen keine interaktive Tool-Freigabe.
 
-Da eine solche persistente TOML-Konfiguration als user-provided stdio-MCP gilt,
-muss dessen Start zusätzlich in der maschinenweiten `admin_config.toml`
-administrativ erlaubt sein:
+Mit `--with-os-write` werden zusätzlich die mutierenden Tools registriert. Diese
+benötigen standardmäßig eine explizite Benutzerfreigabe. Ein konkretes Tool kann
+für die laufende Session oder mit `--approve-tool <exposed_name>` für genau den
+aktuellen Prozesslauf freigegeben werden. Administrative Auto-Approvals für
+externe MCPs können die Built-in-Write-Regel nicht umgehen.
 
-```toml
-[mcp]
-allow_untrusted_stdio = true
-```
-
-Diese Einstellung gehört bewusst **nicht** unter `[mcp_servers.config]` in die
-normale `config.toml`; dort wird sie vom Agenten abgewiesen. Unter Windows wird
-die Admin-Policy über `scripts/setup-admin-config.ps1 -AllowUntrustedStdio`
-gesetzt.
-
-Bei einer persistenten TOML-Konfiguration verlangt der Agent standardmäßig vor
-Tool-Aufrufen eine explizite Benutzerfreigabe, weil der Prozess als
-user-provided stdio-Server gilt. Ein Tool kann interaktiv einmalig oder exakt
-für die laufende Session freigegeben werden; permanente Auto-Approvals für
-externe MCP-Tools gehören ebenfalls in die Admin-Policy. Die CLI-Variante
-`--with-os-read` ist dagegen als eingebauter read-only Server markiert.
-Nicht-interaktive Aufrufer ohne Approval-Callback werden abgewiesen. Der
-Approval-Dialog zeigt keine Datei-Inhalte an.
+Der Approval-Dialog zeigt eine begrenzte Vorschau der Toolargumente. Argumente,
+deren Namen auf Secrets oder Credentials hindeuten (zum Beispiel `token`,
+`password`, `authorization` oder `api_key`), werden verborgen. Andere
+Stringargumente können bis zu einer begrenzten Länge sichtbar sein; bei
+`write_file` kann dies daher auch einen Ausschnitt des zu schreibenden Inhalts
+umfassen. Der Dialog selbst ist deshalb ebenfalls als potenziell vertrauliche
+lokale Anzeige zu behandeln.
 
 ## Tools
 
@@ -132,4 +118,6 @@ Zusätzlich gelten unter anderem:
 
 Die MCP-`instructions` fordern das Modell außerdem auf, bestehende Dateien vor
 einer Änderung zu lesen und Schreiboperationen nur auf ausdrückliche
-Benutzeranforderung auszuführen.
+Benutzeranforderung auszuführen. Diese Instructions unterstützen die korrekte
+Tool-Nutzung; die eigentlichen Workspace- und Approval-Grenzen werden unabhängig
+davon deterministisch im Agenten beziehungsweise im OS-MCP erzwungen.

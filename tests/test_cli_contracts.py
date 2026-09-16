@@ -17,9 +17,10 @@ from cli_agent.cli import (
     McpToolInspection,
     _inspect_mcp_tool,
     _render_tool_approval_fragment,
+    _render_trusted_server_fragment,
     build_admin_parser,
 )
-from cli_agent.config import McpServerConfig
+from cli_agent.config import AppConfig, McpServerConfig
 from cli_agent.mcp_contracts import tool_contract_fingerprint
 from cli_agent.network_policy import NetworkConfig
 
@@ -67,6 +68,54 @@ def test_rendered_fragment_contains_only_copyable_pinned_approval() -> None:
     assert "admin_config.toml" not in fragment
 
 
+def test_render_trusted_http_server_fragment_redacts_header_values() -> None:
+    server = McpServerConfig(
+        name="fachsoftware",
+        transport="streamable_http",
+        url="https://mcp.internal/mcp",
+        headers={
+            "Authorization": "Bearer live-secret-token",
+            "X-Client": "internal-client",
+        },
+    )
+
+    fragment = _render_trusted_server_fragment(server)
+
+    assert 'name = "fachsoftware"' in fragment
+    assert 'transport = "streamable_http"' in fragment
+    assert 'url = "https://mcp.internal/mcp"' in fragment
+    assert '"Authorization" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert '"X-Client" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert "Bearer live-secret-token" not in fragment
+    assert "internal-client" not in fragment
+    assert "Header-Werte werden aus Sicherheitsgründen nicht ausgegeben" in fragment
+    assert "trust_instructions = false" in fragment
+
+
+def test_render_trusted_stdio_server_fragment_redacts_environment_values() -> None:
+    server = TrustedMcpServer(
+        name="local-tool",
+        transport="stdio",
+        command="C:/Program Files/Company/tool.exe",
+        args=("--stdio",),
+        env=(("API_TOKEN", "very-secret"), ("MODE", "safe")),
+        trust_instructions=True,
+    )
+
+    fragment = _render_trusted_server_fragment(server)
+
+    assert 'name = "local-tool"' in fragment
+    assert 'transport = "stdio"' in fragment
+    assert 'command = "C:/Program Files/Company/tool.exe"' in fragment
+    assert 'args = ["--stdio"]' in fragment
+    assert '"API_TOKEN" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert '"MODE" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert "very-secret" not in fragment
+    assert '"safe"' not in fragment
+    assert "Environment-Werte werden aus Sicherheitsgründen nicht ausgegeben" in fragment
+    assert "trust_instructions = true" in fragment
+
+
 def test_inspection_uses_live_tool_metadata_without_model_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     server = McpServerConfig(
         name="fachsoftware",
@@ -100,6 +149,7 @@ def test_inspection_uses_live_tool_metadata_without_model_call(tmp_path: Path, m
                     }
                 ]
             }
+            self._server_configs = {"fachsoftware": server}
 
         async def __aenter__(self):
             return self
@@ -131,20 +181,14 @@ def test_inspection_uses_live_tool_metadata_without_model_call(tmp_path: Path, m
 
 def test_inspection_reports_existing_pinned_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     contract = tool_contract_fingerprint("search", SCHEMA, "")
-    server = McpServerConfig(name="fachsoftware", command="ignored")
-    admin = AdminConfig(
-        mcp=McpPolicy(
-            allow_untrusted_stdio=True,
-            trusted_servers=(
-                TrustedMcpServer(
-                    name="fachsoftware",
-                    transport="stdio",
-                    command="ignored",
-                    auto_approve_tools=(TrustedMcpToolApproval("search", contract),),
-                ),
-            )
-        )
+    server = McpServerConfig(name="fachsoftware")
+    trusted_server = TrustedMcpServer(
+        name="fachsoftware",
+        transport="stdio",
+        command="/trusted/fachsoftware",
+        auto_approve_tools=(TrustedMcpToolApproval("search", contract),),
     )
+    admin = AdminConfig(mcp=McpPolicy(trusted_servers=(trusted_server,)))
 
     class FakeAgent:
         def __init__(self, *_args, **_kwargs):
@@ -152,6 +196,13 @@ def test_inspection_reports_existing_pinned_contract(tmp_path: Path, monkeypatch
                 "fachsoftware": [
                     {"function": {"name": "fachsoftware__search", "parameters": SCHEMA}}
                 ]
+            }
+            self._server_configs = {
+                "fachsoftware": McpServerConfig(
+                    name="fachsoftware",
+                    transport="stdio",
+                    command="/trusted/fachsoftware",
+                )
             }
 
         async def __aenter__(self):
@@ -175,3 +226,60 @@ def test_inspection_reports_existing_pinned_contract(tmp_path: Path, monkeypatch
     )
 
     assert inspection.existing_contract_sha256 == contract
+
+
+def test_trust_tool_prints_admin_path_server_example_before_auto_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    server = McpServerConfig(
+        name="fachsoftware",
+        transport="streamable_http",
+        url="https://mcp.internal/mcp",
+        headers={"Authorization": "Bearer live-secret-token"},
+    )
+    config = AppConfig(mcp_servers=(server,))
+    admin = AdminConfig(network=NetworkConfig(mcp_allowed_hosts=("mcp.internal",)))
+    contract = tool_contract_fingerprint("search", SCHEMA, "Search records")
+    inspection = McpToolInspection(
+        server_name="fachsoftware",
+        transport="streamable_http",
+        tool_name="search",
+        description="Search records",
+        input_schema=SCHEMA,
+        contract_sha256=contract,
+        trusted_server_found=False,
+        existing_contract_sha256=None,
+    )
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "load_admin_config", lambda: admin)
+
+    async def fake_inspect(**_kwargs):
+        return inspection
+
+    monkeypatch.setattr(cli_module, "_inspect_mcp_tool", fake_inspect)
+    args = SimpleNamespace(
+        admin_command="trust-tool",
+        server="fachsoftware",
+        tool="search",
+        config=tmp_path / "project.toml",
+        workspace=tmp_path,
+        update=False,
+    )
+
+    asyncio.run(cli_module.run_admin(args))
+    output = capsys.readouterr().out
+
+    path_heading = output.index("Pfad zur Admin-Konfiguration:")
+    server_heading = output.index("Beispiel für den Trusted-Server-Eintrag:")
+    approval_heading = output.index("Auto-Approval für dieses Tool:")
+    assert path_heading < server_heading < approval_heading
+    assert str(cli_module.default_admin_config_file()) in output[path_heading:server_heading]
+    assert "[[mcp.trusted_servers]]" in output[server_heading:approval_heading]
+    assert "[[mcp.trusted_servers.auto_approve_tools]]" in output[approval_heading:]
+    assert 'url = "https://mcp.internal/mcp"' in output
+    assert '"Authorization" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in output
+    assert "Bearer live-secret-token" not in output
+    assert "trust_instructions = false" in output

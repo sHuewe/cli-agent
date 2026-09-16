@@ -18,7 +18,6 @@ def test_admin_config_defaults_are_restrictive(tmp_path: Path) -> None:
     assert config.network.mcp_allowed_hosts == config.network.model_allowed_hosts
     assert config.network.web_allowed_hosts == ()
     assert config.model_credentials == ()
-    assert config.mcp.allow_untrusted_stdio is False
     assert config.mcp.trusted_servers == ()
 
 
@@ -42,9 +41,6 @@ provider = "openai"
 host = "LLM.INTERNAL."
 allowed_api_key_envs = ["LLM_API_KEY"]
 
-[mcp]
-allow_untrusted_stdio = true
-
 [[mcp.trusted_servers]]
 name = "continuous"
 transport = "stdio"
@@ -61,6 +57,13 @@ contract_sha256 = "{VALID_CONTRACT}"
     assert trusted.command == executable
     assert trusted.auto_approve_tools[0].name == "search"
     assert trusted.auto_approve_tools[0].contract_sha256 == VALID_CONTRACT
+
+
+def test_legacy_allow_untrusted_stdio_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text('[mcp]\nallow_untrusted_stdio = true\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="nicht mehr unterstützt|trusted_servers"):
+        load_admin_config(path)
 
 
 def test_name_only_auto_approval_is_rejected(tmp_path: Path) -> None:
@@ -142,9 +145,11 @@ def test_trusted_stdio_accepts_managed_python_placeholder(tmp_path: Path) -> Non
 name = "tool"
 transport = "stdio"
 command = "{python}"
-args = ["-m", "company_tool"]
+args = ["-m", "company_tool", "--project-directory", "{workspace_directory}"]
 '''.strip(), encoding="utf-8")
-    assert load_admin_config(path).mcp.trusted_servers[0].command == "{python}"
+    trusted = load_admin_config(path).mcp.trusted_servers[0]
+    assert trusted.command == "{python}"
+    assert "{workspace_directory}" in trusted.args
 
 
 def test_admin_config_accepts_empty_optional_lists(tmp_path: Path) -> None:
@@ -154,8 +159,6 @@ def test_admin_config_accepts_empty_optional_lists(tmp_path: Path) -> None:
 model_allowed_hosts = ["localhost", "127.0.0.1", "::1", "openrouter.ai"]
 mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 web_allowed_hosts = []
-[mcp]
-allow_untrusted_stdio = false
 '''.strip(), encoding="utf-8")
     config = load_admin_config(path)
     assert "openrouter.ai" in config.network.model_allowed_hosts
@@ -208,15 +211,12 @@ def test_user_config_rejects_network_policy(tmp_path: Path) -> None:
         load_config(path)
 
 
-def test_user_config_rejects_untrusted_stdio_policy(tmp_path: Path) -> None:
+def test_user_config_rejects_stdio_launch_configuration(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text('''
 [[mcp_servers]]
 name = "external"
-transport = "stdio"
 command = "external-mcp"
-[mcp_servers.config]
-allow_untrusted_stdio = true
 '''.strip(), encoding="utf-8")
-    with pytest.raises(ValueError, match="admin_config"):
+    with pytest.raises(ValueError, match="Admin-Policy|nur.*Namen|nur.*referenziert"):
         load_config(path)

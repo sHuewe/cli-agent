@@ -83,7 +83,6 @@ class TrustedMcpServer:
 class McpPolicy:
     """Administrator-controlled policy for MCP process and tool execution."""
 
-    allow_untrusted_stdio: bool = False
     trusted_servers: tuple[TrustedMcpServer, ...] = ()
 
 
@@ -265,6 +264,11 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
         raise ValueError("[mcp] in admin_config.toml muss eine Tabelle sein.")
     if "approval" in mcp_values:
         raise ValueError("[mcp.approval] ist nicht mehr unterstützt. Permanente Freigaben müssen über [[mcp.trusted_servers]] an eine Serveridentität gebunden werden.")
+    if "allow_untrusted_stdio" in mcp_values:
+        raise ValueError(
+            "[mcp].allow_untrusted_stdio wird nicht mehr unterstützt. Externe stdio-MCP-Server "
+            "müssen einzeln über [[mcp.trusted_servers]] administrativ definiert werden."
+        )
     raw_trusted_servers = mcp_values.get("trusted_servers", [])
     if not isinstance(raw_trusted_servers, list) or not all(isinstance(value, dict) for value in raw_trusted_servers):
         raise ValueError("[[mcp.trusted_servers]] muss eine Liste von Tabellen sein.")
@@ -276,8 +280,5 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
     return AdminConfig(
         network=network,
         model_credentials=model_credentials,
-        mcp=McpPolicy(
-            allow_untrusted_stdio=_bool_value(mcp_values, "allow_untrusted_stdio", False, section="[mcp]"),
-            trusted_servers=trusted_servers,
-        ),
+        mcp=McpPolicy(trusted_servers=trusted_servers),
     )

@@ -86,22 +86,6 @@ def test_load_config_rejects_string_security_flags(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="log_prompts"):
         load_config(logging_config_file)
 
-    mcp_config_file = tmp_path / "mcp-config.toml"
-    mcp_config_file.write_text(
-        """
-[[mcp_servers]]
-name = "os"
-transport = "stdio"
-command = "python"
-
-[mcp_servers.config]
-allow_write_files = "false"
-""".strip(),
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="allow_write_files"):
-        load_config(mcp_config_file)
-
 
 def test_configure_logging_writes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     state_dir = tmp_path / "state"
@@ -114,26 +98,40 @@ def test_configure_logging_writes_file(tmp_path: Path, monkeypatch: pytest.Monke
     assert "tool_call name=example" in log_file.read_text(encoding="utf-8")
 
 
-def test_load_mcp_servers(tmp_path: Path) -> None:
+def test_load_stdio_server_reference_is_name_only(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """
 [[mcp_servers]]
 name = "special"
-transport = "stdio"
-command = "C:/tools/python.exe"
-args = ["-m", "special.server"]
-
-[mcp_servers.env]
-API_URL = "http://localhost:8080"
 """.strip(),
         encoding="utf-8",
     )
-    config = load_config(config_file)
-    assert len(config.mcp_servers) == 1
-    assert config.mcp_servers[0].name == "special"
-    assert config.mcp_servers[0].args == ("-m", "special.server")
-    assert config.mcp_servers[0].env["API_URL"] == "http://localhost:8080"
+    server = load_config(config_file).mcp_servers[0]
+    assert server.name == "special"
+    assert server.transport == "stdio"
+    assert server.command is None
+    assert server.args == ()
+    assert server.env == {}
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        'transport = "stdio"',
+        'command = "python"',
+        'args = ["-m", "special.server"]',
+        'compress_result = true',
+    ],
+)
+def test_stdio_user_config_rejects_launch_or_runtime_settings(tmp_path: Path, extra: str) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        f'[[mcp_servers]]\nname = "special"\n{extra}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="nur.*Namen|nur.*referenziert|Admin-Policy"):
+        load_config(config_file)
 
 
 def test_load_streamable_http_server(tmp_path: Path) -> None:
@@ -179,13 +177,9 @@ def test_duplicate_mcp_server_names_are_rejected(tmp_path: Path) -> None:
         """
 [[mcp_servers]]
 name = "same"
-transport = "stdio"
-command = "first"
 
 [[mcp_servers]]
 name = "same"
-transport = "stdio"
-command = "second"
 """.strip(),
         encoding="utf-8",
     )

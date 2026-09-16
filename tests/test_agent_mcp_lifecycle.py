@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.admin_config import McpPolicy
+from cli_agent.admin_config import McpPolicy, TrustedMcpServer
 from cli_agent.agent import CliAgent
 from cli_agent.agent_knowledge import _OkfOptions
 from cli_agent.config import McpServerConfig
@@ -47,11 +47,19 @@ def test_start_is_idempotent(tmp_path: Path) -> None:
 
 def test_start_cleans_state_when_server_start_fails(tmp_path: Path) -> None:
     async def exercise() -> None:
-        server = McpServerConfig(name="broken", command="broken")
+        server = McpServerConfig(name="broken")
         agent = make_agent(
             tmp_path,
             (server,),
-            mcp_policy=McpPolicy(allow_untrusted_stdio=True),
+            mcp_policy=McpPolicy(
+                trusted_servers=(
+                    TrustedMcpServer(
+                        name="broken",
+                        transport="stdio",
+                        command="/trusted/broken",
+                    ),
+                )
+            ),
         )
 
         async def fail(_config, _stack):
@@ -69,11 +77,56 @@ def test_start_cleans_state_when_server_start_fails(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_external_stdio_without_admin_profile_is_rejected(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        agent = make_agent(tmp_path)
+        parent = AsyncExitStack()
+        await parent.__aenter__()
+        try:
+            with pytest.raises(PermissionError, match="trusted_servers"):
+                await agent._start_server(
+                    McpServerConfig(name="external"),
+                    parent,
+                )
+        finally:
+            await parent.aclose()
+    asyncio.run(exercise())
+
+
+def test_external_stdio_is_materialized_from_admin_profile(tmp_path: Path) -> None:
+    agent = make_agent(
+        tmp_path,
+        mcp_policy=McpPolicy(
+            trusted_servers=(
+                TrustedMcpServer(
+                    name="external",
+                    transport="stdio",
+                    command="{python}",
+                    args=("-m", "trusted.server", "--project", "{workspace_directory}"),
+                    env=(("MODE", "safe"),),
+                ),
+            )
+        ),
+    )
+    resolved = agent._resolve_external_stdio_server(McpServerConfig(name="external"))
+    assert resolved.command == "{python}"
+    assert resolved.args == ("-m", "trusted.server", "--project", "{workspace_directory}")
+    assert resolved.env == {"MODE": "safe"}
+
+
 def test_start_server_rejects_duplicate_connection(tmp_path: Path) -> None:
     async def exercise() -> None:
         agent = make_agent(
             tmp_path,
-            mcp_policy=McpPolicy(allow_untrusted_stdio=True),
+            mcp_policy=McpPolicy(
+                trusted_servers=(
+                    TrustedMcpServer(
+                        name="external",
+                        transport="stdio",
+                        command="/trusted/external",
+                    ),
+                )
+            ),
         )
         agent._sessions["external"] = object()
         parent = AsyncExitStack()
@@ -81,7 +134,7 @@ def test_start_server_rejects_duplicate_connection(tmp_path: Path) -> None:
         try:
             with pytest.raises(RuntimeError, match="bereits verbunden"):
                 await agent._start_server(
-                    McpServerConfig(name="external", command="unused"),
+                    McpServerConfig(name="external"),
                     parent,
                 )
         finally:
@@ -116,6 +169,35 @@ def test_start_server_registers_tools_and_trusted_instructions(tmp_path: Path) -
         assert "docs__search" in agent._tool_routes
         assert agent._server_tools["docs"][0]["function"]["name"] == "docs__search"
         assert agent._server_instructions["docs"] == "Use carefully"
+        assert "docs" not in agent._server_untrusted_instructions
+        await parent.aclose()
+    asyncio.run(exercise())
+
+
+def test_untrusted_http_instructions_are_retained_as_reference_context(tmp_path: Path) -> None:
+    class Session:
+        async def list_tools(self):
+            return SimpleNamespace(
+                tools=[SimpleNamespace(name="search", description="Search", inputSchema={})]
+            )
+
+    async def exercise() -> None:
+        agent = make_agent(tmp_path)
+        parent = AsyncExitStack()
+        await parent.__aenter__()
+
+        async def connect(_stack, _config):
+            return Session(), "Call search before details"
+
+        agent._connect_server = connect
+        config = McpServerConfig(
+            name="docs",
+            transport="streamable_http",
+            url="http://localhost:8001/mcp",
+        )
+        await agent._start_server(config, parent)
+        assert "docs" not in agent._server_instructions
+        assert agent._server_untrusted_instructions["docs"] == "Call search before details"
         await parent.aclose()
     asyncio.run(exercise())
 
@@ -236,12 +318,14 @@ def test_close_clears_runtime_state(tmp_path: Path) -> None:
         agent._exit_stack = stack
         agent._sessions["x"] = object()
         agent._active_servers.add("x")
+        agent._server_untrusted_instructions["x"] = "reference"
         agent._knowledge_session = object()
         agent.history.append({"role": "user", "content": "x"})
         await agent.close()
         assert agent._exit_stack is None
         assert agent._sessions == {}
         assert agent._active_servers == set()
+        assert agent._server_untrusted_instructions == {}
         assert agent._knowledge_session is None
         assert agent.history == []
         await agent.close()
