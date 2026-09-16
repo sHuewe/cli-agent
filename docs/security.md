@@ -12,9 +12,9 @@
 
 ### Vom Benutzer änderbare Security-Policy
 
-**Problem:** Eine Sicherheits-Allowlist in derselben `config.toml` wie die funktionale Projektkonfiguration wäre keine belastbare administrative Grenze, wenn der Benutzer sie selbst erweitern kann.
+**Problem:** Eine Sicherheits-Allowlist oder lokale Prozessfreigabe in derselben `config.toml` wie die funktionale Projektkonfiguration wäre keine belastbare administrative Grenze, wenn der Benutzer sie selbst erweitern kann.
 
-**Gelöst:** Security-relevante Netzwerkregeln, `allow_untrusted_stdio` und permanente Tool-Auto-Approvals wurden in eine separate `admin_config.toml` verschoben. Permanente Tool-Auto-Approvals sind zusätzlich an eine konkrete, administrativ definierte MCP-Serveridentität unter `[[mcp.trusted_servers]]` gebunden. Der Agent liest die Policy ausschließlich aus dem festen maschinenweiten Pfad (`C:\ProgramData\cli-agent\admin_config.toml` beziehungsweise `/etc/cli-agent/admin_config.toml`); die normale `config.toml` kann diese Regeln nicht überschreiben und entsprechende Security-Felder werden dort abgewiesen. Fehlt die Admin-Datei, greifen restriktive Defaults. `tests/test_admin_config.py` und `tests/test_cli.py` prüfen die Trennung und Weitergabe der Policy.
+**Gelöst:** Security-relevante Netzwerkregeln, externe stdio-Launchprofile und permanente Tool-Auto-Approvals liegen in der separaten `admin_config.toml`. Permanente Tool-Auto-Approvals sind zusätzlich an eine konkrete, administrativ definierte MCP-Serveridentität unter `[[mcp.trusted_servers]]` gebunden. Der Agent liest die Policy ausschließlich aus dem festen maschinenweiten Pfad (`C:\ProgramData\cli-agent\admin_config.toml` beziehungsweise `/etc/cli-agent/admin_config.toml`); die normale `config.toml` kann diese Regeln nicht überschreiben. Fehlt die Admin-Datei, greifen restriktive Defaults. Das frühere globale `allow_untrusted_stdio` wird nicht mehr unterstützt. `tests/test_admin_config.py` und `tests/test_cli.py` prüfen die Trennung und Weitergabe der Policy.
 
 ### Schutz der Windows-Admin-Policy
 
@@ -24,23 +24,35 @@
 
 ### Externe stdio-MCPs / Prozessausführung
 
-**Problem:** Ein frei konfigurierbarer stdio-MCP ist zugleich lokale Prozessausführung und darf nicht allein durch einen Eintrag in der Userconfig implizit vertrauenswürdig werden. Geerbte Environment-Variablen können außerdem Secrets an den Kindprozess weitergeben.
+**Problem:** Ein stdio-MCP ist bereits beim Verbindungsaufbau lokale Prozessausführung. Ein globaler Schalter, der beliebige userkonfigurierte stdio-Commands erlaubt, ist deshalb zu grob: Tool-Approvals greifen erst nachdem der Kindprozess gestartet wurde.
 
-**Gelöst:** Nicht eingebaute stdio-MCPs starten nur, wenn die Admin-Policy `[mcp].allow_untrusted_stdio = true` setzt. Die Userconfig kann diese Freigabe nicht setzen. stdio-Prozesse erhalten außerdem eine reduzierte Umgebung; zusätzliche Werte müssen explizit über die MCP-Konfiguration übergeben werden. Tests prüfen sowohl deny-by-default als auch die explizite administrative Freigabe und das Nicht-Vererben von `LLM_API_KEY`.
+**Gelöst:** Jeder externe stdio-MCP muss einzeln als `[[mcp.trusted_servers]]` in der maschinenweiten Admin-Policy definiert sein. Die Benutzer-/Projektkonfiguration darf einen externen stdio-MCP ausschließlich über dessen Namen auswählen; `command`, `args` und `env` werden vollständig aus dem passenden Admin-Profil materialisiert. Benutzerseitige Launch-Parameter werden nicht akzeptiert. Trusted stdio-Commands müssen ein absoluter Executable-Pfad oder exakt `{python}` sein; Bare Commands über `PATH` sind nicht zulässig.
+
+Der Agent setzt Runtime-Platzhalter wie `{workspace_directory}` selbst ein. Dadurch können workspacegebundene MCPs wie Compose- oder Validator-Server weiterhin als 1:1-stdio-Prozess an den aktuellen Agent-Workspace gebunden werden, ohne den Workspace als modellkontrollierten Tool-Parameter offenzulegen. stdio-Prozesse erhalten außerdem nur eine reduzierte Umgebung; zusätzliche Werte stammen explizit aus dem administrativen Launchprofil. `PYTHONSAFEPATH=1` wird gesetzt und `PYTHONPATH` nicht geerbt.
+
+### MCP-Instructions und Prompt Injection
+
+**Problem:** MCP-`instructions` können für die korrekte Tool-Nutzung wichtig sein, sind bei externen Servern aber gleichzeitig vom Server kontrollierter Freitext. Sie pauschal in den Systemprompt zu übernehmen erhöht ihren Prompt-Trust unnötig; sie vollständig zu ignorieren verliert dagegen funktional relevante Informationen.
+
+**Gelöst:** Instructions externer MCPs werden standardmäßig als explizit nicht vertrauenswürdiger Referenzkontext behandelt. Zusammen mit eventuell vorhandenem OKF-Wissen, Web-Kontext und lokalem Datei-Kontext werden sie in einer separaten transienten `user`-Message unmittelbar vor der aktuellen echten Benutzeranfrage bereitgestellt. Der Systemprompt definiert die Interpretation dieser Daten: relevante fachliche und operative Informationen dürfen verwendet werden, enthaltene Anweisungen dürfen aber weder Benutzerziel noch Berechtigungen oder Security-Grenzen verändern.
+
+Diese synthetische Referenzmessage wird nicht in `self.history` übernommen. Die persistente Conversation History enthält nur tatsächliche Benutzeranfragen und Assistentenantworten; der aktuelle User-Input bleibt auch in `working_messages` als eigene unveränderte `user`-Message erhalten.
+
+Für Ausnahmefälle kann ein Administrator bei einem konkret identifizierten Server weiterhin `trust_instructions = true` setzen. Nur dann werden dessen Instructions in den Systemprompt aufgenommen. Dieser Trust ist identitätsgebunden und ist für administrativ kontrollierte Server vorgesehen, deren Instructions für den korrekten Betrieb tatsächlich essenziell sind.
 
 ### Unkontrollierte Tool-Ausführung / MCP-Identität
 
-**Problem:** Tool-Metadaten und Tool-Aufrufe stammen aus nicht vollständig vertrauenswürdigen Komponenten. Insbesondere externe MCP-Tools sollten nicht ohne eine eigene Freigabegrenze ausgeführt werden. Eine dauerhafte Freigabe darf außerdem nicht allein an den frei wählbaren String `<server>__<tool>` gebunden sein, da ein Benutzer sonst einen anderen MCP-Server mit demselben Namen und Toolnamen konfigurieren könnte.
+**Problem:** Tool-Metadaten und Tool-Aufrufe stammen aus nicht vollständig vertrauenswürdigen Komponenten. Insbesondere externe MCP-Tools sollten nicht ohne eine eigene Freigabegrenze ausgeführt werden. Eine dauerhafte Freigabe darf außerdem nicht allein an den frei wählbaren String `<server>__<tool>` gebunden sein.
 
-**Gelöst:** Externe MCP-Tools benötigen standardmäßig eine interaktive Benutzerfreigabe. Dauerhafte administrative Auto-Approvals werden nur über `[[mcp.trusted_servers]]` vergeben und an eine konkrete Serveridentität gebunden. Bei HTTP-MCPs müssen Name, Transport, vollständiger normalisierter Endpoint und konfigurierte Header mit der Admin-Policy übereinstimmen; bei stdio-MCPs Name, Transport, Command, Args und explizite Environment-Werte. Erst danach wird geprüft, ob der konkrete MCP-Toolname in `auto_approve_tools` dieses Trusted-Server-Eintrags steht. Der alte name-only Mechanismus `[mcp.approval].auto_approve_tools = ["server__tool"]` wird absichtlich als ungültige Policy abgewiesen.
+**Gelöst:** Externe MCP-Tools benötigen standardmäßig eine interaktive Benutzerfreigabe. Dauerhafte administrative Auto-Approvals werden nur über `[[mcp.trusted_servers]]` vergeben und an eine konkrete Serveridentität gebunden. Bei HTTP-MCPs müssen Name, Transport, vollständiger normalisierter Endpoint und konfigurierte Header mit der Admin-Policy übereinstimmen. Bei stdio stammt die gesamte externe Launch-Identität bereits aus dem administrativen Trusted-Server-Profil. Zusätzlich wird der aktuelle Tool-Contract aus nativem Toolnamen, modell-sichtbarer Beschreibung und vollständigem `inputSchema` gepinnt; Contract-Drift führt zurück zur normalen interaktiven Freigabe.
 
-Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses exponierte Tool nur für den laufenden Prozess freigeben. Für vertrauenswürdige Skripte kann dieselbe prozesslokale Vertrauensentscheidung vor dem Start mit wiederholbarem `--approve-tool <exposed_name>` explizit getroffen werden. Diese CLI-Freigabe verwendet ebenfalls nur exakte Toolnamen, kennt kein `approve-all` und ersetzt ausschließlich die interaktive Nachfrage; Serveraktivierung, Admin-Policy, Netzwerk-, Workspace- und Sensitive-Path-Grenzen bleiben bestehen. Ohne TTY und ohne passende CLI-Vorabfreigabe wird weiterhin fail-closed abgelehnt. Unbekannte Tools, ungültige JSON-Argumente und Tools deaktivierter Server werden vor der Ausführung abgewiesen. Die Approval-Anzeige redigiert sensitive Argumentnamen und große Inhalte. `tests/test_mcp_policy.py`, `tests/test_session_approval.py`, `tests/test_agent_tool_calls.py`, `tests/test_admin_config.py` und `tests/test_cli.py` decken diese Grenzen ab.
+Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses exponierte Tool nur für den laufenden Prozess freigeben. Für vertrauenswürdige Skripte kann dieselbe prozesslokale Vertrauensentscheidung vor dem Start mit wiederholbarem `--approve-tool <exposed_name>` explizit getroffen werden. Diese CLI-Freigabe verwendet nur exakte Toolnamen, kennt kein `approve-all` und ersetzt ausschließlich die interaktive Nachfrage; Serveraktivierung, Admin-Policy, Netzwerk-, Workspace- und Sensitive-Path-Grenzen bleiben bestehen. Ohne TTY und ohne passende CLI-Vorabfreigabe wird weiterhin fail-closed abgelehnt. Unbekannte Tools, ungültige JSON-Argumente und Tools deaktivierter Server werden vor der Ausführung abgewiesen.
 
 ### Built-in-OS-Schreiboperationen
 
 **Problem:** Schreibzugriff auf den Workspace ist eine höhere Fähigkeit als Lesen und darf weder implizit aktiv sein noch durch eine externe Tool-Auto-Approval-Regel versehentlich freigeschaltet werden.
 
-**Gelöst:** Der eingebaute OS-MCP ist standardmäßig read-only; Schreiben wird explizit über `--with-os-write` aktiviert. Mutierende Built-in-Tools (`write_file`, `delete_file`, `make_directory`, `copy_file`) benötigen dann weiterhin Zustimmung. Administrative Trusted-Server-Auto-Approvals gelten absichtlich nur für externe MCPs und können diese Built-in-Regel nicht umgehen. Der Benutzer kann ein konkretes Built-in-Write-Tool bewusst für die aktuelle Session oder mit `--approve-tool` für genau den aktuellen Prozesslauf freigeben; ein anderes Write-Tool bleibt separat zustimmungspflichtig. Workspace-Containment und Sensitive-Path-Schutz werden dadurch nicht umgangen. Diese Policy ist in `tests/test_agent.py`, `tests/test_session_approval.py` und `tests/test_cli.py` abgesichert.
+**Gelöst:** Der eingebaute OS-MCP ist standardmäßig read-only; Schreiben wird explizit über `--with-os-write` aktiviert. Mutierende Built-in-Tools (`write_file`, `delete_file`, `make_directory`, `copy_file`) benötigen dann weiterhin Zustimmung. Administrative Trusted-Server-Auto-Approvals gelten absichtlich nur für externe MCPs und können diese Built-in-Regel nicht umgehen. Der Benutzer kann ein konkretes Built-in-Write-Tool bewusst für die aktuelle Session oder mit `--approve-tool` für genau den aktuellen Prozesslauf freigeben; ein anderes Write-Tool bleibt separat zustimmungspflichtig. Workspace-Containment und Sensitive-Path-Schutz werden dadurch nicht umgangen.
 
 ### Workspace-Escape und Secret-Zugriff
 
@@ -58,13 +70,13 @@ Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses
 
 **Problem:** Geladene Webseiten sind untrusted Input und können Prompt-Injection enthalten; unbeschränkte Antworten können außerdem Speicher-/Kontextprobleme verursachen.
 
-**Gelöst:** Webzugriff benötigt eine Admin-Allowlist. Nur textuelle HTTP-Inhalte werden akzeptiert, Response-Bytes und resultierender Modellkontext sind begrenzt. Redirect-Ziele werden erneut validiert. Der geladene Inhalt wird ausdrücklich als nicht vertrauenswürdiger Referenzinhalt markiert und nicht als System-/Benutzeranweisung behandelt; Web-Kontext wird nicht dauerhaft in die normale Conversation-History übernommen. `--add-web-context <url>` verwendet für One-Shot-/Skriptaufrufe denselben Ladepfad wie der interaktive Befehl `add_web_context <url>` und erbt damit dieselbe Allowlist-, Redirect-, Größen- und Untrusted-Content-Behandlung. `tests/test_web_context.py` und `tests/test_cli.py` decken diese Grenzen ab.
+**Gelöst:** Webzugriff benötigt eine Admin-Allowlist. Nur textuelle HTTP-Inhalte werden akzeptiert, Response-Bytes und resultierender Modellkontext sind begrenzt. Redirect-Ziele werden erneut validiert. Der geladene Inhalt wird als nicht vertrauenswürdiger Referenzinhalt in die transiente Referenzmessage aufgenommen und nicht dauerhaft in die Conversation History übernommen. `--add-web-context <url>` verwendet für One-Shot-/Skriptaufrufe denselben Ladepfad wie der interaktive Befehl `add_web_context <url>` und erbt damit dieselbe Allowlist-, Redirect-, Größen- und Untrusted-Content-Behandlung. `tests/test_web_context.py` und `tests/test_cli.py` decken diese Grenzen ab.
 
 ### OKF-/Knowledge-Inhalte und Repository-Navigation
 
 **Problem:** Knowledge-Dateien sind ebenfalls untrusted Input. Ein Modell darf keine beliebigen Repository-Pfade erfinden, aus dem Repository ausbrechen oder unbegrenzt Concepts/Tools lesen; eine manipulierte finale Auswahl darf keine nicht gelesenen Concepts einschleusen.
 
-**Gelöst:** Das OKF-Repository verwendet eine workspace-begrenzte Pfadauflösung mit Symlink-Schutz, Größen-/Indexlimits und restriktiver Markdown-/UTF-8-Verarbeitung. Der Agent darf Folgeaufrufe nur für Pfade und `next_tool`-Kombinationen ausführen, die ein vorheriges Repository-Ergebnis tatsächlich angeboten hat. Doppelte/parallel unerlaubte Knowledge-Aufrufe werden verworfen, Tool- und Concept-Limits werden erzwungen und finale Selection-Tokens gegen die tatsächlich gelesenen Concepts validiert. Knowledge-Inhalt wird im Hauptlauf explizit als untrusted Referenzdaten markiert. `tests/test_okf_repository.py`, `tests/test_agent_knowledge.py`, `tests/test_agent_tool_calls.py` und `tests/test_agent_loop.py` prüfen diese Grenzen.
+**Gelöst:** Das OKF-Repository verwendet eine workspace-begrenzte Pfadauflösung mit Symlink-Schutz, Größen-/Indexlimits und restriktiver Markdown-/UTF-8-Verarbeitung. Der Agent darf Folgeaufrufe nur für Pfade und `next_tool`-Kombinationen ausführen, die ein vorheriges Repository-Ergebnis tatsächlich angeboten hat. Doppelte/parallel unerlaubte Knowledge-Aufrufe werden verworfen, Tool- und Concept-Limits werden erzwungen und finale Selection-Tokens gegen die tatsächlich gelesenen Concepts validiert. Knowledge-Inhalt wird im Hauptlauf in dieselbe transiente untrusted Referenzmessage wie Web-/MCP-Referenzdaten aufgenommen. `tests/test_okf_repository.py`, `tests/test_agent_knowledge.py`, `tests/test_agent_tool_calls.py` und `tests/test_agent_loop.py` prüfen diese Grenzen.
 
 ### Logging, Dumps und lokale Artefakte
 
@@ -76,7 +88,7 @@ Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses
 
 **Problem:** Docker-Daemon-Zugriff und das Ausführen fremden Codes haben eine wesentlich stärkere Host-Sicherheitswirkung als der Core-Agent und erschweren eine pauschale Firmenfreigabe.
 
-**Gelöst:** Docker Compose und Python Validator wurden vollständig aus dem Core-Paket entfernt und in das separate Repository/Paket `cli-agent-mcp` ausgelagert. Der Core hat keine entsprechenden Entry Points oder direkte Docker-Abhängigkeit mehr. Wer diese optionalen MCPs installiert, muss sie separat prüfen und freigeben.
+**Gelöst:** Docker Compose und Python Validator wurden vollständig aus dem Core-Paket entfernt und in das separate Repository/Paket `cli-agent-mcp` ausgelagert. Der Core hat keine entsprechenden Entry Points oder direkte Docker-Abhängigkeit mehr. Wer diese optionalen MCPs installiert, muss sie separat prüfen und als konkretes stdio-Launchprofil in der Admin-Policy freigeben.
 
 ### Dependency- und Regression-Risiko
 
@@ -86,14 +98,14 @@ Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses
 
 ## Maschinenweite Admin-Policy
 
-Die normale Benutzer-/Projektkonfiguration kann keine Netzwerk-Allowlist und keine Freigabe für untrusted stdio-MCPs setzen. Auch permanente externe MCP-Auto-Approvals werden ausschließlich in der maschinenweiten `admin_config.toml` als identitätsgebundene `[[mcp.trusted_servers]]`-Einträge definiert:
+Die normale Benutzer-/Projektkonfiguration kann keine Netzwerk-Allowlist setzen und keine beliebigen lokalen stdio-Prozesse definieren. Jeder externe stdio-MCP muss als konkreter `[[mcp.trusted_servers]]`-Eintrag in der maschinenweiten `admin_config.toml` vorhanden sein. Permanente externe MCP-Auto-Approvals und optionales `trust_instructions` werden ebenfalls dort definiert:
 
 - Windows: `C:\ProgramData\cli-agent\admin_config.toml`
 - Linux: `/etc/cli-agent/admin_config.toml`
 
-Fehlt die Datei, gelten deny-by-default-orientierte Defaults: Modell und HTTP-MCP nur localhost, Web aus, externe stdio-MCPs aus, keine externen Tool-Auto-Approvals.
+Fehlt die Datei, gelten deny-by-default-orientierte Defaults: Modell und HTTP-MCP nur localhost, Web aus, externe stdio-MCPs aus, keine externen Tool-Auto-Approvals und kein externer Instruction-Trust.
 
-Unter Windows kann `scripts/setup-admin-config.ps1` in einer administrativen PowerShell verwendet werden. Das Skript schützt sowohl Policy-Datei als auch Policy-Verzeichnis. Normale Benutzer können die Policy lesen, aber nicht ohne Elevation verändern. Entwickler mit lokalen Adminrechten können die Policy bewusst ändern; eine solche Änderung ist eine administrative Security-Entscheidung und liegt außerhalb der normalen Agentenkonfiguration. Trusted-Server-Einträge werden bewusst nicht vom Convenience-Skript erzeugt, sondern nach Prüfung des konkreten MCP-Endpunkts administrativ ergänzt.
+Unter Windows kann `scripts/setup-admin-config.ps1` in einer administrativen PowerShell verwendet werden. Das Skript schützt sowohl Policy-Datei als auch Policy-Verzeichnis. Normale Benutzer können die Policy lesen, aber nicht ohne Elevation verändern. Entwickler mit lokalen Adminrechten können die Policy bewusst ändern; eine solche Änderung ist eine administrative Security-Entscheidung und liegt außerhalb der normalen Agentenkonfiguration. Externe stdio-Launchprofile und andere Trusted-Server-Einträge werden bewusst nicht vom Convenience-Skript erzeugt, sondern nach Prüfung des konkreten Servers administrativ ergänzt.
 
 ## Netzwerk
 
@@ -101,11 +113,13 @@ URLs werden gegen exakte Hostnamen aus der Admin-Policy validiert. Remote-Ziele 
 
 ## MCP
 
-Externe stdio-MCPs werden nur gestartet, wenn `[mcp].allow_untrusted_stdio = true` in der Admin-Policy gesetzt ist. Ein gleichnamiger Wert in der Userconfig wird abgewiesen.
+Externe stdio-MCPs werden ausschließlich gestartet, wenn ein gleichnamiges `[[mcp.trusted_servers]]`-Profil mit `transport = "stdio"` existiert. In der Userconfig steht für einen solchen Server nur der Name. Die Admin-Policy liefert `command`, `args` und `env`; der Benutzer kann diese Launch-Identität nicht überschreiben.
 
-Externe MCP-Tools benötigen standardmäßig eine interaktive Zustimmung. Administratoren können einzelne externe Tools nur über einen passenden `[[mcp.trusted_servers]]`-Eintrag dauerhaft freigeben. Der Benutzer kann den MCP-Namen oder Toolnamen nicht nutzen, um eine Freigabe auf eine andere Serverkonfiguration zu übertragen: die aktuelle Serveridentität muss zusätzlich zur Toolfreigabe mit der Admin-Policy übereinstimmen. Bei einer interaktiven Nachfrage kann `[s]` genau dieses exponierte Tool für die aktuelle Session freigeben; diese Entscheidung wird nicht persistiert. Für vertrauenswürdige Automation kann `--approve-tool` einen exakten Toolnamen für den aktuellen Prozess vorab freigeben. Diese Option ist keine dauerhafte Policy und umgeht keine anderen Security-Grenzen. Eingebaute mutierende Workspace-OS-Tools können nicht über Trusted-Server-Auto-Approvals freigeschaltet werden.
+HTTP-MCPs benötigen für die normale Nutzung keinen Trusted-Server-Eintrag. Ihr Host muss in `network.mcp_allowed_hosts` zugelassen sein. Ein `[[mcp.trusted_servers]]`-Eintrag wird für HTTP nur benötigt, wenn dessen Instructions explizit in den Systemprompt gehoben oder einzelne Tools permanent auto-approved werden sollen.
 
-stdio-Prozesse erhalten nur eine reduzierte Umgebung; zusätzliche Werte müssen explizit über die MCP-Konfiguration übergeben werden.
+Externe MCP-Tools benötigen standardmäßig eine interaktive Zustimmung. Administratoren können einzelne externe Tools nur über einen passenden `[[mcp.trusted_servers]]`-Eintrag dauerhaft freigeben. Bei einer interaktiven Nachfrage kann `[s]` genau dieses exponierte Tool für die aktuelle Session freigeben; diese Entscheidung wird nicht persistiert. Für vertrauenswürdige Automation kann `--approve-tool` einen exakten Toolnamen für den aktuellen Prozess vorab freigeben. Diese Option ist keine dauerhafte Policy und umgeht keine anderen Security-Grenzen. Eingebaute mutierende Workspace-OS-Tools können nicht über Trusted-Server-Auto-Approvals freigeschaltet werden.
+
+Nicht privilegierte MCP-Instructions bleiben modell-sichtbar, befinden sich aber nur im transienten untrusted Referenzkontext. Nur explizit mit `trust_instructions = true` vertraute Instructions werden in den Systemprompt aufgenommen.
 
 ## Workspace OS
 
@@ -113,7 +127,7 @@ Workspace-Pfade werden auf den festgelegten Workspace begrenzt. Absolute Pfade, 
 
 ## Web-Kontext
 
-Webzugriff ist ohne `web_allowed_hosts` deaktiviert. Geladener Webinhalt ist nicht vertrauenswürdiger Referenzinhalt, wird größenbegrenzt verarbeitet und darf keine weiteren Netzwerkzugriffe oder Berechtigungsänderungen auslösen. `--add-web-context` verwendet dieselbe Verarbeitung wie der interaktive `add_web_context`-Befehl.
+Webzugriff ist ohne `web_allowed_hosts` deaktiviert. Geladener Webinhalt ist nicht vertrauenswürdiger Referenzinhalt, wird größenbegrenzt verarbeitet und darf keine weiteren Netzwerkzugriffe oder Berechtigungsänderungen auslösen. Er wird in der transienten Referenzmessage direkt vor der aktuellen echten User-Message bereitgestellt und nicht in die Conversation History geschrieben. `--add-web-context` verwendet dieselbe Verarbeitung wie der interaktive `add_web_context`-Befehl.
 
 ## Logging
 
@@ -121,4 +135,4 @@ Prompts, Toolargumente, Modellnachrichten, Toolresultate und Context Dumps sind 
 
 ## Optionale Docker-MCPs
 
-Docker Compose und Python Validator sind in `sHuewe/cli-agent-mcp` ausgelagert. Docker-Daemon-/Container-Ausführungsrisiken gehören damit nicht zur allgemeinen Security-Grenze des Core-Agenten, solange dieses optionale Paket nicht installiert und angebunden wird.
+Docker Compose und Python Validator sind in `sHuewe/cli-agent-mcp` ausgelagert. Docker-Daemon-/Container-Ausführungsrisiken gehören damit nicht zur allgemeinen Security-Grenze des Core-Agenten, solange dieses optionale Paket nicht installiert und angebunden wird. Für die Anbindung als stdio-MCP ist ein explizites administratives Launchprofil erforderlich.
