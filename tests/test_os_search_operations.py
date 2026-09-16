@@ -26,7 +26,9 @@ def test_search_text_finds_literal_text_recursively_and_returns_lines(tmp_path: 
     result = json.loads(_workspace(tmp_path).search_text(".", "needle"))
 
     assert result["truncated"] is False
-    assert [(item["path"], item["line"], item["text"]) for item in result["matches"]] == [
+    assert sorted(
+        (item["path"], item["line"], item["text"]) for item in result["matches"]
+    ) == [
         ("src/a.py", 2, "needle here"),
         ("src/b.txt", 1, "needle.*literal"),
     ]
