@@ -291,7 +291,12 @@ def test_git_grep_does_not_recurse_into_unvalidated_submodules(tmp_path: Path) -
     _git(repo, "commit", "-am", "add submodule")
     workspace = GitWorkspace.from_directory(repo)
     _git(repo, "config", "submodule.recurse", "true")
-    (repo / "sub" / ".git").write_text(f"gitdir: {outside / '.git'}\n", encoding="utf-8")
+    # Git for Windows can mark the submodule gitfile read-only. Replace the
+    # entry rather than opening it for in-place truncation so the fixture
+    # behaves the same way on Windows and POSIX.
+    submodule_gitfile = repo / "sub" / ".git"
+    submodule_gitfile.unlink()
+    submodule_gitfile.write_text(f"gitdir: {outside / '.git'}\n", encoding="utf-8")
 
     assert json.loads(workspace.git_grep(".", "outside secret")) == {
         "matches": [], "truncated": False,
