@@ -72,6 +72,50 @@ def create_server(workspace: GitWorkspace) -> FastMCP:
         """Return files changed by one commit, including change type and rename source when applicable."""
         return workspace.git_commit_files(repository, commit_hash)
 
+    @mcp.tool()
+    def git_grep(
+        repository: str,
+        text: str,
+        path: str | None = None,
+        max_results: int = 50,
+    ) -> str:
+        """Search tracked working-tree files for a literal text string.
+
+        The search uses Git's fixed-string grep and ignores binary files. It
+        never enables --no-index, so untracked files are not searched. Results
+        include repository-relative path, line number and matching line text.
+        max_results must be between 1 and 200; truncation is reported explicitly.
+
+        Args:
+            repository: Validated repository path relative to the workspace.
+            text: Literal text to search for; regular expressions are not used.
+            path: Optional repository-relative file or directory restriction.
+            max_results: Maximum number of returned matching lines.
+        """
+        return workspace.git_grep(repository, text, path, max_results)
+
+    @mcp.tool()
+    def git_blame(
+        repository: str,
+        path: str,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> str:
+        """Return Git blame metadata for a tracked file or line range.
+
+        Each result contains the current line number, source text, author,
+        author date, commit id/message and original path/line. Uncommitted lines
+        are marked explicitly. At most 200 lines are returned; for larger files
+        provide both start_line and end_line.
+
+        Args:
+            repository: Validated repository path relative to the workspace.
+            path: Repository-relative tracked file path.
+            start_line: Optional first line, 1-based; requires end_line.
+            end_line: Optional last line, inclusive; requires start_line.
+        """
+        return workspace.git_blame(repository, path, start_line, end_line)
+
     return mcp
 
 
