@@ -12,6 +12,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
 from .agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS, ServerConfig, ToolRoute, _RuntimeMcpServerConfig
+from .config import McpServerConfig
 from .mcp_limits import validate_mcp_server_metadata
 from .network_policy import validate_http_url
 
@@ -39,6 +40,7 @@ class McpLifecycleMixin:
                     self._sessions.pop(server_name, None)
                     self._server_tools.pop(server_name, None)
                     self._server_instructions.pop(server_name, None)
+                    self._server_untrusted_instructions.pop(server_name, None)
                     self._tool_routes = {name: route for name, route in self._tool_routes.items() if route[2].name != server_name}
         messages = getattr(self, "messages", None)
         if isinstance(messages, list) and messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
@@ -78,17 +80,36 @@ class McpLifecycleMixin:
             self._exit_stack = stack
         except BaseException:
             await stack.aclose()
-            self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._active_servers.clear()
+            self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._server_untrusted_instructions.clear(); self._active_servers.clear()
             self._knowledge_session = None; self._knowledge_tools.clear(); self._knowledge_routes.clear(); self._knowledge_instructions = None; self.history.clear()
             raise
 
-    async def _start_server(self, server_config: ServerConfig, parent_stack: AsyncExitStack) -> None:
-        if not getattr(server_config, "built_in", False) and server_config.transport == "stdio" and not self.mcp_policy.allow_untrusted_stdio:
+    def _resolve_external_stdio_server(self, server_config: ServerConfig) -> ServerConfig:
+        if getattr(server_config, "built_in", False) or server_config.transport != "stdio":
+            return server_config
+        trusted = next(
+            (
+                item
+                for item in self.mcp_policy.trusted_servers
+                if item.name == server_config.name and item.transport == "stdio"
+            ),
+            None,
+        )
+        if trusted is None:
             raise PermissionError(
-                f"Der untrusted stdio-MCP-Server {server_config.name!r} wird durch die "
-                "maschinenweite Admin-Policy blockiert. allow_untrusted_stdio kann "
-                "ausschließlich in admin_config.toml freigegeben werden."
+                f"Der externe stdio-MCP-Server {server_config.name!r} ist nicht in "
+                "[[mcp.trusted_servers]] der maschinenweiten Admin-Policy definiert."
             )
+        return McpServerConfig(
+            name=trusted.name,
+            transport="stdio",
+            command=trusted.command,
+            args=trusted.args,
+            env=dict(trusted.env),
+        )
+
+    async def _start_server(self, server_config: ServerConfig, parent_stack: AsyncExitStack) -> None:
+        server_config = self._resolve_external_stdio_server(server_config)
         if server_config.name in self._sessions:
             raise RuntimeError(f"MCP-Server bereits verbunden: {server_config.name}")
         server_stack = AsyncExitStack(); await server_stack.__aenter__()
@@ -100,8 +121,12 @@ class McpLifecycleMixin:
                 instructions=instructions,
                 tools=list(listed.tools),
             )
+            native_names: set[str] = set()
             tool_names: list[str] = []; server_tools: list[dict[str, Any]] = []; routes: dict[str, ToolRoute] = {}
             for tool in listed.tools:
+                if tool.name in native_names:
+                    raise RuntimeError(f"MCP-Server {server_config.name!r} bietet Tool {tool.name!r} mehrfach an.")
+                native_names.add(tool.name)
                 exposed_name = f"{server_config.name}__{tool.name}"
                 if exposed_name in self._tool_routes:
                     raise RuntimeError(f"Doppelter Toolname: {exposed_name}")
@@ -114,7 +139,8 @@ class McpLifecycleMixin:
         if instructions and self._instructions_are_trusted(server_config):
             self._server_instructions[server_config.name] = instructions
         elif instructions:
-            logger.info("mcp_server_instructions_ignored name=%s reason=not_admin_trusted", server_config.name)
+            self._server_untrusted_instructions[server_config.name] = instructions
+            logger.info("mcp_server_instructions_untrusted name=%s", server_config.name)
         parent_stack.push_async_callback(server_stack.aclose)
         logger.info("mcp_server_connected name=%s transport=%s tools=%s", server_config.name, server_config.transport, json.dumps(tool_names, ensure_ascii=False))
 
@@ -122,7 +148,7 @@ class McpLifecycleMixin:
         options = self._okf_options
         if options is None: return
         if not options.repository.is_dir():
-            error = ValueError(f"Konfiguriertes OKF-Repository existiert nicht oder ist kein Verzeichnis: {options.repository}")
+            error = ValueError(f"Konfiguriertes OKF-Repository existiert nicht oder kein Verzeichnis: {options.repository}")
             if options.required: raise error
             logger.error("knowledge_server_disabled reason=%s", error); return
         server_config = _RuntimeMcpServerConfig(name="okf", command="{python}", args=("-m", "cli_agent.okf_mcp_server.server", "--project-directory", str(options.repository), "--max-read-bytes", str(options.max_read_bytes), "--max-index-entries", str(options.max_index_entries), "--config-file", str(self.config_file)), compress_result=True, compress_min_chars=options.compress_min_chars)
@@ -176,5 +202,5 @@ class McpLifecycleMixin:
     async def close(self) -> None:
         if self._exit_stack is None: return
         stack = self._exit_stack; self._exit_stack = None
-        self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._active_servers.clear(); self._knowledge_session = None; self._knowledge_tools.clear(); self._knowledge_routes.clear(); self._knowledge_instructions = None; self.history.clear()
+        self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._server_untrusted_instructions.clear(); self._active_servers.clear(); self._knowledge_session = None; self._knowledge_tools.clear(); self._knowledge_routes.clear(); self._knowledge_instructions = None; self.history.clear()
         await stack.aclose()
