@@ -131,15 +131,14 @@ def test_inspection_uses_live_tool_metadata_without_model_call(tmp_path: Path, m
 
 def test_inspection_reports_existing_pinned_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     contract = tool_contract_fingerprint("search", SCHEMA, "")
-    server = McpServerConfig(name="fachsoftware", command="ignored")
+    server = McpServerConfig(name="fachsoftware")
     admin = AdminConfig(
         mcp=McpPolicy(
-            allow_untrusted_stdio=True,
             trusted_servers=(
                 TrustedMcpServer(
                     name="fachsoftware",
                     transport="stdio",
-                    command="ignored",
+                    command="/trusted/fachsoftware",
                     auto_approve_tools=(TrustedMcpToolApproval("search", contract),),
                 ),
             )
