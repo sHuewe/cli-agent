@@ -229,22 +229,23 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
         raise ValueError("Jeder [[mcp_servers]]-Eintrag benötigt einen Namen.")
     if transport not in {"stdio", "streamable_http"}:
         raise ValueError(f"Nicht unterstützter MCP-Transport für {name!r}: {transport!r}.")
+
+    if transport == "stdio":
+        extra_keys = set(values) - {"name"}
+        if extra_keys:
+            raise ValueError(
+                f"Der stdio-MCP-Server {name!r} darf in der Benutzerkonfiguration nur "
+                "über seinen Namen referenziert werden. Launch-Konfiguration liegt ausschließlich "
+                "in [[mcp.trusted_servers]] der Admin-Policy."
+            )
+        return McpServerConfig(name=name)
+
     raw_args = values.get("args", [])
     if not isinstance(raw_args, list) or not all(isinstance(value, str) for value in raw_args):
         raise ValueError(f"args von MCP-Server {name!r} muss eine String-Liste sein.")
     raw_config = values.get("config", {})
     if not isinstance(raw_config, dict):
         raise ValueError(f"config von MCP-Server {name!r} muss eine Tabelle sein.")
-    forbidden_policy_keys = {"allow_untrusted_stdio"}
-    found_policy_keys = forbidden_policy_keys.intersection(raw_config)
-    if found_policy_keys:
-        raise ValueError(
-            "Security-Policy darf nicht in config.toml gesetzt werden: "
-            + ", ".join(sorted(found_policy_keys))
-            + ". Verwende admin_config.toml."
-        )
-    if "allow_write_files" in raw_config and not isinstance(raw_config["allow_write_files"], bool):
-        raise ValueError(f"allow_write_files von MCP-Server {name!r} muss true oder false sein.")
     raw_env = values.get("env", {})
     if not isinstance(raw_env, dict):
         raise ValueError(f"env von MCP-Server {name!r} muss eine Tabelle sein.")
@@ -254,16 +255,10 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     command = str(command_value).strip() if command_value is not None else None
     url_value = values.get("url")
     url = str(url_value).strip() if url_value is not None else None
-    if transport == "stdio":
-        if not command:
-            raise ValueError(f"Der stdio-MCP-Server {name!r} benötigt command.")
-        if url:
-            raise ValueError(f"Der stdio-MCP-Server {name!r} darf keine url enthalten.")
-    else:
-        if not url:
-            raise ValueError(f"Der HTTP-MCP-Server {name!r} benötigt eine url.")
-        if command or raw_args or raw_env:
-            raise ValueError(f"Der HTTP-MCP-Server {name!r} darf command, args und env nicht enthalten.")
+    if not url:
+        raise ValueError(f"Der HTTP-MCP-Server {name!r} benötigt eine url.")
+    if command or raw_args or raw_env:
+        raise ValueError(f"Der HTTP-MCP-Server {name!r} darf command, args und env nicht enthalten.")
     compress_result = values.get("compress_result", False)
     if not isinstance(compress_result, bool):
         raise ValueError(f"compress_result von MCP-Server {name!r} muss true oder false sein.")
@@ -273,9 +268,6 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     return McpServerConfig(
         name=name,
         transport=transport,
-        command=command,
-        args=tuple(raw_args),
-        env={str(key): str(value) for key, value in raw_env.items()},
         url=url,
         headers=headers,
         config=raw_config,
