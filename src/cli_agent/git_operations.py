@@ -17,6 +17,8 @@ MAX_OUTPUT = 500_000
 MAX_GREP_RESULTS = 200
 MAX_GREP_TEXT_LENGTH = 4_096
 MAX_BLAME_LINES = 200
+MAX_OBJECT_DIRECTORIES = 64
+MAX_METADATA_ENTRIES = 100_000
 
 
 class GitWorkspaceError(RuntimeError):
@@ -53,7 +55,7 @@ class GitWorkspace:
             dirs[:] = [
                 name
                 for name in dirs
-                if name != ".git" and not (base / name).is_symlink()
+                if name != ".git" and not path_entry_is_symlink_or_reparse(base / name)
             ]
         found: dict[Path, GitRepository] = {}
         for candidate in candidates:
@@ -69,6 +71,36 @@ class GitWorkspace:
     @classmethod
     def _probe(cls, workspace: Path, candidate: Path) -> GitRepository:
         try:
+            cls._inside(workspace, candidate.resolve(strict=True), "Repository-Root")
+            # Blame reads the worktree mailmap automatically, independently of
+            # mailmap.file. It must obey the same boundary as metadata files.
+            if os.path.lexists(candidate / ".mailmap"):
+                cls._metadata_text(workspace, candidate / ".mailmap")
+            # Validate metadata before asking Git to read it. Git follows
+            # gitfiles, commondir, refs, indexes and loose-object links itself.
+            marker = candidate / ".git"
+            if marker.is_dir():
+                expected_git_dir = marker.resolve(strict=True)
+            else:
+                gitfile = cls._metadata_text(workspace, marker).rstrip("\r\n")
+                if not gitfile.startswith("gitdir: "):
+                    raise GitWorkspaceError("Ungültiger Git-Verzeichniseintrag.")
+                expected_git_dir = (candidate / gitfile[8:]).resolve(strict=True)
+            cls._inside(workspace, expected_git_dir, "Git-Verzeichnis")
+            common_file = expected_git_dir / "commondir"
+            expected_common_dir = expected_git_dir
+            if os.path.lexists(common_file):
+                common_value = cls._metadata_text(workspace, common_file).rstrip("\r\n")
+                if not common_value:
+                    raise GitWorkspaceError("Leeres Git-Common-Verzeichnis.")
+                expected_common_dir = (expected_git_dir / common_value).resolve(strict=True)
+            cls._inside(workspace, expected_common_dir, "Git-Common-Verzeichnis")
+            cls._validate_metadata_tree(workspace, expected_common_dir)
+            if not expected_git_dir.is_relative_to(expected_common_dir):
+                cls._validate_metadata_tree(workspace, expected_git_dir)
+            cls._validate_repository_config(
+                workspace, candidate, expected_git_dir, expected_common_dir
+            )
             root = Path(
                 cls._git(candidate, "rev-parse", "--show-toplevel").strip()
             ).resolve(strict=True)
@@ -83,7 +115,9 @@ class GitWorkspace:
                 if common_raw.is_absolute()
                 else (candidate / common_raw).resolve(strict=True)
             )
-        except OSError as exc:
+        except GitWorkspaceError:
+            raise
+        except (OSError, ValueError, RuntimeError) as exc:
             raise GitWorkspaceError(
                 "Git-Repositorypfade konnten nicht sicher aufgelöst werden."
             ) from exc
@@ -97,6 +131,8 @@ class GitWorkspace:
             ("Git-Common-Verzeichnis", common_dir),
         ):
             cls._inside(workspace, path, label)
+        if git_dir != expected_git_dir or common_dir != expected_common_dir:
+            raise GitWorkspaceError("Git-Repositorypfade haben sich während der Prüfung geändert.")
 
         objects_raw = Path(
             cls._git(candidate, "rev-parse", "--git-path", "objects").strip()
@@ -107,7 +143,7 @@ class GitWorkspace:
                 if objects_raw.is_absolute()
                 else (candidate / objects_raw).resolve(strict=True)
             )
-        except OSError as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             raise GitWorkspaceError(
                 "Git-Objektverzeichnis konnte nicht sicher aufgelöst werden."
             ) from exc
@@ -126,6 +162,57 @@ class GitWorkspace:
             root.relative_to(workspace).as_posix() or ".",
         )
 
+    @classmethod
+    def _metadata_text(cls, workspace: Path, path: Path) -> str:
+        """Read a bounded, direct Git control file without path aliases."""
+        try:
+            cls._inside(workspace, path.resolve(strict=True), "Git-Metadatendatei")
+            status = path.lstat()
+            if path_entry_is_symlink_or_reparse(path) or not stat.S_ISREG(status.st_mode):
+                raise GitWorkspaceError("Git-Metadatendateien müssen reguläre Dateien sein.")
+            if status.st_nlink > 1:
+                raise GitWorkspaceError("Git-Metadatendateien mit mehreren Hardlinks sind nicht erlaubt.")
+            with path.open("rb") as handle:
+                data = handle.read(MAX_OUTPUT + 1)
+            if len(data) > MAX_OUTPUT:
+                raise GitWorkspaceError("Git-Metadatendatei ist zu groß.")
+            return data.decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise GitWorkspaceError("Git-Metadatendatei konnte nicht sicher gelesen werden.") from exc
+
+    @classmethod
+    def _validate_metadata_tree(cls, workspace: Path, directory: Path) -> None:
+        """Reject metadata aliases, including object shards and individual refs.
+
+        Checking only the top-level object directory misses links deeper in the
+        store. Bound this walk and fail closed if any entry cannot be inspected.
+        """
+        pending = [directory]
+        count = 0
+        try:
+            while pending:
+                current = pending.pop()
+                cls._inside(workspace, current.resolve(strict=True), "Git-Metadatenpfad")
+                if path_entry_is_symlink_or_reparse(current):
+                    raise GitWorkspaceError("Symlinks oder Reparse-Points in Git-Metadaten sind nicht erlaubt.")
+                with os.scandir(current) as entries:
+                    for entry in entries:
+                        count += 1
+                        if count > MAX_METADATA_ENTRIES:
+                            raise GitWorkspaceError("Zu viele Git-Metadateneinträge für eine sichere Prüfung.")
+                        path = Path(entry.path)
+                        if path_entry_is_symlink_or_reparse(path):
+                            raise GitWorkspaceError("Symlinks oder Reparse-Points in Git-Metadaten sind nicht erlaubt.")
+                        status = entry.stat(follow_symlinks=False)
+                        if stat.S_ISDIR(status.st_mode):
+                            pending.append(path)
+                        elif not stat.S_ISREG(status.st_mode):
+                            raise GitWorkspaceError("Nicht reguläre Git-Metadatendatei ist nicht erlaubt.")
+                        elif status.st_nlink > 1:
+                            raise GitWorkspaceError("Git-Metadatendateien mit mehreren Hardlinks sind nicht erlaubt.")
+        except OSError as exc:
+            raise GitWorkspaceError("Git-Metadaten konnten nicht sicher geprüft werden.") from exc
+
     @staticmethod
     def _inside(workspace: Path, path: Path, label: str) -> None:
         try:
@@ -136,19 +223,33 @@ class GitWorkspace:
             ) from exc
 
     @classmethod
-    def _validate_alternates(cls, workspace: Path, objects_dir: Path) -> None:
+    def _validate_alternates(
+        cls,
+        workspace: Path,
+        objects_dir: Path,
+        visited: set[Path] | None = None,
+    ) -> None:
+        # Git follows alternates transitively. Validate the entire graph, with
+        # cycle detection and a bound on repository-controlled traversal.
+        if visited is None:
+            visited = set()
+        if objects_dir in visited:
+            return
+        if len(visited) >= MAX_OBJECT_DIRECTORIES:
+            raise GitWorkspaceError("Zu viele Git-Alternate-Objektverzeichnisse.")
+        visited.add(objects_dir)
+        cls._validate_metadata_tree(workspace, objects_dir)
         alternates = objects_dir / "info" / "alternates"
         if alternates.exists():
-            try:
-                values = alternates.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError) as exc:
-                raise GitWorkspaceError(
-                    "Git-Alternates konnten nicht sicher gelesen werden."
-                ) from exc
+            values = cls._metadata_text(workspace, alternates).split("\n")
             for value in values:
-                value = value.strip()
                 if not value:
                     continue
+                # Git C-unquotes these entries. Treating a quoted absolute path
+                # as a literal relative directory would validate a different
+                # location from the one Git subsequently opens.
+                if value.startswith('"'):
+                    raise GitWorkspaceError("C-quotierte Git-Alternate-Pfade sind nicht erlaubt.")
                 path = Path(value)
                 try:
                     resolved = (
@@ -156,7 +257,7 @@ class GitWorkspace:
                         if path.is_absolute()
                         else (objects_dir / path).resolve(strict=True)
                     )
-                except OSError as exc:
+                except (OSError, ValueError, RuntimeError) as exc:
                     raise GitWorkspaceError(
                         "Git-Alternate-Objektverzeichnis ist ungültig oder nicht erreichbar."
                     ) from exc
@@ -165,14 +266,10 @@ class GitWorkspace:
                     resolved,
                     "Git-Alternate-Objektverzeichnis",
                 )
+                cls._validate_alternates(workspace, resolved, visited)
         http_alternates = objects_dir / "info" / "http-alternates"
         if http_alternates.exists():
-            try:
-                content = http_alternates.read_text(encoding="utf-8").strip()
-            except (OSError, UnicodeDecodeError) as exc:
-                raise GitWorkspaceError(
-                    "Git-HTTP-Alternates konnten nicht sicher gelesen werden."
-                ) from exc
+            content = cls._metadata_text(workspace, http_alternates).strip()
             if content:
                 raise GitWorkspaceError("Git-HTTP-Alternates sind nicht erlaubt.")
 
@@ -191,6 +288,8 @@ class GitWorkspace:
         rejected as well because they can import executable filter configuration
         from arbitrary files outside the workspace. The relevant config files
         themselves must be direct, single-link files inside the workspace.
+        Blame ignore-revs files are rejected because Git reads configured files
+        before processing even an empty --ignore-revs-file reset argument.
         """
         config_paths = {
             common_dir / "config",
@@ -241,12 +340,12 @@ class GitWorkspace:
                 str(config_path),
                 "--no-includes",
                 "--get-regexp",
-                r"^filter\..*\.(clean|smudge|process)$",
+                r"^filter\..*\.(clean|smudge|process)$|^blame\.ignorerevsfile$",
                 allowed_returncodes=(0, 1),
             )
             if filter_output.strip():
                 raise GitWorkspaceError(
-                    "Repository-lokale Git-Content-Filter sind nicht erlaubt."
+                    "Repository-lokale Git-Content-Filter oder Blame-Ignore-Dateien sind nicht erlaubt."
                 )
 
     @staticmethod
@@ -261,7 +360,10 @@ class GitWorkspace:
                 "GIT_CONFIG_NOSYSTEM": "1",
                 "GIT_CONFIG_GLOBAL": os.devnull,
                 "GIT_NO_LAZY_FETCH": "1",
+                "GIT_ALLOW_PROTOCOL": "",
+                "GIT_TERMINAL_PROMPT": "0",
                 "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_LITERAL_PATHSPECS": "1",
                 "GIT_PAGER": "cat",
                 "PAGER": "cat",
             }
@@ -287,6 +389,16 @@ class GitWorkspace:
             "-c",
             "core.fsmonitor=false",
             "-c",
+            "submodule.recurse=false",
+            "-c",
+            "diff.submodule=short",
+            "-c",
+            "log.showSignature=false",
+            "-c",
+            f"mailmap.file={os.devnull}",
+            "-c",
+            "mailmap.blob=",
+            "-c",
             f"core.attributesFile={os.devnull}",
             "-c",
             f"core.excludesFile={os.devnull}",
@@ -296,9 +408,6 @@ class GitWorkspace:
             result = subprocess.run(
                 command,
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=20,
                 env=cls._environment(),
                 check=False,
@@ -315,8 +424,8 @@ class GitWorkspace:
             detail = (
                 result.stderr
                 or result.stdout
-                or f"Exit-Code {result.returncode}"
-            ).strip()
+                or f"Exit-Code {result.returncode}".encode("utf-8")
+            ).decode("utf-8", errors="replace").strip()
             raise GitWorkspaceError(
                 f"Git-Aufruf fehlgeschlagen: {detail[:2000]}"
             )
@@ -324,7 +433,9 @@ class GitWorkspace:
             raise GitWorkspaceError(
                 "Git-Ausgabe ist zu groß; Abfrage weiter eingrenzen."
             )
-        return result.stdout
+        # Text-mode subprocess pipes translate CR and CRLF into LF, corrupting
+        # both source text and filenames in Git's NUL-delimited output.
+        return result.stdout.decode("utf-8", errors="replace")
 
     def _repo(self, repository: str) -> GitRepository:
         normalized = self._relative(repository, allow_dot=True).as_posix()
@@ -332,15 +443,10 @@ class GitWorkspace:
         for repo in self.repositories:
             if repo.relative_path != normalized:
                 continue
-            # Security-sensitive local config can change after server startup.
-            # Revalidate it before every Git tool call.
-            self._validate_repository_config(
-                self.directory,
-                repo.root,
-                repo.git_dir,
-                repo.common_dir,
-            )
-            return repo
+            # Discovery grants access to a workspace-relative location, not to
+            # cached metadata paths. Gitfiles, common dirs and object stores can
+            # all change after startup; probe and validate them again.
+            return self._probe(self.directory, self.directory / normalized)
         raise GitWorkspaceError(
             f"Unbekanntes oder nicht freigegebenes Git-Repository: {repository!r}"
         )
@@ -630,7 +736,7 @@ class GitWorkspace:
 
     @classmethod
     def _blame_records(cls, output: str) -> list[dict[str, object]]:
-        lines = output.splitlines()
+        lines = output.removesuffix("\n").split("\n") if output else []
         records: list[dict[str, object]] = []
         index = 0
         while index < len(lines):
@@ -705,6 +811,7 @@ class GitWorkspace:
             "--short",
             "--branch",
             "--untracked-files=all",
+            "--ignore-submodules=all",
         ).strip()
         return output or "(working tree clean)"
 
@@ -740,7 +847,7 @@ class GitWorkspace:
         repo = self._repo(repository)
         repo_path = self._repo_path(repo, path) if path is not None else None
         self._validate_worktree_files(repo, repo_path)
-        args = ["diff", "--no-ext-diff", "--no-textconv"]
+        args = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"]
         if repo_path is not None:
             args += ["--", repo_path]
         return self._git(repo.root, *args).strip() or "(no unstaged changes)"
@@ -974,9 +1081,16 @@ class GitWorkspace:
         repo_path = self._repo_path(repo, path)
         self._validate_worktree_files(repo, repo_path)
         line_range = self._blame_range(start_line, end_line)
-        args = ["blame", "--line-porcelain"]
+        args = ["blame", "--line-porcelain", "--no-textconv"]
         if line_range is None:
-            args += ["-L", f"1,{MAX_BLAME_LINES + 1}"]
+            try:
+                status = (repo.root / repo_path).lstat()
+            except OSError as exc:
+                raise GitWorkspaceError("Blame-Datei konnte nicht geprüft werden.") from exc
+            # Git rejects -L 1,... for an empty file. Still invoke blame without
+            # a range so Git verifies that this is a valid tracked file.
+            if not (stat.S_ISREG(status.st_mode) and status.st_size == 0):
+                args += ["-L", f"1,{MAX_BLAME_LINES + 1}"]
         else:
             args += ["-L", f"{line_range[0]},{line_range[1]}"]
         args += ["--", repo_path]

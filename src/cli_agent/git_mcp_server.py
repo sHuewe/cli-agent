@@ -24,7 +24,7 @@ def create_server(workspace: GitWorkspace) -> FastMCP:
 
     @mcp.tool()
     def git_status(repository: str) -> str:
-        """Show branch and working-tree status for one workspace-relative repository path."""
+        """Show branch and working-tree status; inspect submodules via their own validated repository paths."""
         return workspace.git_status(repository)
 
     @mcp.tool()
@@ -39,7 +39,7 @@ def create_server(workspace: GitWorkspace) -> FastMCP:
 
     @mcp.tool()
     def git_diff(repository: str, path: str | None = None) -> str:
-        """Return unstaged diff, optionally limited to one repository-relative path."""
+        """Return unstaged diff for an optional repository-relative path; submodule worktrees are excluded."""
         return workspace.git_diff(repository, path)
 
     @mcp.tool()
@@ -92,6 +92,8 @@ def create_server(workspace: GitWorkspace) -> FastMCP:
         The search uses Git's fixed-string grep and ignores binary files. It
         never enables --no-index, so untracked files are not searched. Results
         include repository-relative path, line number and matching line text.
+        Submodules require a separate call using their own validated repository
+        path; searches do not recurse into them automatically.
         max_results must be between 1 and 200; truncation is reported explicitly.
 
         Args:
@@ -115,6 +117,8 @@ def create_server(workspace: GitWorkspace) -> FastMCP:
         author date, commit id/message and original path/line. Uncommitted lines
         are marked explicitly. At most 200 lines are returned; for larger files
         provide both start_line and end_line.
+        Empty tracked files return [] when no range is supplied. Line numbers
+        follow Git's LF separators; other source characters are preserved.
 
         Args:
             repository: Validated repository path relative to the workspace.
