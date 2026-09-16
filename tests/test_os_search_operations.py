@@ -44,6 +44,10 @@ def test_search_text_supports_file_scope_limit_and_argument_validation(tmp_path:
     assert len(result["matches"]) == 2
     assert result["truncated"] is True
 
+    exact = json.loads(workspace.search_text("a.txt", "hit", max_results=3))
+    assert len(exact["matches"]) == 3
+    assert exact["truncated"] is False
+
     with pytest.raises(WorkspaceError, match="text darf nicht leer"):
         workspace.search_text(".", "")
     with pytest.raises(WorkspaceError, match="max_results"):
@@ -82,6 +86,10 @@ def test_find_files_matches_names_and_workspace_relative_paths(tmp_path: Path) -
 
     by_path = json.loads(workspace.find_files(".", "src/*.txt"))
     assert by_path == {"files": ["src/two.txt"], "truncated": False}
+
+    exact = json.loads(workspace.find_files(".", "*", max_results=2))
+    assert len(exact["files"]) == 2
+    assert exact["truncated"] is False
 
     with pytest.raises(WorkspaceError, match="pattern darf nicht leer"):
         workspace.find_files(".", "")
@@ -137,6 +145,23 @@ def test_move_file_rejects_parent_escape_sensitive_and_missing_parent(tmp_path: 
     assert (tmp_path / "source.txt").read_text(encoding="utf-8") == "original"
 
 
+def test_move_file_rejects_source_symlink_even_when_target_is_inside_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "target.txt"
+    target.write_text("original", encoding="utf-8")
+    try:
+        (tmp_path / "link.txt").symlink_to(target)
+    except OSError:
+        pytest.skip("Symlinks are unavailable on this platform")
+
+    workspace = _workspace(tmp_path)
+    with pytest.raises(WorkspaceError, match="Symlinks|Junctions"):
+        workspace.move_file("link.txt", "renamed.txt")
+
+    assert target.read_text(encoding="utf-8") == "original"
+    assert (tmp_path / "link.txt").is_symlink()
+    assert not (tmp_path / "renamed.txt").exists()
+
+
 def test_recursive_tools_do_not_follow_directory_symlink_outside_workspace(tmp_path: Path) -> None:
     root = tmp_path / "workspace"
     outside = tmp_path / "outside"
@@ -177,9 +202,9 @@ def test_move_file_cannot_use_symlink_to_escape_workspace(tmp_path: Path) -> Non
         pytest.skip("Symlinks are unavailable on this platform")
 
     workspace = _workspace(root)
-    with pytest.raises(WorkspaceError, match="außerhalb"):
+    with pytest.raises(WorkspaceError, match="außerhalb|Symlinks|Junctions"):
         workspace.move_file("source.txt", "outside-link/moved.txt")
-    with pytest.raises(WorkspaceError, match="außerhalb"):
+    with pytest.raises(WorkspaceError, match="außerhalb|Symlinks|Junctions"):
         workspace.move_file("source-link.txt", "moved.txt")
     assert (root / "source.txt").read_text(encoding="utf-8") == "inside"
     assert (outside / "outside.txt").read_text(encoding="utf-8") == "outside"
