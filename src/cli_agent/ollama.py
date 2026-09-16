@@ -5,6 +5,11 @@ from typing import Any
 import httpx
 
 from .model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
+from .model_http import (
+    MAX_MODEL_RESPONSE_BYTES,
+    ModelResponseTooLargeError,
+    read_bounded_json_response,
+)
 from .network_policy import LOCAL_HOSTS, validate_http_url
 
 ctx_large = 24576
@@ -112,14 +117,25 @@ class OllamaClient:
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
-                response = await client.post(f"{self.base_url}/api/chat", json=payload)
-                response.raise_for_status()
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/api/chat",
+                    json=payload,
+                ) as response:
+                    response.raise_for_status()
+                    data = await read_bounded_json_response(
+                        response,
+                        max_bytes=MAX_MODEL_RESPONSE_BYTES,
+                    )
+        except ModelResponseTooLargeError as exc:
+            raise OllamaError(f"Ollama unter {self.base_url}: {exc}") from exc
         except httpx.HTTPError as exc:
             raise OllamaError(
                 f"Ollama unter {self.base_url} ist nicht erreichbar: {exc}"
             ) from exc
 
-        data = response.json()
+        if not isinstance(data, dict):
+            raise OllamaError("Unerwartete Ollama-Antwort: JSON-Root ist kein Objekt.")
         self.last_usage = self._token_usage(data)
         self.usage_history.append(self.last_usage)
         self._check_context_limit()
