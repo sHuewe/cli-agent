@@ -238,6 +238,21 @@ class Workspace:
 
         return resolved
 
+    def resolve_direct_path(self, path: str, *, must_exist: bool = True) -> Path:
+        """Resolve a path but reject symlink/junction indirection.
+
+        Move/rename semantics must operate on the path the caller named, not on
+        a resolved target. Comparing the lexical absolute path with the
+        canonical path also rejects indirection in parent components.
+        """
+        resolved = self.resolve_path(path, must_exist=must_exist)
+        lexical = (self.directory / Path(path.strip())).absolute()
+        if os.path.normcase(str(lexical)) != os.path.normcase(str(resolved)):
+            raise WorkspaceError(
+                "Symlinks oder Junctions sind für diese Dateioperation nicht erlaubt."
+            )
+        return resolved
+
     @staticmethod
     def _is_text_file(path: Path) -> bool:
         name = path.name.lower()
@@ -455,7 +470,9 @@ class Workspace:
                         if text_truncated:
                             match["text_truncated"] = True
                         matches.append(match)
-                        if len(matches) >= limit:
+                        # Probe for one additional result so truncated is true
+                        # only when a result was actually omitted.
+                        if len(matches) > limit:
                             truncated = True
                             break
             except UnicodeDecodeError:
@@ -469,7 +486,7 @@ class Workspace:
                 break
 
         return json.dumps(
-            {"matches": matches, "truncated": truncated},
+            {"matches": matches[:limit], "truncated": truncated},
             ensure_ascii=False,
             indent=2,
         )
@@ -495,12 +512,14 @@ class Workspace:
             ):
                 continue
             matches.append(relative)
-            if len(matches) >= limit:
+            # Probe for one additional result so exact-limit result sets are
+            # reported as complete.
+            if len(matches) > limit:
                 truncated = True
                 break
 
         return json.dumps(
-            {"files": matches, "truncated": truncated},
+            {"files": matches[:limit], "truncated": truncated},
             ensure_ascii=False,
             indent=2,
         )
@@ -583,13 +602,13 @@ class Workspace:
         return f"Datei kopiert: {relative} "
 
     def move_file(self, path_src: str, path_dst: str) -> str:
-        src_path = self.resolve_path(path_src)
+        src_path = self.resolve_direct_path(path_src)
         if not src_path.is_file():
             raise WorkspaceError(f"Quellpfad ist keine Datei: {path_src!r}")
         self._reject_hardlinked_file(src_path)
         self._reject_sensitive_mutation(src_path)
 
-        dst_path = self.resolve_path(path_dst, must_exist=False)
+        dst_path = self.resolve_direct_path(path_dst, must_exist=False)
         self._reject_sensitive_mutation(dst_path)
         if dst_path.exists() and not dst_path.is_file():
             raise WorkspaceError(f"Zielpfad ist keine Datei: {path_dst!r}")
