@@ -40,7 +40,7 @@ Unter Linux ist der feste Pfad:
 /etc/cli-agent/admin_config.toml
 ```
 
-Ein `[network]`-Abschnitt oder `allow_untrusted_stdio` in der Benutzerkonfiguration wird als Konfigurationsfehler abgewiesen. Eine vorhandene, aber syntaktisch oder typseitig ungültige Admin-Policy führt ebenfalls zu einem Fehler, statt still auf weniger restriktive Werte zurückzufallen.
+Ein `[network]`-Abschnitt in der Benutzerkonfiguration wird als Konfigurationsfehler abgewiesen. Externe stdio-MCPs dürfen dort ausschließlich per Namen referenziert werden; ihre Launch-Konfiguration liegt vollständig in der Admin-Policy. Das frühere globale `allow_untrusted_stdio` wird nicht mehr unterstützt. Eine vorhandene, aber syntaktisch oder typseitig ungültige Admin-Policy führt ebenfalls zu einem Fehler, statt still auf weniger restriktive Werte zurückzufallen.
 
 ## Maschinenweite Admin-Policy einrichten
 
@@ -51,7 +51,7 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 .\scripts\setup-admin-config.ps1 -LlmHost "llm.intern.firma.de"
 ```
 
-Optional können weitere administrativ freizugebende Netzwerkziele beziehungsweise Fähigkeiten angegeben werden:
+Optional können weitere administrativ freizugebende Netzwerkziele angegeben werden:
 
 ```powershell
 .\scripts\setup-admin-config.ps1 `
@@ -60,7 +60,7 @@ Optional können weitere administrativ freizugebende Netzwerkziele beziehungswei
   -WebHosts "docs.intern.firma.de"
 ```
 
-`-AllowUntrustedStdio` erlaubt externe stdio-MCP-Prozesse. Diese Freigabe ist administrativ und kann nicht aus `config.toml` gesetzt werden. Das Setup-Skript fragt vor dem Ersetzen einer vorhandenen Policy nach; `-Force` überspringt diese Rückfrage. Verzeichnis und Datei werden mit ACLs geschützt: Administrators und SYSTEM erhalten Full Control, normale Users nur Leserechte.
+Das Setup-Skript erzeugt bewusst keine externen stdio-Launchprofile. Solche Server werden anschließend einzeln als `[[mcp.trusted_servers]]` administrativ definiert. Das Setup-Skript fragt vor dem Ersetzen einer vorhandenen Policy nach; `-Force` überspringt diese Rückfrage. Verzeichnis und Datei werden mit ACLs geschützt: Administrators und SYSTEM erhalten Full Control, normale Users nur Leserechte.
 
 Eine Admin-Policy kann beispielsweise so aussehen:
 
@@ -70,17 +70,15 @@ model_allowed_hosts = ["localhost", "127.0.0.1", "::1", "llm.intern.firma.de"]
 mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1", "mcp.intern.firma.de"]
 web_allowed_hosts = ["docs.intern.firma.de"]
 
-[mcp]
-allow_untrusted_stdio = false
-
 [[mcp.trusted_servers]]
-name = "fachsoftware"
-transport = "streamable_http"
-url = "https://mcp.intern.firma.de/mcp"
-trust_instructions = true
+name = "compose"
+transport = "stdio"
+command = "C:/Program Files/Company/compose-mcp.exe"
+args = ["--project-directory", "{workspace_directory}"]
+trust_instructions = false
 ```
 
-Die Netzwerklisten enthalten Hosts, keine vollständigen URLs. Modell- und MCP-URLs bleiben Teil der normalen Benutzerkonfiguration, ihre Hosts müssen aber von der Admin-Policy erlaubt sein.
+Die Netzwerklisten enthalten Hosts, keine vollständigen URLs. Modell- und HTTP-MCP-URLs bleiben Teil der normalen Benutzerkonfiguration, ihre Hosts müssen aber von der Admin-Policy erlaubt sein. Bei externen stdio-MCPs ist es umgekehrt: Der Benutzer wählt nur den administrativ definierten Servernamen; `command`, `args` und `env` stammen ausschließlich aus `admin_config.toml`. Platzhalter wie `{workspace_directory}` werden vom Agenten mit seinem eigenen Laufzeitkontext aufgelöst und sind nicht modellkontrolliert.
 
 ### Remote-Modell-Credentials
 
@@ -128,7 +126,7 @@ context_length = 262144
 
 Die `base_url` bleibt Benutzerkonfiguration, ihr Host muss aber in `admin_config.toml` freigegeben sein. Für nichtlokale OpenAI-kompatible Hosts muss eine konfigurierte `api_key_env` zusätzlich über eine passende `[[model.credentials]]`-Regel administrativ erlaubt sein. `--model` überschreibt nur `model.model`.
 
-Persistente MCP-Verbindungen werden über `[[mcp_servers]]` konfiguriert:
+Persistente HTTP-MCP-Verbindungen werden über `[[mcp_servers]]` konfiguriert:
 
 ```toml
 [[mcp_servers]]
@@ -137,7 +135,16 @@ transport = "streamable_http"
 url = "https://mcp.intern.firma.de/mcp"
 ```
 
-Der Host muss in `network.mcp_allowed_hosts` der Admin-Policy enthalten sein. Externe stdio-MCPs können ebenfalls konfiguriert werden, werden aber nur gestartet, wenn die Admin-Policy `allow_untrusted_stdio = true` setzt. Für stdio stehen `{python}`, `{workspace_directory}`, `{project_directory}` und `{config_file}` als Platzhalter zur Verfügung.
+Der Host muss in `network.mcp_allowed_hosts` der Admin-Policy enthalten sein. Dafür ist **kein** `[[mcp.trusted_servers]]`-Eintrag erforderlich, solange weder permanente Auto-Approvals noch administrativ vertrauenswürdige Server-Instructions benötigt werden.
+
+Ein externer stdio-MCP wird in der Benutzerkonfiguration dagegen ausschließlich über seinen administrativ vergebenen Namen ausgewählt:
+
+```toml
+[[mcp_servers]]
+name = "compose"
+```
+
+Ein identischer `[[mcp.trusted_servers]]`-Eintrag mit `transport = "stdio"` muss in der Admin-Policy existieren. Benutzerseitige Angaben für `transport`, `command`, `args`, `env` oder andere Launch-Details eines stdio-MCPs werden nicht akzeptiert.
 
 ## MCP-Tool-Freigaben
 
@@ -162,7 +169,9 @@ Permanente Auto-Approvals für externe MCP-Tools sind absichtlich strenger als S
 
 Der Tool-Contract ist ein SHA-256-Fingerprint über den nativen Toolnamen, die modell-sichtbare Toolbeschreibung und das vollständige MCP-`inputSchema`. Ändert ein MCP-Update das Schema – zum Beispiel durch einen zusätzlichen Parameter, einen anderen Typ oder geänderte Required-Felder – oder die Toolbeschreibung inhaltlich, stimmt der Fingerprint nicht mehr. Das Tool wird dann **nicht blockiert**, sondern fällt sicher auf die normale interaktive Bestätigung zurück.
 
-Bei der Toolbeschreibung werden ausschließlich Formatunterschiede normalisiert, die den Inhalt nicht verändern: `CRLF`/`CR` werden auf `LF` vereinheitlicht, Leerzeichen und Tabs am Zeilenende entfernt und abschließende leere Zeilen ignoriert. Führende Leerzeichen, interne Leerzeilen, Satzzeichen, Groß-/Kleinschreibung, Markdown und sonstiger Inhalt bleiben Bestandteil des Contracts. MCP-`instructions` sind weiterhin separat über `trust_instructions` an die MCP-Serveridentität gebunden und nicht Bestandteil des Tool-Contracts.
+Bei der Toolbeschreibung werden ausschließlich Formatunterschiede normalisiert, die den Inhalt nicht verändern: `CRLF`/`CR` werden auf `LF` vereinheitlicht, Leerzeichen und Tabs am Zeilenende entfernt und abschließende leere Zeilen ignoriert. Führende Leerzeichen, interne Leerzeilen, Satzzeichen, Groß-/Kleinschreibung, Markdown und sonstiger Inhalt bleiben Bestandteil des Contracts.
+
+MCP-`instructions` sind davon getrennt. Standardmäßig bleiben externe Instructions modell-sichtbar, werden aber als **nicht vertrauenswürdiger Referenzkontext** in einer transienten User-Message direkt vor der aktuellen echten Benutzeranfrage bereitgestellt. Sie werden nicht in die Conversation History übernommen. Nur wenn ein konkret identifizierter Server administrativ mit `trust_instructions = true` freigegeben ist, werden seine Instructions wie bisher in den Systemprompt aufgenommen. Diese Option ist für Ausnahmefälle gedacht, in denen administrativ kontrollierte Instructions für den korrekten Betrieb essenziell sind.
 
 ### CLI-Workflow zum Prüfen und Freigeben eines Tools
 
@@ -332,7 +341,9 @@ log_tool_results = false
 
 ## Technischer Ablauf
 
-Der Agent hält MCP-Sessions offen, exponiert Tools als `<server>__<tool>` und führt nach Tool-Ergebnissen den Modelllauf fort. MCP-`instructions` von Built-in-MCPs gelten als Teil des ausgelieferten Agenten und werden in den Systemprompt aufgenommen. Instructions externer MCPs werden dagegen nur dann in den Systemprompt übernommen, wenn die konkrete Serveridentität in `admin_config.toml` mit `trust_instructions = true` freigegeben wurde. Sie dürfen zentrale Agent-Regeln oder Berechtigungsgrenzen dennoch nicht überschreiben.
+Der Agent hält MCP-Sessions offen, exponiert Tools als `<server>__<tool>` und führt nach Tool-Ergebnissen den Modelllauf fort. MCP-`instructions` von Built-in-MCPs gelten als Teil des ausgelieferten Agenten und werden in den Systemprompt aufgenommen. Instructions externer MCPs werden nur bei einer identitätsgleichen Admin-Freigabe mit `trust_instructions = true` in den Systemprompt aufgenommen; alle anderen Instructions bleiben verfügbar, erscheinen aber zusammen mit eventuell vorhandenem OKF-Wissen, Web-Kontext und lokalem Datei-Kontext in einer separaten transienten `user`-Referenzmessage unmittelbar vor der aktuellen echten Benutzeranfrage.
+
+Die synthetische Referenzmessage wird für jeden Modelllauf neu aufgebaut und **nicht** in `self.history` übernommen. Die Conversation History enthält daher weiterhin nur die tatsächlichen Benutzeranfragen und Assistentenantworten. Der aktuelle User-Input bleibt auch in `working_messages` unverändert und 1:1 erkennbar.
 
 Permanente externe Auto-Approvals werden zusätzlich gegen den administrativ gepinnten Tool-Contract geprüft. Ein Drift der modell-sichtbaren Toolbeschreibung oder des `inputSchema` führt nicht zur automatischen Ausführung, sondern zurück zur normalen Approval-Abfrage.
 
@@ -342,4 +353,4 @@ Mit `tokens` kann die Usage des letzten Agentenlaufs angezeigt werden.
 
 ## Security
 
-Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, externe stdio-MCPs und identitäts- sowie contractgebundene administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern. Session- und CLI-Vorabfreigaben sind dagegen bewusste, nicht persistente Benutzerentscheidungen für genau benannte Tools innerhalb des laufenden Prozesses.
+Die Security-Baseline steht in [docs/security.md](docs/security.md), die Firmen-Rollout-Checkliste in [docs/company-deployment-checklist.md](docs/company-deployment-checklist.md). Die maschinenweite `admin_config.toml` ist die autoritative Policy für Netzwerkziele, **jeden einzelnen externen stdio-MCP-Launch** und identitäts- sowie contractgebundene administrative Tool-Auto-Approvals; die normale Benutzerkonfiguration kann diese Policy nicht lockern. HTTP-MCPs benötigen dagegen normalerweise nur einen administrativ erlaubten Host. Session- und CLI-Vorabfreigaben sind bewusste, nicht persistente Benutzerentscheidungen für genau benannte Tools innerhalb des laufenden Prozesses.
