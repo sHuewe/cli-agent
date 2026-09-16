@@ -24,7 +24,7 @@ def _init_repo(path: Path) -> str:
     # commits created by the fixture and reads performed by GitWorkspace use
     # the same line-ending semantics on Linux and Windows.
     _git(path, "config", "core.autocrlf", "false")
-    (path / "a.txt").write_text("one\n", encoding="utf-8")
+    (path / "a.txt").write_bytes(b"one\n")
     _git(path, "add", "a.txt")
     _git(path, "commit", "-m", "initial")
     return _git(path, "rev-parse", "HEAD")
@@ -101,7 +101,7 @@ def test_status_diff_history_and_commit_files(tmp_path: Path) -> None:
     files = json.loads(workspace.git_commit_files(".", commit))
     assert files == [{"status": "added", "path": "a.txt"}]
 
-    (tmp_path / "a.txt").write_text("two\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_bytes(b"two\n")
     assert "-one" in workspace.git_diff(".", "a.txt")
     assert "+two" in workspace.git_diff(".", "a.txt")
 
@@ -110,12 +110,12 @@ def test_merge_commit_diff_and_files_use_first_parent_semantics(tmp_path: Path) 
     _init_repo(tmp_path)
     default_branch = _git(tmp_path, "branch", "--show-current")
     _git(tmp_path, "checkout", "-b", "feature")
-    (tmp_path / "feature.txt").write_text("from feature\n", encoding="utf-8")
+    (tmp_path / "feature.txt").write_bytes(b"from feature\n")
     _git(tmp_path, "add", "feature.txt")
     _git(tmp_path, "commit", "-m", "feature change")
 
     _git(tmp_path, "checkout", default_branch)
-    (tmp_path / "main.txt").write_text("from main\n", encoding="utf-8")
+    (tmp_path / "main.txt").write_bytes(b"from main\n")
     _git(tmp_path, "add", "main.txt")
     _git(tmp_path, "commit", "-m", "main change")
     _git(tmp_path, "merge", "--no-ff", "feature", "-m", "merge feature")
@@ -133,10 +133,10 @@ def test_merge_commit_diff_and_files_use_first_parent_semantics(tmp_path: Path) 
 
 def test_git_grep_returns_structured_literal_matches_and_ignores_untracked(tmp_path: Path) -> None:
     _init_repo(tmp_path)
-    (tmp_path / "a.txt").write_text("alpha needle\nneedle.*literal\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_bytes(b"alpha needle\nneedle.*literal\n")
     (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "tracked.txt").write_text("needle\n", encoding="utf-8")
-    (tmp_path / "untracked.txt").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "sub" / "tracked.txt").write_bytes(b"needle\n")
+    (tmp_path / "untracked.txt").write_bytes(b"needle\n")
     _git(tmp_path, "add", "a.txt", "sub/tracked.txt")
     _git(tmp_path, "commit", "-m", "add searchable content")
     workspace = GitWorkspace.from_directory(tmp_path)
@@ -156,9 +156,9 @@ def test_git_grep_returns_structured_literal_matches_and_ignores_untracked(tmp_p
 
 def test_git_grep_supports_path_limit_no_match_and_result_limit(tmp_path: Path) -> None:
     _init_repo(tmp_path)
-    (tmp_path / "a.txt").write_text("hit\nhit\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_bytes(b"hit\nhit\n")
     (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "b.txt").write_text("hit\nhit\n", encoding="utf-8")
+    (tmp_path / "sub" / "b.txt").write_bytes(b"hit\nhit\n")
     _git(tmp_path, "add", ".")
     _git(tmp_path, "commit", "-m", "grep data")
     workspace = GitWorkspace.from_directory(tmp_path)
@@ -187,11 +187,13 @@ def test_git_grep_validates_arguments_and_path_escape(tmp_path: Path) -> None:
 
 def test_git_blame_returns_structured_committed_and_uncommitted_lines(tmp_path: Path) -> None:
     commit = _init_repo(tmp_path)
-    (tmp_path / "a.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    # Use bytes so the fixture represents the same LF-only working-tree content
+    # on Windows and POSIX. git_blame deliberately preserves CR characters.
+    (tmp_path / "a.txt").write_bytes(b"one\ntwo\nthree\n")
     _git(tmp_path, "add", "a.txt")
     _git(tmp_path, "commit", "-m", "three lines")
     committed = _git(tmp_path, "rev-parse", "HEAD")
-    (tmp_path / "a.txt").write_text("changed\ntwo\nthree\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_bytes(b"changed\ntwo\nthree\n")
     workspace = GitWorkspace.from_directory(tmp_path)
 
     result = json.loads(workspace.git_blame(".", "a.txt", 1, 2))
