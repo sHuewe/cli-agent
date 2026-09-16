@@ -53,6 +53,7 @@ CliAgent
 - laufende MCP-Sessions,
 - Tool-Metadaten und Tool-Routen,
 - aktive/deaktivierte Server,
+- getrennte trusted und untrusted MCP-Instructions,
 - OKF-/Knowledge-Zustand,
 - Session-Auto-Approvals.
 
@@ -75,10 +76,12 @@ Wesentliche Aufgaben:
 
 - MCP-Server starten und stoppen,
 - stdio- und `streamable_http`-Verbindungen herstellen,
+- externe stdio-Namensreferenzen gegen administrative `[[mcp.trusted_servers]]`-Launchprofile auflösen,
 - MCP-Tools über `list_tools()` einlesen,
 - Tool-Metadaten und Schemas prüfen,
 - exposed Tool-Namen nach dem Schema `server__tool` erzeugen,
 - Tool-Routen auf die jeweilige `ClientSession` abbilden,
+- MCP-Instructions nach trusted/untrusted klassifizieren,
 - MCP-Server zur Laufzeit aktivieren/deaktivieren,
 - den separaten OKF-MCP-Server starten.
 
@@ -90,6 +93,31 @@ Eine Tool-Route hat konzeptionell die Form:
         ▼
 (ClientSession, "start_search", ServerConfig)
 ```
+
+Für externe stdio-Server besteht bewusst eine zusätzliche Launch-Grenze:
+
+```text
+config.toml
+[[mcp_servers]]
+name = "compose"
+       │
+       ▼
+admin_config.toml
+[[mcp.trusted_servers]]
+name = "compose"
+transport = "stdio"
+command = "..."
+args = ["--project-directory", "{workspace_directory}"]
+       │
+       ▼
+cli-agent materialisiert das Admin-Profil
+und löst den eigenen Workspace ein
+       │
+       ▼
+stdio child process
+```
+
+Damit kann die normale Projektkonfiguration weder Executable noch Argumentstruktur oder Environment eines externen stdio-MCP verändern. Der Workspace wird vom Agenten gebunden und ist kein modellkontrollierter Tool-Parameter.
 
 Die Mixinklasse besitzt keinen eigenen unabhängigen Zustand. Sie arbeitet direkt auf den Attributen der `CliAgent`-Instanz, z. B. `_sessions`, `_tool_routes`, `_server_tools` und `_active_servers`.
 
@@ -105,15 +133,25 @@ ask(prompt)
    ├─ optional: Knowledge-/OKF-Vorlauf
    │      └─ _collect_knowledge(prompt)
    │
-   ├─ Main-User-Message aufbauen
+   ├─ transienten Referenzkontext aufbauen
+   │      ├─ untrusted MCP-Instructions
+   │      ├─ optionales OKF-Wissen
+   │      ├─ optionaler Web-Kontext
+   │      └─ optionaler lokaler Datei-Kontext
    │
-   ├─ Systemprompt + History + User-Message zusammenstellen
+   ├─ working_messages aufbauen
+   │      ├─ system
+   │      ├─ persistente History
+   │      ├─ optional: synthetische user-Referenzmessage
+   │      └─ user: exakter aktueller Prompt
    │
    └─ Agentenschleife starten
           └─ _run_model_loop(...)
 ```
 
-Bei aktiviertem OKF läuft damit vor dem eigentlichen Main-Loop ein eigener Knowledge-Loop. Dessen Ergebnis wird als nicht vertrauenswürdiger Referenzkontext in die eigentliche Anfrage eingebettet.
+Die synthetische Referenzmessage ist bewusst **nicht** Teil von `self.history`. Persistiert werden nach einem erfolgreichen Turn ausschließlich die unveränderte echte Benutzeranfrage und die finale Assistentenantwort. Dadurch bleiben Conversation-History und tatsächlicher User-Input klar von externen Referenzdaten getrennt.
+
+Trusted MCP-Instructions sind die Ausnahme: Built-in-Instructions sowie externe Instructions eines identitätsgleich administrativ mit `trust_instructions = true` freigegebenen Servers werden in den Systemprompt aufgenommen. Alle anderen externen Instructions bleiben modell-sichtbar, aber nur als untrusted Referenzdaten.
 
 `ConversationMixin` enthält außerdem unterstützende Funktionen für Tool-Fehler, Result-Kompression und OKF-Selektion.
 
@@ -198,7 +236,7 @@ Zusätzliche Aufgaben:
 
 - `add_web_context <url>`,
 - `clear_web_context`,
-- Web-Kontext als nicht vertrauenswürdige Referenzdaten in die User-Message einbetten,
+- Web-Kontext in den gemeinsamen transienten untrusted Referenzpayload einfügen,
 - Token-Usage getrennt für Main- und Knowledge-Loop erfassen,
 - lokalen Befehl `tokens` bereitstellen.
 
@@ -215,7 +253,7 @@ Zusätzlich enthält `file_context.py` die Host-seitige Behandlung von:
 - `--output`,
 - `--overwrite-output`.
 
-Datei-Kontexte werden nicht als Toolzugriff des LLM behandelt, sondern vor dem Agentenlauf explizit vom Host validiert und als nicht vertrauenswürdiger Referenzinhalt in den Prompt aufgenommen.
+Datei-Kontexte werden nicht als Toolzugriff des LLM behandelt, sondern vor dem Agentenlauf explizit vom Host validiert und anschließend in denselben transienten untrusted Referenzpayload wie Web-, OKF- und externe MCP-Referenzdaten aufgenommen.
 
 ## Modell-Abstraktion
 
@@ -266,7 +304,9 @@ admin_config.toml
 
 Die Benutzerkonfiguration beschreibt überwiegend, **was verwendet werden soll**. Die Maschinenpolicy begrenzt, **was verwendet werden darf**.
 
-Beide treffen insbesondere beim Aufbau des `ModelClient`, beim Start externer MCP-Server und bei permanenten MCP-Auto-Approvals zusammen.
+Für HTTP-MCPs reicht im Normalfall die Hostfreigabe über `mcp_allowed_hosts`; ein `TrustedMcpServer` ist dort nur für permanente Auto-Approvals oder explizit privilegierte Instructions erforderlich. Für externe stdio-MCPs ist dagegen immer ein `TrustedMcpServer` erforderlich, weil dessen Launch selbst lokale Prozessausführung darstellt.
+
+Beide Konfigurationsebenen treffen insbesondere beim Aufbau des `ModelClient`, beim Start externer MCP-Server und bei permanenten MCP-Auto-Approvals zusammen.
 
 ## Security Boundaries
 
@@ -289,9 +329,9 @@ Web-/Datei-Kontext ◄┘
 Wichtige Grundannahmen:
 
 - Das LLM ist keine Security Boundary.
-- Web-, Datei- und OKF-Inhalte sind nicht vertrauenswürdige Referenzdaten.
+- Web-, Datei-, OKF-Inhalte und nicht privilegierte externe MCP-Instructions sind nicht vertrauenswürdige Referenzdaten.
 - Externe MCP-Server bilden eine eigene Trust Boundary.
-- Normale Benutzerkonfiguration darf keine administrativen Netzwerk- oder Trust-Grenzen erweitern.
+- Normale Benutzerkonfiguration darf keine administrativen Netzwerk-, Prozessstart- oder Trust-Grenzen erweitern.
 - Vom Host verwaltete Dateizugriffe – insbesondere der eingebaute OS-MCP sowie Datei-Kontext und Output – werden deterministisch auf die vorgesehenen Workspace-Grenzen geprüft. Externe MCP-Server sind eigenständige Prozesse bzw. Dienste; ihre internen Datei- oder Systemzugriffe kann `cli-agent` nicht auf den Workspace beschränken.
 
 Weitere Details stehen in [`security.md`](security.md) und [`company-deployment-checklist.md`](company-deployment-checklist.md).
