@@ -25,6 +25,7 @@ from .mcp_contracts import tool_contract_fingerprint
 from .model_factory import create_model_client
 
 OS_MCP_SERVER_NAME = "os"
+REDACTED_CONFIG_VALUE = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"
 logger = logging.getLogger("cli_agent.cli")
 
 
@@ -190,10 +191,10 @@ def _config_pairs(values: Any) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((str(key), str(value)) for key, value in (values or ())))
 
 
-def _render_inline_toml_table(values: Any) -> str:
+def _render_inline_toml_table(values: Any, *, redact_values: bool = False) -> str:
     pairs = _config_pairs(values)
     return "{ " + ", ".join(
-        f"{json.dumps(key, ensure_ascii=False)} = {json.dumps(value, ensure_ascii=False)}"
+        f"{json.dumps(key, ensure_ascii=False)} = {json.dumps(REDACTED_CONFIG_VALUE if redact_values else value, ensure_ascii=False)}"
         for key, value in pairs
     ) + " }"
 
@@ -212,7 +213,8 @@ def _render_trusted_server_fragment(server: Any) -> str:
             lines.append(f"url = {json.dumps(str(url), ensure_ascii=False)}")
         headers = getattr(server, "headers", None)
         if headers:
-            lines.append(f"headers = {_render_inline_toml_table(headers)}")
+            lines.append("# Header-Werte werden aus Sicherheitsgründen nicht ausgegeben; Werte aus der vorhandenen Konfiguration übernehmen.")
+            lines.append(f"headers = {_render_inline_toml_table(headers, redact_values=True)}")
     elif transport == "stdio":
         command = getattr(server, "command", None)
         if command:
@@ -222,7 +224,8 @@ def _render_trusted_server_fragment(server: Any) -> str:
             lines.append("args = [" + ", ".join(json.dumps(value, ensure_ascii=False) for value in args) + "]")
         env = getattr(server, "env", None)
         if env:
-            lines.append(f"env = {_render_inline_toml_table(env)}")
+            lines.append("# Environment-Werte werden aus Sicherheitsgründen nicht ausgegeben; Werte aus der vorhandenen Admin-Konfiguration übernehmen.")
+            lines.append(f"env = {_render_inline_toml_table(env, redact_values=True)}")
     lines.append(f"trust_instructions = {'true' if bool(getattr(server, 'trust_instructions', False)) else 'false'}")
     return "\n".join(lines)
 
