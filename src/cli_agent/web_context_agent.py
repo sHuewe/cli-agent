@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .agent import CliAgent
+from .admin_config import WebProviderConfig
 from .model import TokenUsage
 from .network_policy import NetworkConfig
 from .web_context import WebContext, fetch_web_context
@@ -58,8 +59,10 @@ class WebContextCliAgent(CliAgent):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         network = kwargs.get("network") or NetworkConfig()
+        web_providers = kwargs.pop("web_providers", ())
         super().__init__(*args, **kwargs)
         self._web_allowed_hosts = network.web_allowed_hosts
+        self._web_providers: tuple[WebProviderConfig, ...] = tuple(web_providers)
         self._web_contexts: list[WebContext] = []
         self._last_main_usage: LoopTokenUsage | None = None
         self._last_knowledge_usage: LoopTokenUsage | None = None
@@ -129,7 +132,11 @@ class WebContextCliAgent(CliAgent):
             return self.token_usage_text()
         add_command = re.fullmatch(r"add_web_context\s+(\S+)", stripped)
         if add_command:
-            context = await fetch_web_context(add_command.group(1), allowed_hosts=self._web_allowed_hosts)
+            context = await fetch_web_context(
+                add_command.group(1),
+                allowed_hosts=self._web_allowed_hosts,
+                providers=self._web_providers,
+            )
             replaced = any(existing.requested_url == context.requested_url for existing in self._web_contexts)
             self._web_contexts = [existing for existing in self._web_contexts if existing.requested_url != context.requested_url]
             self._web_contexts.append(context)
