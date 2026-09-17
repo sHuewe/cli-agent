@@ -45,13 +45,31 @@ Read-only-Tools:
    FSMonitor, Pager, Signaturprüfung, externe Diffs oder Textkonverter.
    Repository-lokale Content-Filter und Config-Includes werden abgewiesen.
 3. Tools, die Working-Tree-Inhalte an das Modell zurückgeben (`git_diff`,
-   `git_grep`, `git_blame`), prüfen die betroffenen getrackten Pfade vor dem
-   Lesen auf Symlink-/Reparse-Indirection, Workspace-/Repository-Escape,
-   Spezialdateien und Hardlink-Aliase. `git_status` gibt dagegen nur
-   Namen/Zustände aus und führt deshalb keinen vollständigen Scan aller
-   getrackten Dateien aus.
+   `git_grep`, `git_blame`), prüfen ausschließlich die konkreten Dateien, deren
+   Inhalt in die Antwort einfließen kann, auf Symlink-/Reparse-Indirection,
+   Workspace-/Repository-Escape, Spezialdateien und Hardlink-Aliase.
 
-### Vertrauensgrenze für Git-interne Daten
+### Keine vollständigen Repository-Scans
+
+Eine vollständige Validierung aller getrackten Working-Tree-Dateien ist bewusst
+**kein unterstützter Runtime-Mechanismus**. Die frühere Implementierung über
+`git ls-files` plus Filesystem-Prüfung jedes getrackten Pfades benötigt in realen
+Repositories keine akzeptable Laufzeit. Ein Tool, dessen Sicherheitsmodell einen
+solchen vollständigen Scan voraussetzen würde, wird deshalb nicht auf diesem Weg
+unterstützt. Neue Git-Tools müssen entweder ohne Working-Tree-Inhalte auskommen
+oder die tatsächlich relevanten Dateien zuerst bestimmen und anschließend einzeln
+validieren.
+
+Konkret bedeutet das: `git_status` gibt nur Namen/Zustände aus und validiert keine
+Working-Tree-Inhalte. `git_diff` bestimmt zunächst die tatsächlich geänderten
+Pfade und prüft nur vorhandene Dateien, deren aktueller Inhalt in den Patch
+einfließt. Gelöschte Inhalte stammen aus dem lokalen Git-Objektspeicher.
+`git_grep` darf die getrackten Treffer-Dateinamen zunächst ohne Content-Ausgabe
+ermitteln; vor dem zweiten Git-Aufruf, der Trefferzeilen ausgibt, wird jede
+betroffene Datei einzeln geprüft. `git_blame` prüft ausschließlich den explizit
+angegebenen Dateipfad.
+
+## Vertrauensgrenze für Git-interne Daten
 
 Der lokale Git-Objektspeicher einschließlich von Git konfigurierter Alternates
 wird als Teil der lokalen Repository-Datenquelle behandelt. Er darf – wie auch
@@ -72,7 +90,7 @@ manipulieren kann, kann die Git-Historie beeinflussen. Daraus entsteht aber kein
 zusätzliche Prozess- oder Netzwerkfähigkeit des MCP-Servers. Repository-Inhalte
 und Commit-Nachrichten bleiben untrusted Daten für das LLM.
 
-### Repository-Steuerpfade
+## Repository-Steuerpfade
 
 Bei Discovery und erneut vor Tool-Aufrufen werden die kleine Menge der
 sicherheitsrelevanten Repository-Pfade erneut geprüft: Repository-Root,
@@ -90,11 +108,11 @@ Repository-Pfad angesprochen werden.
 
 ## Working-Tree-Inhalte
 
-`git_grep` sucht ausschließlich getrackte Dateien und verwendet keine
-`--no-index`-Suche. Vor inhaltlichen Working-Tree-Zugriffen werden die von Git
-aufgelisteten getrackten Pfade validiert. Auch interne Symlink-Eltern werden
-abgewiesen, weil sie sonst einen getrackten Namen auf andere Inhalte umlenken
-könnten. Hardlinks werden für diese inhaltlichen Reads ebenfalls abgewiesen.
+Bei jeder einzelnen Content-Datei werden auch ihre Parent-Komponenten geprüft.
+Damit kann ein scheinbar normaler getrackter Pfad nicht über ein symlinked oder
+reparsed Parent-Verzeichnis auf andere Inhalte zeigen. Die Zieldatei muss regulär
+sein, innerhalb von Repository und Workspace auflösen und darf kein Hardlink mit
+mehreren Namen sein.
 
 `git_diff` und `git_blame` verwenden zusätzlich `--no-ext-diff` bzw.
 `--no-textconv`. Ausgaben und Ergebniszahlen sind begrenzt; Git-Subprozesse haben
