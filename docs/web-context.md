@@ -35,7 +35,9 @@ Für eine passende Confluence-URL verwendet `cli-agent` die Confluence REST API 
 Authorization: Bearer <PAT>
 ```
 
-Der PAT wird nicht an das LLM übergeben, nicht als Web-Kontext gespeichert und nicht geloggt. Authentifizierte REST-Redirects dürfen den konfigurierten Origin nicht verlassen. Dadurch wird das Credential nicht an Redirect-Ziele anderer Origins weitergegeben.
+Der PAT wird nicht an das LLM übergeben, nicht als Web-Kontext gespeichert und nicht geloggt. Authentifizierte REST-Redirects dürfen weder den konfigurierten Origin noch dessen Confluence-Context-Path verlassen. Dadurch wird das Credential auch dann nicht an einen anderen Pfad auf demselben Host weitergegeben, wenn dieser Host noch weitere Anwendungen bereitstellt.
+
+Die bestehenden stdio-MCP-Prozesse erhalten nur eine explizite kleine Environment-Allowlist. Eine zusätzliche Variable wie `CLI_AGENT_CONFLUENCE_PAT` wird deshalb nicht implizit an MCP-Kindprozesse vererbt. HTTP-Aufrufe des Web-Providers verwenden außerdem `trust_env = false`, sodass Proxy-Umgebungsvariablen nicht stillschweigend den Transportweg verändern.
 
 Unterstützte Seiten-URL-Formen sind derzeit insbesondere:
 
@@ -45,7 +47,7 @@ Unterstützte Seiten-URL-Formen sind derzeit insbesondere:
 .../display/SPACE/Page+Title
 ```
 
-Bei einer Page-ID wird `/rest/api/content/{id}` verwendet. Legacy-`/display/...`-URLs werden über Space-Key und Titel aufgelöst. Der Abruf fordert `body.view` und `body.storage` an; bevorzugt wird die gerenderte `body.view`-Darstellung und anschließend wie bei normalem HTML auf Text reduziert.
+Bei einer Page-ID wird `/rest/api/content/{id}` verwendet. Legacy-`/display/...`-URLs werden über Space-Key und Titel aufgelöst. Der Abruf fordert `body.view` und `body.storage` an; bevorzugt wird die gerenderte `body.view`-Darstellung und anschließend wie bei normalem HTML auf Text reduziert. Falls die gerenderte Darstellung keinen verwertbaren Text ergibt, wird innerhalb derselben REST-Antwort die Storage-Darstellung versucht.
 
 Wenn eine URL zu einem konfigurierten Confluence-Provider gehört, ist diese Zuordnung verbindlich. Fehlt der PAT, schlägt die REST-API fehl oder kann die URL nicht eindeutig auf eine Seite abgebildet werden, gibt `add_web_context` einen Fehler zurück. Es gibt **keinen** stillen Fallback auf den normalen unauthentifizierten HTML-Abruf.
 
