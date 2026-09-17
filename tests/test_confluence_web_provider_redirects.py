@@ -6,7 +6,10 @@ import pytest
 
 import cli_agent.web_context as web_context_module
 from cli_agent.admin_config import WebProviderConfig
-from cli_agent.web_context import _confluence_get_json
+from cli_agent.web_context import (
+    _confluence_get_json,
+    _validate_confluence_credential_url,
+)
 
 
 class _RedirectResponse:
@@ -53,41 +56,89 @@ class _RecordingClient:
         return _StreamContext(type(self).redirect_location)
 
 
+def _provider() -> WebProviderConfig:
+    return WebProviderConfig(
+        provider_type="confluence",
+        base_url="https://confluence.internal/wiki",
+        token_env="CONFLUENCE_PAT",
+    )
+
+
 @pytest.mark.parametrize(
     "redirect_location",
     [
         "https://other.internal/steal",
         "https://confluence.internal/not-confluence/steal",
+        "https://confluence.internal/wiki/../other-app",
+        "https://confluence.internal/wiki/%2e%2e/other-app",
+        "https://confluence.internal/wiki/%2E%2E/other-app",
+        "https://confluence.internal/wiki/%252e%252e/other-app",
+        "https://confluence.internal/wiki%2f..%2fother-app",
+        "https://confluence.internal/wiki%5c..%5cother-app",
+        "/wiki/rest/api/content/456",
     ],
 )
-def test_confluence_pat_is_not_forwarded_outside_provider_namespace(
+def test_confluence_pat_is_never_forwarded_to_redirect_target(
     monkeypatch: pytest.MonkeyPatch,
     redirect_location: str,
 ) -> None:
     _RecordingClient.calls.clear()
     _RecordingClient.redirect_location = redirect_location
     monkeypatch.setattr(web_context_module.httpx, "AsyncClient", _RecordingClient)
-    configured = WebProviderConfig(
-        provider_type="confluence",
-        base_url="https://confluence.internal/wiki",
-        token_env="CONFLUENCE_PAT",
-    )
 
-    with pytest.raises(ValueError, match="Provider-Namensraums") as exc_info:
+    with pytest.raises(ValueError, match="Redirect.*abgelehnt") as exc_info:
         asyncio.run(
             _confluence_get_json(
                 "https://confluence.internal/wiki/rest/api/content/123",
-                provider=configured,
-                # Deliberately allowlist both hosts. Provider credential binding must
-                # still be stricter than the generic Web allowlist.
+                provider=_provider(),
                 allowed_hosts=("confluence.internal", "other.internal"),
                 token="super-secret-pat",
             )
         )
 
+    # The PAT is used only for the original, internally constructed REST URL.
+    # No redirect target receives a second authenticated request.
     assert len(_RecordingClient.calls) == 1
     method, requested_url, headers = _RecordingClient.calls[0]
     assert method == "GET"
-    assert requested_url.startswith("https://confluence.internal/wiki/")
+    assert requested_url == "https://confluence.internal/wiki/rest/api/content/123"
     assert headers["Authorization"] == "Bearer super-secret-pat"
     assert "super-secret-pat" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://confluence.internal/wiki/../other-app",
+        "https://confluence.internal/wiki/./rest/api/content/123",
+        "https://confluence.internal/wiki/%2e%2e/other-app",
+        "https://confluence.internal/wiki/%2E/other-app",
+        "https://confluence.internal/wiki/%252e%252e/other-app",
+        "https://confluence.internal/wiki%2f..%2fother-app",
+        "https://confluence.internal/wiki%5c..%5cother-app",
+        "https://confluence.internal/wiki\\..\\other-app",
+    ],
+)
+def test_confluence_credential_url_rejects_ambiguous_paths(url: str) -> None:
+    with pytest.raises(ValueError):
+        _validate_confluence_credential_url(
+            url,
+            provider=_provider(),
+            allowed_hosts=("confluence.internal",),
+        )
+
+
+def test_confluence_credential_url_accepts_generated_rest_path() -> None:
+    url = (
+        "https://confluence.internal/wiki/rest/api/content/123"
+        "?expand=body.view%2Cbody.storage"
+    )
+
+    assert (
+        _validate_confluence_credential_url(
+            url,
+            provider=_provider(),
+            allowed_hosts=("confluence.internal",),
+        )
+        == url
+    )
