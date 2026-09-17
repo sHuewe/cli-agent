@@ -308,3 +308,17 @@ def test_search_text_stops_at_byte_scan_budget(tmp_path: Path, monkeypatch) -> N
         "truncated": True,
         "truncation_reason": "scan_budget",
     }
+
+
+def test_find_files_stops_at_scan_budget(tmp_path: Path, monkeypatch) -> None:
+    for index in range(4):
+        (tmp_path / f"{index}.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(os_operations, "MAX_FIND_SCAN_FILES", 2)
+
+    result = json.loads(_workspace(tmp_path).find_files(".", "*.py"))
+
+    assert result == {
+        "files": [],
+        "truncated": True,
+        "truncation_reason": "scan_budget",
+    }
