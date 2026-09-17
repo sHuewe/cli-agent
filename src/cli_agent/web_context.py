@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from html import escape
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, quote, unquote, unquote_plus, urlencode, urljoin, urlsplit
 
@@ -203,9 +204,11 @@ def _confluence_api_url(
     expand = "body.view,body.storage"
     if reference_type == "id":
         return f"{api_root}/{quote(str(value), safe='')}?{urlencode({'expand': expand})}"
+    if reference_type != "title" or not isinstance(value, tuple):
+        raise ValueError("Ungültige Confluence-Seitenreferenz.")
 
-    space_key, title = value  # type: ignore[misc]
-    return f"{api_root}?{urlencode({'spaceKey': space_key, 'title': title, 'expand': expand})}"
+    space_key, title = value
+    return f"{api_root}?{urlencode({'type': 'page', 'spaceKey': space_key, 'title': title, 'expand': expand})}"
 
 
 async def _read_response_bytes(response: httpx.Response) -> bytes:
@@ -228,7 +231,6 @@ async def _confluence_get_json(
     token: str,
 ) -> dict[str, object]:
     timeout = httpx.Timeout(WEB_REQUEST_TIMEOUT_SECONDS)
-    provider_origin = _origin(provider.base_url)
 
     async with httpx.AsyncClient(
         follow_redirects=False,
@@ -239,10 +241,10 @@ async def _confluence_get_json(
         current_url = url
         for redirect_count in range(MAX_WEB_REDIRECTS + 1):
             current_url = _validate_web_url(current_url, allowed_hosts=allowed_hosts)
-            if _origin(current_url) != provider_origin:
+            if not _provider_matches(current_url, provider):
                 raise ValueError(
                     "Confluence-REST-Request würde den administrativ konfigurierten "
-                    "Origin verlassen."
+                    "Provider-Namensraum verlassen."
                 )
 
             async with client.stream(
@@ -261,10 +263,11 @@ async def _confluence_get_json(
                     if redirect_count >= MAX_WEB_REDIRECTS:
                         raise ValueError("Zu viele Redirects im Confluence-REST-Abruf.")
                     redirect_url = urljoin(current_url, location)
-                    if _origin(redirect_url) != provider_origin:
+                    if not _provider_matches(redirect_url, provider):
                         raise ValueError(
-                            "Confluence-REST-Redirect auf einen anderen Origin wurde "
-                            "abgelehnt; der PAT wird nicht weitergegeben."
+                            "Confluence-REST-Redirect außerhalb des konfigurierten "
+                            "Provider-Namensraums wurde abgelehnt; der PAT wird nicht "
+                            "weitergegeben."
                         )
                     current_url = redirect_url
                     continue
@@ -312,23 +315,31 @@ def _confluence_document(payload: dict[str, object]) -> tuple[str | None, str]:
     if not isinstance(body, dict):
         raise ValueError("Confluence REST API lieferte keinen Seiteninhalt.")
 
-    raw_html = ""
+    saw_representation = False
     for representation in ("view", "storage"):
         representation_value = body.get(representation)
         if not isinstance(representation_value, dict):
             continue
         value = representation_value.get("value")
-        if isinstance(value, str) and value.strip():
-            raw_html = value
-            break
-    if not raw_html:
-        raise ValueError("Confluence REST API lieferte keinen verwertbaren Seiteninhalt.")
+        if not isinstance(value, str) or not value.strip():
+            continue
+        saw_representation = True
+        extracted_title, content = _extract_web_content(
+            (
+                "<html><head><title>"
+                f"{escape(title or '')}"
+                "</title></head><body>"
+                f"{value}"
+                "</body></html>"
+            ),
+            "text/html",
+        )
+        if content:
+            return title or extracted_title, content
 
-    extracted_title, content = _extract_web_content(
-        f"<html><head><title>{title or ''}</title></head><body>{raw_html}</body></html>",
-        "text/html",
-    )
-    return title or extracted_title, content
+    if saw_representation:
+        raise ValueError("Die Confluence-Seite enthält keinen verwertbaren Textinhalt.")
+    raise ValueError("Confluence REST API lieferte keinen verwertbaren Seiteninhalt.")
 
 
 async def _fetch_confluence_context(
@@ -353,8 +364,6 @@ async def _fetch_confluence_context(
         token=token,
     )
     title, content = _confluence_document(payload)
-    if not content:
-        raise ValueError("Die Confluence-Seite enthält keinen verwertbaren Textinhalt.")
 
     truncated = len(content) > MAX_WEB_CONTEXT_CHARS
     if truncated:
