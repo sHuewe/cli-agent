@@ -311,7 +311,20 @@ async def run(args: argparse.Namespace) -> None:
     configure_logging(config.logging)
     model_client = create_model_client(config.model, network=admin_config.network, credential_rules=admin_config.model_credentials)
     approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
-    agent = WebContextCliAgent(workspace, model_client, config.mcp_servers, logging_config=config.logging, config_file=args.config or default_config_file(), dump_llm_context=config.dump_llm_context, network=admin_config.network, mcp_policy=admin_config.mcp, approval_callback=approval_callback, okf=config.okf, file_context=file_context)
+    agent = WebContextCliAgent(
+        workspace,
+        model_client,
+        config.mcp_servers,
+        logging_config=config.logging,
+        config_file=args.config or default_config_file(),
+        dump_llm_context=config.dump_llm_context,
+        network=admin_config.network,
+        web_providers=admin_config.web.providers,
+        mcp_policy=admin_config.mcp,
+        approval_callback=approval_callback,
+        okf=config.okf,
+        file_context=file_context,
+    )
     print(f"Arbeitsordner: {workspace}")
     print(f"Admin-Policy: {default_admin_config_file()}")
     print("MCP-Server: " + (", ".join(server.name for server in config.mcp_servers) or "(keine)"))
