@@ -171,6 +171,18 @@ def test_loose_ref_validation_is_bounded(tmp_path: Path, monkeypatch: pytest.Mon
         workspace.git_log("repo")
 
 
+def test_unborn_head_returns_empty_histories(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "untracked.txt").write_text("not committed\n", encoding="utf-8")
+
+    workspace = RuntimeGitWorkspace.from_directory(tmp_path)
+
+    assert workspace.git_log("repo") == "[]"
+    assert workspace.git_file_history("repo", "untracked.txt") == "[]"
+
+
 def test_repository_content_filter_remains_rejected(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
