@@ -7,15 +7,6 @@ LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
 @dataclass(frozen=True)
-class WebProviderConfig:
-    """Administrator-defined authenticated web provider."""
-
-    provider_type: str
-    base_url: str
-    token_env: str
-
-
-@dataclass(frozen=True)
 class NetworkConfig:
     """Explicit host allowlists for every network-capable feature."""
 
@@ -23,8 +14,6 @@ class NetworkConfig:
     mcp_allowed_hosts: tuple[str, ...] = LOCAL_HOSTS
     # Web retrieval is disabled until an operator explicitly allowlists hosts.
     web_allowed_hosts: tuple[str, ...] = ()
-    # Authenticated providers are machine-wide policy and never user config.
-    web_providers: tuple[WebProviderConfig, ...] = ()
 
 
 def _normalized_hosts(hosts: tuple[str, ...] | list[str]) -> set[str]:
