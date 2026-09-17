@@ -71,19 +71,27 @@ angegebenen Dateipfad.
 
 ## Vertrauensgrenze für Git-interne Daten
 
-Der lokale Git-Objektspeicher einschließlich von Git konfigurierter Alternates
-wird als Teil der lokalen Repository-Datenquelle behandelt. Er darf – wie auch
-das Git-Binary, geladene Systembibliotheken und andere lokale Laufzeitressourcen –
-Dateien außerhalb des Projekt-Workspaces verwenden. Die Sicherheitszusage lautet
-**nicht**, dass der `git`-Prozess ausschließlich Dateien unterhalb des Workspaces
-öffnet.
+Der lokale Git-Objektspeicher des Repositorys wird als Teil der lokalen
+Repository-Datenquelle behandelt. Historische Tools (`git_log`,
+`git_commit_info`, `git_commit_diff`, `git_commit_files`, `git_file_history`)
+behandeln die von Git gelieferten Commit-/Objektdaten daher als
+Repository-Inhalt.
 
-Insbesondere wird der Object Store nicht vor jedem Tool-Aufruf rekursiv auf jede
-Objektdatei, jeden Hardlink und jeden Alternate geprüft. Diese frühere Strategie
-war bei realen Repositories sehr teuer, ohne eine vollständige TOCTOU-Garantie
-geben zu können. Historische Tools (`git_log`, `git_commit_info`,
-`git_commit_diff`, `git_commit_files`, `git_file_history`) behandeln die von Git
-gelieferten Commit-/Objektdaten daher als Repository-Inhalt.
+**Alternate Object Stores werden bewusst nicht unterstützt.** Sobald unter
+`objects/info/alternates` oder `objects/info/http-alternates` ein entsprechender
+Steuerpfad vorhanden ist, wird das Repository abgewiesen – auch wenn die Datei
+leer ist. Damit werden insbesondere Shared Clones bzw. Repositories, deren
+Objektdaten über Git-Alternates aus einem anderen Object Store bezogen werden,
+nicht vom eingebauten Git-MCP freigegeben. Die Prüfung ist absichtlich eine
+konstante Prüfung weniger Steuerpfade; ein Alternate-Graph wird nicht traversiert.
+
+Der Object Store selbst wird nicht vor jedem Tool-Aufruf rekursiv auf jede
+Objektdatei und jeden Hardlink geprüft. Diese frühere Strategie war bei realen
+Repositories sehr teuer, ohne eine vollständige TOCTOU-Garantie geben zu können.
+Die Sicherheitszusage lautet daher nicht, dass der `git`-Prozess ausschließlich
+Dateien unterhalb des Workspaces öffnet: Git-Binary, Systembibliotheken und andere
+vertrauenswürdige lokale Laufzeitressourcen können weiterhin außerhalb des
+Workspaces liegen.
 
 Diese Grenze ist bewusst: Wer ein lokales Repository bzw. dessen Object Store
 manipulieren kann, kann die Git-Historie beeinflussen. Daraus entsteht aber keine
