@@ -291,15 +291,6 @@ cli-agent --with-os-write
 
 Details: [Workspace OS MCP](docs/mcp-os.md).
 
-Der eingebaute Git-MCP bietet lesende Zugriffe auf geprüfte Repositories im Workspace:
-
-```powershell
-cli-agent --with-git-read
-```
-
-Details zu Tools, unterstützten Repository-Strukturen und Sicherheitsgrenzen:
-[Workspace Git MCP](docs/mcp-git.md).
-
 ## OKF
 
 ```toml
