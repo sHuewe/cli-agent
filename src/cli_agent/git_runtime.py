@@ -216,6 +216,18 @@ class RuntimeGitWorkspace(GitWorkspace):
             values.append(value)
         return values
 
+    @classmethod
+    def _has_head_commit(cls, repo: GitRepository) -> bool:
+        output = cls._git(
+            repo.root,
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "HEAD^{commit}",
+            allowed_returncodes=(0, 1),
+        )
+        return bool(output.strip())
+
     @staticmethod
     def _history_records(output: str) -> list[dict[str, str]]:
         output = output.removesuffix("\n")
@@ -350,7 +362,10 @@ class RuntimeGitWorkspace(GitWorkspace):
 
     def git_log(self, repository: str, max_count: int = 20) -> str:
         repo = self._repo(repository)
-        output = self._git(repo.root, "log", f"--max-count={self._count(max_count)}", "--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00")
+        limit = self._count(max_count)
+        if not self._has_head_commit(repo):
+            return "[]"
+        output = self._git(repo.root, "log", f"--max-count={limit}", "--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00")
         return json.dumps(self._history_records(output), ensure_ascii=False, indent=2)
 
     def git_commit_info(self, repository: str, commit_hash: str) -> str:
@@ -376,7 +391,11 @@ class RuntimeGitWorkspace(GitWorkspace):
 
     def git_file_history(self, repository: str, path: str, max_count: int = 20) -> str:
         repo = self._repo(repository)
-        output = self._git(repo.root, "log", "--follow", f"--max-count={self._count(max_count)}", "--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00", "--", self._repo_path(repo, path))
+        limit = self._count(max_count)
+        repo_path = self._repo_path(repo, path)
+        if not self._has_head_commit(repo):
+            return "[]"
+        output = self._git(repo.root, "log", "--follow", f"--max-count={limit}", "--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00", "--", repo_path)
         result = [{"author": {"name": item["author"], "email": item["email"]}, "date": item["date"], "commit": {"id": item["id"], "message": item["message"]}} for item in self._history_records(output)]
         return json.dumps(result, ensure_ascii=False, indent=2)
 
