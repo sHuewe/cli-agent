@@ -190,6 +190,8 @@ MAX_READ_FILE_BYTES = 1_000_000
 MAX_SEARCH_RESULTS = 200
 MAX_SEARCH_TEXT_LENGTH = 4_096
 MAX_SEARCH_LINE_CHARS = 4_000
+MAX_SEARCH_SCAN_FILES = 10_000
+MAX_SEARCH_SCAN_BYTES = 64_000_000
 MAX_FIND_RESULTS = 500
 
 
@@ -223,8 +225,6 @@ class Workspace:
         if candidate.is_absolute() or windows_path.is_absolute() or windows_path.drive:
             raise WorkspaceError("Der Pfad muss relativ zum Projekt-Workspace sein.")
 
-        # Check the lexical path before resolving it. Resolving first would
-        # normalize ".." away and make the explicit prohibition ineffective.
         if ".." in PurePath(raw_path).parts or ".." in windows_path.parts:
             raise WorkspaceError("Der Pfad darf '..' nicht enthalten.")
 
@@ -232,7 +232,6 @@ class Workspace:
         try:
             resolved.relative_to(self.directory)
         except ValueError as exc:
-            # Also blocks symlinks that point outside the workspace.
             raise WorkspaceError(
                 "Der Pfad verweist außerhalb des Projekt-Workspaces."
             ) from exc
@@ -240,12 +239,7 @@ class Workspace:
         return resolved
 
     def resolve_direct_path(self, path: str, *, must_exist: bool = True) -> Path:
-        """Resolve a path but reject symlink/junction indirection.
-
-        Move/rename semantics must operate on the path the caller named, not on
-        a resolved target. Comparing the lexical absolute path with the
-        canonical path also rejects indirection in parent components.
-        """
+        """Resolve a path but reject symlink/junction indirection."""
         resolved = self.resolve_path(path, must_exist=must_exist)
         lexical = (self.directory / Path(path.strip())).absolute()
         if os.path.normcase(str(lexical)) != os.path.normcase(str(resolved)):
@@ -325,13 +319,7 @@ class Workspace:
         return "\n"
 
     def _safe_walk_files(self, root: Path):
-        """Yield regular files without following filesystem indirection.
-
-        Every traversed child is canonically checked against the workspace.
-        Directory/file symlinks, junction-like paths that resolve elsewhere,
-        sensitive paths, and hardlinked files are skipped. This keeps recursive
-        read operations within the same security boundary as read_file().
-        """
+        """Yield regular files without following filesystem indirection."""
         if root.is_file():
             self._reject_sensitive_read(root)
             self._reject_hardlinked_file(root)
@@ -351,8 +339,6 @@ class Workspace:
                     resolved.relative_to(self.directory)
                 except (OSError, ValueError):
                     continue
-                # Do not recursively traverse symlinks, junctions or other
-                # path indirection even when their target happens to be inside.
                 if resolved != entry.absolute():
                     continue
                 if self._is_sensitive_file(resolved) or not resolved.is_dir():
@@ -448,18 +434,35 @@ class Workspace:
         root = self.resolve_path(path)
         matches: list[dict[str, object]] = []
         truncated = False
+        scan_budget_reached = False
+        scanned_files = 0
+        scanned_bytes = 0
 
         for file_path in self._safe_walk_files(root):
+            if scanned_files >= MAX_SEARCH_SCAN_FILES:
+                truncated = True
+                scan_budget_reached = True
+                break
+            scanned_files += 1
             if not self._is_text_file(file_path):
                 continue
+
+            remaining_bytes = MAX_SEARCH_SCAN_BYTES - scanned_bytes
+            if remaining_bytes <= 0:
+                truncated = True
+                scan_budget_reached = True
+                break
+
             try:
                 with file_path.open("rb") as handle:
-                    data = handle.read(MAX_READ_FILE_BYTES + 1)
+                    data = handle.read(min(MAX_READ_FILE_BYTES, remaining_bytes) + 1)
+                scanned_bytes += len(data)
+                if scanned_bytes > MAX_SEARCH_SCAN_BYTES:
+                    truncated = True
+                    scan_budget_reached = True
+                    break
                 if len(data) > MAX_READ_FILE_BYTES:
                     continue
-                # Decode the complete bounded file before publishing any
-                # matches. A later invalid byte must invalidate the entire
-                # file rather than leave earlier partial results behind.
                 content = data.decode("utf-8")
                 with io.StringIO(content, newline=None) as handle:
                     for line_number, line in enumerate(handle, start=1):
@@ -467,8 +470,6 @@ class Workspace:
                         if match_start < 0:
                             continue
                         line_text = line.rstrip("\r\n")
-                        # Keep the whole literal match, including queries up to
-                        # MAX_SEARCH_TEXT_LENGTH, and centre context around it.
                         width = max(MAX_SEARCH_LINE_CHARS, len(text))
                         text_truncated = len(line_text) > width
                         excerpt_start = 0
@@ -488,8 +489,6 @@ class Workspace:
                             match["text_truncated"] = True
                             match["text_start_column"] = excerpt_start + 1
                         matches.append(match)
-                        # Probe for one additional result so truncated is true
-                        # only when a result was actually omitted.
                         if len(matches) > limit:
                             truncated = True
                             break
@@ -503,11 +502,13 @@ class Workspace:
             if truncated:
                 break
 
-        return json.dumps(
-            {"matches": matches[:limit], "truncated": truncated},
-            ensure_ascii=False,
-            indent=2,
-        )
+        result: dict[str, object] = {
+            "matches": matches[:limit],
+            "truncated": truncated,
+        }
+        if scan_budget_reached:
+            result["truncation_reason"] = "scan_budget"
+        return json.dumps(result, ensure_ascii=False, indent=2)
 
     def find_files(
         self,
@@ -530,8 +531,6 @@ class Workspace:
             ):
                 continue
             matches.append(relative)
-            # Probe for one additional result so exact-limit result sets are
-            # reported as complete.
             if len(matches) > limit:
                 truncated = True
                 break
