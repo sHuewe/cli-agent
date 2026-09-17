@@ -31,9 +31,7 @@ class RuntimeGitWorkspace(GitWorkspace):
         """Run Git with a hard in-memory output bound while the process runs."""
         try:
             with tempfile.TemporaryFile() as errors, subprocess.Popen(
-                cls._git_command(directory, *args),
-                stdout=subprocess.PIPE,
-                stderr=errors,
+                cls._git_command(directory, *args), stdout=subprocess.PIPE, stderr=errors,
                 env=cls._environment(),
             ) as process:
                 timed_out = threading.Event()
@@ -85,8 +83,6 @@ class RuntimeGitWorkspace(GitWorkspace):
             cls._inside(workspace, root, "Repository-Root")
             if root != candidate.absolute():
                 raise GitWorkspaceError("Repository-Pfade dürfen nicht über Symlinks oder Reparse-Points umgeleitet werden.")
-            # git blame reads the worktree mailmap automatically. Validate this
-            # one special worktree metadata file without scanning the worktree.
             if os.path.lexists(candidate / ".mailmap"):
                 cls._metadata_text(workspace, candidate / ".mailmap")
             marker = candidate / ".git"
@@ -167,6 +163,10 @@ class RuntimeGitWorkspace(GitWorkspace):
 
     @staticmethod
     def _history_records(output: str) -> list[dict[str, str]]:
+        # Git's --format appends one LF after each formatted record. The final
+        # LF is framing and follows our terminal NUL; remove exactly that LF,
+        # never user-controlled whitespace inside a field.
+        output = output.removesuffix("\n")
         fields = output.split("\x00")
         if fields and fields[-1] == "":
             fields.pop()
@@ -175,12 +175,55 @@ class RuntimeGitWorkspace(GitWorkspace):
             raise GitWorkspaceError("Git-Historie konnte nicht ausgewertet werden.")
         for offset in range(0, len(fields), 5):
             values = fields[offset : offset + 5]
-            # Pretty-format inserts a line break between commits. It is framing,
-            # not part of the next object id.
             values[0] = values[0].lstrip("\r\n")
             if not values[0]:
                 raise GitWorkspaceError("Git-Historie konnte nicht ausgewertet werden.")
             records.append(dict(zip(("id", "author", "email", "date", "message"), values, strict=True)))
+        return records
+
+    @staticmethod
+    def _decode_git_c_path(value: str) -> str:
+        """Decode Git's C-quoted pathname representation used by blame."""
+        if not (len(value) >= 2 and value[0] == '"' and value[-1] == '"'):
+            return value
+        source = value[1:-1]
+        result = bytearray()
+        index = 0
+        escapes = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, "\\": 92, '"': 34}
+        while index < len(source):
+            char = source[index]
+            if char != "\\":
+                result.extend(char.encode("utf-8"))
+                index += 1
+                continue
+            index += 1
+            if index >= len(source):
+                raise GitWorkspaceError("Git-Dateiname enthält eine ungültige C-Quotierung.")
+            escaped = source[index]
+            if escaped in escapes:
+                result.append(escapes[escaped])
+                index += 1
+                continue
+            if escaped in "01234567":
+                end = index
+                while end < len(source) and end < index + 3 and source[end] in "01234567":
+                    end += 1
+                result.append(int(source[index:end], 8))
+                index = end
+                continue
+            raise GitWorkspaceError("Git-Dateiname enthält eine ungültige C-Quotierung.")
+        try:
+            return bytes(result).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise GitWorkspaceError("Git-Dateinamen müssen gültiges UTF-8 sein.") from exc
+
+    @classmethod
+    def _blame_records(cls, output: str) -> list[dict[str, object]]:
+        records = super()._blame_records(output)
+        for record in records:
+            original = record.get("original_path")
+            if isinstance(original, str):
+                record["original_path"] = cls._decode_git_c_path(original)
         return records
 
     def _repo(self, repository: str) -> GitRepository:
@@ -242,7 +285,16 @@ class RuntimeGitWorkspace(GitWorkspace):
         args = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"]
         if repo_path is not None:
             args += ["--", repo_path]
-        return self._git(repo.root, *args).strip() or "(no unstaged changes)"
+        output = self._git(repo.root, *args)
+        return output.removesuffix("\n") if output else "(no unstaged changes)"
+
+    def git_diff_staged(self, repository: str, path: str | None = None) -> str:
+        repo = self._repo(repository)
+        args = ["diff", "--cached", "--no-ext-diff", "--no-textconv"]
+        if path is not None:
+            args += ["--", self._repo_path(repo, path)]
+        output = self._git(repo.root, *args)
+        return output.removesuffix("\n") if output else "(no staged changes)"
 
     def git_log(self, repository: str, max_count: int = 20) -> str:
         repo = self._repo(repository)
@@ -256,6 +308,19 @@ class RuntimeGitWorkspace(GitWorkspace):
         if len(records) != 1:
             raise GitWorkspaceError("Commit-Metadaten konnten nicht eindeutig ausgewertet werden.")
         return json.dumps(records[0], ensure_ascii=False, indent=2)
+
+    def git_commit_diff(self, repository: str, commit_hash: str, path: str | None = None) -> str:
+        repo = self._repo(repository)
+        commit = self._commit(repo, commit_hash)
+        parents = self._commit_parents(repo, commit)
+        if len(parents) > 1:
+            args = ["diff", "--no-ext-diff", "--no-textconv", parents[0], commit]
+        else:
+            args = ["show", "--format=", "--patch", "--no-ext-diff", "--no-textconv", commit]
+        if path is not None:
+            args += ["--", self._repo_path(repo, path)]
+        output = self._git(repo.root, *args)
+        return output.removesuffix("\n") if output else "(commit has no textual diff for this selection)"
 
     def git_file_history(self, repository: str, path: str, max_count: int = 20) -> str:
         repo = self._repo(repository)
