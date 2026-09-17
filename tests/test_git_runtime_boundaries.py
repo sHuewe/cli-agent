@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from cli_agent import git_runtime
 from cli_agent.git_operations import GitWorkspaceError
 from cli_agent.git_runtime import RuntimeGitWorkspace
 
@@ -78,17 +79,12 @@ def test_content_returning_tools_keep_worktree_alias_validation(tmp_path: Path) 
         pytest.skip("Hardlinks are unavailable on this platform")
 
     workspace = RuntimeGitWorkspace.from_directory(tmp_path)
-    # Status reports metadata only and therefore does not need to read/return
-    # the aliased file content.
     assert workspace.git_status("repo").startswith("## ")
     for operation in (
         lambda: workspace.git_diff("repo", "a.txt"),
         lambda: workspace.git_grep("repo", "outside secret", path="a.txt"),
         lambda: workspace.git_blame("repo", "a.txt", 1, 1),
     ):
-        # On Windows path_entry_is_symlink_or_reparse intentionally classifies
-        # multiply-linked regular files as unsafe filesystem indirection. The
-        # security property is rejection; the platform-specific label differs.
         with pytest.raises(GitWorkspaceError, match="Hardlinks|Symlinks|Reparse"):
             operation()
 
@@ -124,6 +120,55 @@ def test_symlinked_git_control_path_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(GitWorkspaceError, match="Symlinks|Reparse"):
         workspace.git_current_branch("repo")
+
+
+def test_symlinked_loose_ref_is_rejected_after_discovery(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside-ref"
+    _init_repo(repo)
+    workspace = RuntimeGitWorkspace.from_directory(tmp_path)
+    branch = _git(repo, "branch", "--show-current")
+    ref = repo / ".git" / "refs" / "heads" / branch
+    outside.write_text(ref.read_text(encoding="utf-8"), encoding="utf-8")
+    ref.unlink()
+    try:
+        ref.symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlinks are unavailable on this platform")
+
+    with pytest.raises(GitWorkspaceError, match="Git-Refs|Symlinks|Reparse"):
+        workspace.git_log(".")
+
+
+def test_hardlinked_loose_ref_is_rejected_after_discovery(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside-ref"
+    _init_repo(repo)
+    workspace = RuntimeGitWorkspace.from_directory(tmp_path)
+    branch = _git(repo, "branch", "--show-current")
+    ref = repo / ".git" / "refs" / "heads" / branch
+    outside.write_text(ref.read_text(encoding="utf-8"), encoding="utf-8")
+    ref.unlink()
+    try:
+        os.link(outside, ref)
+    except OSError:
+        pytest.skip("Hardlinks are unavailable on this platform")
+
+    with pytest.raises(GitWorkspaceError, match="Git-Refs|Hardlinks|Symlinks|Reparse"):
+        workspace.git_log(".")
+
+
+def test_loose_ref_validation_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    workspace = RuntimeGitWorkspace.from_directory(tmp_path)
+    refs = repo / ".git" / "refs" / "heads"
+    (refs / "extra-one").write_text(_git(repo, "rev-parse", "HEAD") + "\n", encoding="utf-8")
+    (refs / "extra-two").write_text(_git(repo, "rev-parse", "HEAD") + "\n", encoding="utf-8")
+    monkeypatch.setattr(git_runtime, "MAX_REF_ENTRIES", 1)
+
+    with pytest.raises(GitWorkspaceError, match="Zu viele lose Git-Refs"):
+        workspace.git_log(".")
 
 
 def test_repository_content_filter_remains_rejected(tmp_path: Path) -> None:
