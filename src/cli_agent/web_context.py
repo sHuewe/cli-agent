@@ -143,6 +143,40 @@ def _provider_matches(url: str, provider: WebProviderConfig) -> bool:
     return requested_path == base_path or requested_path.startswith(base_path + "/")
 
 
+def _validate_confluence_credential_url(
+    url: str,
+    *,
+    provider: WebProviderConfig,
+    allowed_hosts: tuple[str, ...] | list[str],
+) -> str:
+    """Validate the exact URL before attaching a Confluence PAT.
+
+    Authenticated provider paths must be unambiguous to both the client and any
+    reverse proxy/server.  Reject traversal, backslashes and percent-encoded path
+    octets rather than trying to guess how another HTTP component will normalize
+    them.  Query encoding remains allowed and is used by the Confluence REST API.
+    """
+
+    validated = _validate_web_url(url, allowed_hosts=allowed_hosts)
+    if not _provider_matches(validated, provider):
+        raise ValueError(
+            "Confluence-REST-Request würde den administrativ konfigurierten "
+            "Provider-Namensraum verlassen."
+        )
+
+    path = urlsplit(validated).path or "/"
+    if "\\" in path or "%" in path:
+        raise ValueError(
+            "Confluence-REST-Pfad ist für einen credential-behafteten Request "
+            "nicht eindeutig kanonisch."
+        )
+    if any(segment in {".", ".."} for segment in path.split("/")):
+        raise ValueError(
+            "Confluence-REST-Pfad enthält nicht erlaubte Dot-Segmente."
+        )
+    return validated
+
+
 def _matching_provider(
     url: str,
     providers: tuple[WebProviderConfig, ...] | list[WebProviderConfig],
@@ -231,64 +265,47 @@ async def _confluence_get_json(
     token: str,
 ) -> dict[str, object]:
     timeout = httpx.Timeout(WEB_REQUEST_TIMEOUT_SECONDS)
+    request_url = _validate_confluence_credential_url(
+        url,
+        provider=provider,
+        allowed_hosts=allowed_hosts,
+    )
 
     async with httpx.AsyncClient(
         follow_redirects=False,
-        max_redirects=MAX_WEB_REDIRECTS,
         timeout=timeout,
         trust_env=False,
     ) as client:
-        current_url = url
-        for redirect_count in range(MAX_WEB_REDIRECTS + 1):
-            current_url = _validate_web_url(current_url, allowed_hosts=allowed_hosts)
-            if not _provider_matches(current_url, provider):
+        async with client.stream(
+            "GET",
+            request_url,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "cli-agent/1.0",
+            },
+        ) as response:
+            if response.is_redirect:
                 raise ValueError(
-                    "Confluence-REST-Request würde den administrativ konfigurierten "
-                    "Provider-Namensraum verlassen."
+                    "Confluence-REST-Redirect wurde aus Credential-Sicherheitsgründen "
+                    "abgelehnt; der PAT wird nicht an ein Redirect-Ziel weitergegeben."
                 )
 
-            async with client.stream(
-                "GET",
-                current_url,
-                headers={
-                    "Accept": "application/json",
-                    "Authorization": f"Bearer {token}",
-                    "User-Agent": "cli-agent/1.0",
-                },
-            ) as response:
-                if response.is_redirect:
-                    location = response.headers.get("location")
-                    if not location:
-                        raise ValueError("Confluence-REST-Redirect enthält kein Ziel.")
-                    if redirect_count >= MAX_WEB_REDIRECTS:
-                        raise ValueError("Zu viele Redirects im Confluence-REST-Abruf.")
-                    redirect_url = urljoin(current_url, location)
-                    if not _provider_matches(redirect_url, provider):
-                        raise ValueError(
-                            "Confluence-REST-Redirect außerhalb des konfigurierten "
-                            "Provider-Namensraums wurde abgelehnt; der PAT wird nicht "
-                            "weitergegeben."
-                        )
-                    current_url = redirect_url
-                    continue
-
-                response.raise_for_status()
-                media_type = response.headers.get("content-type", "").split(";", 1)[0]
-                if media_type.strip().lower() != "application/json":
-                    raise ValueError(
-                        "Confluence REST API lieferte keinen JSON-Inhalt; erhalten: "
-                        f"{media_type or '(kein Content-Type)'}."
-                    )
-                body = await _read_response_bytes(response)
-                try:
-                    parsed = json.loads(body.decode(response.encoding or "utf-8", errors="strict"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ValueError("Confluence REST API lieferte ungültiges JSON.") from exc
-                if not isinstance(parsed, dict):
-                    raise ValueError("Confluence REST API lieferte kein JSON-Objekt.")
-                return parsed
-
-    raise ValueError("Confluence REST API konnte nicht geladen werden.")
+            response.raise_for_status()
+            media_type = response.headers.get("content-type", "").split(";", 1)[0]
+            if media_type.strip().lower() != "application/json":
+                raise ValueError(
+                    "Confluence REST API lieferte keinen JSON-Inhalt; erhalten: "
+                    f"{media_type or '(kein Content-Type)'}."
+                )
+            body = await _read_response_bytes(response)
+            try:
+                parsed = json.loads(body.decode(response.encoding or "utf-8", errors="strict"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("Confluence REST API lieferte ungültiges JSON.") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError("Confluence REST API lieferte kein JSON-Objekt.")
+            return parsed
 
 
 def _confluence_document(payload: dict[str, object]) -> tuple[str | None, str]:
