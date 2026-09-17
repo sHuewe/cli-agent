@@ -108,13 +108,13 @@ class GitWorkspace:
                 workspace, candidate, expected_git_dir, expected_common_dir
             )
             root = Path(
-                cls._git(candidate, "rev-parse", "--show-toplevel").strip()
+                cls._git(candidate, "rev-parse", "--show-toplevel").removesuffix("\n")
             ).resolve(strict=True)
             git_dir = Path(
-                cls._git(candidate, "rev-parse", "--absolute-git-dir").strip()
+                cls._git(candidate, "rev-parse", "--absolute-git-dir").removesuffix("\n")
             ).resolve(strict=True)
             common_raw = Path(
-                cls._git(candidate, "rev-parse", "--git-common-dir").strip()
+                cls._git(candidate, "rev-parse", "--git-common-dir").removesuffix("\n")
             )
             common_dir = (
                 common_raw.resolve(strict=True)
@@ -141,7 +141,7 @@ class GitWorkspace:
             raise GitWorkspaceError("Git-Repositorypfade haben sich während der Prüfung geändert.")
 
         objects_raw = Path(
-            cls._git(candidate, "rev-parse", "--git-path", "objects").strip()
+            cls._git(candidate, "rev-parse", "--git-path", "objects").removesuffix("\n")
         )
         try:
             objects_dir = (
@@ -495,7 +495,12 @@ class GitWorkspace:
                             value = bytes(pending[:end])
                             del pending[:end + 1]
                             if value:
-                                yield value.decode("utf-8", errors="replace")
+                                try:
+                                    yield value.decode("utf-8")
+                                except UnicodeDecodeError as exc:
+                                    raise GitWorkspaceError(
+                                        "Git-Dateinamen müssen gültiges UTF-8 sein."
+                                    ) from exc
                         if len(pending) > MAX_OUTPUT:
                             raise GitWorkspaceError("Git-Dateiname ist zu groß.")
                     process.wait()
@@ -534,16 +539,22 @@ class GitWorkspace:
             # Discovery grants access to a workspace-relative location, not to
             # cached metadata paths. Gitfiles, common dirs and object stores can
             # all change after startup; probe and validate them again.
-            return self._probe(self.directory, self.directory / normalized)
+            refreshed = self._probe(self.directory, self.directory / normalized)
+            if refreshed.relative_path != normalized:
+                raise GitWorkspaceError(
+                    "Repository-Pfade dürfen nicht über Symlinks oder "
+                    "Reparse-Points umgeleitet werden."
+                )
+            return refreshed
         raise GitWorkspaceError(
             f"Unbekanntes oder nicht freigegebenes Git-Repository: {repository!r}"
         )
 
     @staticmethod
     def _relative(path: str, *, allow_dot: bool = False) -> PurePath:
-        if not isinstance(path, str) or not path.strip():
+        if not isinstance(path, str) or path == "":
             raise GitWorkspaceError("Der Pfad darf nicht leer sein.")
-        raw = path.strip()
+        raw = path
         native, windows = Path(raw), PureWindowsPath(raw)
         pure = PurePath(raw)
         if native.is_absolute() or windows.is_absolute() or windows.drive:
@@ -582,21 +593,43 @@ class GitWorkspace:
                 pure = self._relative(relative)
                 entry = repo.root / Path(pure.as_posix())
                 try:
+                    current = repo.root
+                    for component in pure.parts[:-1]:
+                        current /= component
+                        if path_entry_is_symlink_or_reparse(current):
+                            raise GitWorkspaceError(
+                                "Symlinks oder Reparse-Points in getrackten "
+                                "Working-Tree-Pfaden sind nicht erlaubt."
+                            )
+                    status = os.lstat(entry)
+                    attributes = int(getattr(status, "st_file_attributes", 0))
+                    reparse_flag = int(
+                        getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                    )
+                    if stat.S_ISLNK(status.st_mode) or attributes & reparse_flag:
+                        raise GitWorkspaceError(
+                            "Symlinks oder Reparse-Points in getrackten "
+                            "Working-Tree-Pfaden sind nicht erlaubt."
+                        )
+                    if not (
+                        stat.S_ISREG(status.st_mode)
+                        or stat.S_ISDIR(status.st_mode)
+                    ):
+                        raise GitWorkspaceError(
+                            "Getrackte Working-Tree-Pfade müssen reguläre "
+                            "Dateien oder Verzeichnisse sein."
+                        )
                     resolved = entry.resolve(strict=False)
                     resolved.relative_to(repo.root)
                     resolved.relative_to(self.directory)
-                except (OSError, ValueError) as exc:
-                    raise GitWorkspaceError(
-                        "Ein getrackter Working-Tree-Pfad verweist außerhalb des Repositorys oder Workspaces."
-                    ) from exc
-                try:
-                    status = os.lstat(entry)
+                except GitWorkspaceError:
+                    raise
                 except FileNotFoundError:
                     # Tracked files may be deleted from the working tree.
                     continue
-                except OSError as exc:
+                except (OSError, ValueError) as exc:
                     raise GitWorkspaceError(
-                        "Working-Tree-Dateimetadaten konnten nicht sicher geprüft werden."
+                        "Ein getrackter Working-Tree-Pfad verweist außerhalb des Repositorys oder Workspaces."
                     ) from exc
                 if stat.S_ISREG(status.st_mode) and status.st_nlink > 1:
                     raise GitWorkspaceError(

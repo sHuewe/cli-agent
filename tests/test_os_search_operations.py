@@ -267,3 +267,17 @@ def test_search_text_short_line_returns_first_match_column(tmp_path: Path) -> No
         "path": "short.txt", "line": 1, "column": 7,
         "text": "first needle, second needle",
     }]
+
+
+def test_search_text_discards_partial_matches_from_invalid_utf8_file(
+    tmp_path: Path,
+) -> None:
+    # Put the invalid byte beyond the decoder's first buffered read so the
+    # valid-looking first line must not escape before the later error occurs.
+    (tmp_path / "invalid.txt").write_bytes(
+        b"needle must be discarded\n" + b"x" * 9_000 + b"\xff"
+    )
+
+    result = json.loads(_workspace(tmp_path).search_text("invalid.txt", "needle"))
+
+    assert result == {"matches": [], "truncated": False}

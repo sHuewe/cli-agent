@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import fnmatch
+import io
 import json
 import os
 import shutil
@@ -452,9 +453,15 @@ class Workspace:
             if not self._is_text_file(file_path):
                 continue
             try:
-                if file_path.stat().st_size > MAX_READ_FILE_BYTES:
+                with file_path.open("rb") as handle:
+                    data = handle.read(MAX_READ_FILE_BYTES + 1)
+                if len(data) > MAX_READ_FILE_BYTES:
                     continue
-                with file_path.open("r", encoding="utf-8") as handle:
+                # Decode the complete bounded file before publishing any
+                # matches. A later invalid byte must invalidate the entire
+                # file rather than leave earlier partial results behind.
+                content = data.decode("utf-8")
+                with io.StringIO(content, newline=None) as handle:
                     for line_number, line in enumerate(handle, start=1):
                         match_start = line.find(text)
                         if match_start < 0:
