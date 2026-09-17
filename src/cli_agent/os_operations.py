@@ -225,6 +225,8 @@ class Workspace:
         if candidate.is_absolute() or windows_path.is_absolute() or windows_path.drive:
             raise WorkspaceError("Der Pfad muss relativ zum Projekt-Workspace sein.")
 
+        # Check the lexical path before resolving it. Resolving first would
+        # normalize ".." away and make the explicit prohibition ineffective.
         if ".." in PurePath(raw_path).parts or ".." in windows_path.parts:
             raise WorkspaceError("Der Pfad darf '..' nicht enthalten.")
 
@@ -232,6 +234,7 @@ class Workspace:
         try:
             resolved.relative_to(self.directory)
         except ValueError as exc:
+            # Also blocks symlinks that point outside the workspace.
             raise WorkspaceError(
                 "Der Pfad verweist außerhalb des Projekt-Workspaces."
             ) from exc
@@ -239,7 +242,12 @@ class Workspace:
         return resolved
 
     def resolve_direct_path(self, path: str, *, must_exist: bool = True) -> Path:
-        """Resolve a path but reject symlink/junction indirection."""
+        """Resolve a path but reject symlink/junction indirection.
+
+        Move/rename semantics must operate on the path the caller named, not on
+        a resolved target. Comparing the lexical absolute path with the
+        canonical path also rejects indirection in parent components.
+        """
         resolved = self.resolve_path(path, must_exist=must_exist)
         lexical = (self.directory / Path(path.strip())).absolute()
         if os.path.normcase(str(lexical)) != os.path.normcase(str(resolved)):
@@ -319,7 +327,13 @@ class Workspace:
         return "\n"
 
     def _safe_walk_files(self, root: Path):
-        """Yield regular files without following filesystem indirection."""
+        """Yield regular files without following filesystem indirection.
+
+        Every traversed child is canonically checked against the workspace.
+        Directory/file symlinks, junction-like paths that resolve elsewhere,
+        sensitive paths, and hardlinked files are skipped. This keeps recursive
+        read operations within the same security boundary as read_file().
+        """
         if root.is_file():
             self._reject_sensitive_read(root)
             self._reject_hardlinked_file(root)
@@ -339,6 +353,8 @@ class Workspace:
                     resolved.relative_to(self.directory)
                 except (OSError, ValueError):
                     continue
+                # Do not recursively traverse symlinks, junctions or other
+                # path indirection even when their target happens to be inside.
                 if resolved != entry.absolute():
                     continue
                 if self._is_sensitive_file(resolved) or not resolved.is_dir():
@@ -463,6 +479,9 @@ class Workspace:
                     break
                 if len(data) > MAX_READ_FILE_BYTES:
                     continue
+                # Decode the complete bounded file before publishing any
+                # matches. A later invalid byte must invalidate the entire
+                # file rather than leave earlier partial results behind.
                 content = data.decode("utf-8")
                 with io.StringIO(content, newline=None) as handle:
                     for line_number, line in enumerate(handle, start=1):
@@ -470,6 +489,8 @@ class Workspace:
                         if match_start < 0:
                             continue
                         line_text = line.rstrip("\r\n")
+                        # Keep the whole literal match, including queries up to
+                        # MAX_SEARCH_TEXT_LENGTH, and centre context around it.
                         width = max(MAX_SEARCH_LINE_CHARS, len(text))
                         text_truncated = len(line_text) > width
                         excerpt_start = 0
@@ -489,6 +510,8 @@ class Workspace:
                             match["text_truncated"] = True
                             match["text_start_column"] = excerpt_start + 1
                         matches.append(match)
+                        # Probe for one additional result so truncated is true
+                        # only when a result was actually omitted.
                         if len(matches) > limit:
                             truncated = True
                             break
@@ -531,6 +554,8 @@ class Workspace:
             ):
                 continue
             matches.append(relative)
+            # Probe for one additional result so exact-limit result sets are
+            # reported as complete.
             if len(matches) > limit:
                 truncated = True
                 break
