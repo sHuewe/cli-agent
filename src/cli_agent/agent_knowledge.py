@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import json
 import secrets
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
-
-from mcp import ClientSession
 
 from .agent_knowledge_support import (  # noqa: F401
     EXPECTED_KNOWLEDGE_TOOLS,
@@ -20,7 +17,12 @@ from .agent_knowledge_support import (  # noqa: F401
     _normalize_knowledge_path,
     tool_result_text,
 )
-from .config import McpServerConfig
+from .agent_types import (
+    ApprovalCallback,
+    ServerConfig,
+    ToolRoute,
+    _RuntimeMcpServerConfig,
+)
 
 DEFAULT_OKF_MAX_TOOL_CALLS = 200
 DEFAULT_OKF_MAX_CONCEPT_READS = 180
@@ -49,46 +51,6 @@ class _OkfOptions:
     max_index_entries: int = 200
     compress_min_chars: int = 12_000
     required: bool = True
-
-
-@dataclass(frozen=True)
-class _RuntimeMcpServerConfig:
-    """Minimal MCP config used only for the internal OKF stdio process."""
-
-    name: str
-    transport: str = "stdio"
-    command: str | None = None
-    args: tuple[str, ...] = ()
-    env: dict[str, str] = field(default_factory=dict)
-    url: str | None = None
-    headers: dict[str, str] = field(default_factory=dict)
-    compress_result: bool = False
-    compress_min_chars: int = 12_000
-    built_in: bool = True
-
-
-ServerConfig = McpServerConfig | _RuntimeMcpServerConfig
-ToolRoute = tuple[ClientSession, str, ServerConfig]
-ApprovalCallback = Callable[[str, dict[str, Any]], Awaitable[bool | str]]
-
-WRITE_TOOLS = frozenset(
-    {
-        "write_file",
-        "delete_file",
-        "make_directory",
-        "copy_file",
-        "move_file",
-    }
-)
-COMPOSE_MUTATING_TOOLS = frozenset(
-    {
-        "compose_up_all",
-        "compose_up",
-        "compose_down",
-        "compose_restart",
-    }
-)
-EXECUTING_TOOLS = frozenset({"validate_python_project"})
 
 
 @dataclass
