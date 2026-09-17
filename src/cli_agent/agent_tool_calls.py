@@ -7,7 +7,6 @@ from typing import Any
 
 from .agent_knowledge import (
     KnowledgeCallKey,
-    ToolRoute,
     _KnowledgeRunState,
     _knowledge_allowed_calls,
     _knowledge_call_key,
@@ -17,6 +16,7 @@ from .agent_knowledge import (
     _normalize_knowledge_path,
     tool_result_text,
 )
+from .agent_types import ToolRoute
 from .mcp_limits import enforce_mcp_tool_result_limit, validate_mcp_tool_arguments
 
 logger = logging.getLogger("cli_agent.agent_tool_calls")
