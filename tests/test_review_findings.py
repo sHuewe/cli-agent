@@ -175,7 +175,10 @@ def test_git_paths_preserve_edge_whitespace(
         pytest.skip("Windows normalizes trailing spaces in filesystem paths")
     repo = tmp_path / repository_name
     _init_repo(repo)
-    (repo / filename).write_text("literal whitespace needle\n", encoding="utf-8")
+    # Keep the fixture byte-identical across platforms. Path.write_text() uses
+    # the platform newline convention on Windows and would introduce CRLF,
+    # while this test is about preserving path whitespace rather than line endings.
+    (repo / filename).write_bytes(b"literal whitespace needle\n")
     _git(repo, "add", "--", filename)
     _git(repo, "commit", "-m", "add whitespace path")
     workspace = GitWorkspace.from_directory(tmp_path)
