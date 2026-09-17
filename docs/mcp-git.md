@@ -30,54 +30,86 @@ Zeilentrennzeichen innerhalb des Quelltexts bleiben in der JSON-Ausgabe erhalten
 Explizite ungültige Bereiche, fehlende Dateien und ungetrackte Dateien bleiben
 Fehler.
 
-`git_grep` liest Dateilisten fortlaufend und sammelt höchstens `max_results + 1`
-passende Dateinamen. Auch bei sehr vielen passenden Dateien bleiben das globale
-Trefferlimit und `truncated` nutzbar. Die Sicherheitsprüfung läuft davor über
-alle ausgewählten getrackten Pfade; ein kleineres Trefferlimit überspringt keine
-Pfadprüfung. Früh beendete Dateisuchen stoppen den Git-Prozess; für die gesamte
-Lebensdauer eines gestreamten Git-Aufrufs gilt weiterhin das 20-Sekunden-Limit.
+## Security-Modell und bewusst gesetzte Grenzen
 
-## Repository-Prüfung
+Der Git-MCP ist kein Dateisystem-Sandboxer für den Git-Prozess. Seine
+Sicherheitsgrenze ist bewusst enger und entspricht dem Zweck der angebotenen
+Read-only-Tools:
 
-Vor jedem Git-Toolzugriff werden Root, Git-Verzeichnis, Common-Verzeichnis,
-Objektdatenbanken und lokale Konfiguration neu geprüft. Ein nach dem Serverstart
-ausgetauschter `.git`-Eintrag kann dadurch keine frühere Freigabe übernehmen.
-Gitfiles und verknüpfte Worktrees werden unterstützt, wenn die benötigten
-Verzeichnisse innerhalb des Workspaces liegen.
+1. Modellkontrollierte Repository- und Dateipfade dürfen den festen Workspace
+   nicht verlassen oder über Symlinks/Junctions/Reparse-Points umgeleitet
+   werden.
+2. Repository-kontrollierte Daten dürfen keine zusätzlichen Prozess- oder
+   Netzwerkfähigkeiten aktivieren. Git läuft deshalb non-interaktiv mit
+   deaktivierten Protokollen/lazy fetch, ohne geerbte `GIT_*`-Variablen,
+   FSMonitor, Pager, Signaturprüfung, externe Diffs oder Textkonverter.
+   Repository-lokale Content-Filter und Config-Includes werden abgewiesen.
+3. Tools, die Working-Tree-Inhalte an das Modell zurückgeben (`git_diff`,
+   `git_grep`, `git_blame`), prüfen die betroffenen getrackten Pfade vor dem
+   Lesen auf Symlink-/Reparse-Indirection, Workspace-/Repository-Escape,
+   Spezialdateien und Hardlink-Aliase. `git_status` gibt dagegen nur
+   Namen/Zustände aus und führt deshalb keinen vollständigen Scan aller
+   getrackten Dateien aus.
 
-Auch einzelne Einträge innerhalb der Git-Metadaten werden geprüft: Symlinks,
-Windows-Reparse-Points, mehrfach hartverlinkte Dateien und Spezialdateien werden
-abgewiesen. Das betrifft beispielsweise Index, Referenzen und Objektdateien.
-Lokale Klone mit hartverlinkten Objekten benötigen daher einen eigenständigen
-Objektspeicher, etwa durch einen Klon mit `git clone --no-hardlinks`.
+### Vertrauensgrenze für Git-interne Daten
 
-Alternative Objektdatenbanken werden einschließlich ihrer weiteren Alternates
-geprüft. Alle Ziele müssen im Workspace liegen. Zyklen werden erkannt;
-HTTP-Alternates werden abgewiesen. Die Prüfung akzeptiert höchstens 64
-Objektverzeichnisse; C-quotierte Alternate-Pfade werden nicht unterstützt. Pro
-geprüftem Metadatenbaum sind 100.000 Einträge erlaubt. Git-Steuerdateien
-wie Gitfiles und Alternates-Dateien sind auf 500.000 Bytes begrenzt. Die erneute
-Metadatenprüfung verursacht insbesondere bei vielen losen Git-Objekten Aufwand
-pro Toolaufruf.
+Der lokale Git-Objektspeicher einschließlich von Git konfigurierter Alternates
+wird als Teil der lokalen Repository-Datenquelle behandelt. Er darf – wie auch
+das Git-Binary, geladene Systembibliotheken und andere lokale Laufzeitressourcen –
+Dateien außerhalb des Projekt-Workspaces verwenden. Die Sicherheitszusage lautet
+**nicht**, dass der `git`-Prozess ausschließlich Dateien unterhalb des Workspaces
+öffnet.
 
-Repository-lokale Config-Includes, ausführbare Content-Filter und
-`blame.ignoreRevsFile` werden abgewiesen. Git liest konfigurierte Ignore-Dateien
-bereits vor einem CLI-Reset; ihre Inhalte könnten sonst über Fehlermeldungen
-sichtbar werden. Externe Textkonverter für Blame und Diffs, externe Diff-Programme,
-automatische Signaturprüfung, FSMonitor, globale Konfiguration und automatische
-Netzwerktransporte sind deaktiviert. Git-Ausgaben werden als Bytes gelesen und
-erst anschließend ohne Zeilenumbruchumwandlung als UTF-8 dekodiert.
+Insbesondere wird der Object Store nicht vor jedem Tool-Aufruf rekursiv auf jede
+Objektdatei, jeden Hardlink und jeden Alternate geprüft. Diese frühere Strategie
+war bei realen Repositories sehr teuer, ohne eine vollständige TOCTOU-Garantie
+geben zu können. Historische Tools (`git_log`, `git_commit_info`,
+`git_commit_diff`, `git_commit_files`, `git_file_history`) behandeln die von Git
+gelieferten Commit-/Objektdaten daher als Repository-Inhalt.
 
-Submodule werden nicht automatisch rekursiv durchsucht. Status und ungestagter
-Diff ignorieren Änderungen innerhalb von Submodulen. Ein Submodul kann über
-seinen eigenen Repository-Pfad angesprochen werden, sofern es separat entdeckt
-und geprüft wurde. Historische Submoduländerungen werden ohne rekursiven Diff
-angezeigt.
+Diese Grenze ist bewusst: Wer ein lokales Repository bzw. dessen Object Store
+manipulieren kann, kann die Git-Historie beeinflussen. Daraus entsteht aber keine
+zusätzliche Prozess- oder Netzwerkfähigkeit des MCP-Servers. Repository-Inhalte
+und Commit-Nachrichten bleiben untrusted Daten für das LLM.
 
-## Geltungsbereich
+### Repository-Steuerpfade
 
-Die Prüfungen schützen die Workspace-Grenze bei den angebotenen Git-Operationen.
-Sie sind keine Betriebssystem-Sandbox gegen einen lokalen Prozess, der Dateien
-gezielt zwischen Prüfung und Git-Zugriff austauscht. Repository-Inhalte und
-Commit-Nachrichten bleiben untrusted Daten. Bereits im Repository versionierte
-Secrets werden durch diesen Server nicht automatisch erkannt oder redigiert.
+Bei Discovery und erneut vor Tool-Aufrufen werden die kleine Menge der
+sicherheitsrelevanten Repository-Pfade erneut geprüft: Repository-Root,
+`.git`/Gitfile, `commondir`, Git-/Common-Verzeichnis sowie zentrale Steuerpfade
+wie `HEAD`, `index`, `packed-refs`, `refs`, `config` und der Object-Store-Root.
+Symlinks/Reparse-Points an diesen Grenzen werden abgewiesen. Dadurch kann ein
+nach Discovery ausgetauschtes Repository nicht die frühere Freigabe übernehmen,
+ohne dass für jeden Aufruf der gesamte `.git/objects`-Baum traversiert wird.
+
+Gitfiles und verknüpfte Worktrees werden unterstützt, wenn ihre Git- und
+Common-Verzeichnisse innerhalb des Workspaces liegen. Submodule werden nicht
+automatisch rekursiv durchsucht. Status und ungestagter Diff ignorieren
+Submodule; ein separat entdecktes Submodule-Repository kann über seinen eigenen
+Repository-Pfad angesprochen werden.
+
+## Working-Tree-Inhalte
+
+`git_grep` sucht ausschließlich getrackte Dateien und verwendet keine
+`--no-index`-Suche. Vor inhaltlichen Working-Tree-Zugriffen werden die von Git
+aufgelisteten getrackten Pfade validiert. Auch interne Symlink-Eltern werden
+abgewiesen, weil sie sonst einen getrackten Namen auf andere Inhalte umlenken
+könnten. Hardlinks werden für diese inhaltlichen Reads ebenfalls abgewiesen.
+
+`git_diff` und `git_blame` verwenden zusätzlich `--no-ext-diff` bzw.
+`--no-textconv`. Ausgaben und Ergebniszahlen sind begrenzt; Git-Subprozesse haben
+ein Zeitlimit von 20 Sekunden. NUL-delimitierte Dateilisten werden gestreamt und
+UTF-8-validiert.
+
+## Geltungsbereich / Restrisiken
+
+Die Prüfungen sind keine Betriebssystem-Sandbox gegen einen gleichzeitig
+laufenden lokalen Prozess, der Dateien gezielt zwischen Prüfung und Git-Zugriff
+austauscht (TOCTOU). Das ist eine dokumentierte Trust-Grenze. Eine stärkere
+Garantie würde Prozess-/Dateisystem-Sandboxing erfordern und ist nicht Ziel des
+eingebauten Git-MCP.
+
+Bereits im Repository oder in dessen Historie vorhandene Secrets werden nicht
+automatisch erkannt oder redigiert. Der Benutzer entscheidet mit
+`--with-git-read`, dass die lokalen Repository-Inhalte als LLM-Kontext verwendet
+werden dürfen.
