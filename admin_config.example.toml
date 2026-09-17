@@ -7,6 +7,19 @@ model_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 mcp_allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 web_allowed_hosts = []
 
+# Authenticated web providers are configured exclusively in this machine-wide
+# policy. The secret itself is never stored here: token_env names the process
+# environment variable that contains the user's Confluence Personal Access Token.
+# The provider host must also be present in network.web_allowed_hosts.
+# base_url is an HTTPS origin plus optional Confluence context path (for example
+# /wiki). URLs below this namespace are routed through the Confluence REST API;
+# if the REST request fails, cli-agent does not fall back to unauthenticated HTML.
+#
+# [[web.providers]]
+# type = "confluence"
+# base_url = "https://confluence.intern.firma.de/wiki"
+# token_env = "CLI_AGENT_CONFLUENCE_PAT"
+
 # Optional remote model credentials are bound to provider + host. This section
 # is only needed when the user config actually sets model.api_key_env.
 # [[model.credentials]]
