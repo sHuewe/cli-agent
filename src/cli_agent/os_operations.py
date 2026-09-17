@@ -456,19 +456,30 @@ class Workspace:
                     continue
                 with file_path.open("r", encoding="utf-8") as handle:
                     for line_number, line in enumerate(handle, start=1):
-                        if text not in line:
+                        match_start = line.find(text)
+                        if match_start < 0:
                             continue
                         line_text = line.rstrip("\r\n")
-                        text_truncated = len(line_text) > MAX_SEARCH_LINE_CHARS
+                        # Keep the whole literal match, including queries up to
+                        # MAX_SEARCH_TEXT_LENGTH, and centre context around it.
+                        width = max(MAX_SEARCH_LINE_CHARS, len(text))
+                        text_truncated = len(line_text) > width
+                        excerpt_start = 0
                         if text_truncated:
-                            line_text = line_text[:MAX_SEARCH_LINE_CHARS]
+                            excerpt_start = min(
+                                max(0, match_start - (width - len(text)) // 2),
+                                len(line_text) - width,
+                            )
+                            line_text = line_text[excerpt_start:excerpt_start + width]
                         match: dict[str, object] = {
                             "path": file_path.relative_to(self.directory).as_posix(),
                             "line": line_number,
+                            "column": match_start + 1,
                             "text": line_text,
                         }
                         if text_truncated:
                             match["text_truncated"] = True
+                            match["text_start_column"] = excerpt_start + 1
                         matches.append(match)
                         # Probe for one additional result so truncated is true
                         # only when a result was actually omitted.

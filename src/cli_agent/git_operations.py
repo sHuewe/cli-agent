@@ -6,7 +6,12 @@ import os
 import re
 import stat
 import subprocess
+import tempfile
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path, PurePath, PureWindowsPath
 
 from .filesystem_security import path_entry_is_symlink_or_reparse
@@ -19,6 +24,7 @@ MAX_GREP_TEXT_LENGTH = 4_096
 MAX_BLAME_LINES = 200
 MAX_OBJECT_DIRECTORIES = 64
 MAX_METADATA_ENTRIES = 100_000
+GIT_TIMEOUT_SECONDS = 20
 
 
 class GitWorkspaceError(RuntimeError):
@@ -370,14 +376,9 @@ class GitWorkspace:
         )
         return env
 
-    @classmethod
-    def _git(
-        cls,
-        directory: Path,
-        *args: str,
-        allowed_returncodes: tuple[int, ...] = (0,),
-    ) -> str:
-        command = [
+    @staticmethod
+    def _git_command(directory: Path, *args: str) -> list[str]:
+        return [
             "git",
             "-C",
             str(directory),
@@ -404,11 +405,19 @@ class GitWorkspace:
             f"core.excludesFile={os.devnull}",
             *args,
         ]
+
+    @classmethod
+    def _git(
+        cls,
+        directory: Path,
+        *args: str,
+        allowed_returncodes: tuple[int, ...] = (0,),
+    ) -> str:
         try:
             result = subprocess.run(
-                command,
+                cls._git_command(directory, *args),
                 capture_output=True,
-                timeout=20,
+                timeout=GIT_TIMEOUT_SECONDS,
                 env=cls._environment(),
                 check=False,
             )
@@ -436,6 +445,85 @@ class GitWorkspace:
         # Text-mode subprocess pipes translate CR and CRLF into LF, corrupting
         # both source text and filenames in Git's NUL-delimited output.
         return result.stdout.decode("utf-8", errors="replace")
+
+    @classmethod
+    @contextmanager
+    def _git_null_records(
+        cls,
+        directory: Path,
+        *args: str,
+        allowed_returncodes: tuple[int, ...] = (0,),
+    ) -> Iterator[Iterator[str]]:
+        """Stream bounded NUL records and stop Git when the consumer stops.
+
+        Filename lists may exceed the response limit in total. Each record is
+        still bounded, and decoding happens only after a complete record. A
+        watchdog also covers blocked pipe reads on Windows. Stderr uses a
+        temporary file so an unread stderr pipe cannot deadlock stdout.
+        """
+        try:
+            with tempfile.TemporaryFile() as errors, subprocess.Popen(
+                cls._git_command(directory, *args),
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                env=cls._environment(),
+            ) as process:
+                timed_out = threading.Event()
+
+                def expire() -> None:
+                    timed_out.set()
+                    if process.poll() is None:
+                        process.kill()
+
+                timer = threading.Timer(GIT_TIMEOUT_SECONDS, expire)
+                timer.daemon = True
+                timer.start()
+
+                def records() -> Iterator[str]:
+                    assert process.stdout is not None
+                    pending = bytearray()
+                    while True:
+                        chunk = process.stdout.read1(65_536)
+                        if timed_out.is_set():
+                            raise GitWorkspaceError("Git-Aufruf hat das Zeitlimit überschritten.")
+                        if not chunk:
+                            break
+                        pending.extend(chunk)
+                        while (end := pending.find(b"\x00")) >= 0:
+                            if end > MAX_OUTPUT:
+                                raise GitWorkspaceError("Git-Dateiname ist zu groß.")
+                            value = bytes(pending[:end])
+                            del pending[:end + 1]
+                            if value:
+                                yield value.decode("utf-8", errors="replace")
+                        if len(pending) > MAX_OUTPUT:
+                            raise GitWorkspaceError("Git-Dateiname ist zu groß.")
+                    process.wait()
+                    if timed_out.is_set():
+                        raise GitWorkspaceError("Git-Aufruf hat das Zeitlimit überschritten.")
+                    if process.returncode not in allowed_returncodes:
+                        errors.seek(0)
+                        detail = errors.read(2000).decode("utf-8", errors="replace").strip()
+                        raise GitWorkspaceError(
+                            f"Git-Aufruf fehlgeschlagen: {detail or f'Exit-Code {process.returncode}'}"
+                        )
+                    if pending:
+                        raise GitWorkspaceError("Git-Dateiliste ist unvollständig.")
+
+                iterator = records()
+                try:
+                    yield iterator
+                finally:
+                    iterator.close()
+                    timer.cancel()
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait()
+                    timer.join()
+        except FileNotFoundError as exc:
+            raise GitWorkspaceError(
+                "Git ist nicht installiert oder nicht über PATH erreichbar."
+            ) from exc
 
     def _repo(self, repository: str) -> GitRepository:
         normalized = self._relative(repository, allow_dot=True).as_posix()
@@ -489,31 +577,31 @@ class GitWorkspace:
         args = ["ls-files", "-z"]
         if path is not None:
             args += ["--", path]
-        output = self._git(repo.root, *args)
-        for relative in (value for value in output.split("\x00") if value):
-            pure = self._relative(relative)
-            entry = repo.root / Path(pure.as_posix())
-            try:
-                resolved = entry.resolve(strict=False)
-                resolved.relative_to(repo.root)
-                resolved.relative_to(self.directory)
-            except (OSError, ValueError) as exc:
-                raise GitWorkspaceError(
-                    "Ein getrackter Working-Tree-Pfad verweist außerhalb des Repositorys oder Workspaces."
-                ) from exc
-            try:
-                status = os.lstat(entry)
-            except FileNotFoundError:
-                # A tracked file may legitimately be deleted from the working tree.
-                continue
-            except OSError as exc:
-                raise GitWorkspaceError(
-                    "Working-Tree-Dateimetadaten konnten nicht sicher geprüft werden."
-                ) from exc
-            if stat.S_ISREG(status.st_mode) and status.st_nlink > 1:
-                raise GitWorkspaceError(
-                    "Getrackte Working-Tree-Dateien mit mehreren Hardlinks werden aus Sicherheitsgründen nicht gelesen."
-                )
+        with self._git_null_records(repo.root, *args) as paths:
+            for relative in paths:
+                pure = self._relative(relative)
+                entry = repo.root / Path(pure.as_posix())
+                try:
+                    resolved = entry.resolve(strict=False)
+                    resolved.relative_to(repo.root)
+                    resolved.relative_to(self.directory)
+                except (OSError, ValueError) as exc:
+                    raise GitWorkspaceError(
+                        "Ein getrackter Working-Tree-Pfad verweist außerhalb des Repositorys oder Workspaces."
+                    ) from exc
+                try:
+                    status = os.lstat(entry)
+                except FileNotFoundError:
+                    # Tracked files may be deleted from the working tree.
+                    continue
+                except OSError as exc:
+                    raise GitWorkspaceError(
+                        "Working-Tree-Dateimetadaten konnten nicht sicher geprüft werden."
+                    ) from exc
+                if stat.S_ISREG(status.st_mode) and status.st_nlink > 1:
+                    raise GitWorkspaceError(
+                        "Getrackte Working-Tree-Dateien mit mehreren Hardlinks werden aus Sicherheitsgründen nicht gelesen."
+                    )
 
     @staticmethod
     def _count(value: int) -> int:
@@ -1013,14 +1101,14 @@ class GitWorkspace:
         file_args = ["grep", "-l", "-z", "-I", "-F", "-e", text]
         if repo_path is not None:
             file_args += ["--", repo_path]
-        file_output = self._git(
+        with self._git_null_records(
             repo.root,
             *file_args,
             allowed_returncodes=(0, 1),
-        )
-        matching_files = [
-            value for value in file_output.split("\x00") if value
-        ]
+        ) as filenames:
+            # Every matching file contributes at least one line. One additional
+            # filename is sufficient lookahead for the global truncation flag.
+            matching_files = list(islice(filenames, limit + 1))
 
         matches: list[dict[str, object]] = []
         result_size = 0

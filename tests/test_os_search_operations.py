@@ -228,3 +228,42 @@ def test_new_read_tools_skip_or_reject_hardlinked_files(tmp_path: Path) -> None:
         workspace.file_info("source.txt")
     with pytest.raises(WorkspaceError, match="Hardlinks"):
         workspace.move_file("source.txt", "moved.txt")
+
+
+@pytest.mark.parametrize("prefix, needle, suffix", [
+    ("x" * 6000, "needle", "y" * 6000),
+    ("x" * 6000, "needle", "end"),
+    ("", "needle", "y" * 6000),
+    ("x" * 3998, "needle", "y" * 6000),
+    ("ä" * 6000, "gesucht😀", "ö" * 6000),
+    ("x" * 6000, "n" * 4096, "y" * 6000),
+], ids=["middle", "end", "start", "old-cutoff", "unicode", "long-query"])
+def test_search_text_keeps_match_in_long_line_excerpt(
+    tmp_path: Path, prefix: str, needle: str, suffix: str
+) -> None:
+    line = prefix + needle + suffix
+    (tmp_path / "long.txt").write_text("first\n" + line + "\n", encoding="utf-8")
+
+    result = json.loads(_workspace(tmp_path).search_text("long.txt", needle))
+
+    assert result["truncated"] is False
+    match = result["matches"][0]
+    assert match["line"] == 2
+    assert match["column"] == len(prefix) + 1
+    assert needle in match["text"]
+    assert match["text_truncated"] is True
+    assert len(match["text"]) <= max(4000, len(needle))
+    start = match["text_start_column"] - 1
+    assert match["text"] == line[start:start + len(match["text"])]
+    assert match["text"][match["column"] - match["text_start_column"]:].startswith(needle)
+
+
+def test_search_text_short_line_returns_first_match_column(tmp_path: Path) -> None:
+    (tmp_path / "short.txt").write_bytes(b"first needle, second needle\n")
+
+    result = json.loads(_workspace(tmp_path).search_text("short.txt", "needle"))
+
+    assert result["matches"] == [{
+        "path": "short.txt", "line": 1, "column": 7,
+        "text": "first needle, second needle",
+    }]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -238,3 +239,61 @@ def test_repository_and_file_paths_reject_parent_escape(tmp_path: Path) -> None:
         workspace.git_status("../app")
     with pytest.raises(GitWorkspaceError, match="'..'"):
         workspace.git_diff("app", "../secret.txt")
+
+
+@pytest.mark.parametrize("limit", [1, 5])
+def test_git_grep_limits_large_matching_filename_sets(tmp_path: Path, monkeypatch, limit: int) -> None:
+    _init_repo(tmp_path)
+    filenames = [f"matching-{i:03d}.txt" for i in range(100)]
+    for filename in filenames:
+        (tmp_path / filename).write_bytes(b"needle\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-m", "many matching files")
+    workspace = GitWorkspace.from_directory(tmp_path)
+    # Both ls-files and grep -l exceed this bound. The returned records fit.
+    monkeypatch.setattr("cli_agent.git_operations.MAX_OUTPUT", 1024)
+
+    result = json.loads(workspace.git_grep(".", "needle", max_results=limit))
+
+    assert [item["path"] for item in result["matches"]] == filenames[:limit]
+    assert result["truncated"] is True
+
+
+@pytest.mark.parametrize("files, lines_per_file, limit, truncated", [
+    (1, 1, 1, False), (1, 2, 1, True), (2, 1, 2, False),
+    (2, 1, 1, True), (2, 2, 3, True), (2, 2, 4, False),
+])
+def test_git_grep_global_limit_looks_ahead_across_files(
+    tmp_path: Path, files: int, lines_per_file: int, limit: int, truncated: bool
+) -> None:
+    _init_repo(tmp_path)
+    for index in range(files):
+        (tmp_path / f"match-{index}.txt").write_bytes(b"needle\n" * lines_per_file)
+    _git(tmp_path, "add", ".")
+    workspace = GitWorkspace.from_directory(tmp_path)
+
+    result = json.loads(workspace.git_grep(".", "needle", max_results=limit))
+    assert len(result["matches"]) == min(limit, files * lines_per_file)
+    assert result["truncated"] is truncated
+
+
+def test_git_grep_validates_all_paths_before_returning_limited_results(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    for index in range(100):
+        (repo / f"match-{index:03d}.txt").write_bytes(b"needle\n")
+    tracked = repo / "z-last.txt"
+    tracked.write_bytes(b"safe\n")
+    _git(repo, "add", ".")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"secret needle\n")
+    tracked.unlink()
+    try:
+        os.link(outside, tracked)
+    except OSError:
+        pytest.skip("Hardlinks are unavailable on this platform")
+    workspace = GitWorkspace.from_directory(repo)
+    monkeypatch.setattr("cli_agent.git_operations.MAX_OUTPUT", 1024)
+
+    with pytest.raises(GitWorkspaceError, match="Hardlinks"):
+        workspace.git_grep(".", "needle", max_results=1)

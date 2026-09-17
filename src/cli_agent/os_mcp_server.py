@@ -66,7 +66,9 @@ Only write, move or delete a file when the user requested a file change.
 
         The search is recursive for directories, does not follow symlinks,
         excludes sensitive files and directories, skips hardlinked or oversized
-        files, and returns path, line number and line text for each match.
+        files, and returns path, line number, first match column and text.
+        Columns are 1-based character positions. Long lines return an excerpt
+        containing the match, with text_truncated and text_start_column metadata.
         Regex is not supported. Results are capped; truncation is reported.
 
         Args:

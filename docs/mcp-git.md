@@ -30,6 +30,13 @@ Zeilentrennzeichen innerhalb des Quelltexts bleiben in der JSON-Ausgabe erhalten
 Explizite ungültige Bereiche, fehlende Dateien und ungetrackte Dateien bleiben
 Fehler.
 
+`git_grep` liest Dateilisten fortlaufend und sammelt höchstens `max_results + 1`
+passende Dateinamen. Auch bei sehr vielen passenden Dateien bleiben das globale
+Trefferlimit und `truncated` nutzbar. Die Sicherheitsprüfung läuft davor über
+alle ausgewählten getrackten Pfade; ein kleineres Trefferlimit überspringt keine
+Pfadprüfung. Früh beendete Dateisuchen stoppen den Git-Prozess; für die gesamte
+Lebensdauer eines gestreamten Git-Aufrufs gilt weiterhin das 20-Sekunden-Limit.
+
 ## Repository-Prüfung
 
 Vor jedem Git-Toolzugriff werden Root, Git-Verzeichnis, Common-Verzeichnis,
