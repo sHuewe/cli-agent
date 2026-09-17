@@ -4,16 +4,15 @@ import json
 import logging
 from typing import Any
 
-from .agent_tool_calls import process_tool_calls
-
 from .agent_knowledge import (
     MAX_KNOWLEDGE_SELECTION_RETRIES,
     MAX_PREMATURE_KNOWLEDGE_RETRIES,
-    ToolRoute,
     _KnowledgeRunState,
     _fallback_knowledge_selection,
     _validate_knowledge_selection,
 )
+from .agent_tool_calls import process_tool_calls
+from .agent_types import ToolRoute
 
 logger = logging.getLogger("cli_agent.agent_loop")
 
