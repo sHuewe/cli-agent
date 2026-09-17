@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
+import tempfile
+import threading
 from itertools import islice
 from pathlib import Path
 
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .git_operations import (
+    GIT_TIMEOUT_SECONDS,
     MAX_BLAME_LINES,
     MAX_GREP_TEXT_LENGTH,
     MAX_OUTPUT,
@@ -16,17 +20,63 @@ from .git_operations import (
     GitWorkspaceError,
 )
 
+MAX_COLLECTED_RECORDS = 10_000
+
 
 class RuntimeGitWorkspace(GitWorkspace):
-    """Git workspace with an operation-oriented trust boundary.
+    """Git workspace with an operation-oriented trust boundary."""
 
-    Git's local object database is repository data and is not recursively
-    audited. Alternate object stores are deliberately unsupported. Working-tree
-    paths are validated lazily: only files whose contents are about to cross
-    the MCP boundary are inspected. A whole-repository working-tree validation
-    is deliberately unsupported because it is not acceptably bounded for real
-    repositories.
-    """
+    @classmethod
+    def _git(cls, directory: Path, *args: str, allowed_returncodes: tuple[int, ...] = (0,)) -> str:
+        """Run Git with a hard in-memory output bound while the process runs."""
+        try:
+            with tempfile.TemporaryFile() as errors, subprocess.Popen(
+                cls._git_command(directory, *args),
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                env=cls._environment(),
+            ) as process:
+                timed_out = threading.Event()
+
+                def expire() -> None:
+                    timed_out.set()
+                    if process.poll() is None:
+                        process.kill()
+
+                timer = threading.Timer(GIT_TIMEOUT_SECONDS, expire)
+                timer.daemon = True
+                timer.start()
+                output = bytearray()
+                try:
+                    assert process.stdout is not None
+                    while True:
+                        chunk = process.stdout.read1(65_536)
+                        if timed_out.is_set():
+                            raise GitWorkspaceError("Git-Aufruf hat das Zeitlimit überschritten.")
+                        if not chunk:
+                            break
+                        output.extend(chunk)
+                        if len(output) > MAX_OUTPUT:
+                            process.kill()
+                            raise GitWorkspaceError("Git-Ausgabe ist zu groß; Abfrage weiter eingrenzen.")
+                    process.wait()
+                    if timed_out.is_set():
+                        raise GitWorkspaceError("Git-Aufruf hat das Zeitlimit überschritten.")
+                    if process.returncode not in allowed_returncodes:
+                        errors.seek(0)
+                        detail = errors.read(2000).decode("utf-8", errors="replace").strip()
+                        if not detail and output:
+                            detail = bytes(output[:2000]).decode("utf-8", errors="replace").strip()
+                        raise GitWorkspaceError(f"Git-Aufruf fehlgeschlagen: {detail or f'Exit-Code {process.returncode}'}")
+                    return bytes(output).decode("utf-8", errors="replace")
+                finally:
+                    timer.cancel()
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait()
+                    timer.join()
+        except FileNotFoundError as exc:
+            raise GitWorkspaceError("Git ist nicht installiert oder nicht über PATH erreichbar.") from exc
 
     @classmethod
     def _probe(cls, workspace: Path, candidate: Path) -> GitRepository:
@@ -35,6 +85,10 @@ class RuntimeGitWorkspace(GitWorkspace):
             cls._inside(workspace, root, "Repository-Root")
             if root != candidate.absolute():
                 raise GitWorkspaceError("Repository-Pfade dürfen nicht über Symlinks oder Reparse-Points umgeleitet werden.")
+            # git blame reads the worktree mailmap automatically. Validate this
+            # one special worktree metadata file without scanning the worktree.
+            if os.path.lexists(candidate / ".mailmap"):
+                cls._metadata_text(workspace, candidate / ".mailmap")
             marker = candidate / ".git"
             if marker.is_dir():
                 if path_entry_is_symlink_or_reparse(marker):
@@ -85,6 +139,8 @@ class RuntimeGitWorkspace(GitWorkspace):
                 status = os.lstat(path)
                 if not (stat.S_ISREG(status.st_mode) or stat.S_ISDIR(status.st_mode)):
                     raise GitWorkspaceError("Git-Steuerpfade müssen reguläre Dateien oder Verzeichnisse sein.")
+                if stat.S_ISREG(status.st_mode) and status.st_nlink > 1:
+                    raise GitWorkspaceError("Git-Steuerdateien mit mehreren Hardlinks sind nicht erlaubt.")
                 cls._inside(workspace, path.resolve(strict=True), "Git-Steuerpfad")
             except GitWorkspaceError:
                 raise
@@ -93,16 +149,39 @@ class RuntimeGitWorkspace(GitWorkspace):
 
     @classmethod
     def _reject_alternate_object_stores(cls, common_dir: Path) -> None:
-        """Reject repositories that can source objects from alternate stores.
-
-        This is intentionally a constant-size control-file check. We do not
-        traverse the object database or an alternate graph: repositories using
-        alternates are simply outside the supported Git MCP subset.
-        """
         info_dir = common_dir / "objects" / "info"
         for name in ("alternates", "http-alternates"):
             if os.path.lexists(info_dir / name):
                 raise GitWorkspaceError("Git-Repositories mit alternativen Object Stores werden nicht unterstützt.")
+
+    @staticmethod
+    def _bounded_records(records, *, label: str) -> list[str]:
+        values: list[str] = []
+        total = 0
+        for value in records:
+            total += len(value.encode("utf-8")) + 1
+            if total > MAX_OUTPUT or len(values) >= MAX_COLLECTED_RECORDS:
+                raise GitWorkspaceError(f"{label} ist zu groß; Abfrage weiter eingrenzen.")
+            values.append(value)
+        return values
+
+    @staticmethod
+    def _history_records(output: str) -> list[dict[str, str]]:
+        fields = output.split("\x00")
+        if fields and fields[-1] == "":
+            fields.pop()
+        records: list[dict[str, str]] = []
+        if len(fields) % 5:
+            raise GitWorkspaceError("Git-Historie konnte nicht ausgewertet werden.")
+        for offset in range(0, len(fields), 5):
+            values = fields[offset : offset + 5]
+            # Pretty-format inserts a line break between commits. It is framing,
+            # not part of the next object id.
+            values[0] = values[0].lstrip("\r\n")
+            if not values[0]:
+                raise GitWorkspaceError("Git-Historie konnte nicht ausgewertet werden.")
+            records.append(dict(zip(("id", "author", "email", "date", "message"), values, strict=True)))
+        return records
 
     def _repo(self, repository: str) -> GitRepository:
         normalized = self._relative(repository, allow_dot=True).as_posix()
@@ -147,7 +226,7 @@ class RuntimeGitWorkspace(GitWorkspace):
         if path is not None:
             args += ["--", path]
         with self._git_null_records(repo.root, *args) as records:
-            return list(records)
+            return self._bounded_records(records, label="Liste geänderter Dateien")
 
     def git_status(self, repository: str) -> str:
         repo = self._repo(repository)
@@ -165,6 +244,25 @@ class RuntimeGitWorkspace(GitWorkspace):
             args += ["--", repo_path]
         return self._git(repo.root, *args).strip() or "(no unstaged changes)"
 
+    def git_log(self, repository: str, max_count: int = 20) -> str:
+        repo = self._repo(repository)
+        output = self._git(repo.root, "log", f"--max-count={self._count(max_count)}", "--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00")
+        return json.dumps(self._history_records(output), ensure_ascii=False, indent=2)
+
+    def git_commit_info(self, repository: str, commit_hash: str) -> str:
+        repo = self._repo(repository)
+        commit = self._commit(repo, commit_hash)
+        records = self._history_records(self._git(repo.root, "show", "-s", "--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00", commit))
+        if len(records) != 1:
+            raise GitWorkspaceError("Commit-Metadaten konnten nicht eindeutig ausgewertet werden.")
+        return json.dumps(records[0], ensure_ascii=False, indent=2)
+
+    def git_file_history(self, repository: str, path: str, max_count: int = 20) -> str:
+        repo = self._repo(repository)
+        output = self._git(repo.root, "log", "--follow", f"--max-count={self._count(max_count)}", "--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00", "--", self._repo_path(repo, path))
+        result = [{"author": {"name": item["author"], "email": item["email"]}, "date": item["date"], "commit": {"id": item["id"], "message": item["message"]}} for item in self._history_records(output)]
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
     def git_commit_files(self, repository: str, commit_hash: str) -> str:
         repo = self._repo(repository)
         commit = self._commit(repo, commit_hash)
@@ -174,10 +272,11 @@ class RuntimeGitWorkspace(GitWorkspace):
         else:
             args = ["diff-tree", "--root", "--no-commit-id", "--name-status", "-z", "-r", "-M", commit]
         with self._git_null_records(repo.root, *args) as records:
-            fields = list(records)
-        # _git_null_records decodes every filename-bearing field strictly, so
-        # invalid UTF-8 is rejected instead of being rewritten with U+FFFD.
-        return json.dumps(self._name_status_records("\x00".join(fields) + "\x00"), ensure_ascii=False, indent=2)
+            fields = self._bounded_records(records, label="Commit-Dateiliste")
+        result = json.dumps(self._name_status_records("\x00".join(fields) + "\x00"), ensure_ascii=False, indent=2)
+        if len(result.encode("utf-8")) > MAX_OUTPUT:
+            raise GitWorkspaceError("Commit-Dateiliste ist zu groß; Abfrage weiter eingrenzen.")
+        return result
 
     def git_grep(self, repository: str, text: str, path: str | None = None, max_results: int = 50) -> str:
         if not isinstance(text, str) or not text:
