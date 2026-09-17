@@ -21,10 +21,11 @@ class RuntimeGitWorkspace(GitWorkspace):
     """Git workspace with an operation-oriented trust boundary.
 
     Git's local object database is repository data and is not recursively
-    audited. Working-tree paths are validated lazily: only files whose contents
-    are about to cross the MCP boundary are inspected. A whole-repository
-    working-tree validation is deliberately unsupported because it is not
-    acceptably bounded for real repositories.
+    audited. Alternate object stores are deliberately unsupported. Working-tree
+    paths are validated lazily: only files whose contents are about to cross
+    the MCP boundary are inspected. A whole-repository working-tree validation
+    is deliberately unsupported because it is not acceptably bounded for real
+    repositories.
     """
 
     @classmethod
@@ -54,6 +55,7 @@ class RuntimeGitWorkspace(GitWorkspace):
                 expected_common_dir = (expected_git_dir / common_value).resolve(strict=True)
             cls._inside(workspace, expected_common_dir, "Git-Common-Verzeichnis")
             cls._validate_control_paths(workspace, expected_git_dir, expected_common_dir)
+            cls._reject_alternate_object_stores(expected_common_dir)
             cls._validate_repository_config(workspace, candidate, expected_git_dir, expected_common_dir)
             git_root = Path(cls._git(candidate, "rev-parse", "--show-toplevel").removesuffix("\n")).resolve(strict=True)
             git_dir = Path(cls._git(candidate, "rev-parse", "--absolute-git-dir").removesuffix("\n")).resolve(strict=True)
@@ -88,6 +90,19 @@ class RuntimeGitWorkspace(GitWorkspace):
                 raise
             except OSError as exc:
                 raise GitWorkspaceError("Git-Steuerpfad konnte nicht sicher geprüft werden.") from exc
+
+    @classmethod
+    def _reject_alternate_object_stores(cls, common_dir: Path) -> None:
+        """Reject repositories that can source objects from alternate stores.
+
+        This is intentionally a constant-size control-file check. We do not
+        traverse the object database or an alternate graph: repositories using
+        alternates are simply outside the supported Git MCP subset.
+        """
+        info_dir = common_dir / "objects" / "info"
+        for name in ("alternates", "http-alternates"):
+            if os.path.lexists(info_dir / name):
+                raise GitWorkspaceError("Git-Repositories mit alternativen Object Stores werden nicht unterstützt.")
 
     def _repo(self, repository: str) -> GitRepository:
         normalized = self._relative(repository, allow_dot=True).as_posix()
