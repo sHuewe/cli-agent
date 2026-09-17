@@ -163,9 +163,6 @@ class RuntimeGitWorkspace(GitWorkspace):
 
     @staticmethod
     def _history_records(output: str) -> list[dict[str, str]]:
-        # Git's --format appends one LF after each formatted record. The final
-        # LF is framing and follows our terminal NUL; remove exactly that LF,
-        # never user-controlled whitespace inside a field.
         output = output.removesuffix("\n")
         fields = output.split("\x00")
         if fields and fields[-1] == "":
@@ -356,6 +353,13 @@ class RuntimeGitWorkspace(GitWorkspace):
             file_args += ["--", repo_path]
         with self._git_null_records(repo.root, *file_args, allowed_returncodes=(0, 1)) as filenames:
             matching_files = list(islice(filenames, limit + 1))
+
+        # The filename-only grep has already inspected file contents. Validate
+        # every collected result, including the lookahead entry, before its
+        # existence can influence matches or the truncated flag.
+        for filename in matching_files:
+            self._validate_content_path(repo, filename)
+
         matches: list[dict[str, object]] = []
         result_size = 0
         truncated = False
@@ -364,7 +368,6 @@ class RuntimeGitWorkspace(GitWorkspace):
             if remaining <= 0:
                 truncated = True
                 break
-            self._validate_content_path(repo, filename)
             output = self._git(repo.root, "grep", "-n", "-z", "-I", "-F", f"--max-count={remaining + 1}", "-e", text, "--", filename, allowed_returncodes=(0, 1))
             file_matches = self._grep_records(output)
             selected = file_matches[:remaining]
@@ -389,7 +392,7 @@ class RuntimeGitWorkspace(GitWorkspace):
             if not (stat.S_ISREG(status.st_mode) and status.st_size == 0):
                 args += ["-L", f"1,{MAX_BLAME_LINES + 1}"]
         else:
-            args += ["-L", f"{line_range[0]},{line_range[1]}"]
+            args += ["-L", f"{line_range[0]},{line_range[1]}" ]
         args += ["--", repo_path]
         records = self._blame_records(self._git(repo.root, *args))
         if line_range is None and len(records) > MAX_BLAME_LINES:
