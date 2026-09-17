@@ -137,7 +137,7 @@ def test_symlinked_loose_ref_is_rejected_after_discovery(tmp_path: Path) -> None
         pytest.skip("Symlinks are unavailable on this platform")
 
     with pytest.raises(GitWorkspaceError, match="Git-Refs|Symlinks|Reparse"):
-        workspace.git_log(".")
+        workspace.git_log("repo")
 
 
 def test_hardlinked_loose_ref_is_rejected_after_discovery(tmp_path: Path) -> None:
@@ -155,7 +155,7 @@ def test_hardlinked_loose_ref_is_rejected_after_discovery(tmp_path: Path) -> Non
         pytest.skip("Hardlinks are unavailable on this platform")
 
     with pytest.raises(GitWorkspaceError, match="Git-Refs|Hardlinks|Symlinks|Reparse"):
-        workspace.git_log(".")
+        workspace.git_log("repo")
 
 
 def test_loose_ref_validation_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,7 +168,7 @@ def test_loose_ref_validation_is_bounded(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(git_runtime, "MAX_REF_ENTRIES", 1)
 
     with pytest.raises(GitWorkspaceError, match="Zu viele lose Git-Refs"):
-        workspace.git_log(".")
+        workspace.git_log("repo")
 
 
 def test_repository_content_filter_remains_rejected(tmp_path: Path) -> None:
