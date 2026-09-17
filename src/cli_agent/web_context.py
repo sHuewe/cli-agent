@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, quote, unquote, unquote_plus, urlencode, urljoin, urlsplit
 
 import httpx
 from trafilatura import bare_extraction
 
+from .admin_config import WebProviderConfig
 from .network_policy import validate_http_url
 
 MAX_WEB_RESPONSE_BYTES = 5_000_000
@@ -117,12 +120,273 @@ def _extract_web_content(
     return None, _normalize_text(raw_text)
 
 
+def _origin(url: str) -> tuple[str, str, int | None]:
+    parsed = urlsplit(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    port = parsed.port
+    if port is None:
+        if parsed.scheme.lower() == "https":
+            port = 443
+        elif parsed.scheme.lower() == "http":
+            port = 80
+    return parsed.scheme.lower(), hostname, port
+
+
+def _provider_matches(url: str, provider: WebProviderConfig) -> bool:
+    if _origin(url) != _origin(provider.base_url):
+        return False
+    requested_path = urlsplit(url).path or "/"
+    base_path = urlsplit(provider.base_url).path.rstrip("/") or "/"
+    if base_path == "/":
+        return True
+    return requested_path == base_path or requested_path.startswith(base_path + "/")
+
+
+def _matching_provider(
+    url: str,
+    providers: tuple[WebProviderConfig, ...] | list[WebProviderConfig],
+) -> WebProviderConfig | None:
+    matches = [provider for provider in providers if _provider_matches(url, provider)]
+    if not matches:
+        return None
+    return max(matches, key=lambda provider: len(urlsplit(provider.base_url).path))
+
+
+def _confluence_relative_path(url: str, provider: WebProviderConfig) -> str:
+    requested_path = urlsplit(url).path or "/"
+    base_path = urlsplit(provider.base_url).path.rstrip("/") or "/"
+    if base_path == "/":
+        return requested_path
+    relative = requested_path[len(base_path) :]
+    return relative or "/"
+
+
+def _confluence_page_reference(
+    url: str,
+    provider: WebProviderConfig,
+) -> tuple[str, tuple[str, str] | str]:
+    parsed = urlsplit(url)
+    query = parse_qs(parsed.query)
+    page_ids = [value.strip() for value in query.get("pageId", []) if value.strip()]
+    if page_ids:
+        page_id = page_ids[0]
+        if not page_id.isdigit():
+            raise ValueError("Confluence pageId muss numerisch sein.")
+        return "id", page_id
+
+    path = _confluence_relative_path(url, provider)
+    segments = [unquote(segment) for segment in path.split("/") if segment]
+    for index, segment in enumerate(segments[:-1]):
+        if segment.lower() == "pages" and segments[index + 1].isdigit():
+            return "id", segments[index + 1]
+
+    if len(segments) >= 3 and segments[0].lower() == "display":
+        space_key = segments[1].strip()
+        encoded_title = "/".join(path.split("/")[3:])
+        title = unquote_plus(encoded_title).strip()
+        if not space_key or not title:
+            raise ValueError("Confluence-URL enthält keinen gültigen Space/Page-Titel.")
+        return "title", (space_key, title)
+
+    raise ValueError(
+        "Die konfigurierte Confluence-URL enthält keine unterstützte Seitenreferenz "
+        "(pageId, /pages/<id>/... oder /display/<space>/<title>)."
+    )
+
+
+def _confluence_api_url(
+    provider: WebProviderConfig,
+    reference: tuple[str, tuple[str, str] | str],
+) -> str:
+    reference_type, value = reference
+    api_root = provider.base_url.rstrip("/") + "/rest/api/content"
+    expand = "body.view,body.storage"
+    if reference_type == "id":
+        return f"{api_root}/{quote(str(value), safe='')}?{urlencode({'expand': expand})}"
+
+    space_key, title = value  # type: ignore[misc]
+    return f"{api_root}?{urlencode({'spaceKey': space_key, 'title': title, 'expand': expand})}"
+
+
+async def _read_response_bytes(response: httpx.Response) -> bytes:
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        if len(body) + len(chunk) > MAX_WEB_RESPONSE_BYTES:
+            raise ValueError(
+                "Die Web-Antwort überschreitet das erlaubte Limit von "
+                f"{MAX_WEB_RESPONSE_BYTES} Bytes."
+            )
+        body.extend(chunk)
+    return bytes(body)
+
+
+async def _confluence_get_json(
+    url: str,
+    *,
+    provider: WebProviderConfig,
+    allowed_hosts: tuple[str, ...] | list[str],
+    token: str,
+) -> dict[str, object]:
+    timeout = httpx.Timeout(WEB_REQUEST_TIMEOUT_SECONDS)
+    provider_origin = _origin(provider.base_url)
+
+    async with httpx.AsyncClient(
+        follow_redirects=False,
+        max_redirects=MAX_WEB_REDIRECTS,
+        timeout=timeout,
+        trust_env=False,
+    ) as client:
+        current_url = url
+        for redirect_count in range(MAX_WEB_REDIRECTS + 1):
+            current_url = _validate_web_url(current_url, allowed_hosts=allowed_hosts)
+            if _origin(current_url) != provider_origin:
+                raise ValueError(
+                    "Confluence-REST-Request würde den administrativ konfigurierten "
+                    "Origin verlassen."
+                )
+
+            async with client.stream(
+                "GET",
+                current_url,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {token}",
+                    "User-Agent": "cli-agent/1.0",
+                },
+            ) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Confluence-REST-Redirect enthält kein Ziel.")
+                    if redirect_count >= MAX_WEB_REDIRECTS:
+                        raise ValueError("Zu viele Redirects im Confluence-REST-Abruf.")
+                    redirect_url = urljoin(current_url, location)
+                    if _origin(redirect_url) != provider_origin:
+                        raise ValueError(
+                            "Confluence-REST-Redirect auf einen anderen Origin wurde "
+                            "abgelehnt; der PAT wird nicht weitergegeben."
+                        )
+                    current_url = redirect_url
+                    continue
+
+                response.raise_for_status()
+                media_type = response.headers.get("content-type", "").split(";", 1)[0]
+                if media_type.strip().lower() != "application/json":
+                    raise ValueError(
+                        "Confluence REST API lieferte keinen JSON-Inhalt; erhalten: "
+                        f"{media_type or '(kein Content-Type)'}."
+                    )
+                body = await _read_response_bytes(response)
+                try:
+                    parsed = json.loads(body.decode(response.encoding or "utf-8", errors="strict"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("Confluence REST API lieferte ungültiges JSON.") from exc
+                if not isinstance(parsed, dict):
+                    raise ValueError("Confluence REST API lieferte kein JSON-Objekt.")
+                return parsed
+
+    raise ValueError("Confluence REST API konnte nicht geladen werden.")
+
+
+def _confluence_document(payload: dict[str, object]) -> tuple[str | None, str]:
+    item: dict[str, object]
+    results = payload.get("results")
+    if isinstance(results, list):
+        if not results:
+            raise ValueError("Confluence-Seite wurde über die REST API nicht gefunden.")
+        if len(results) > 1:
+            raise ValueError(
+                "Confluence-Seitenauflösung über Space und Titel ist nicht eindeutig."
+            )
+        candidate = results[0]
+        if not isinstance(candidate, dict):
+            raise ValueError("Confluence REST API lieferte ein ungültiges Seitenergebnis.")
+        item = candidate
+    else:
+        item = payload
+
+    title_value = item.get("title")
+    title = _normalize_text(title_value) if isinstance(title_value, str) else None
+
+    body = item.get("body")
+    if not isinstance(body, dict):
+        raise ValueError("Confluence REST API lieferte keinen Seiteninhalt.")
+
+    raw_html = ""
+    for representation in ("view", "storage"):
+        representation_value = body.get(representation)
+        if not isinstance(representation_value, dict):
+            continue
+        value = representation_value.get("value")
+        if isinstance(value, str) and value.strip():
+            raw_html = value
+            break
+    if not raw_html:
+        raise ValueError("Confluence REST API lieferte keinen verwertbaren Seiteninhalt.")
+
+    extracted_title, content = _extract_web_content(
+        f"<html><head><title>{title or ''}</title></head><body>{raw_html}</body></html>",
+        "text/html",
+    )
+    return title or extracted_title, content
+
+
+async def _fetch_confluence_context(
+    requested_url: str,
+    *,
+    provider: WebProviderConfig,
+    allowed_hosts: tuple[str, ...] | list[str],
+) -> WebContext:
+    token = os.environ.get(provider.token_env, "")
+    if not token:
+        raise ValueError(
+            "Confluence-PAT fehlt. Setze die administrativ konfigurierte "
+            f"Umgebungsvariable {provider.token_env!r}."
+        )
+
+    reference = _confluence_page_reference(requested_url, provider)
+    api_url = _confluence_api_url(provider, reference)
+    payload = await _confluence_get_json(
+        api_url,
+        provider=provider,
+        allowed_hosts=allowed_hosts,
+        token=token,
+    )
+    title, content = _confluence_document(payload)
+    if not content:
+        raise ValueError("Die Confluence-Seite enthält keinen verwertbaren Textinhalt.")
+
+    truncated = len(content) > MAX_WEB_CONTEXT_CHARS
+    if truncated:
+        content = content[:MAX_WEB_CONTEXT_CHARS].rstrip()
+
+    return WebContext(
+        requested_url=requested_url,
+        final_url=requested_url,
+        title=title,
+        content=content,
+        fetched_at=datetime.now(UTC).isoformat(),
+        truncated=truncated,
+    )
+
+
 async def fetch_web_context(
     url: str,
     *,
     allowed_hosts: tuple[str, ...] | list[str] = (),
+    providers: tuple[WebProviderConfig, ...] | list[WebProviderConfig] = (),
 ) -> WebContext:
     requested_url = _validate_web_url(url, allowed_hosts=allowed_hosts)
+    provider = _matching_provider(requested_url, providers)
+    if provider is not None:
+        if provider.provider_type == "confluence":
+            return await _fetch_confluence_context(
+                requested_url,
+                provider=provider,
+                allowed_hosts=allowed_hosts,
+            )
+        raise ValueError(f"Nicht unterstützter Web-Provider: {provider.provider_type!r}.")
+
     timeout = httpx.Timeout(WEB_REQUEST_TIMEOUT_SECONDS)
 
     async with httpx.AsyncClient(
@@ -174,15 +438,7 @@ async def fetch_web_context(
                         f"erhalten: {media_type or '(kein Content-Type)'}."
                     )
 
-                body = bytearray()
-                async for chunk in response.aiter_bytes():
-                    if len(body) + len(chunk) > MAX_WEB_RESPONSE_BYTES:
-                        raise ValueError(
-                            "Die Web-Antwort überschreitet das erlaubte Limit von "
-                            f"{MAX_WEB_RESPONSE_BYTES} Bytes."
-                        )
-                    body.extend(chunk)
-
+                body = await _read_response_bytes(response)
                 encoding = response.encoding or "utf-8"
                 raw_text = body.decode(encoding, errors="replace")
                 break
