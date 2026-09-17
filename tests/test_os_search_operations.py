@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from cli_agent import os_operations
 from cli_agent.config import McpServerConfig
 from cli_agent.os_operations import Workspace, WorkspaceError
 
@@ -272,8 +273,6 @@ def test_search_text_short_line_returns_first_match_column(tmp_path: Path) -> No
 def test_search_text_discards_partial_matches_from_invalid_utf8_file(
     tmp_path: Path,
 ) -> None:
-    # Put the invalid byte beyond the decoder's first buffered read so the
-    # valid-looking first line must not escape before the later error occurs.
     (tmp_path / "invalid.txt").write_bytes(
         b"needle must be discarded\n" + b"x" * 9_000 + b"\xff"
     )
@@ -281,3 +280,31 @@ def test_search_text_discards_partial_matches_from_invalid_utf8_file(
     result = json.loads(_workspace(tmp_path).search_text("invalid.txt", "needle"))
 
     assert result == {"matches": [], "truncated": False}
+
+
+def test_search_text_stops_at_file_scan_budget(tmp_path: Path, monkeypatch) -> None:
+    for index in range(4):
+        (tmp_path / f"{index}.txt").write_text("no match", encoding="utf-8")
+    monkeypatch.setattr(os_operations, "MAX_SEARCH_SCAN_FILES", 2)
+
+    result = json.loads(_workspace(tmp_path).search_text(".", "needle"))
+
+    assert result == {
+        "matches": [],
+        "truncated": True,
+        "truncation_reason": "scan_budget",
+    }
+
+
+def test_search_text_stops_at_byte_scan_budget(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "a.txt").write_text("a" * 8, encoding="utf-8")
+    (tmp_path / "b.txt").write_text("b" * 8, encoding="utf-8")
+    monkeypatch.setattr(os_operations, "MAX_SEARCH_SCAN_BYTES", 10)
+
+    result = json.loads(_workspace(tmp_path).search_text(".", "needle"))
+
+    assert result == {
+        "matches": [],
+        "truncated": True,
+        "truncation_reason": "scan_budget",
+    }
