@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -33,6 +34,27 @@ def _normalize_mcp_url(value: str, *, section: str) -> str:
     return urlunsplit((scheme, host, path, parsed.query, ""))
 
 
+def _normalize_web_provider_base_url(value: str, *, section: str) -> str:
+    raw = value.strip()
+    parsed = urlsplit(raw)
+    if parsed.scheme.lower() != "https":
+        raise ValueError(f"{section}.base_url muss eine https:// URL sein.")
+    if not parsed.hostname:
+        raise ValueError(f"{section}.base_url enthält keinen Hostnamen.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"Credentials in {section}.base_url werden nicht unterstützt.")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{section}.base_url darf weder Query noch Fragment enthalten.")
+
+    host = parsed.hostname.lower().rstrip(".")
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    path = (parsed.path or "/").rstrip("/") or "/"
+    return urlunsplit(("https", host, path, "", ""))
+
+
 def _string_map(values: Any, *, section: str, key: str) -> tuple[tuple[str, str], ...]:
     if values is None:
         return ()
@@ -54,6 +76,20 @@ class ModelCredentialRule:
     provider: str
     host: str
     allowed_api_key_envs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class WebProviderConfig:
+    """Administrator-defined authenticated provider for one web URL namespace."""
+
+    provider_type: str
+    base_url: str
+    token_env: str
+
+
+@dataclass(frozen=True)
+class WebPolicy:
+    providers: tuple[WebProviderConfig, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,6 +126,7 @@ class McpPolicy:
 class AdminConfig:
     network: NetworkConfig = NetworkConfig()
     model_credentials: tuple[ModelCredentialRule, ...] = ()
+    web: WebPolicy = WebPolicy()
     mcp: McpPolicy = McpPolicy()
 
 
@@ -134,6 +171,29 @@ def _model_credential_rule(values: dict[str, Any], index: int) -> ModelCredentia
         raise ValueError(f"{section}.host muss ein einzelner Hostname ohne Schema oder Pfad sein.")
     allowed = _string_list(values, "allowed_api_key_envs", (), section=section)
     return ModelCredentialRule(provider=provider, host=host, allowed_api_key_envs=allowed)
+
+
+def _web_provider(values: dict[str, Any], index: int) -> WebProviderConfig:
+    section = f"[[web.providers]] #{index + 1}"
+    provider_type = str(values.get("type", "")).strip().lower()
+    if provider_type != "confluence":
+        raise ValueError(f"{section}.type muss derzeit 'confluence' sein.")
+
+    base_url_value = values.get("base_url")
+    if not isinstance(base_url_value, str) or not base_url_value.strip():
+        raise ValueError(f"{section}.base_url muss eine nichtleere URL sein.")
+    base_url = _normalize_web_provider_base_url(base_url_value, section=section)
+
+    token_env = str(values.get("token_env", "")).strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token_env):
+        raise ValueError(
+            f"{section}.token_env muss der Name einer Umgebungsvariable sein."
+        )
+    return WebProviderConfig(
+        provider_type=provider_type,
+        base_url=base_url,
+        token_env=token_env,
+    )
 
 
 def _trusted_tool_approvals(values: dict[str, Any], *, section: str) -> tuple[TrustedMcpToolApproval, ...]:
@@ -259,6 +319,24 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
         if rule.host not in network.model_allowed_hosts:
             raise ValueError(f"[[model.credentials]] Host {rule.host!r} muss auch in network.model_allowed_hosts erlaubt sein.")
 
+    web_values = values.get("web", {})
+    if not isinstance(web_values, dict):
+        raise ValueError("[web] in admin_config.toml muss eine Tabelle sein.")
+    raw_web_providers = web_values.get("providers", [])
+    if not isinstance(raw_web_providers, list) or not all(isinstance(value, dict) for value in raw_web_providers):
+        raise ValueError("[[web.providers]] muss eine Liste von Tabellen sein.")
+    web_providers = tuple(_web_provider(v, i) for i, v in enumerate(raw_web_providers))
+    provider_urls = [provider.base_url for provider in web_providers]
+    if len(provider_urls) != len(set(provider_urls)):
+        raise ValueError("[[web.providers]].base_url darf nicht doppelt vorkommen.")
+    for provider in web_providers:
+        provider_host = urlsplit(provider.base_url).hostname
+        if provider_host not in network.web_allowed_hosts:
+            raise ValueError(
+                f"[[web.providers]] Host {provider_host!r} muss auch in "
+                "network.web_allowed_hosts erlaubt sein."
+            )
+
     mcp_values = values.get("mcp", {})
     if not isinstance(mcp_values, dict):
         raise ValueError("[mcp] in admin_config.toml muss eine Tabelle sein.")
@@ -280,5 +358,6 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
     return AdminConfig(
         network=network,
         model_credentials=model_credentials,
+        web=WebPolicy(providers=web_providers),
         mcp=McpPolicy(trusted_servers=trusted_servers),
     )
