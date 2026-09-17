@@ -17,12 +17,6 @@ from .agent_knowledge_support import (  # noqa: F401
     _normalize_knowledge_path,
     tool_result_text,
 )
-from .agent_types import (
-    ApprovalCallback,
-    ServerConfig,
-    ToolRoute,
-    _RuntimeMcpServerConfig,
-)
 
 DEFAULT_OKF_MAX_TOOL_CALLS = 200
 DEFAULT_OKF_MAX_CONCEPT_READS = 180
