@@ -11,7 +11,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from .agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS, ServerConfig, ToolRoute, _RuntimeMcpServerConfig
+from .agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS
+from .agent_types import ServerConfig, ToolRoute, _RuntimeMcpServerConfig
 from .config import McpServerConfig
 from .mcp_limits import validate_mcp_server_metadata
 from .network_policy import validate_http_url
