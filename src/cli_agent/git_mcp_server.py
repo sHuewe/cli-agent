@@ -7,13 +7,14 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from .config import load_config
-from .git_operations import GitWorkspace, GitWorkspaceError
+from .git_operations import GitWorkspaceError
+from .git_runtime import RuntimeGitWorkspace
 from .logging_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
 
-def create_server(workspace: GitWorkspace) -> FastMCP:
+def create_server(workspace: RuntimeGitWorkspace) -> FastMCP:
     instructions = """Use these read-only Git tools only for repositories discovered inside the fixed project workspace. Repository paths are workspace-relative. Never infer or access repositories above or outside the workspace."""
     mcp = FastMCP("Workspace Git Read Operations", instructions=instructions)
 
@@ -143,7 +144,7 @@ def main() -> None:
     config = load_config(path=args.config_file)
     configure_logging(config.logging, logger=logger, default_filename="cli-agent-git-mcp.log")
     try:
-        workspace = GitWorkspace.from_directory(args.project_directory)
+        workspace = RuntimeGitWorkspace.from_directory(args.project_directory)
     except GitWorkspaceError as exc:
         raise SystemExit(str(exc)) from exc
     if not workspace.repositories:
