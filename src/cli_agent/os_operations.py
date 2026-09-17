@@ -249,9 +249,10 @@ class Workspace:
     def resolve_direct_path(self, path: str, *, must_exist: bool = True) -> Path:
         """Resolve a path but reject symlink/junction indirection.
 
-        Move/rename semantics must operate on the path the caller named, not on
-        a resolved target. Comparing the lexical absolute path with the
-        canonical path also rejects indirection in parent components.
+        Operations that must act on the path the caller named rather than on a
+        canonicalized target use this stricter resolver. Comparing the lexical
+        absolute path with the canonical path also rejects indirection in parent
+        components.
         """
         resolved = self.resolve_path(path, must_exist=must_exist)
         lexical = (self.directory / Path(path.strip())).absolute()
@@ -454,12 +455,14 @@ class Workspace:
     ) -> str:
         if not isinstance(text, str) or not text:
             raise WorkspaceError("text darf nicht leer sein.")
+        if "\n" in text or "\r" in text:
+            raise WorkspaceError("text darf keine Zeilenumbrüche enthalten.")
         if len(text) > MAX_SEARCH_TEXT_LENGTH:
             raise WorkspaceError(
                 f"text darf höchstens {MAX_SEARCH_TEXT_LENGTH} Zeichen lang sein."
             )
         limit = self._limit(max_results, name="max_results", maximum=MAX_SEARCH_RESULTS)
-        root = self.resolve_path(path)
+        root = self.resolve_direct_path(path)
         matches: list[dict[str, object]] = []
         truncated = False
         scan_budget_reached = False
@@ -558,7 +561,7 @@ class Workspace:
         if not isinstance(pattern, str) or not pattern:
             raise WorkspaceError("pattern darf nicht leer sein.")
         limit = self._limit(max_results, name="max_results", maximum=MAX_FIND_RESULTS)
-        root = self.resolve_path(path)
+        root = self.resolve_direct_path(path)
         matches: list[str] = []
         truncated = False
         scan_budget_reached = False
@@ -687,8 +690,7 @@ class Workspace:
             self._reject_hardlinked_file(dst_path)
         if not dst_path.parent.is_dir():
             raise WorkspaceError(
-                f"Zielordner existiert nicht: "
-                f"{dst_path.parent.relative_to(self.directory).as_posix()!r}"
+                f"Zielordner existiert nicht: {path_dst!r}"
             )
         if src_path == dst_path:
             relative = src_path.relative_to(self.directory).as_posix()
