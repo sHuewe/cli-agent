@@ -322,3 +322,35 @@ def test_find_files_stops_at_scan_budget(tmp_path: Path, monkeypatch) -> None:
         "truncated": True,
         "truncation_reason": "scan_budget",
     }
+
+
+def test_search_text_counts_filtered_entries_toward_traversal_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    for index in range(4):
+        (tmp_path / f"secret-{index}.log").write_text("needle", encoding="utf-8")
+    monkeypatch.setattr(os_operations, "MAX_SEARCH_SCAN_FILES", 2)
+
+    result = json.loads(_workspace(tmp_path).search_text(".", "needle"))
+
+    assert result == {
+        "matches": [],
+        "truncated": True,
+        "truncation_reason": "scan_budget",
+    }
+
+
+def test_find_files_counts_empty_directories_toward_traversal_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    for index in range(4):
+        (tmp_path / f"dir-{index}").mkdir()
+    monkeypatch.setattr(os_operations, "MAX_FIND_SCAN_FILES", 2)
+
+    result = json.loads(_workspace(tmp_path).find_files(".", "*.py"))
+
+    assert result == {
+        "files": [],
+        "truncated": True,
+        "truncation_reason": "scan_budget",
+    }
