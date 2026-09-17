@@ -35,7 +35,7 @@ Für eine passende Confluence-URL verwendet `cli-agent` die Confluence REST API 
 Authorization: Bearer <PAT>
 ```
 
-Der PAT wird nicht an das LLM übergeben, nicht als Web-Kontext gespeichert und nicht geloggt. Authentifizierte REST-Redirects dürfen weder den konfigurierten Origin noch dessen Confluence-Context-Path verlassen. Dadurch wird das Credential auch dann nicht an einen anderen Pfad auf demselben Host weitergegeben, wenn dieser Host noch weitere Anwendungen bereitstellt.
+Der PAT wird nicht an das LLM übergeben, nicht als Web-Kontext gespeichert und nicht geloggt. Credential-behaftete Confluence-REST-Aufrufe folgen **keinen Redirects**. Jede Redirect-Antwort wird fail-closed abgelehnt, sodass der PAT niemals an ein vom Server geliefertes Redirect-Ziel weitergegeben wird. Zusätzlich werden die tatsächlich mit PAT gesendeten Request-Pfade vor dem Senden streng validiert; Dot-Segmente, Backslashes und percent-encoded Pfadbestandteile werden für diese credential-behafteten Requests abgelehnt, um unterschiedliche URL-Normalisierung durch Client, Proxy oder Server nicht zu einer Credential-Grenzen-Umgehung werden zu lassen.
 
 Die bestehenden stdio-MCP-Prozesse erhalten nur eine explizite kleine Environment-Allowlist. Eine zusätzliche Variable wie `CLI_AGENT_CONFLUENCE_PAT` wird deshalb nicht implizit an MCP-Kindprozesse vererbt. HTTP-Aufrufe des Web-Providers verwenden außerdem `trust_env = false`, sodass Proxy-Umgebungsvariablen nicht stillschweigend den Transportweg verändern.
 
