@@ -66,6 +66,7 @@ Immer verfügbar:
 | --- | --- |
 | `list_files(path)` | Listet Dateien und Verzeichnisse direkt unter einem relativen Workspace-Pfad. |
 | `read_file(path)` | Liest eine unterstützte UTF-8-Textdatei oder extrahiert PDF-Text mit Seitenmarkierungen. Rückgabe bleibt `str`. |
+| `search_text(path, text, max_results=50)` | Sucht literalen Text rekursiv in freigegebenen Textdateien und liefert höchstens 200 Treffer. |
 
 Nur bei Schreibzugriff:
 
@@ -75,6 +76,20 @@ Nur bei Schreibzugriff:
 | `delete_file(path)` | Löscht eine Datei. |
 | `make_directory(path)` | Erstellt ein Verzeichnis im Workspace. |
 | `copy_file(path_src, path_dst)` | Kopiert eine Datei innerhalb des Workspaces. |
+
+## Textsuche
+
+`search_text` liefert `path`, `line`, `column` und `text` pro Treffer. Zeile und
+Spalte beginnen bei 1; `column` bezeichnet das erste Vorkommen in der Zeile und
+zählt Unicode-Zeichen. Lange Zeilen werden um dieses Vorkommen gekürzt, sodass der
+gesamte Suchtext sichtbar bleibt. Ein solcher Ausschnitt enthält zusätzlich
+`text_truncated: true` und `text_start_column` als Anfangsspalte des Ausschnitts.
+Die Textlänge ist auf 4.000 Zeichen begrenzt; bei einem längeren erlaubten
+Suchtext wächst sie höchstens auf dessen Länge von maximal 4.096 Zeichen.
+
+Das separate Feld `truncated` der Gesamtausgabe zeigt an, ob weitere Treffer
+wegen `max_results` ausgelassen wurden. Die bestehenden Dateityp-, Größen- und
+Workspace-Prüfungen gelten auch für diese Suche.
 
 ## PDF-Dateien
 

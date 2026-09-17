@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import datetime
+import fnmatch
+import io
+import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
@@ -182,10 +187,21 @@ SENSITIVE_DIRECTORY_NAMES = frozenset(
 )
 SENSITIVE_SUFFIXES = frozenset({".key", ".pem", ".p12", ".pfx"})
 MAX_READ_FILE_BYTES = 1_000_000
+MAX_SEARCH_RESULTS = 200
+MAX_SEARCH_TEXT_LENGTH = 4_096
+MAX_SEARCH_LINE_CHARS = 4_000
+MAX_SEARCH_SCAN_FILES = 10_000
+MAX_SEARCH_SCAN_BYTES = 64_000_000
+MAX_FIND_RESULTS = 500
+MAX_FIND_SCAN_FILES = 10_000
 
 
 class WorkspaceError(RuntimeError):
     """An OS operation could not be performed inside the workspace."""
+
+
+class _TraversalBudgetReached(RuntimeError):
+    """Internal signal that a bounded recursive walk inspected too many entries."""
 
 
 @dataclass(frozen=True)
@@ -230,6 +246,22 @@ class Workspace:
 
         return resolved
 
+    def resolve_direct_path(self, path: str, *, must_exist: bool = True) -> Path:
+        """Resolve a path but reject symlink/junction indirection.
+
+        Operations that must act on the path the caller named rather than on a
+        canonicalized target use this stricter resolver. Comparing the lexical
+        absolute path with the canonical path also rejects indirection in parent
+        components.
+        """
+        resolved = self.resolve_path(path, must_exist=must_exist)
+        lexical = (self.directory / Path(path.strip())).absolute()
+        if os.path.normcase(str(lexical)) != os.path.normcase(str(resolved)):
+            raise WorkspaceError(
+                "Symlinks oder Junctions sind für diese Dateioperation nicht erlaubt."
+            )
+        return resolved
+
     @staticmethod
     def _is_text_file(path: Path) -> bool:
         name = path.name.lower()
@@ -246,6 +278,14 @@ class Workspace:
             or ".log." in name
             or name.endswith(".log")
         )
+
+    @classmethod
+    def _reject_sensitive_read(cls, path: Path) -> None:
+        if cls._is_sensitive_file(path):
+            raise WorkspaceError(
+                "Das Lesen von Secret-/Credential-Dateien ist über den "
+                "Workspace-OS-Server nicht erlaubt."
+            )
 
     @classmethod
     def _reject_sensitive_mutation(cls, path: Path) -> None:
@@ -270,6 +310,12 @@ class Workspace:
             )
 
     @staticmethod
+    def _limit(value: int, *, name: str, maximum: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
+            raise WorkspaceError(f"{name} muss zwischen 1 und {maximum} liegen.")
+        return value
+
+    @staticmethod
     def _existing_line_ending(path: Path) -> str:
         """Return the dominant line ending, defaulting to LF on ties."""
         if not path.exists():
@@ -285,6 +331,67 @@ class Workspace:
         if cr_count > lf_count and cr_count > crlf_count:
             return "\r"
         return "\n"
+
+    def _safe_walk_files(self, root: Path, *, max_entries: int | None = None):
+        """Yield regular files without following filesystem indirection.
+
+        Every directory entry is counted before filtering so recursive callers
+        can bound traversal work even for empty directories, sensitive paths,
+        aliases, hardlinks, and other entries that will never be yielded.
+        Directory/file symlinks, junction-like paths that resolve elsewhere,
+        sensitive paths, and hardlinked files are skipped. This keeps recursive
+        read operations within the same security boundary as read_file().
+        """
+        if root.is_file():
+            self._reject_sensitive_read(root)
+            self._reject_hardlinked_file(root)
+            yield root
+            return
+        if not root.is_dir():
+            raise WorkspaceError("Suchpfad ist weder Datei noch Ordner.")
+        self._reject_sensitive_read(root)
+
+        pending = [root]
+        inspected_entries = 0
+        while pending:
+            current_path = pending.pop()
+            try:
+                with os.scandir(current_path) as entries:
+                    for item in entries:
+                        inspected_entries += 1
+                        if max_entries is not None and inspected_entries > max_entries:
+                            raise _TraversalBudgetReached
+
+                        entry = Path(item.path)
+                        try:
+                            resolved = entry.resolve(strict=True)
+                            resolved.relative_to(self.directory)
+                        except (OSError, ValueError):
+                            continue
+                        # Do not recursively traverse symlinks, junctions or
+                        # other path indirection even when their target happens
+                        # to be inside the workspace.
+                        if resolved != entry.absolute():
+                            continue
+                        if self._is_sensitive_file(resolved):
+                            continue
+                        if resolved.is_dir():
+                            pending.append(resolved)
+                            continue
+                        if not resolved.is_file():
+                            continue
+                        try:
+                            if regular_file_has_multiple_links(resolved):
+                                continue
+                        except OSError:
+                            continue
+                        yield resolved
+            except _TraversalBudgetReached:
+                raise
+            except OSError:
+                # Match os.walk's previous default behaviour: inaccessible
+                # directories are skipped rather than failing the whole search.
+                continue
 
     def list_files(self, path: str) -> str:
         directory = self.resolve_path(path)
@@ -310,11 +417,7 @@ class Workspace:
         if not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
         self._reject_hardlinked_file(file_path)
-        if self._is_sensitive_file(file_path):
-            raise WorkspaceError(
-                "Das Lesen von Secret-/Credential-Dateien ist über den "
-                "Workspace-OS-Server nicht erlaubt."
-            )
+        self._reject_sensitive_read(file_path)
         if file_path.suffix.lower() == ".pdf":
             try:
                 return read_pdf_text(file_path)
@@ -343,6 +446,184 @@ class Workspace:
             raise WorkspaceError(
                 f"Datei konnte nicht gelesen werden: {path!r}: {exc}"
             ) from exc
+
+    def search_text(
+        self,
+        path: str,
+        text: str,
+        max_results: int = 50,
+    ) -> str:
+        if not isinstance(text, str) or not text:
+            raise WorkspaceError("text darf nicht leer sein.")
+        if "\n" in text or "\r" in text:
+            raise WorkspaceError("text darf keine Zeilenumbrüche enthalten.")
+        if len(text) > MAX_SEARCH_TEXT_LENGTH:
+            raise WorkspaceError(
+                f"text darf höchstens {MAX_SEARCH_TEXT_LENGTH} Zeichen lang sein."
+            )
+        limit = self._limit(max_results, name="max_results", maximum=MAX_SEARCH_RESULTS)
+        root = self.resolve_direct_path(path)
+        matches: list[dict[str, object]] = []
+        truncated = False
+        scan_budget_reached = False
+        scanned_files = 0
+        scanned_bytes = 0
+
+        try:
+            for file_path in self._safe_walk_files(root, max_entries=MAX_SEARCH_SCAN_FILES):
+                if scanned_files >= MAX_SEARCH_SCAN_FILES:
+                    truncated = True
+                    scan_budget_reached = True
+                    break
+                scanned_files += 1
+                if not self._is_text_file(file_path):
+                    continue
+
+                remaining_bytes = MAX_SEARCH_SCAN_BYTES - scanned_bytes
+                if remaining_bytes <= 0:
+                    truncated = True
+                    scan_budget_reached = True
+                    break
+
+                try:
+                    with file_path.open("rb") as handle:
+                        data = handle.read(min(MAX_READ_FILE_BYTES, remaining_bytes) + 1)
+                    scanned_bytes += len(data)
+                    if scanned_bytes > MAX_SEARCH_SCAN_BYTES:
+                        truncated = True
+                        scan_budget_reached = True
+                        break
+                    if len(data) > MAX_READ_FILE_BYTES:
+                        continue
+                    # Decode the complete bounded file before publishing any
+                    # matches. A later invalid byte must invalidate the entire
+                    # file rather than leave earlier partial results behind.
+                    content = data.decode("utf-8")
+                    with io.StringIO(content, newline=None) as handle:
+                        for line_number, line in enumerate(handle, start=1):
+                            match_start = line.find(text)
+                            if match_start < 0:
+                                continue
+                            line_text = line.rstrip("\r\n")
+                            # Keep the whole literal match, including queries up to
+                            # MAX_SEARCH_TEXT_LENGTH, and centre context around it.
+                            width = max(MAX_SEARCH_LINE_CHARS, len(text))
+                            text_truncated = len(line_text) > width
+                            excerpt_start = 0
+                            if text_truncated:
+                                excerpt_start = min(
+                                    max(0, match_start - (width - len(text)) // 2),
+                                    len(line_text) - width,
+                                )
+                                line_text = line_text[excerpt_start:excerpt_start + width]
+                            match: dict[str, object] = {
+                                "path": file_path.relative_to(self.directory).as_posix(),
+                                "line": line_number,
+                                "column": match_start + 1,
+                                "text": line_text,
+                            }
+                            if text_truncated:
+                                match["text_truncated"] = True
+                                match["text_start_column"] = excerpt_start + 1
+                            matches.append(match)
+                            # Probe for one additional result so truncated is true
+                            # only when a result was actually omitted.
+                            if len(matches) > limit:
+                                truncated = True
+                                break
+                except UnicodeDecodeError:
+                    continue
+                except OSError as exc:
+                    raise WorkspaceError(
+                        f"Datei konnte bei der Textsuche nicht sicher gelesen werden: "
+                        f"{file_path.name!r}: {exc}"
+                    ) from exc
+                if truncated:
+                    break
+        except _TraversalBudgetReached:
+            truncated = True
+            scan_budget_reached = True
+
+        result: dict[str, object] = {
+            "matches": matches[:limit],
+            "truncated": truncated,
+        }
+        if scan_budget_reached:
+            result["truncation_reason"] = "scan_budget"
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def find_files(
+        self,
+        path: str,
+        pattern: str,
+        max_results: int = 100,
+    ) -> str:
+        if not isinstance(pattern, str) or not pattern:
+            raise WorkspaceError("pattern darf nicht leer sein.")
+        limit = self._limit(max_results, name="max_results", maximum=MAX_FIND_RESULTS)
+        root = self.resolve_direct_path(path)
+        matches: list[str] = []
+        truncated = False
+        scan_budget_reached = False
+        scanned_files = 0
+
+        try:
+            for file_path in self._safe_walk_files(root, max_entries=MAX_FIND_SCAN_FILES):
+                if scanned_files >= MAX_FIND_SCAN_FILES:
+                    truncated = True
+                    scan_budget_reached = True
+                    break
+                scanned_files += 1
+                relative = file_path.relative_to(self.directory).as_posix()
+                if not (
+                    fnmatch.fnmatchcase(file_path.name, pattern)
+                    or fnmatch.fnmatchcase(relative, pattern)
+                ):
+                    continue
+                matches.append(relative)
+                # Probe for one additional result so exact-limit result sets are
+                # reported as complete.
+                if len(matches) > limit:
+                    truncated = True
+                    break
+        except _TraversalBudgetReached:
+            truncated = True
+            scan_budget_reached = True
+
+        result: dict[str, object] = {
+            "files": matches[:limit],
+            "truncated": truncated,
+        }
+        if scan_budget_reached:
+            result["truncation_reason"] = "scan_budget"
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def file_info(self, path: str) -> str:
+        resolved = self.resolve_path(path)
+        self._reject_sensitive_read(resolved)
+        if resolved.is_file():
+            self._reject_hardlinked_file(resolved)
+            kind = "file"
+        elif resolved.is_dir():
+            kind = "directory"
+        else:
+            raise WorkspaceError(f"Pfad ist keine reguläre Datei oder Ordner: {path!r}")
+        try:
+            stat = resolved.stat()
+        except OSError as exc:
+            raise WorkspaceError(
+                f"Dateimetadaten konnten nicht gelesen werden: {path!r}: {exc}"
+            ) from exc
+        result = {
+            "path": resolved.relative_to(self.directory).as_posix() or ".",
+            "type": kind,
+            "size_bytes": stat.st_size if kind == "file" else None,
+            "modified": datetime.datetime.fromtimestamp(
+                stat.st_mtime,
+                tz=datetime.UTC,
+            ).isoformat(),
+        }
+        return json.dumps(result, ensure_ascii=False, indent=2)
 
     def delete_file(self, path: str) -> str:
         file_path = self.resolve_path(path)
@@ -393,6 +674,37 @@ class Workspace:
 
         relative = dst_path.relative_to(self.directory).as_posix()
         return f"Datei kopiert: {relative} "
+
+    def move_file(self, path_src: str, path_dst: str) -> str:
+        src_path = self.resolve_direct_path(path_src)
+        if not src_path.is_file():
+            raise WorkspaceError(f"Quellpfad ist keine Datei: {path_src!r}")
+        self._reject_hardlinked_file(src_path)
+        self._reject_sensitive_mutation(src_path)
+
+        dst_path = self.resolve_direct_path(path_dst, must_exist=False)
+        self._reject_sensitive_mutation(dst_path)
+        if dst_path.exists() and not dst_path.is_file():
+            raise WorkspaceError(f"Zielpfad ist keine Datei: {path_dst!r}")
+        if dst_path.exists():
+            self._reject_hardlinked_file(dst_path)
+        if not dst_path.parent.is_dir():
+            raise WorkspaceError(
+                f"Zielordner existiert nicht: {path_dst!r}"
+            )
+        if src_path == dst_path:
+            relative = src_path.relative_to(self.directory).as_posix()
+            return f"Datei befindet sich bereits am Ziel: {relative}"
+
+        try:
+            src_path.replace(dst_path)
+        except OSError as exc:
+            raise WorkspaceError(
+                f"Datei konnte nicht verschoben werden: {path_src!r} -> {path_dst!r}: {exc}"
+            ) from exc
+
+        relative = dst_path.relative_to(self.directory).as_posix()
+        return f"Datei verschoben: {relative}"
 
     def make_directory(self, path: str) -> str:
         dir_path = self.resolve_path(path, must_exist=False)

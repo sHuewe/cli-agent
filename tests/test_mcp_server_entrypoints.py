@@ -167,10 +167,14 @@ def _workspace_stub(calls):
     return SimpleNamespace(
         list_files=lambda path: calls.append(("list", path)) or "listed",
         read_file=lambda path: calls.append(("read", path)) or "contents",
+        search_text=lambda path, text, max_results=50: calls.append(("search", path, text, max_results)) or "matches",
+        find_files=lambda path, pattern, max_results=100: calls.append(("find", path, pattern, max_results)) or "files",
+        file_info=lambda path: calls.append(("info", path)) or "metadata",
         write_file=lambda path, content: calls.append(("write", path, content)) or "written",
         delete_file=lambda path: calls.append(("delete", path)) or "deleted",
         make_directory=lambda path: calls.append(("mkdir", path)) or "created",
         copy_file=lambda src, dst: calls.append(("copy", src, dst)) or "copied",
+        move_file=lambda src, dst: calls.append(("move", src, dst)) or "moved",
     )
 
 
@@ -182,10 +186,19 @@ def test_os_create_server_read_only_registers_only_read_tools(monkeypatch) -> No
     server = os_mcp_server.create_server(_workspace_stub(calls), config)
 
     assert server.name == "Workspace OS Operations"
-    assert set(server.tools) == {"list_files", "read_file"}
+    assert set(server.tools) == {"list_files", "read_file", "search_text", "find_files", "file_info"}
     assert server.tools["list_files"](".") == "listed"
     assert server.tools["read_file"]("README.md") == "contents"
-    assert calls == [("list", "."), ("read", "README.md")]
+    assert server.tools["search_text"]("src", "needle", 12) == "matches"
+    assert server.tools["find_files"](".", "*.py", 15) == "files"
+    assert server.tools["file_info"]("README.md") == "metadata"
+    assert calls == [
+        ("list", "."),
+        ("read", "README.md"),
+        ("search", "src", "needle", 12),
+        ("find", ".", "*.py", 15),
+        ("info", "README.md"),
+    ]
 
 
 def test_os_read_file_contract_and_pdf_description(monkeypatch) -> None:
@@ -214,20 +227,26 @@ def test_os_create_server_write_mode_registers_and_delegates_write_tools(monkeyp
     assert set(server.tools) == {
         "list_files",
         "read_file",
+        "search_text",
+        "find_files",
+        "file_info",
         "write_file",
         "delete_file",
         "make_directory",
         "copy_file",
+        "move_file",
     }
     assert server.tools["write_file"]("a.txt", "hello") == "written"
     assert server.tools["delete_file"]("a.txt") == "deleted"
     assert server.tools["make_directory"]("folder") == "created"
     assert server.tools["copy_file"]("src.txt", "dst.txt") == "copied"
+    assert server.tools["move_file"]("old.txt", "new.txt") == "moved"
     assert calls == [
         ("write", "a.txt", "hello"),
         ("delete", "a.txt"),
         ("mkdir", "folder"),
         ("copy", "src.txt", "dst.txt"),
+        ("move", "old.txt", "new.txt"),
     ]
 
 

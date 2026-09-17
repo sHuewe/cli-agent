@@ -7,7 +7,6 @@ import re
 from typing import Any
 
 from .agent_knowledge import (
-    ToolRoute,
     _KnowledgeRunState,
     _assemble_knowledge_payload,
     _knowledge_allowed_calls,
@@ -15,6 +14,7 @@ from .agent_knowledge import (
     tool_result_text,
 )
 from .agent_loop import run_model_loop
+from .agent_types import ToolRoute
 
 logger = logging.getLogger("cli_agent.agent_conversation")
 

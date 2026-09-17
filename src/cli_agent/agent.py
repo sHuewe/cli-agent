@@ -11,24 +11,22 @@ from typing import Any
 from mcp import ClientSession
 
 from .admin_config import McpPolicy, TrustedMcpServer, _normalize_mcp_url
+from .agent_conversation import ConversationMixin
+from .agent_knowledge import (
+    DEFAULT_OKF_MAX_CONCEPT_READS,
+    DEFAULT_OKF_MAX_TOOL_CALLS,
+    OkfConfigLike,
+    _OkfOptions,
+)
+from .agent_mcp import McpLifecycleMixin
+from .agent_permissions import WRITE_TOOLS
+from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT
+from .agent_types import ApprovalCallback, ServerConfig, ToolRoute
 from .config import LoggingConfig, McpServerConfig
 from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
 from .mcp_contracts import tool_contract_fingerprint
 from .model import ModelClient
 from .network_policy import NetworkConfig
-from .agent_conversation import ConversationMixin
-from .agent_mcp import McpLifecycleMixin
-from .agent_knowledge import (
-    ApprovalCallback,
-    DEFAULT_OKF_MAX_CONCEPT_READS,
-    DEFAULT_OKF_MAX_TOOL_CALLS,
-    OkfConfigLike,
-    ServerConfig,
-    ToolRoute,
-    WRITE_TOOLS,
-    _OkfOptions,
-)
-from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT
 
 logger = logging.getLogger("cli_agent.agent")
 
@@ -138,10 +136,6 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 "LLM-Context-Dump verweigert: .cli-agent liegt nicht sicher im Workspace."
             ) from exc
         dump_file = dump_directory / filename
-        if path_entry_is_symlink_or_reparse(dump_file):
-            raise RuntimeError(
-                f"LLM-Context-Dump verweigert: {filename!r} darf kein Symlink oder Reparse Point sein."
-            )
         if dump_file.exists():
             try:
                 if regular_file_has_multiple_links(dump_file):
@@ -152,6 +146,10 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 raise RuntimeError(
                     f"LLM-Context-Dump-Datei {filename!r} konnte nicht sicher geprüft werden."
                 ) from exc
+        if path_entry_is_symlink_or_reparse(dump_file):
+            raise RuntimeError(
+                f"LLM-Context-Dump verweigert: {filename!r} darf kein Symlink oder Reparse Point sein."
+            )
         return dump_file
 
     def _write_dump_json(self, filename: str, value: Any) -> None:
