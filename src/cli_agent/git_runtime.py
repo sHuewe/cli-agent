@@ -21,6 +21,7 @@ from .git_operations import (
 )
 
 MAX_COLLECTED_RECORDS = 10_000
+MAX_REF_ENTRIES = 10_000
 
 
 class RuntimeGitWorkspace(GitWorkspace):
@@ -125,7 +126,19 @@ class RuntimeGitWorkspace(GitWorkspace):
 
     @classmethod
     def _validate_control_paths(cls, workspace: Path, git_dir: Path, common_dir: Path) -> None:
-        paths = {git_dir / "HEAD", git_dir / "index", git_dir / "commondir", git_dir / "config", git_dir / "config.worktree", common_dir / "HEAD", common_dir / "packed-refs", common_dir / "config", common_dir / "refs", common_dir / "objects"}
+        paths = {
+            git_dir / "HEAD",
+            git_dir / "index",
+            git_dir / "commondir",
+            git_dir / "config",
+            git_dir / "config.worktree",
+            common_dir / "HEAD",
+            common_dir / "packed-refs",
+            common_dir / "config",
+            common_dir / "refs",
+            common_dir / "objects",
+            common_dir / "objects" / "info",
+        }
         for path in paths:
             if not os.path.lexists(path):
                 continue
@@ -142,6 +155,48 @@ class RuntimeGitWorkspace(GitWorkspace):
                 raise
             except OSError as exc:
                 raise GitWorkspaceError("Git-Steuerpfad konnte nicht sicher geprüft werden.") from exc
+
+        refs_roots = {common_dir / "refs", git_dir / "refs"}
+        for refs_root in refs_roots:
+            if os.path.lexists(refs_root):
+                cls._validate_refs_tree(workspace, refs_root)
+
+    @classmethod
+    def _validate_refs_tree(cls, workspace: Path, refs_root: Path) -> None:
+        """Validate loose refs without traversing the object store.
+
+        Loose refs are small control files but Git follows them before reading
+        history. Walk only the refs tree, fail closed on aliases, and cap the
+        amount of metadata work so repository revalidation stays predictable.
+        """
+        pending = [refs_root]
+        count = 0
+        try:
+            while pending:
+                current = pending.pop()
+                cls._inside(workspace, current.resolve(strict=True), "Git-Refs-Verzeichnis")
+                if path_entry_is_symlink_or_reparse(current):
+                    raise GitWorkspaceError("Symlinks oder Reparse-Points in Git-Refs sind nicht erlaubt.")
+                with os.scandir(current) as entries:
+                    for entry in entries:
+                        count += 1
+                        if count > MAX_REF_ENTRIES:
+                            raise GitWorkspaceError("Zu viele lose Git-Refs für eine sichere Prüfung.")
+                        path = Path(entry.path)
+                        if path_entry_is_symlink_or_reparse(path):
+                            raise GitWorkspaceError("Symlinks oder Reparse-Points in Git-Refs sind nicht erlaubt.")
+                        status = entry.stat(follow_symlinks=False)
+                        if stat.S_ISDIR(status.st_mode):
+                            pending.append(path)
+                        elif stat.S_ISREG(status.st_mode):
+                            if status.st_nlink > 1:
+                                raise GitWorkspaceError("Git-Refs mit mehreren Hardlinks sind nicht erlaubt.")
+                        else:
+                            raise GitWorkspaceError("Git-Refs müssen reguläre Dateien oder Verzeichnisse sein.")
+        except GitWorkspaceError:
+            raise
+        except OSError as exc:
+            raise GitWorkspaceError("Git-Refs konnten nicht sicher geprüft werden.") from exc
 
     @classmethod
     def _reject_alternate_object_stores(cls, common_dir: Path) -> None:
@@ -392,7 +447,7 @@ class RuntimeGitWorkspace(GitWorkspace):
             if not (stat.S_ISREG(status.st_mode) and status.st_size == 0):
                 args += ["-L", f"1,{MAX_BLAME_LINES + 1}"]
         else:
-            args += ["-L", f"{line_range[0]},{line_range[1]}" ]
+            args += ["-L", f"{line_range[0]},{line_range[1]}"]
         args += ["--", repo_path]
         records = self._blame_records(self._git(repo.root, *args))
         if line_range is None and len(records) > MAX_BLAME_LINES:
