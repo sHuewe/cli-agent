@@ -259,13 +259,13 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 )
                 configured_headers = tuple(
                     sorted(
-                        (key, self._resolve_http_value(value))
+                        (key.casefold(), self._resolve_http_value(value))
                         for key, value in server_config.headers.items()
                     )
                 )
                 trusted_headers = tuple(
                     sorted(
-                        (key, self._resolve_http_value(value))
+                        (key.casefold(), self._resolve_http_value(value))
                         for key, value in trusted.headers
                     )
                 )
