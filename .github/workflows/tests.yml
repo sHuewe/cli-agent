@@ -85,7 +85,7 @@ jobs:
           if (-not $wheel) {
             throw "No wheel was produced in dist/."
           }
-          uv run --no-project --with $wheel.FullName python -c "import cli_agent; assert cli_agent.__version__ == '1.0.0'"
+          uv run --no-project --with $wheel.FullName python -c "import importlib.metadata, pathlib, tomllib, cli_agent; project = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']; expected = project['version']; assert cli_agent.__version__ == expected, f'module version {cli_agent.__version__!r} != {expected!r}'; installed = importlib.metadata.version(project['name']); assert installed == expected, f'distribution version {installed!r} != {expected!r}'"
 
       - name: Verify source distribution exists
         shell: pwsh
