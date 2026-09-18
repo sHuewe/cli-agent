@@ -63,7 +63,7 @@ url = "https://allowed.example/mcp"
         load_config(config_file)
 
 
-def test_normal_authentication_headers_remain_allowed(tmp_path: Path) -> None:
+def test_mcp_authorization_header_is_rejected_in_user_config(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         '''
@@ -74,7 +74,26 @@ url = "https://allowed.example/mcp"
 
 [mcp_servers.headers]
 Authorization = "Bearer token"
+'''.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Authorization|Admin-Policy"):
+        load_config(config_file)
+
+
+def test_non_authentication_mcp_headers_remain_allowed(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        '''
+[[mcp_servers]]
+name = "external"
+transport = "streamable_http"
+url = "https://allowed.example/mcp"
+
+[mcp_servers.headers]
 X-Client-Id = "cli-agent"
+X-Workspace = "{workspace_directory}"
 '''.strip(),
         encoding="utf-8",
     )
@@ -82,6 +101,24 @@ X-Client-Id = "cli-agent"
     server = load_config(config_file).mcp_servers[0]
 
     assert server.headers == {
-        "Authorization": "Bearer token",
         "X-Client-Id": "cli-agent",
+        "X-Workspace": "{workspace_directory}",
     }
+
+
+def test_model_authorization_header_remains_supported(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        '''
+[model]
+provider = "openai"
+model = "test-model"
+base_url = "https://allowed.example/v1"
+
+[model.headers]
+Authorization = "Bearer model-token"
+'''.strip(),
+        encoding="utf-8",
+    )
+
+    assert load_config(config_file).model.headers["Authorization"] == "Bearer model-token"
