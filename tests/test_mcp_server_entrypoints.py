@@ -343,6 +343,45 @@ def test_os_main_uses_resolved_config_workspace_and_stdio(tmp_path, monkeypatch)
     assert runner.run_transport == "stdio"
 
 
+def test_os_main_protects_effective_default_config_when_config_flag_is_omitted(tmp_path, monkeypatch) -> None:
+    captured = {}
+    default_config = tmp_path / "cli-agent" / "config.toml"
+    runner = FakeFastMCP("runner")
+    workspace = object()
+
+    monkeypatch.setattr(
+        os_mcp_server,
+        "parse_args",
+        lambda: SimpleNamespace(
+            project_directory=tmp_path,
+            config_file=None,
+            access="read",
+        ),
+    )
+    monkeypatch.setattr(os_mcp_server, "default_config_file", lambda: default_config)
+    monkeypatch.setattr(
+        os_mcp_server,
+        "load_config",
+        lambda path: SimpleNamespace(logging=object(), mcp_servers=()),
+    )
+    monkeypatch.setattr(os_mcp_server, "configure_logging", lambda *_args, **_kwargs: None)
+
+    class WorkspaceFactory:
+        @classmethod
+        def from_directory(cls, directory, mcp_config, *, protected_paths=()):
+            captured["workspace"] = (directory, mcp_config, protected_paths)
+            return workspace
+
+    monkeypatch.setattr(os_mcp_server, "Workspace", WorkspaceFactory)
+    monkeypatch.setattr(os_mcp_server, "create_server", lambda *_args: runner)
+
+    os_mcp_server.main()
+
+    assert captured["workspace"][0] == tmp_path
+    assert captured["workspace"][2] == (default_config,)
+    assert runner.run_transport == "stdio"
+
+
 def test_os_main_converts_workspace_error_to_system_exit(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         os_mcp_server,
