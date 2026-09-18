@@ -10,6 +10,7 @@ from jsonschema.validators import validator_for
 # These limits are intentionally generous. They are last-resort safety bounds
 # against broken or compromised MCP servers, not normal application quotas.
 MAX_MCP_TOOLS_PER_SERVER = 1_024
+MAX_MCP_TOOL_NAME_CHARS = 512
 MAX_MCP_INSTRUCTIONS_CHARS = 2_000_000
 MAX_MCP_TOOL_DESCRIPTION_CHARS = 250_000
 MAX_MCP_TOOL_SCHEMA_CHARS = 2_000_000
@@ -125,6 +126,11 @@ def validate_mcp_server_metadata(
     seen_tool_names: set[str] = set()
     for tool in tools:
         tool_name = str(getattr(tool, "name", "<unbekannt>"))
+        if len(tool_name) > MAX_MCP_TOOL_NAME_CHARS:
+            raise RuntimeError(
+                f"MCP-Server {server_name!r} liefert einen zu langen Toolnamen "
+                f"({len(tool_name)} > {MAX_MCP_TOOL_NAME_CHARS} Zeichen)."
+            )
         if tool_name in seen_tool_names:
             raise RuntimeError(
                 f"MCP-Server {server_name!r} bietet den Toolnamen {tool_name!r} mehrfach an."
