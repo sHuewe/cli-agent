@@ -375,6 +375,17 @@ def test_list_files_hides_sensitive_entries(tmp_path) -> None:
     assert ".git" not in listing
 
 
+def test_list_files_skips_cyclic_symlink(tmp_path) -> None:
+    (tmp_path / "visible.txt").write_text("visible", encoding="utf-8")
+    loop = tmp_path / "loop"
+    loop.symlink_to("loop")
+
+    listing = _workspace(tmp_path).list_files(".")
+
+    assert "visible.txt" in listing
+    assert "loop" not in listing
+
+
 def test_list_files_rejects_sensitive_directory(tmp_path) -> None:
     (tmp_path / ".git").mkdir()
 
