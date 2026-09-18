@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import tomllib
 from types import SimpleNamespace
 
 import pytest
@@ -205,6 +206,27 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
         "tokens",
     ]
     assert asyncio.run(captured["approval_callback"]("continuous__search", {"query": "test"})) is True
+
+
+def test_render_trusted_http_server_fragment_preserves_bearer_env() -> None:
+    server = TrustedMcpServer(
+        name="docs",
+        transport="streamable_http",
+        url="https://mcp.internal/mcp",
+        bearer_token_env="CLI_AGENT_DOCS_TOKEN",
+        trust_instructions=True,
+    )
+
+    fragment = cli_module._render_trusted_server_fragment(server)
+    parsed = tomllib.loads(fragment)
+    trusted = parsed["mcp"]["trusted_servers"][0]
+
+    assert trusted["trust_instructions"] is True
+    assert (
+        trusted["from_env"]["authentication"]["bearer"]
+        == "CLI_AGENT_DOCS_TOKEN"
+    )
+    assert "Bearer " not in fragment
 
 
 def test_model_cli_override_replaces_only_model_name() -> None:
