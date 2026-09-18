@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import cli_agent.file_context as file_context_module
 from cli_agent.file_context import (
     OutputTarget,
     prepare_context_file,
@@ -87,6 +88,31 @@ def test_context_file_rejects_symlink_escape(tmp_path: Path) -> None:
         prepare_context_file(workspace, Path("repository.txt"))
 
 
+def test_context_file_limit_is_generous_but_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(file_context_module, "MAX_LLM_INPUT_FILE_BYTES", 16)
+    context = tmp_path / "repository.txt"
+    context.write_bytes(b"x" * 17)
+
+    with pytest.raises(ValueError, match="Sicherheitslimit"):
+        prepare_context_file(tmp_path, Path("repository.txt"))
+
+
+def test_context_file_at_size_limit_is_accepted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(file_context_module, "MAX_LLM_INPUT_FILE_BYTES", 16)
+    context = tmp_path / "repository.txt"
+    context.write_bytes(b"x" * 16)
+
+    prepared = prepare_context_file(tmp_path, Path("repository.txt"))
+
+    assert prepared.content == "x" * 16
+
+
 def test_prompt_file_is_loaded_as_workspace_text(tmp_path: Path) -> None:
     prompt = tmp_path / "review-prompt.md"
     prompt.write_text("Review the repository thoroughly.\n", encoding="utf-8")
@@ -95,6 +121,18 @@ def test_prompt_file_is_loaded_as_workspace_text(tmp_path: Path) -> None:
 
     assert prepared.relative_path == "review-prompt.md"
     assert prepared.content == "Review the repository thoroughly.\n"
+
+
+def test_prompt_file_uses_same_bounded_reader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(file_context_module, "MAX_LLM_INPUT_FILE_BYTES", 8)
+    prompt = tmp_path / "prompt.md"
+    prompt.write_bytes(b"x" * 9)
+
+    with pytest.raises(ValueError, match="Sicherheitslimit"):
+        prepare_prompt_file(tmp_path, Path("prompt.md"))
 
 
 def test_prompt_file_rejects_outside_workspace(tmp_path: Path) -> None:
