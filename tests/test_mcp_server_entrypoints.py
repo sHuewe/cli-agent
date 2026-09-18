@@ -319,8 +319,8 @@ def test_os_main_uses_resolved_config_workspace_and_stdio(tmp_path, monkeypatch)
 
     class WorkspaceFactory:
         @classmethod
-        def from_directory(cls, directory, mcp_config):
-            captured["workspace"] = (directory, mcp_config)
+        def from_directory(cls, directory, mcp_config, *, protected_paths=()):
+            captured["workspace"] = (directory, mcp_config, protected_paths)
             return workspace
 
     monkeypatch.setattr(os_mcp_server, "Workspace", WorkspaceFactory)
@@ -339,6 +339,7 @@ def test_os_main_uses_resolved_config_workspace_and_stdio(tmp_path, monkeypatch)
     assert captured["logging"][1]["default_filename"] == "cli-agent-os-mcp.log"
     assert captured["workspace"][0] == tmp_path
     assert captured["workspace"][1].allow_write_files() is True
+    assert captured["workspace"][2] == (tmp_path / "config.toml",)
     assert runner.run_transport == "stdio"
 
 
