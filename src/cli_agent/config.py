@@ -36,6 +36,12 @@ def _validated_user_headers(values: Any, *, section: str) -> dict[str, str]:
                 f"{section} darf den routing-/proxyrelevanten Header {name!r} nicht setzen. "
                 "Host und Routing werden ausschließlich aus der geprüften URL abgeleitet."
             )
+        if normalized == "authorization" and "MCP-Server" in section:
+            raise ValueError(
+                f"{section} darf Authorization nicht statisch setzen. "
+                "Bearer-Authentifizierung für HTTP-MCPs wird ausschließlich "
+                "über die maschinenweite Admin-Policy konfiguriert."
+            )
         result[name] = str(raw_value)
     return result
 
