@@ -33,10 +33,13 @@ async def await_mcp_operation(
 ) -> _T:
     """Await one MCP operation with an application-level deadline."""
 
+    timeout = asyncio.timeout(timeout_seconds)
     try:
-        async with asyncio.timeout(timeout_seconds):
+        async with timeout:
             return await awaitable
     except TimeoutError as exc:
+        if not timeout.expired():
+            raise
         raise RuntimeError(
             f"{operation} hat das Timeout von {timeout_seconds:g} Sekunden überschritten."
         ) from exc
