@@ -72,7 +72,7 @@ Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses
 
 **Problem:** Ein Workspace-Tool darf weder über `..`, absolute/Windows-Drive-Pfade oder Symlinks aus dem Workspace ausbrechen noch triviale Secret-/Credential- oder interne Agentendateien lesen oder überschreiben.
 
-**Gelöst:** Die Workspace-Auflösung erzwingt relative, innerhalb des Root verbleibende Pfade und prüft auf Symlink-Escapes. Bekannte sensible Namen/Pfade wie `.env*`, Credentials, Schlüssel, `.git`, `.cli-agent`, `.ssh`, `.aws` und Logs werden beim Lesen blockiert; dieselbe Schutzklasse wird für Mutationsziele angewandt. Auch `copy_file` prüft sensible Quellen und Ziele. Zusätzlich begrenzt `read_file` die gelesene Textgröße. Regressionstests liegen in `tests/test_os_operations.py`.
+**Gelöst:** Die Workspace-Auflösung erzwingt relative, innerhalb des Root verbleibende Pfade und prüft auf Symlink-Escapes. Bekannte sensible Namen/Pfade wie `.env*`, Credentials, Schlüssel, `.git`, `.cli-agent`, `.ssh`, `.aws` und Logs werden beim Lesen blockiert; dieselbe Schutzklasse wird für Mutationsziele angewandt. Zusätzlich wird die tatsächlich aktive Benutzer-/Projektkonfiguration dynamisch als geschützter Pfad an den Built-in-OS-MCP übergeben, sofern sie innerhalb des Workspaces liegt. Sie kann dadurch weder direkt gelesen, über Suche/Find ermittelt, kopiert noch mutiert werden. `list_files` blendet statisch sensible und dynamisch geschützte Einträge aus und verweigert das direkte Listing eines geschützten Verzeichnisses. Zusätzlich begrenzt `read_file` die gelesene Textgröße. Regressionstests liegen in `tests/test_os_operations.py` und `tests/test_mcp_server_entrypoints.py`.
 
 ### Sensitive Output-Ziele
 
