@@ -59,6 +59,95 @@ contract_sha256 = "{VALID_CONTRACT}"
     assert trusted.auto_approve_tools[0].contract_sha256 == VALID_CONTRACT
 
 
+
+def test_trusted_http_server_loads_optional_bearer_token_env(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        '''
+[[mcp.trusted_servers]]
+name = "docs"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+
+[mcp.trusted_servers.from_env.authentication]
+bearer = "CLI_AGENT_DOCS_TOKEN"
+'''.strip(),
+        encoding="utf-8",
+    )
+
+    trusted = load_admin_config(path).mcp.trusted_servers[0]
+
+    assert trusted.bearer_token_env == "CLI_AGENT_DOCS_TOKEN"
+
+
+def test_trusted_http_server_without_authentication_remains_valid(tmp_path: Path) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        '''
+[[mcp.trusted_servers]]
+name = "docs"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+'''.strip(),
+        encoding="utf-8",
+    )
+
+    trusted = load_admin_config(path).mcp.trusted_servers[0]
+
+    assert trusted.bearer_token_env is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '''
+[[mcp.trusted_servers]]
+name = "docs"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+
+[mcp.trusted_servers.from_env.authentication]
+bearer = "bad-name"
+''',
+        '''
+[[mcp.trusted_servers]]
+name = "docs"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+
+[mcp.trusted_servers.from_env.authentication]
+basic = "MCP_BASIC"
+''',
+        '''
+[[mcp.trusted_servers]]
+name = "docs"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+
+[mcp.trusted_servers.from_env]
+header = "TOKEN"
+''',
+        '''
+[[mcp.trusted_servers]]
+name = "docs"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+
+[mcp.trusted_servers.headers]
+Authorization = "Bearer static-secret"
+''',
+    ],
+)
+def test_trusted_http_server_rejects_invalid_bearer_auth_configuration(
+    tmp_path: Path,
+    body: str,
+) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text(body.strip(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="bearer|Authorization|authentication"):
+        load_admin_config(path)
+
 def test_legacy_allow_untrusted_stdio_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "admin.toml"
     path.write_text('[mcp]\nallow_untrusted_stdio = true\n', encoding="utf-8")
