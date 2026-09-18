@@ -79,11 +79,14 @@ Der Workflow kann über `workflow_dispatch` manuell gestartet werden. Dabei gibt
 
 Nur wenn `publish = true` gewählt wird und Test- sowie Package-Job erfolgreich sind, läuft der Publish-Job. Dieser lädt exakt die im selben Workflow erzeugten Python-Distributionen herunter und veröffentlicht Wheel und Source Distribution mit `uv publish`.
 
-Dafür muss mindestens folgende Repository-Variable konfiguriert sein:
+Dafür müssen zwei Repository-Variablen konfiguriert sein:
 
 ```text
 PYTHON_PUBLISH_URL
+PYTHON_PUBLISH_CHECK_URL
 ```
+
+`PYTHON_PUBLISH_URL` ist die Upload-URL des Package-Repositories. `PYTHON_PUBLISH_CHECK_URL` ist die zugehörige Index-/Check-URL, über die `uv publish --check-url` vor dem Upload prüfen kann, ob ein konkretes Distributionsartefakt bereits vorhanden ist. Dadurch kann ein nach einem Teilfehler erneut gestarteter Publish-Lauf bereits erfolgreich hochgeladene Dateien überspringen, statt an einem Duplicate-Upload zu scheitern.
 
 Für die Authentisierung unterstützt der Workflow genau eine der beiden Varianten:
 
