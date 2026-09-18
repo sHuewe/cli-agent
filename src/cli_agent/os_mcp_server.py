@@ -252,6 +252,7 @@ def main() -> None:
         workspace = Workspace.from_directory(
             args.project_directory,
             mcp_config,
+            protected_paths=(args.config_file,) if args.config_file is not None else (),
         )
     except WorkspaceError as exc:
         logger.exception("MCP server initialization failed")
