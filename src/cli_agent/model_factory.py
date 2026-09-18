@@ -58,9 +58,14 @@ def create_model_client(
 
     if config.provider == "openai":
         _validate_api_key_env(config, credential_rules)
-        api_key = "dummy"
+        api_key = None
         if config.api_key_env:
-            api_key = os.getenv(config.api_key_env) or "dummy"
+            api_key = os.getenv(config.api_key_env)
+            if not api_key:
+                raise ValueError(
+                    "Die konfigurierte Credential-Umgebungsvariable "
+                    f"{config.api_key_env!r} ist nicht gesetzt oder leer."
+                )
 
         return OpenAIClient(
             base_url=config.base_url,
