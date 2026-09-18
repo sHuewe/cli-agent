@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import cli_agent.agent_mcp as agent_mcp_module
 from cli_agent.admin_config import McpPolicy, TrustedMcpServer
 from cli_agent.agent import CliAgent
 from cli_agent.agent_knowledge import _OkfOptions
@@ -139,6 +140,90 @@ def test_start_server_rejects_duplicate_connection(tmp_path: Path) -> None:
                 )
         finally:
             await parent.aclose()
+    asyncio.run(exercise())
+
+
+def test_connect_server_times_out_during_initialize(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowSession:
+        async def initialize(self):
+            await asyncio.sleep(1)
+            return SimpleNamespace(instructions=None)
+
+    @asynccontextmanager
+    async def fake_stdio_client(_parameters):
+        yield object(), object()
+
+    @asynccontextmanager
+    async def fake_client_session(_read_stream, _write_stream):
+        yield SlowSession()
+
+    async def exercise() -> None:
+        agent = make_agent(tmp_path)
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        monkeypatch.setattr(agent_mcp_module, "stdio_client", fake_stdio_client)
+        monkeypatch.setattr(agent_mcp_module, "ClientSession", fake_client_session)
+        monkeypatch.setattr(
+            agent_mcp_module,
+            "MCP_INITIALIZE_TIMEOUT_SECONDS",
+            0.01,
+        )
+        try:
+            with pytest.raises(RuntimeError, match="initialize.*Timeout"):
+                await agent._connect_server(
+                    stack,
+                    McpServerConfig(
+                        name="slow",
+                        transport="stdio",
+                        command="unused",
+                        built_in=True,
+                    ),
+                )
+        finally:
+            await stack.aclose()
+
+    asyncio.run(exercise())
+
+
+def test_start_server_times_out_during_list_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowSession:
+        async def list_tools(self):
+            await asyncio.sleep(1)
+            return SimpleNamespace(tools=[])
+
+    async def exercise() -> None:
+        agent = make_agent(tmp_path)
+        parent = AsyncExitStack()
+        await parent.__aenter__()
+
+        async def connect(_stack, _config):
+            return SlowSession(), None
+
+        agent._connect_server = connect
+        monkeypatch.setattr(
+            agent_mcp_module,
+            "MCP_LIST_TOOLS_TIMEOUT_SECONDS",
+            0.01,
+        )
+        try:
+            with pytest.raises(RuntimeError, match="list_tools.*Timeout"):
+                await agent._start_server(
+                    McpServerConfig(
+                        name="slow",
+                        command="unused",
+                        built_in=True,
+                    ),
+                    parent,
+                )
+        finally:
+            await parent.aclose()
+
     asyncio.run(exercise())
 
 
