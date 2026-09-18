@@ -82,9 +82,9 @@ Die Netzwerklisten enthalten Hosts, keine vollständigen URLs. Modell- und HTTP-
 
 ### Remote-Modell-Credentials
 
-`api_key_env` ist optional. Wenn in der normalen Modellkonfiguration **kein** `api_key_env` gesetzt ist, ist keine `[[model.credentials]]`-Regel erforderlich; bei OpenAI-kompatiblen Endpunkten verwendet `cli-agent` dann intern den Dummy-Key `dummy`.
+`api_key_env` ist optional. Wenn in der normalen Modellkonfiguration **kein** `api_key_env` gesetzt ist, ist keine `[[model.credentials]]`-Regel erforderlich; bei OpenAI-kompatiblen Endpunkten sendet `cli-agent` dann keinen `Authorization`-Header. Das unterstützt insbesondere interne oder lokale OpenAI-kompatible Endpunkte, die keine Authentifizierung verlangen.
 
-Wenn für einen nichtlokalen OpenAI-kompatiblen Modell-Endpunkt hingegen `api_key_env` verwendet wird, muss die Admin-Policy festlegen, welche Environment-Variable für diesen Provider und Host zulässig ist. Dadurch kann eine normale Projektkonfiguration nicht versehentlich eine beliebige Prozess-Umgebungsvariable als Credential an einen freigegebenen Remote-LLM-Endpunkt senden.
+Wenn `api_key_env` gesetzt ist, muss die benannte Environment-Variable vorhanden und nicht leer sein; andernfalls bricht die Modellkonfiguration mit einem Fehler ab. Für einen nichtlokalen OpenAI-kompatiblen Modell-Endpunkt muss die Admin-Policy zusätzlich festlegen, welche Environment-Variable für diesen Provider und Host zulässig ist. Dadurch kann eine normale Projektkonfiguration nicht versehentlich eine beliebige Prozess-Umgebungsvariable als Credential an einen freigegebenen Remote-LLM-Endpunkt senden.
 
 Beispiel:
 
