@@ -185,6 +185,12 @@ class McpLifecycleMixin:
         return environment
 
     def _http_headers(self, server_config: ServerConfig) -> dict[str, str]:
+        if any(key.strip().casefold() == "authorization" for key in server_config.headers):
+            raise ValueError(
+                f"HTTP-MCP-Server {server_config.name!r} darf Authorization nicht "
+                "statisch konfigurieren. Bearer-Authentifizierung wird "
+                "ausschließlich aus der Admin-Policy materialisiert."
+            )
         headers = {
             key: self._resolve_http_value(value)
             for key, value in server_config.headers.items()
