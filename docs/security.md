@@ -62,11 +62,11 @@ Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses
 
 **Gelöst:** Die Workspace-Auflösung erzwingt relative, innerhalb des Root verbleibende Pfade und prüft auf Symlink-Escapes. Bekannte sensible Namen/Pfade wie `.env*`, Credentials, Schlüssel, `.git`, `.cli-agent`, `.ssh`, `.aws` und Logs werden beim Lesen blockiert; dieselbe Schutzklasse wird für Mutationsziele angewandt. Auch `copy_file` prüft sensible Quellen und Ziele. Zusätzlich begrenzt `read_file` die gelesene Textgröße. Regressionstests liegen in `tests/test_os_operations.py`.
 
-### Leakage des absoluten Workspace-Pfads
+### Leakage lokaler Runtime-Pfade
 
-**Problem:** Der absolute lokale Workspace-Pfad wurde dem Modell im Systemprompt mitgeteilt, obwohl er für die Modellentscheidung nicht benötigt wird.
+**Problem:** Lokale Runtime-Pfade sollen nicht ohne funktionalen Grund an das Modell oder externe HTTP-MCPs weitergegeben werden. Gleichzeitig kann ein HTTP-MCP den aktuellen Workspace legitimerweise benötigen, etwa um eine dauerhaft laufende MCP-Session einem lokalen Projekt zuzuordnen.
 
-**Gelöst:** Der Systemprompt nennt keinen absoluten Workspace-Pfad mehr und fordert stattdessen relative Pfade für Workspace-Tools. Die absolute Auflösung bleibt ausschließlich intern für Prozess-/MCP-Konfiguration erhalten. `tests/test_agent.py` prüft explizit, dass der absolute Pfad nicht im Prompt vorkommt.
+**Gelöst:** Der Systemprompt nennt keinen absoluten Workspace-Pfad mehr und fordert stattdessen relative Pfade für Workspace-Tools. Runtime-Platzhalter werden außerdem transportabhängig aufgelöst: Administrativ kontrollierte stdio-Launchprofile dürfen `{python}`, `{workspace_directory}`, `{project_directory}` und `{config_file}` verwenden. In HTTP-MCP-URLs und -Headern sind dagegen ausschließlich `{workspace_directory}` und `{project_directory}` zulässig; `{python}` und `{config_file}` werden abgewiesen. Damit bleibt eine bewusste Workspace-Bindung auch für lokale oder entfernte HTTP-MCPs möglich, ohne weitere lokale Installations- oder Konfigurationspfade offenzulegen. Die Weitergabe des absoluten Workspace-Pfads an einen entfernten erlaubten Host ist dabei eine explizite Konfigurationsentscheidung. `tests/test_agent.py` prüft die transportabhängige Placeholder-Auflösung und weiterhin, dass der absolute Pfad nicht im Modellprompt vorkommt.
 
 ### Web-Kontext und Prompt Injection
 
