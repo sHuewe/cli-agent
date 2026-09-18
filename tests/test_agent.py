@@ -170,6 +170,36 @@ def test_http_mcp_bearer_token_is_injected_from_admin_bound_env(
     assert headers["X-Workspace"] == str(tmp_path.resolve())
 
 
+def test_http_mcp_header_identity_is_case_insensitive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = McpServerConfig(
+        name="docs",
+        transport="streamable_http",
+        url="https://mcp.internal/mcp",
+        headers={"X-Client-Id": "cli-agent"},
+    )
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="docs",
+                transport="streamable_http",
+                url="https://mcp.internal/mcp",
+                headers=(("x-client-id", "cli-agent"),),
+                bearer_token_env="CLI_AGENT_DOCS_TOKEN",
+            ),
+        )
+    )
+    agent = make_agent(tmp_path, mcp_policy=policy)
+    monkeypatch.setenv("CLI_AGENT_DOCS_TOKEN", "secret-token")
+
+    headers = agent._http_headers(server)
+
+    assert headers["Authorization"] == "Bearer secret-token"
+    assert headers["X-Client-Id"] == "cli-agent"
+
+
 def test_http_mcp_bearer_token_missing_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
