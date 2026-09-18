@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import cli_agent.agent_tool_calls as agent_tool_calls_module
 from cli_agent.agent_knowledge import _KnowledgeRunState
 from cli_agent.agent_tool_calls import process_tool_calls
 from cli_agent.config import LoggingConfig, McpServerConfig
@@ -330,6 +331,29 @@ def test_compression_failure_falls_back_to_original_result() -> None:
     call = _tool_call("server__read", {})
     _result, messages, _ = _run(agent=agent, tool_calls=[call], routes=routes)
     assert messages[-1]["content"] == text
+
+
+def test_tool_call_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowSession:
+        async def call_tool(self, name, arguments):
+            del name, arguments
+            await asyncio.sleep(1)
+            return SimpleNamespace(content=[], isError=False)
+
+    monkeypatch.setattr(
+        agent_tool_calls_module,
+        "MCP_TOOL_CALL_TIMEOUT_SECONDS",
+        0.01,
+    )
+    agent = ToolAgent()
+    config = McpServerConfig(name="server", command="unused", built_in=True)
+    routes = {"server__read": (SlowSession(), "read", config)}
+    call = _tool_call("server__read", {})
+
+    with pytest.raises(RuntimeError, match="MCP-Tool.*Timeout"):
+        _run(agent=agent, tool_calls=[call], routes=routes)
 
 
 def test_tool_exception_is_propagated() -> None:
