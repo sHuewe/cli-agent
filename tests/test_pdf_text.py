@@ -90,6 +90,25 @@ def test_size_limit_before_starting_parser(tmp_path, monkeypatch):
         _workspace(tmp_path).read_file("large.pdf")
 
 
+def test_pdf_worker_uses_minimal_environment(tmp_path, monkeypatch):
+    path = tmp_path / "document.pdf"
+    path.write_bytes(_pdf("hello"))
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-reach-worker")
+    monkeypatch.setenv("PYTHONPATH", "must-not-reach-worker")
+    captured = {}
+
+    def run(*args, **kwargs):
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(args[0], 0, b"ok", b"")
+
+    monkeypatch.setattr(pdf_text.subprocess, "run", run)
+
+    assert pdf_text.read_pdf_text(path) == "ok"
+    assert "AWS_SECRET_ACCESS_KEY" not in captured["env"]
+    assert "PYTHONPATH" not in captured["env"]
+    assert captured["env"]["PYTHONSAFEPATH"] == "1"
+
+
 def test_timeout_is_workspace_error(tmp_path, monkeypatch):
     (tmp_path / "document.pdf").write_bytes(_pdf("hello"))
 
