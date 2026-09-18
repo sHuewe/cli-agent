@@ -102,6 +102,21 @@ def test_description_and_schema_limits_are_enforced(monkeypatch: pytest.MonkeyPa
         )
 
 
+def test_tool_name_length_limit_is_enforced() -> None:
+    limits.validate_mcp_server_metadata(
+        server_name="valid",
+        instructions=None,
+        tools=[tool(name="t" * limits.MAX_MCP_TOOL_NAME_CHARS)],
+    )
+
+    with pytest.raises(RuntimeError, match="zu langen Toolnamen"):
+        limits.validate_mcp_server_metadata(
+            server_name="broken",
+            instructions=None,
+            tools=[tool(name="t" * (limits.MAX_MCP_TOOL_NAME_CHARS + 1))],
+        )
+
+
 def test_duplicate_tool_names_are_rejected() -> None:
     with pytest.raises(RuntimeError, match="mehrfach"):
         limits.validate_mcp_server_metadata(
