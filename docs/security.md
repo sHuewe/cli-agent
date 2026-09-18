@@ -36,6 +36,12 @@ Der Agent setzt Runtime-Platzhalter wie `{workspace_directory}` selbst ein. Dadu
 
 **Gelöst:** Bearer-Authentifizierung für HTTP-MCPs ist optional und ausschließlich an einen passenden `[[mcp.trusted_servers]]`-Eintrag der maschinenweiten Admin-Policy gebunden. Unter `[mcp.trusted_servers.from_env.authentication]` enthält `bearer` nur den Namen der zugelassenen Environment-Variable; deren Wert ist ausschließlich der rohe Token. `cli-agent` erzeugt erst beim Verbindungsaufbau `Authorization: Bearer <token>`. Fehlt die Variable oder ist sie leer, schlägt der Verbindungsaufbau fail-closed fehl. Statische `Authorization`-Header sind sowohl in der Benutzer- als auch in der Trusted-Server-Konfiguration unzulässig. Andere nicht-sensitive Header bleiben erlaubt. Nicht authentifizierte HTTP-MCPs funktionieren unverändert ohne Trusted-Server-Eintrag, sofern keine andere Trusted-Server-Funktion benötigt wird.
 
+### MCP-Lifecycle- und Tool-Timeouts
+
+**Problem:** Ein nicht antwortender oder absichtlich hängender MCP-Server darf den Agenten nicht unbegrenzt in `initialize`, `list_tools` oder einem Tool-Aufruf blockieren.
+
+**Gelöst:** Diese MCP-Operationen besitzen jetzt explizite anwendungsseitige Deadlines. `initialize` und `list_tools` erhalten jeweils 120 Sekunden, normale Tool-Aufrufe 600 Sekunden. Die Werte sind bewusst großzügig, damit auch langsame lokale oder entfernte MCPs funktionieren; sie dienen als obere Notbremse gegen dauerhaft hängende Sessions. Bei Überschreitung wird der laufende Await abgebrochen und ein klarer Laufzeitfehler an den normalen Fehlerpfad weitergegeben. Die Grenze gilt gleichermaßen für externe MCPs und den internen OKF-MCP.
+
 ### MCP-Instructions und Prompt Injection
 
 **Problem:** MCP-`instructions` können für die korrekte Tool-Nutzung wichtig sein, sind bei externen Servern aber gleichzeitig vom Server kontrollierter Freitext. Sie pauschal in den Systemprompt zu übernehmen erhöht ihren Prompt-Trust unnötig; sie vollständig zu ignorieren verliert dagegen funktional relevante Informationen.
@@ -67,6 +73,12 @@ Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses
 **Problem:** Ein Workspace-Tool darf weder über `..`, absolute/Windows-Drive-Pfade oder Symlinks aus dem Workspace ausbrechen noch triviale Secret-/Credential- oder interne Agentendateien lesen oder überschreiben.
 
 **Gelöst:** Die Workspace-Auflösung erzwingt relative, innerhalb des Root verbleibende Pfade und prüft auf Symlink-Escapes. Bekannte sensible Namen/Pfade wie `.env*`, Credentials, Schlüssel, `.git`, `.cli-agent`, `.ssh`, `.aws` und Logs werden beim Lesen blockiert; dieselbe Schutzklasse wird für Mutationsziele angewandt. Auch `copy_file` prüft sensible Quellen und Ziele. Zusätzlich begrenzt `read_file` die gelesene Textgröße. Regressionstests liegen in `tests/test_os_operations.py`.
+
+### Größenlimit für explizite Prompt-/Context-Dateien
+
+**Problem:** `--context-file` und `--prompt-file` wurden vollständig mit `read_text()` eingelesen. Eine extrem große Datei konnte dadurch bereits vor dem Modellaufruf unverhältnismäßig viel Speicher belegen.
+
+**Gelöst:** Beide explizit vom Benutzer gewählten Eingabedateien werden jetzt mit einem harten, aber bewusst sehr großzügigen Limit von **256 MiB pro Datei** binär begrenzt eingelesen und anschließend als UTF-8 dekodiert. Es findet absichtlich keine Abfrage der Context-Größe des konfigurierten Modells statt. Das Limit ist ausschließlich eine lokale Speicher-/DoS-Notbremse und keine Aussage darüber, was ein Modell verarbeiten darf. Ist der resultierende Modellkontext kleiner als 256 MiB, aber dennoch zu groß für den gewählten Endpoint, bleibt der Modell-Endpoint die autoritative Grenze und dessen Fehler wird an den Benutzer weitergegeben.
 
 ### Leakage lokaler Runtime-Pfade
 
