@@ -154,17 +154,42 @@ jobs:
 
       - name: Validate publish configuration
         env:
-          UV_PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
+          PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
+          PUBLISH_TOKEN: ${{ secrets.PYTHON_PUBLISH_TOKEN }}
+          PUBLISH_USERNAME: ${{ secrets.PYTHON_PUBLISH_USERNAME }}
+          PUBLISH_PASSWORD: ${{ secrets.PYTHON_PUBLISH_PASSWORD }}
         run: |
-          if [ -z "$UV_PUBLISH_URL" ]; then
+          if [ -z "$PUBLISH_URL" ]; then
             echo "Repository variable PYTHON_PUBLISH_URL is not configured." >&2
+            exit 1
+          fi
+
+          if [ -n "$PUBLISH_TOKEN" ]; then
+            if [ -n "$PUBLISH_USERNAME" ] || [ -n "$PUBLISH_PASSWORD" ]; then
+              echo "Configure either PYTHON_PUBLISH_TOKEN or PYTHON_PUBLISH_USERNAME/PYTHON_PUBLISH_PASSWORD, not both." >&2
+              exit 1
+            fi
+          elif [ -z "$PUBLISH_USERNAME" ] || [ -z "$PUBLISH_PASSWORD" ]; then
+            echo "Configure PYTHON_PUBLISH_TOKEN or both PYTHON_PUBLISH_USERNAME and PYTHON_PUBLISH_PASSWORD." >&2
             exit 1
           fi
 
       - name: Publish wheel and source distribution
         env:
-          UV_PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
-          UV_PUBLISH_TOKEN: ${{ secrets.PYTHON_PUBLISH_TOKEN }}
-          UV_PUBLISH_USERNAME: ${{ secrets.PYTHON_PUBLISH_USERNAME }}
-          UV_PUBLISH_PASSWORD: ${{ secrets.PYTHON_PUBLISH_PASSWORD }}
-        run: uv publish --publish-url "$UV_PUBLISH_URL" package/*.whl package/*.tar.gz
+          PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
+          PUBLISH_TOKEN: ${{ secrets.PYTHON_PUBLISH_TOKEN }}
+          PUBLISH_USERNAME: ${{ secrets.PYTHON_PUBLISH_USERNAME }}
+          PUBLISH_PASSWORD: ${{ secrets.PYTHON_PUBLISH_PASSWORD }}
+        run: |
+          export UV_PUBLISH_URL="$PUBLISH_URL"
+
+          if [ -n "$PUBLISH_TOKEN" ]; then
+            export UV_PUBLISH_TOKEN="$PUBLISH_TOKEN"
+            unset UV_PUBLISH_USERNAME UV_PUBLISH_PASSWORD
+          else
+            unset UV_PUBLISH_TOKEN
+            export UV_PUBLISH_USERNAME="$PUBLISH_USERNAME"
+            export UV_PUBLISH_PASSWORD="$PUBLISH_PASSWORD"
+          fi
+
+          uv publish package/*.whl package/*.tar.gz
