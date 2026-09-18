@@ -16,15 +16,22 @@ def test_openai_client_uses_configured_api_key_env_for_localhost(monkeypatch) ->
     assert client.api_key == "secret"
 
 
-def test_openai_client_uses_dummy_when_api_key_env_is_missing(monkeypatch) -> None:
+def test_openai_client_rejects_missing_configured_api_key_env(monkeypatch) -> None:
     monkeypatch.delenv("LLM_API_KEY", raising=False)
-    client = create_model_client(ModelConfig(provider="openai", model="test-model", base_url="http://localhost:8000/v1", api_key_env="LLM_API_KEY"))
-    assert client.api_key == "dummy"
+    with pytest.raises(ValueError, match="nicht gesetzt oder leer"):
+        create_model_client(
+            ModelConfig(
+                provider="openai",
+                model="test-model",
+                base_url="http://localhost:8000/v1",
+                api_key_env="LLM_API_KEY",
+            )
+        )
 
 
-def test_openai_client_uses_dummy_without_api_key_env() -> None:
+def test_openai_client_uses_no_api_key_without_api_key_env() -> None:
     client = create_model_client(ModelConfig(provider="openai", model="test-model", base_url="http://localhost:8000/v1"))
-    assert client.api_key == "dummy"
+    assert client.api_key is None
 
 
 def test_remote_model_rejects_unapproved_api_key_environment(monkeypatch) -> None:
@@ -44,6 +51,32 @@ def test_remote_model_accepts_host_bound_api_key_environment(monkeypatch) -> Non
         credential_rules=(ModelCredentialRule(provider="openai", host="llm.internal", allowed_api_key_envs=("LLM_API_KEY",)),),
     )
     assert client.api_key == "approved-secret"
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_remote_model_rejects_missing_or_empty_approved_api_key_environment(monkeypatch, value) -> None:
+    if value is None:
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("LLM_API_KEY", value)
+
+    with pytest.raises(ValueError, match="nicht gesetzt oder leer"):
+        create_model_client(
+            ModelConfig(
+                provider="openai",
+                model="test",
+                base_url="https://llm.internal/v1",
+                api_key_env="LLM_API_KEY",
+            ),
+            network=NetworkConfig(model_allowed_hosts=("llm.internal",)),
+            credential_rules=(
+                ModelCredentialRule(
+                    provider="openai",
+                    host="llm.internal",
+                    allowed_api_key_envs=("LLM_API_KEY",),
+                ),
+            ),
+        )
 
 
 def test_credential_rule_is_bound_to_host(monkeypatch) -> None:
