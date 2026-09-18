@@ -114,6 +114,19 @@ def test_stdio_environment_does_not_inherit_secrets(monkeypatch: pytest.MonkeyPa
 
 
 
+def test_http_mcp_static_authorization_is_rejected_at_runtime(tmp_path: Path) -> None:
+    server = McpServerConfig(
+        name="docs",
+        transport="streamable_http",
+        url="https://mcp.internal/mcp",
+        headers={"Authorization": "Bearer static-secret"},
+    )
+    agent = make_agent(tmp_path)
+
+    with pytest.raises(ValueError, match="Authorization"):
+        agent._http_headers(server)
+
+
 def test_http_mcp_bearer_auth_is_optional(tmp_path: Path) -> None:
     server = McpServerConfig(
         name="docs",
