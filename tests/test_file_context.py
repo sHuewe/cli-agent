@@ -177,6 +177,40 @@ def test_output_does_not_require_os_write(tmp_path: Path) -> None:
     assert (tmp_path / "review.md").read_text(encoding="utf-8") == "review"
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        Path(".env"),
+        Path(".env.local"),
+        Path(".git") / "config",
+        Path(".cli-agent") / "context.json",
+        Path("secret.pem"),
+        Path("app.log"),
+    ],
+)
+def test_output_rejects_sensitive_workspace_path(
+    tmp_path: Path,
+    path: Path,
+) -> None:
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(ValueError, match="Secret-/Credential- oder interner"):
+        prepare_output_target(tmp_path, path, overwrite=False)
+
+
+def test_output_rejects_sensitive_existing_file_even_with_overwrite(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / ".env"
+    output.write_text("OLD=value", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Secret-/Credential- oder interner"):
+        prepare_output_target(tmp_path, Path(".env"), overwrite=True)
+
+    assert output.read_text(encoding="utf-8") == "OLD=value"
+
+
 def test_existing_output_requires_explicit_overwrite(tmp_path: Path) -> None:
     output = tmp_path / "review.md"
     output.write_text("old", encoding="utf-8")
