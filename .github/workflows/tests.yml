@@ -3,6 +3,13 @@ name: Tests
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the built Python distributions to the configured package repository"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -44,3 +51,153 @@ jobs:
           uv run --frozen python -m pytest
           --cov=cli_agent
           --cov-report=term-missing
+
+  package:
+    name: Build distributions and SBOM
+    needs: test
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned uv
+        run: python -m pip install uv==0.12.13
+
+      - name: Verify lockfile is current
+        run: uv lock --check
+
+      - name: Sync locked runtime environment
+        run: uv sync --frozen
+
+      - name: Build wheel and source distribution
+        run: uv build --no-sources
+
+      - name: Verify built wheel installs
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -Path dist -Filter *.whl | Select-Object -First 1
+          if (-not $wheel) {
+            throw "No wheel was produced in dist/."
+          }
+          uv run --no-project --with $wheel.FullName python -c "import importlib.metadata, pathlib, tomllib, cli_agent; project = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']; expected = project['version']; assert cli_agent.__version__ == expected, f'module version {cli_agent.__version__!r} != {expected!r}'; installed = importlib.metadata.version(project['name']); assert installed == expected, f'distribution version {installed!r} != {expected!r}'"
+
+      - name: Verify source distribution exists
+        shell: pwsh
+        run: |
+          $sdist = Get-ChildItem -Path dist -Filter *.tar.gz | Select-Object -First 1
+          if (-not $sdist) {
+            throw "No source distribution was produced in dist/."
+          }
+
+      - name: Generate CycloneDX SBOM from locked runtime environment
+        shell: pwsh
+        run: |
+          $pythonPath = uv run --frozen python -c "import sys; print(sys.executable)"
+          uv tool run --from cyclonedx-bom==7.3.1 cyclonedx-py environment `
+            --pyproject pyproject.toml `
+            --output-format JSON `
+            --output-reproducible `
+            --output-file dist/cli-agent-python311-windows.cdx.json `
+            $pythonPath
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path dist -File | Sort-Object Name
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path (Resolve-Path dist) "SHA256SUMS.txt"),
+            $lines,
+            (New-Object System.Text.UTF8Encoding($false))
+          )
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-agent-package-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish Python distributions
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
+    needs: package
+    runs-on: ubuntu-latest
+    environment: package-publish
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned uv
+        run: python -m pip install uv==0.12.13
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-agent-package-${{ github.sha }}
+          path: package
+
+      - name: Validate publish configuration
+        env:
+          PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
+          PUBLISH_CHECK_URL: ${{ vars.PYTHON_PUBLISH_CHECK_URL }}
+          PUBLISH_TOKEN: ${{ secrets.PYTHON_PUBLISH_TOKEN }}
+          PUBLISH_USERNAME: ${{ secrets.PYTHON_PUBLISH_USERNAME }}
+          PUBLISH_PASSWORD: ${{ secrets.PYTHON_PUBLISH_PASSWORD }}
+        run: |
+          if [ -z "$PUBLISH_URL" ]; then
+            echo "Repository variable PYTHON_PUBLISH_URL is not configured." >&2
+            exit 1
+          fi
+
+          if [ -z "$PUBLISH_CHECK_URL" ]; then
+            echo "Repository variable PYTHON_PUBLISH_CHECK_URL is not configured." >&2
+            exit 1
+          fi
+
+          if [ -n "$PUBLISH_TOKEN" ]; then
+            if [ -n "$PUBLISH_USERNAME" ] || [ -n "$PUBLISH_PASSWORD" ]; then
+              echo "Configure either PYTHON_PUBLISH_TOKEN or PYTHON_PUBLISH_USERNAME/PYTHON_PUBLISH_PASSWORD, not both." >&2
+              exit 1
+            fi
+          elif [ -z "$PUBLISH_USERNAME" ] || [ -z "$PUBLISH_PASSWORD" ]; then
+            echo "Configure PYTHON_PUBLISH_TOKEN or both PYTHON_PUBLISH_USERNAME and PYTHON_PUBLISH_PASSWORD." >&2
+            exit 1
+          fi
+
+      - name: Publish wheel and source distribution
+        env:
+          PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
+          PUBLISH_CHECK_URL: ${{ vars.PYTHON_PUBLISH_CHECK_URL }}
+          PUBLISH_TOKEN: ${{ secrets.PYTHON_PUBLISH_TOKEN }}
+          PUBLISH_USERNAME: ${{ secrets.PYTHON_PUBLISH_USERNAME }}
+          PUBLISH_PASSWORD: ${{ secrets.PYTHON_PUBLISH_PASSWORD }}
+        run: |
+          export UV_PUBLISH_URL="$PUBLISH_URL"
+
+          if [ -n "$PUBLISH_TOKEN" ]; then
+            export UV_PUBLISH_TOKEN="$PUBLISH_TOKEN"
+            unset UV_PUBLISH_USERNAME UV_PUBLISH_PASSWORD
+          else
+            unset UV_PUBLISH_TOKEN
+            export UV_PUBLISH_USERNAME="$PUBLISH_USERNAME"
+            export UV_PUBLISH_PASSWORD="$PUBLISH_PASSWORD"
+          fi
+
+          uv publish --check-url "$PUBLISH_CHECK_URL" package/*.whl package/*.tar.gz

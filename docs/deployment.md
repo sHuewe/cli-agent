@@ -45,6 +45,12 @@ Arbeitsplatz
   - Ausführung von cli-agent als normaler Benutzer
 ```
 
+## Aktueller Umsetzungsstand
+
+Die GitHub-Actions-CI erzeugt bereits nach erfolgreicher Testmatrix Wheel, Source Distribution, eine CycloneDX-SBOM für Python 3.11 auf Windows und SHA-256-Prüfsummen. Diese Dateien werden derzeit als GitHub-Actions-Artefakt mit 30 Tagen Aufbewahrungszeit bereitgestellt. Details stehen in [ci-release.md](ci-release.md).
+
+Ein dauerhaftes GitHub Release und ein tag-basierter öffentlicher Publish-Prozess sind dagegen noch nicht umgesetzt. Die folgenden Abschnitte beschreiben deshalb sowohl den bereits vorhandenen technischen Paketbau als auch den vorgesehenen weiterführenden Release- und Deployment-Weg.
+
 ## 1. Upstream-Release
 
 Ein freigegebener Release sollte aus einem eindeutig identifizierbaren Quellstand, typischerweise einem Git-Tag, erzeugt werden.
