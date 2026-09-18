@@ -41,7 +41,7 @@ host = "llm.intern.firma.de"
 allowed_api_key_envs = ["LLM_API_KEY"]
 ```
 
-Eine normale Projektkonfiguration kann damit nicht mehr beispielsweise `AWS_SECRET_ACCESS_KEY` als Credential für einen lediglich netzwerkseitig freigegebenen Remote-LLM-Host auswählen. `api_key_env` selbst bleibt optional; ohne Angabe verwendet der OpenAI-kompatible Client den Dummy-Key `dummy`. Lokale Modellziele bleiben bewusst flexibel.
+Eine normale Projektkonfiguration kann damit nicht mehr beispielsweise `AWS_SECRET_ACCESS_KEY` als Credential für einen lediglich netzwerkseitig freigegebenen Remote-LLM-Host auswählen. `api_key_env` selbst bleibt optional: Ohne Angabe sendet der OpenAI-kompatible Client keinen `Authorization`-Header. Ist `api_key_env` dagegen konfiguriert, muss die benannte Environment-Variable vorhanden und nicht leer sein; andernfalls wird die Modellkonfiguration abgewiesen. Lokale Modellziele bleiben bewusst flexibel und können weiterhin ohne API-Key betrieben werden.
 
 ## F-05: Trusted stdio und PATH-Auflösung
 
