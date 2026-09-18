@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import cli_agent.agent_conversation as agent_conversation_module
 from cli_agent.agent_conversation import ConversationMixin
 
 
@@ -143,6 +144,75 @@ def test_discard_one_rejected_call_keeps_other_assistant_calls() -> None:
     agent._discard_rejected_tool_call(messages, assistant, rejected, tool_message)
     assert messages == [assistant]
     assert assistant["tool_calls"] == [remaining]
+
+
+def test_optional_knowledge_bootstrap_timeout_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowSession:
+        async def call_tool(self, name, arguments):
+            del name, arguments
+            await asyncio.sleep(1)
+            return SimpleNamespace(content=[], isError=False)
+
+    agent = ConversationHarness()
+    agent._okf_options = SimpleNamespace(
+        required=False,
+        max_tool_calls=3,
+        max_concept_reads=2,
+    )
+    agent._knowledge_session = SlowSession()
+    agent._knowledge_routes = {
+        "okf__knowledge_index": (
+            agent._knowledge_session,
+            "knowledge_index",
+            SimpleNamespace(name="okf"),
+        )
+    }
+    monkeypatch.setattr(
+        agent_conversation_module,
+        "MCP_TOOL_CALL_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    result = asyncio.run(agent._collect_knowledge("question"))
+
+    assert result is None
+    assert agent.dumped[-1][0] == "knowledge_result.json"
+    assert "Timeout" in agent.dumped[-1][1]["error"]
+
+
+def test_required_knowledge_bootstrap_timeout_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowSession:
+        async def call_tool(self, name, arguments):
+            del name, arguments
+            await asyncio.sleep(1)
+            return SimpleNamespace(content=[], isError=False)
+
+    agent = ConversationHarness()
+    agent._okf_options = SimpleNamespace(
+        required=True,
+        max_tool_calls=3,
+        max_concept_reads=2,
+    )
+    agent._knowledge_session = SlowSession()
+    agent._knowledge_routes = {
+        "okf__knowledge_index": (
+            agent._knowledge_session,
+            "knowledge_index",
+            SimpleNamespace(name="okf"),
+        )
+    }
+    monkeypatch.setattr(
+        agent_conversation_module,
+        "MCP_TOOL_CALL_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    with pytest.raises(RuntimeError, match="Wissensvorlauf fehlgeschlagen"):
+        asyncio.run(agent._collect_knowledge("question"))
 
 
 def test_optional_knowledge_failure_returns_none_and_records_error() -> None:
