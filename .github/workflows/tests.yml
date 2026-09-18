@@ -130,9 +130,10 @@ jobs:
 
   publish:
     name: Publish Python distributions
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
     needs: package
     runs-on: ubuntu-latest
+    environment: package-publish
 
     steps:
       - name: Check out repository
