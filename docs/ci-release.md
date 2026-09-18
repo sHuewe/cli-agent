@@ -85,15 +85,18 @@ Dafür muss mindestens folgende Repository-Variable konfiguriert sein:
 PYTHON_PUBLISH_URL
 ```
 
-Für die Authentisierung unterstützt der Workflow die GitHub-Secrets:
+Für die Authentisierung unterstützt der Workflow genau eine der beiden Varianten:
 
 ```text
+Token:
 PYTHON_PUBLISH_TOKEN
+
+oder Benutzername/Passwort:
 PYTHON_PUBLISH_USERNAME
 PYTHON_PUBLISH_PASSWORD
 ```
 
-Welche Kombination verwendet wird, hängt vom Ziel-Repository ab.
+Token-Authentisierung und Benutzername/Passwort dürfen nicht gleichzeitig konfiguriert sein. Der Workflow prüft diese Bedingung vor dem Upload und exportiert an `uv publish` nur die tatsächlich gewählte Variante.
 
 Ein normaler Push oder Pull Request veröffentlicht keine Pakete.
 
