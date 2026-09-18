@@ -113,6 +113,101 @@ def test_stdio_environment_does_not_inherit_secrets(monkeypatch: pytest.MonkeyPa
     assert "LLM_API_KEY" not in environment
 
 
+
+def test_http_mcp_bearer_auth_is_optional(tmp_path: Path) -> None:
+    server = McpServerConfig(
+        name="docs",
+        transport="streamable_http",
+        url="https://mcp.internal/mcp",
+        headers={"X-Client": "cli-agent"},
+    )
+    agent = make_agent(tmp_path)
+
+    assert agent._http_bearer_token_env(server) is None
+    assert agent._http_headers(server) == {"X-Client": "cli-agent"}
+
+
+def test_http_mcp_bearer_token_is_injected_from_admin_bound_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = McpServerConfig(
+        name="docs",
+        transport="streamable_http",
+        url="https://mcp.internal/mcp",
+        headers={"X-Workspace": "{workspace_directory}"},
+    )
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="docs",
+                transport="streamable_http",
+                url="https://mcp.internal/mcp",
+                headers=(("X-Workspace", "{workspace_directory}"),),
+                bearer_token_env="CLI_AGENT_DOCS_TOKEN",
+            ),
+        )
+    )
+    agent = make_agent(tmp_path, mcp_policy=policy)
+    monkeypatch.setenv("CLI_AGENT_DOCS_TOKEN", "secret-token")
+
+    headers = agent._http_headers(server)
+
+    assert headers["Authorization"] == "Bearer secret-token"
+    assert headers["X-Workspace"] == str(tmp_path.resolve())
+
+
+def test_http_mcp_bearer_token_missing_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = McpServerConfig(
+        name="docs",
+        transport="streamable_http",
+        url="https://mcp.internal/mcp",
+    )
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="docs",
+                transport="streamable_http",
+                url="https://mcp.internal/mcp",
+                bearer_token_env="CLI_AGENT_DOCS_TOKEN",
+            ),
+        )
+    )
+    agent = make_agent(tmp_path, mcp_policy=policy)
+    monkeypatch.delenv("CLI_AGENT_DOCS_TOKEN", raising=False)
+
+    with pytest.raises(ValueError, match="CLI_AGENT_DOCS_TOKEN"):
+        agent._http_headers(server)
+
+
+def test_http_mcp_bearer_source_only_applies_to_matching_server_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = McpServerConfig(
+        name="docs",
+        transport="streamable_http",
+        url="https://other.internal/mcp",
+    )
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="docs",
+                transport="streamable_http",
+                url="https://mcp.internal/mcp",
+                bearer_token_env="CLI_AGENT_DOCS_TOKEN",
+            ),
+        )
+    )
+    agent = make_agent(tmp_path, mcp_policy=policy)
+    monkeypatch.setenv("CLI_AGENT_DOCS_TOKEN", "secret-token")
+
+    assert agent._http_bearer_token_env(server) is None
+    assert "Authorization" not in agent._http_headers(server)
+
 def test_external_mcp_tools_require_approval_by_default(tmp_path: Path) -> None:
     agent = make_agent(tmp_path)
     external = McpServerConfig(name="external", command="external-mcp")
