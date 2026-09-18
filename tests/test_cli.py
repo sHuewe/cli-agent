@@ -21,20 +21,27 @@ from cli_agent.network_policy import NetworkConfig
 from cli_agent.os_mcp_server import resolve_mcp_config
 
 
-def test_approval_summary_shows_payload_but_hides_credentials() -> None:
+def test_approval_summary_shows_payload_even_for_sensitive_looking_argument_names() -> None:
     summary = _approval_arguments(
         {
             "path": "src/main.py",
             "content": "confidential source",
-            "auth-header": "Bearer confidential-token",
-            "options": {"api_key": "nested-secret"},
+            "token": "TOKEN_SENTINEL",
+            "password": "PASSWORD_SENTINEL",
+            "authorization": "AUTH_SENTINEL",
+            "api_key": "API_KEY_SENTINEL",
+            "options": {"secret": "NESTED_SECRET_SENTINEL"},
         }
     )
+
     assert "src/main.py" in summary
     assert "confidential source" in summary
-    assert "confidential-token" not in summary
-    assert "nested-secret" not in summary
-    assert "verborgen" in summary
+    assert "TOKEN_SENTINEL" in summary
+    assert "PASSWORD_SENTINEL" in summary
+    assert "AUTH_SENTINEL" in summary
+    assert "API_KEY_SENTINEL" in summary
+    assert "NESTED_SECRET_SENTINEL" in summary
+    assert "verborgen" not in summary
 
 
 def test_approval_summary_truncates_long_payload_with_head_and_tail() -> None:
