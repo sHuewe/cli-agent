@@ -22,7 +22,12 @@ _FORBIDDEN_ROUTING_HEADERS = frozenset(
 )
 
 
-def _validated_user_headers(\n    values: Any,\n    *,\n    section: str,\n    allow_authorization: bool = True,\n) -> dict[str, str]:
+def _validated_user_headers(
+    values: Any,
+    *,
+    section: str,
+    allow_authorization: bool = True,
+) -> dict[str, str]:
     if not isinstance(values, dict):
         raise ValueError(f"{section} muss eine Tabelle sein.")
     result: dict[str, str] = {}
@@ -256,7 +261,11 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     if not isinstance(raw_env, dict):
         raise ValueError(f"env von MCP-Server {name!r} muss eine Tabelle sein.")
     raw_headers = values.get("headers", {})
-    headers = _validated_user_headers(\n        raw_headers,\n        section=f"headers von MCP-Server {name!r}",\n        allow_authorization=False,\n    )
+    headers = _validated_user_headers(
+        raw_headers,
+        section=f"headers von MCP-Server {name!r}",
+        allow_authorization=False,
+    )
     command_value = values.get("command")
     command = str(command_value).strip() if command_value is not None else None
     url_value = values.get("url")
