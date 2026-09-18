@@ -50,13 +50,20 @@ für die laufende Session oder mit `--approve-tool <exposed_name>` für genau de
 aktuellen Prozesslauf freigegeben werden. Administrative Auto-Approvals für
 externe MCPs können die Built-in-Write-Regel nicht umgehen.
 
-Der Approval-Dialog zeigt eine begrenzte Vorschau der Toolargumente. Argumente,
-deren Namen auf Secrets oder Credentials hindeuten (zum Beispiel `token`,
-`password`, `authorization` oder `api_key`), werden verborgen. Andere
-Stringargumente können bis zu einer begrenzten Länge sichtbar sein; bei
-`write_file` kann dies daher auch einen Ausschnitt des zu schreibenden Inhalts
-umfassen. Der Dialog selbst ist deshalb ebenfalls als potenziell vertrauliche
-lokale Anzeige zu behandeln.
+Der Approval-Dialog zeigt eine begrenzte Vorschau der Toolargumente. Die
+Argumentnamen eines MCP-Servers gelten dabei nicht als vertrauenswürdige
+Redaction-Policy: Auch Namen wie `token`, `password`, `authorization` oder
+`api_key` verbergen den zu sendenden Wert nicht. Dadurch bleibt für den Benutzer
+sichtbar, welche Nutzdaten den Host tatsächlich verlassen sollen. Lange Strings
+und große Collections werden weiterhin begrenzt beziehungsweise gekürzt. Bei
+`write_file` kann die Anzeige daher auch einen Ausschnitt des zu schreibenden
+Inhalts enthalten; der Dialog ist als potenziell vertrauliche lokale Anzeige zu
+behandeln.
+
+Transport-Credentials für MCP-Verbindungen werden separat aus administrativ
+kontrollierter Konfiguration beziehungsweise Environment-Variablen eingespeist
+und sind keine modellgenerierten Toolargumente. Sie erscheinen daher regulär
+nicht in dieser Vorschau.
 
 ## Tools
 
