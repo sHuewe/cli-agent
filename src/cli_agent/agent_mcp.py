@@ -14,7 +14,12 @@ from mcp.client.streamable_http import streamable_http_client
 from .agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS
 from .agent_types import ServerConfig, ToolRoute, _RuntimeMcpServerConfig
 from .config import McpServerConfig
-from .mcp_limits import validate_mcp_server_metadata
+from .mcp_limits import (
+    MCP_INITIALIZE_TIMEOUT_SECONDS,
+    MCP_LIST_TOOLS_TIMEOUT_SECONDS,
+    await_mcp_operation,
+    validate_mcp_server_metadata,
+)
 from .network_policy import validate_http_url
 
 logger = logging.getLogger("cli_agent.agent_mcp")
@@ -116,7 +121,11 @@ class McpLifecycleMixin:
         server_stack = AsyncExitStack(); await server_stack.__aenter__()
         try:
             session, instructions = await self._connect_server(server_stack, server_config)
-            listed = await session.list_tools()
+            listed = await await_mcp_operation(
+                session.list_tools(),
+                timeout_seconds=MCP_LIST_TOOLS_TIMEOUT_SECONDS,
+                operation=f"MCP-Server {server_config.name!r}: list_tools",
+            )
             validate_mcp_server_metadata(
                 server_name=server_config.name,
                 instructions=instructions,
@@ -156,7 +165,11 @@ class McpLifecycleMixin:
         knowledge_stack = AsyncExitStack(); await knowledge_stack.__aenter__()
         try:
             session, instructions = await self._connect_server(knowledge_stack, server_config)
-            listed = await session.list_tools()
+            listed = await await_mcp_operation(
+                session.list_tools(),
+                timeout_seconds=MCP_LIST_TOOLS_TIMEOUT_SECONDS,
+                operation=f"MCP-Server {server_config.name!r}: list_tools",
+            )
             validate_mcp_server_metadata(
                 server_name=server_config.name,
                 instructions=instructions,
@@ -245,7 +258,13 @@ class McpLifecycleMixin:
             )
             connection = await stack.enter_async_context(streamable_http_client(server_url, http_client=http_client)); read_stream, write_stream, _ = connection
         else: raise ValueError(f"Nicht unterstützter MCP-Transport: {server_config.transport!r}")
-        session = await stack.enter_async_context(ClientSession(read_stream, write_stream)); initialize_result = await session.initialize(); return session, initialize_result.instructions
+        session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+        initialize_result = await await_mcp_operation(
+            session.initialize(),
+            timeout_seconds=MCP_INITIALIZE_TIMEOUT_SECONDS,
+            operation=f"MCP-Server {server_config.name!r}: initialize",
+        )
+        return session, initialize_result.instructions
 
     async def close(self) -> None:
         if self._exit_stack is None: return

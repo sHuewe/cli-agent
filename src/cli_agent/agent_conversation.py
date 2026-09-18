@@ -15,6 +15,7 @@ from .agent_knowledge import (
 )
 from .agent_loop import run_model_loop
 from .agent_types import ToolRoute
+from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
 logger = logging.getLogger("cli_agent.agent_conversation")
 
@@ -119,9 +120,13 @@ class ConversationMixin:
                     "tool_call phase=knowledge name=knowledge_index arguments=%s",
                     json.dumps(root_arguments, ensure_ascii=False),
                 )
-            root_result = await root_session.call_tool(
-                root_tool_name,
-                root_arguments,
+            root_result = await await_mcp_operation(
+                root_session.call_tool(
+                    root_tool_name,
+                    root_arguments,
+                ),
+                timeout_seconds=MCP_TOOL_CALL_TIMEOUT_SECONDS,
+                operation="MCP-Tool 'okf__knowledge_index'",
             )
             root_result_text = tool_result_text(root_result)
             logger.info(

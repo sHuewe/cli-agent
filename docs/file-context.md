@@ -12,6 +12,8 @@ cli-agent `
 
 Der Repository-Snapshot selbst sollte außerhalb des Agenten erzeugt werden, zum Beispiel aus bewusst ausgewählten Git-Dateien. Damit bleibt die Entscheidung, welche Daten an einen eventuell externen Modellanbieter übertragen werden, außerhalb des LLM-gesteuerten Tool-Loops.
 
+Für `--context-file` und `--prompt-file` gilt jeweils ein bewusst sehr großzügiges technisches Sicherheitslimit von **256 MiB pro Datei**. Dieses Limit ist keine Modell- oder Token-Grenze und wird nicht aus der konfigurierten Modellgröße abgeleitet. `cli-agent` fragt die Context-Größe des Modells hierfür absichtlich nicht ab. Ist der tatsächlich zusammengesetzte Prompt für das gewählte Modell zu groß, darf der Modell-Endpoint den Request ablehnen; diese Fehlermeldung wird wie andere Modellfehler an den Benutzer weitergegeben. Das Dateilimit dient ausschließlich als letzte Speicher-/DoS-Grenze gegen versehentlich oder absichtlich extrem große lokale Eingaben.
+
 ## Prompt aus einer Datei
 
 Ein längerer User-Prompt kann mit `--prompt-file` aus einer UTF-8-Textdatei im Workspace geladen werden:

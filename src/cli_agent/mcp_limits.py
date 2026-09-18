@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any
+from typing import Any, Awaitable, TypeVar
 
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
@@ -14,6 +15,34 @@ MAX_MCP_TOOL_DESCRIPTION_CHARS = 250_000
 MAX_MCP_TOOL_SCHEMA_CHARS = 2_000_000
 MAX_MCP_TOTAL_TOOL_METADATA_CHARS = 20_000_000
 MAX_MCP_TOOL_RESULT_CHARS = 10_000_000
+
+# Lifecycle calls should fail reasonably quickly if a server is wedged, while
+# normal tool calls get a deliberately much larger execution window.
+MCP_INITIALIZE_TIMEOUT_SECONDS = 120.0
+MCP_LIST_TOOLS_TIMEOUT_SECONDS = 120.0
+MCP_TOOL_CALL_TIMEOUT_SECONDS = 600.0
+
+_T = TypeVar("_T")
+
+
+async def await_mcp_operation(
+    awaitable: Awaitable[_T],
+    *,
+    timeout_seconds: float,
+    operation: str,
+) -> _T:
+    """Await one MCP operation with an application-level deadline."""
+
+    timeout = asyncio.timeout(timeout_seconds)
+    try:
+        async with timeout:
+            return await awaitable
+    except TimeoutError as exc:
+        if not timeout.expired():
+            raise
+        raise RuntimeError(
+            f"{operation} hat das Timeout von {timeout_seconds:g} Sekunden überschritten."
+        ) from exc
 
 
 def _reject_external_schema_references(schema: Any, *, tool_name: str) -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +15,35 @@ def tool(*, name="search", description="", schema=None):
         description=description,
         inputSchema=schema or {"type": "object"},
     )
+
+
+def test_mcp_operation_timeout_is_reported() -> None:
+    async def slow():
+        await asyncio.sleep(1)
+        return "done"
+
+    with pytest.raises(RuntimeError, match="initialize.*Timeout"):
+        asyncio.run(
+            limits.await_mcp_operation(
+                slow(),
+                timeout_seconds=0.01,
+                operation="initialize",
+            )
+        )
+
+
+def test_inner_timeout_error_is_not_relabelled_as_application_timeout() -> None:
+    async def fail():
+        raise TimeoutError("inner timeout")
+
+    with pytest.raises(TimeoutError, match="inner timeout"):
+        asyncio.run(
+            limits.await_mcp_operation(
+                fail(),
+                timeout_seconds=1,
+                operation="call_tool",
+            )
+        )
 
 
 def test_metadata_within_generous_defaults_is_accepted() -> None:
