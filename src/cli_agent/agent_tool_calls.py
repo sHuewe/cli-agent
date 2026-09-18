@@ -17,7 +17,12 @@ from .agent_knowledge import (
     tool_result_text,
 )
 from .agent_types import ToolRoute
-from .mcp_limits import enforce_mcp_tool_result_limit, validate_mcp_tool_arguments
+from .mcp_limits import (
+    MCP_TOOL_CALL_TIMEOUT_SECONDS,
+    await_mcp_operation,
+    enforce_mcp_tool_result_limit,
+    validate_mcp_tool_arguments,
+)
 
 logger = logging.getLogger("cli_agent.agent_tool_calls")
 
@@ -248,7 +253,11 @@ async def process_tool_calls(
                 json.dumps(arguments, ensure_ascii=False),
             )
         try:
-            result = await session.call_tool(original_name, arguments)
+            result = await await_mcp_operation(
+                session.call_tool(original_name, arguments),
+                timeout_seconds=MCP_TOOL_CALL_TIMEOUT_SECONDS,
+                operation=f"MCP-Tool {exposed_name!r}",
+            )
         except Exception as exc:
             logger.error(
                 "tool_call_failed phase=%s name=%s error_type=%s",
