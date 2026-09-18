@@ -208,17 +208,36 @@ class _TraversalBudgetReached(RuntimeError):
 class Workspace:
     directory: Path
     config: McpServerConfig
+    protected_paths: frozenset[Path] = frozenset()
 
     @classmethod
     def from_directory(
         cls,
         directory: Path,
         config: McpServerConfig,
+        *,
+        protected_paths: tuple[Path, ...] = (),
     ) -> Workspace:
         resolved = directory.resolve()
         if not resolved.is_dir():
             raise WorkspaceError(f"Projekt-Workspace existiert nicht: {resolved}")
-        return cls(directory=resolved, config=config)
+
+        protected: set[Path] = set()
+        for path in protected_paths:
+            protected_path = path.expanduser().resolve(strict=False)
+            try:
+                protected_path.relative_to(resolved)
+            except ValueError:
+                # Paths outside the workspace are unreachable through this
+                # server and therefore need no additional protection here.
+                continue
+            protected.add(protected_path)
+
+        return cls(
+            directory=resolved,
+            config=config,
+            protected_paths=frozenset(protected),
+        )
 
     def resolve_path(self, path: str, *, must_exist: bool = True) -> Path:
         if not isinstance(path, str) or not path.strip():
@@ -279,19 +298,29 @@ class Workspace:
             or name.endswith(".log")
         )
 
-    @classmethod
-    def _reject_sensitive_read(cls, path: Path) -> None:
-        if cls._is_sensitive_file(path):
+    def _is_protected_path(self, path: Path) -> bool:
+        if self._is_sensitive_file(path):
+            return True
+        try:
+            resolved = path.resolve(strict=False)
+        except OSError:
+            resolved = path.absolute()
+        return any(
+            resolved == protected or protected in resolved.parents
+            for protected in self.protected_paths
+        )
+
+    def _reject_protected_read(self, path: Path) -> None:
+        if self._is_protected_path(path):
             raise WorkspaceError(
-                "Das Lesen von Secret-/Credential-Dateien ist über den "
-                "Workspace-OS-Server nicht erlaubt."
+                "Das Lesen von Secret-/Credential- oder geschützten "
+                "Agent-Dateien ist über den Workspace-OS-Server nicht erlaubt."
             )
 
-    @classmethod
-    def _reject_sensitive_mutation(cls, path: Path) -> None:
-        if cls._is_sensitive_file(path):
+    def _reject_protected_mutation(self, path: Path) -> None:
+        if self._is_protected_path(path):
             raise WorkspaceError(
-                "Das Ändern von Secret-/Credential- oder internen "
+                "Das Ändern von Secret-/Credential- oder geschützten "
                 "Workspace-Dateien ist über den Workspace-OS-Server nicht erlaubt."
             )
 
@@ -343,13 +372,13 @@ class Workspace:
         read operations within the same security boundary as read_file().
         """
         if root.is_file():
-            self._reject_sensitive_read(root)
+            self._reject_protected_read(root)
             self._reject_hardlinked_file(root)
             yield root
             return
         if not root.is_dir():
             raise WorkspaceError("Suchpfad ist weder Datei noch Ordner.")
-        self._reject_sensitive_read(root)
+        self._reject_protected_read(root)
 
         pending = [root]
         inspected_entries = 0
@@ -373,7 +402,7 @@ class Workspace:
                         # to be inside the workspace.
                         if resolved != entry.absolute():
                             continue
-                        if self._is_sensitive_file(resolved):
+                        if self._is_protected_path(resolved):
                             continue
                         if resolved.is_dir():
                             pending.append(resolved)
@@ -397,27 +426,27 @@ class Workspace:
         directory = self.resolve_path(path)
         if not directory.is_dir():
             raise WorkspaceError(f"Pfad ist kein Ordner: {path!r}")
+        self._reject_protected_read(directory)
 
+        lines: list[str] = []
         entries = sorted(
             directory.iterdir(),
             key=lambda entry: (not entry.is_dir(), entry.name.lower()),
         )
-        if not entries:
-            return "(Ordner ist leer)"
-
-        lines: list[str] = []
         for entry in entries:
+            if self._is_protected_path(entry):
+                continue
             relative = entry.relative_to(self.directory).as_posix()
             kind = "directory" if entry.is_dir() else "file"
             lines.append(f"{kind}\t{relative}")
-        return "\n".join(lines)
+        return "\n".join(lines) if lines else "(Ordner ist leer)"
 
     def read_file(self, path: str) -> str:
         file_path = self.resolve_path(path)
         if not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
         self._reject_hardlinked_file(file_path)
-        self._reject_sensitive_read(file_path)
+        self._reject_protected_read(file_path)
         if file_path.suffix.lower() == ".pdf":
             try:
                 return read_pdf_text(file_path)
@@ -600,7 +629,7 @@ class Workspace:
 
     def file_info(self, path: str) -> str:
         resolved = self.resolve_path(path)
-        self._reject_sensitive_read(resolved)
+        self._reject_protected_read(resolved)
         if resolved.is_file():
             self._reject_hardlinked_file(resolved)
             kind = "file"
@@ -630,7 +659,7 @@ class Workspace:
         if not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
         self._reject_hardlinked_file(file_path)
-        self._reject_sensitive_mutation(file_path)
+        self._reject_protected_mutation(file_path)
 
         try:
             file_path.unlink()
@@ -647,14 +676,10 @@ class Workspace:
         if not src_path.is_file():
             raise WorkspaceError(f"Quellpfad ist keine Datei: {path_src!r}")
         self._reject_hardlinked_file(src_path)
-        if self._is_sensitive_file(src_path):
-            raise WorkspaceError(
-                "Das Kopieren von Secret-/Credential-Dateien über den "
-                "Workspace-OS-Server ist nicht erlaubt."
-            )
+        self._reject_protected_read(src_path)
 
         dst_path = self.resolve_direct_path(path_dst, must_exist=False)
-        self._reject_sensitive_mutation(dst_path)
+        self._reject_protected_mutation(dst_path)
         if dst_path.exists() and not dst_path.is_file():
             raise WorkspaceError(f"Zielpfad ist keine Datei: {path_dst!r}")
         if dst_path.exists():
@@ -680,10 +705,10 @@ class Workspace:
         if not src_path.is_file():
             raise WorkspaceError(f"Quellpfad ist keine Datei: {path_src!r}")
         self._reject_hardlinked_file(src_path)
-        self._reject_sensitive_mutation(src_path)
+        self._reject_protected_mutation(src_path)
 
         dst_path = self.resolve_direct_path(path_dst, must_exist=False)
-        self._reject_sensitive_mutation(dst_path)
+        self._reject_protected_mutation(dst_path)
         if dst_path.exists() and not dst_path.is_file():
             raise WorkspaceError(f"Zielpfad ist keine Datei: {path_dst!r}")
         if dst_path.exists():
@@ -708,7 +733,7 @@ class Workspace:
 
     def make_directory(self, path: str) -> str:
         dir_path = self.resolve_direct_path(path, must_exist=False)
-        self._reject_sensitive_mutation(dir_path)
+        self._reject_protected_mutation(dir_path)
         if dir_path.exists() and not dir_path.is_dir():
             raise WorkspaceError(f"Pfad ist kein Ordner: {path!r}")
         if dir_path.exists():
@@ -727,7 +752,7 @@ class Workspace:
 
     def write_file(self, path: str, content: str) -> str:
         file_path = self.resolve_direct_path(path, must_exist=False)
-        self._reject_sensitive_mutation(file_path)
+        self._reject_protected_mutation(file_path)
         if file_path.exists() and not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
         if file_path.exists():
