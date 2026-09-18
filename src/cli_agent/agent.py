@@ -173,8 +173,31 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             return
         self._write_dump_json(filename, value)
 
-    def _resolve(self, value: str) -> str:
-        return value.replace("{python}", sys.executable).replace("{workspace_directory}", str(self.workspace_directory)).replace("{project_directory}", str(self.workspace_directory)).replace("{config_file}", str(self.config_file))
+    def _resolve_stdio_value(self, value: str) -> str:
+        return (
+            value.replace("{python}", sys.executable)
+            .replace("{workspace_directory}", str(self.workspace_directory))
+            .replace("{project_directory}", str(self.workspace_directory))
+            .replace("{config_file}", str(self.config_file))
+        )
+
+    def _resolve_http_value(self, value: str) -> str:
+        unsupported = tuple(
+            placeholder
+            for placeholder in ("{python}", "{config_file}")
+            if placeholder in value
+        )
+        if unsupported:
+            placeholders = ", ".join(unsupported)
+            raise ValueError(
+                "HTTP-MCP-Werte unterstützen nur die verwalteten Runtime-Platzhalter "
+                "{workspace_directory} und {project_directory}; "
+                f"nicht zulässig: {placeholders}."
+            )
+        return (
+            value.replace("{workspace_directory}", str(self.workspace_directory))
+            .replace("{project_directory}", str(self.workspace_directory))
+        )
 
     def _build_system_prompt(self) -> str:
         parts = [
@@ -226,22 +249,52 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             if server_config.url is None or trusted.url is None:
                 return False
             try:
-                configured_url = _normalize_mcp_url(self._resolve(server_config.url), section=f"MCP-Server {server_config.name!r}")
-                trusted_url = _normalize_mcp_url(self._resolve(trusted.url), section=f"Trusted MCP-Server {trusted.name!r}")
+                configured_url = _normalize_mcp_url(
+                    self._resolve_http_value(server_config.url),
+                    section=f"MCP-Server {server_config.name!r}",
+                )
+                trusted_url = _normalize_mcp_url(
+                    self._resolve_http_value(trusted.url),
+                    section=f"Trusted MCP-Server {trusted.name!r}",
+                )
+                configured_headers = tuple(
+                    sorted(
+                        (key, self._resolve_http_value(value))
+                        for key, value in server_config.headers.items()
+                    )
+                )
+                trusted_headers = tuple(
+                    sorted(
+                        (key, self._resolve_http_value(value))
+                        for key, value in trusted.headers
+                    )
+                )
             except ValueError:
                 return False
-            configured_headers = tuple(sorted((key, self._resolve(value)) for key, value in server_config.headers.items()))
-            trusted_headers = tuple(sorted((key, self._resolve(value)) for key, value in trusted.headers))
             return configured_url == trusted_url and configured_headers == trusted_headers
 
         if server_config.command is None or trusted.command is None:
             return False
-        configured_command = self._resolve(server_config.command)
-        trusted_command = self._resolve(trusted.command)
-        configured_args = tuple(self._resolve(value) for value in server_config.args)
-        trusted_args = tuple(self._resolve(value) for value in trusted.args)
-        configured_env = tuple(sorted((key, self._resolve(value)) for key, value in server_config.env.items()))
-        trusted_env = tuple(sorted((key, self._resolve(value)) for key, value in trusted.env))
+        configured_command = self._resolve_stdio_value(server_config.command)
+        trusted_command = self._resolve_stdio_value(trusted.command)
+        configured_args = tuple(
+            self._resolve_stdio_value(value) for value in server_config.args
+        )
+        trusted_args = tuple(
+            self._resolve_stdio_value(value) for value in trusted.args
+        )
+        configured_env = tuple(
+            sorted(
+                (key, self._resolve_stdio_value(value))
+                for key, value in server_config.env.items()
+            )
+        )
+        trusted_env = tuple(
+            sorted(
+                (key, self._resolve_stdio_value(value))
+                for key, value in trusted.env
+            )
+        )
         return configured_command == trusted_command and configured_args == trusted_args and configured_env == trusted_env
 
     def _instructions_are_trusted(self, server_config: ServerConfig) -> bool:
