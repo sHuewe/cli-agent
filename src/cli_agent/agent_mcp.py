@@ -211,12 +211,22 @@ class McpLifecycleMixin:
                 allowed_hosts=self.network.mcp_allowed_hosts,
                 purpose="MCP-Server",
             )
+            headers = {
+                key: self._resolve_http_value(value)
+                for key, value in server_config.headers.items()
+            }
+            bearer_token_env = self._http_bearer_token_env(server_config)
+            if bearer_token_env is not None:
+                token = os.environ.get(bearer_token_env)
+                if not token:
+                    raise ValueError(
+                        f"Für HTTP-MCP-Server {server_config.name!r} fehlt die "
+                        f"konfigurierte Bearer-Token-Umgebungsvariable {bearer_token_env!r}."
+                    )
+                headers["Authorization"] = f"Bearer {token}"
             http_client = await stack.enter_async_context(
                 httpx.AsyncClient(
-                    headers={
-                        key: self._resolve_http_value(value)
-                        for key, value in server_config.headers.items()
-                    },
+                    headers=headers,
                     follow_redirects=False,
                     trust_env=False,
                 )
