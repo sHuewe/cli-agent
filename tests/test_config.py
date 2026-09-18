@@ -134,7 +134,7 @@ def test_stdio_user_config_rejects_launch_or_runtime_settings(tmp_path: Path, ex
         load_config(config_file)
 
 
-def test_load_streamable_http_server(tmp_path: Path) -> None:
+def test_load_streamable_http_server_without_authentication(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """
@@ -144,7 +144,7 @@ transport = "streamable_http"
 url = "http://127.0.0.1:8001/mcp"
 
 [mcp_servers.headers]
-Authorization = "Bearer test"
+X-Client-Id = "cli-agent"
 """.strip(),
         encoding="utf-8",
     )
@@ -152,7 +152,7 @@ Authorization = "Bearer test"
     assert server.transport == "streamable_http"
     assert server.url == "http://127.0.0.1:8001/mcp"
     assert server.command is None
-    assert server.headers == {"Authorization": "Bearer test"}
+    assert server.headers == {"X-Client-Id": "cli-agent"}
 
 
 def test_http_server_rejects_process_options(tmp_path: Path) -> None:
