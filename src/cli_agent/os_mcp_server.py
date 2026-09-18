@@ -6,7 +6,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .config import McpServerConfig, load_config
+from .config import McpServerConfig, default_config_file, load_config
 from .logging_setup import configure_logging
 from .os_operations import Workspace, WorkspaceError
 
@@ -233,6 +233,11 @@ def resolve_mcp_config(
 def main() -> None:
     args = parse_args()
     config = load_config(path=args.config_file)
+    effective_config_file = (
+        args.config_file.expanduser()
+        if args.config_file is not None
+        else default_config_file().expanduser()
+    )
     configure_logging(
         config.logging,
         logger=logger,
@@ -252,7 +257,7 @@ def main() -> None:
         workspace = Workspace.from_directory(
             args.project_directory,
             mcp_config,
-            protected_paths=(args.config_file,) if args.config_file is not None else (),
+            protected_paths=(effective_config_file,),
         )
     except WorkspaceError as exc:
         logger.exception("MCP server initialization failed")
