@@ -291,3 +291,72 @@ def test_make_directory_rejects_sensitive_directories(tmp_path, directory) -> No
     with pytest.raises(WorkspaceError, match="Ändern"):
         _workspace(tmp_path).make_directory(directory)
     assert not (tmp_path / directory).exists()
+
+
+def test_write_file_rejects_workspace_internal_symlink_alias(tmp_path) -> None:
+    target = tmp_path / "important.txt"
+    target.write_text("original", encoding="utf-8")
+    (tmp_path / "harmless.txt").symlink_to(target)
+
+    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+        _workspace(tmp_path).write_file("harmless.txt", "changed")
+
+    assert target.read_text(encoding="utf-8") == "original"
+
+
+def test_delete_file_rejects_workspace_internal_symlink_alias(tmp_path) -> None:
+    target = tmp_path / "important.txt"
+    target.write_text("original", encoding="utf-8")
+    alias = tmp_path / "harmless.txt"
+    alias.symlink_to(target)
+
+    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+        _workspace(tmp_path).delete_file("harmless.txt")
+
+    assert target.read_text(encoding="utf-8") == "original"
+    assert alias.is_symlink()
+
+
+def test_copy_file_rejects_workspace_internal_symlink_source(tmp_path) -> None:
+    target = tmp_path / "important.txt"
+    target.write_text("secret-content", encoding="utf-8")
+    (tmp_path / "harmless.txt").symlink_to(target)
+
+    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+        _workspace(tmp_path).copy_file("harmless.txt", "copy.txt")
+
+    assert not (tmp_path / "copy.txt").exists()
+
+
+def test_copy_file_rejects_workspace_internal_symlink_destination(tmp_path) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("replacement", encoding="utf-8")
+    target = tmp_path / "important.txt"
+    target.write_text("original", encoding="utf-8")
+    (tmp_path / "harmless.txt").symlink_to(target)
+
+    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+        _workspace(tmp_path).copy_file("source.txt", "harmless.txt")
+
+    assert target.read_text(encoding="utf-8") == "original"
+
+
+def test_mutations_reject_symlinked_parent_directory(tmp_path) -> None:
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    alias_dir = tmp_path / "alias"
+    alias_dir.symlink_to(real_dir, target_is_directory=True)
+    (real_dir / "existing.txt").write_text("original", encoding="utf-8")
+
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+        workspace.write_file("alias/new.txt", "new")
+    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+        workspace.delete_file("alias/existing.txt")
+    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+        workspace.make_directory("alias/new-dir")
+
+    assert not (real_dir / "new.txt").exists()
+    assert (real_dir / "existing.txt").read_text(encoding="utf-8") == "original"
+    assert not (real_dir / "new-dir").exists()

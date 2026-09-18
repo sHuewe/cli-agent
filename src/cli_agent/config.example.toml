@@ -31,6 +31,8 @@ timeout = 120
 # provider = "openai"
 # model = "NAME-DES-MODELLS"
 # base_url = "https://llm.example.org/v1"
+# Optional: omit api_key_env for endpoints that do not require authentication.
+# If configured, the environment variable must exist and be non-empty.
 # api_key_env = "LLM_API_KEY"
 # timeout = 120
 # context_length = 262144

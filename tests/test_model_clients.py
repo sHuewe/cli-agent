@@ -231,6 +231,24 @@ def test_openai_chat_builds_request_headers_tools_and_normalizes_response(monkey
     assert client.usage_history == [TokenUsage(12, 3, 15)]
 
 
+def test_openai_chat_without_api_key_omits_authorization_header(monkeypatch) -> None:
+    monkeypatch.setattr("cli_agent.openai_client.httpx.AsyncClient", FakeAsyncClient)
+    FakeAsyncClient.response = FakeResponse(
+        {"choices": [{"message": {"content": "ok"}}]}
+    )
+    client = OpenAIClient(
+        base_url="http://localhost:8000/v1",
+        model="m",
+        api_key=None,
+    )
+
+    asyncio.run(client.chat([{"role": "user", "content": "hello"}], []))
+
+    headers = FakeAsyncClient.instances[0].posts[0][1]["headers"]
+    assert "Authorization" not in headers
+    assert headers["Content-Type"] == "application/json"
+
+
 def test_openai_chat_without_tools_omits_tool_fields_and_respects_explicit_auth_header(monkeypatch) -> None:
     monkeypatch.setattr("cli_agent.openai_client.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse(
