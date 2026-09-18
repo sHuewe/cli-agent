@@ -184,6 +184,30 @@ class McpLifecycleMixin:
         environment["PYTHONSAFEPATH"] = "1"
         return environment
 
+    def _http_headers(self, server_config: ServerConfig) -> dict[str, str]:
+        if any(key.strip().casefold() == "authorization" for key in server_config.headers):
+            raise ValueError(
+                f"HTTP-MCP-Server {server_config.name!r} darf Authorization nicht "
+                "statisch konfigurieren. Bearer-Authentifizierung wird "
+                "ausschließlich aus der Admin-Policy materialisiert."
+            )
+        headers = {
+            key: self._resolve_http_value(value)
+            for key, value in server_config.headers.items()
+        }
+        bearer_token_env = self._http_bearer_token_env(server_config)
+        if bearer_token_env is None:
+            return headers
+
+        token = os.environ.get(bearer_token_env)
+        if not token:
+            raise ValueError(
+                f"Für HTTP-MCP-Server {server_config.name!r} fehlt die "
+                f"konfigurierte Bearer-Token-Umgebungsvariable {bearer_token_env!r}."
+            )
+        headers["Authorization"] = f"Bearer {token}"
+        return headers
+
     async def _connect_server(self, stack: AsyncExitStack, server_config: ServerConfig) -> tuple[ClientSession, str | None]:
         if server_config.transport == "stdio":
             if server_config.command is None: raise ValueError(f"stdio-MCP-Server {server_config.name!r} ohne command.")
@@ -211,12 +235,10 @@ class McpLifecycleMixin:
                 allowed_hosts=self.network.mcp_allowed_hosts,
                 purpose="MCP-Server",
             )
+            headers = self._http_headers(server_config)
             http_client = await stack.enter_async_context(
                 httpx.AsyncClient(
-                    headers={
-                        key: self._resolve_http_value(value)
-                        for key, value in server_config.headers.items()
-                    },
+                    headers=headers,
                     follow_redirects=False,
                     trust_env=False,
                 )

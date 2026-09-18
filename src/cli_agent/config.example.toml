@@ -49,15 +49,17 @@ timeout = 120
 # name = "local-audited-tool"
 
 # External Streamable HTTP MCP. Its host must be permitted by admin_config.toml.
-# A trusted-server entry is NOT normally required; it is only needed for
-# permanent auto-approvals or explicitly trusted server instructions.
+# Unauthenticated HTTP MCPs need no trusted-server entry unless permanent
+# auto-approvals or explicitly trusted server instructions are required.
+# Bearer authentication is configured only in admin_config.toml via
+# [mcp.trusted_servers.from_env.authentication]; static Authorization headers
+# are intentionally rejected here.
 # [[mcp_servers]]
 # name = "external"
 # transport = "streamable_http"
 # url = "http://127.0.0.1:8001/mcp"
 #
 # [mcp_servers.headers]
-# Authorization = "Bearer example-token"
 # X-Workspace = "{workspace_directory}"
 #
 # HTTP MCP URLs/headers may use {workspace_directory} or {project_directory}

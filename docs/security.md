@@ -30,6 +30,12 @@
 
 Der Agent setzt Runtime-Platzhalter wie `{workspace_directory}` selbst ein. Dadurch können workspacegebundene MCPs wie Compose- oder Validator-Server weiterhin als 1:1-stdio-Prozess an den aktuellen Agent-Workspace gebunden werden, ohne den Workspace als modellkontrollierten Tool-Parameter offenzulegen. stdio-Prozesse erhalten außerdem nur eine reduzierte Umgebung; zusätzliche Werte stammen explizit aus dem administrativen Launchprofil. `PYTHONSAFEPATH=1` wird gesetzt und `PYTHONPATH` nicht geerbt.
 
+### HTTP-MCP-Credentials
+
+**Problem:** Ein statischer `Authorization`-Header in der normalen Projektkonfiguration würde Bearer-Tokens im Klartext in einer benutzerkontrollierten Datei ablegen. Eine generische Environment-Expansion wäre ebenfalls zu weit gefasst, weil eine manipulierte Projektkonfiguration sonst beliebige vorhandene Prozess-Umgebungsvariablen an einen erlaubten MCP-Host weiterleiten könnte.
+
+**Gelöst:** Bearer-Authentifizierung für HTTP-MCPs ist optional und ausschließlich an einen passenden `[[mcp.trusted_servers]]`-Eintrag der maschinenweiten Admin-Policy gebunden. Unter `[mcp.trusted_servers.from_env.authentication]` enthält `bearer` nur den Namen der zugelassenen Environment-Variable; deren Wert ist ausschließlich der rohe Token. `cli-agent` erzeugt erst beim Verbindungsaufbau `Authorization: Bearer <token>`. Fehlt die Variable oder ist sie leer, schlägt der Verbindungsaufbau fail-closed fehl. Statische `Authorization`-Header sind sowohl in der Benutzer- als auch in der Trusted-Server-Konfiguration unzulässig. Andere nicht-sensitive Header bleiben erlaubt. Nicht authentifizierte HTTP-MCPs funktionieren unverändert ohne Trusted-Server-Eintrag, sofern keine andere Trusted-Server-Funktion benötigt wird.
+
 ### MCP-Instructions und Prompt Injection
 
 **Problem:** MCP-`instructions` können für die korrekte Tool-Nutzung wichtig sein, sind bei externen Servern aber gleichzeitig vom Server kontrollierter Freitext. Sie pauschal in den Systemprompt zu übernehmen erhöht ihren Prompt-Trust unnötig; sie vollständig zu ignorieren verliert dagegen funktional relevante Informationen.
@@ -119,7 +125,7 @@ URLs werden gegen exakte Hostnamen aus der Admin-Policy validiert. Remote-Ziele 
 
 Externe stdio-MCPs werden ausschließlich gestartet, wenn ein gleichnamiges `[[mcp.trusted_servers]]`-Profil mit `transport = "stdio"` existiert. In der Userconfig steht für einen solchen Server nur der Name. Die Admin-Policy liefert `command`, `args` und `env`; der Benutzer kann diese Launch-Identität nicht überschreiben.
 
-HTTP-MCPs benötigen für die normale Nutzung keinen Trusted-Server-Eintrag. Ihr Host muss in `network.mcp_allowed_hosts` zugelassen sein. Ein `[[mcp.trusted_servers]]`-Eintrag wird für HTTP nur benötigt, wenn dessen Instructions explizit in den Systemprompt gehoben oder einzelne Tools permanent auto-approved werden sollen.
+Nicht authentifizierte HTTP-MCPs benötigen für die normale Nutzung keinen Trusted-Server-Eintrag; ihr Host muss in `network.mcp_allowed_hosts` zugelassen sein. Ein `[[mcp.trusted_servers]]`-Eintrag wird für HTTP benötigt, wenn Bearer-Authentifizierung konfiguriert wird oder wenn dessen Instructions explizit in den Systemprompt gehoben bzw. einzelne Tools permanent auto-approved werden sollen.
 
 Externe MCP-Tools benötigen standardmäßig eine interaktive Zustimmung. Administratoren können einzelne externe Tools nur über einen passenden `[[mcp.trusted_servers]]`-Eintrag dauerhaft freigeben. Bei einer interaktiven Nachfrage kann `[s]` genau dieses exponierte Tool für die aktuelle Session freigeben; diese Entscheidung wird nicht persistiert. Für vertrauenswürdige Automation kann `--approve-tool` einen exakten Toolnamen für den aktuellen Prozess vorab freigeben. Diese Option ist keine dauerhafte Policy und umgeht keine anderen Security-Grenzen. Eingebaute mutierende Workspace-OS-Tools können nicht über Trusted-Server-Auto-Approvals freigeschaltet werden.
 

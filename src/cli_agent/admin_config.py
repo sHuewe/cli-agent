@@ -111,6 +111,7 @@ class TrustedMcpServer:
     args: tuple[str, ...] = ()
     env: tuple[tuple[str, str], ...] = ()
     headers: tuple[tuple[str, str], ...] = ()
+    bearer_token_env: str | None = None
     auto_approve_tools: tuple[TrustedMcpToolApproval, ...] = ()
     trust_instructions: bool = False
 
@@ -237,6 +238,58 @@ def _trusted_tool_approvals(values: dict[str, Any], *, section: str) -> tuple[Tr
     return tuple(approvals)
 
 
+def _trusted_http_bearer_token_env(values: Any, *, section: str) -> str:
+    if not isinstance(values, dict):
+        raise ValueError(f"{section}.from_env muss eine Tabelle sein.")
+
+    unknown_from_env = set(values) - {"authentication"}
+    if unknown_from_env:
+        names = ", ".join(sorted(str(name) for name in unknown_from_env))
+        raise ValueError(
+            f"{section}.from_env unterstützt derzeit nur 'authentication'; "
+            f"unbekannt: {names}."
+        )
+
+    authentication = values.get("authentication")
+    if not isinstance(authentication, dict):
+        raise ValueError(f"{section}.from_env.authentication muss eine Tabelle sein.")
+
+    unknown_authentication = set(authentication) - {"bearer"}
+    if unknown_authentication:
+        names = ", ".join(sorted(str(name) for name in unknown_authentication))
+        raise ValueError(
+            f"{section}.from_env.authentication unterstützt derzeit nur 'bearer'; "
+            f"unbekannt: {names}."
+        )
+
+    bearer = authentication.get("bearer")
+    if not isinstance(bearer, str) or not bearer.strip():
+        raise ValueError(
+            f"{section}.from_env.authentication.bearer muss der Name "
+            "einer Umgebungsvariable sein."
+        )
+    bearer = bearer.strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", bearer):
+        raise ValueError(
+            f"{section}.from_env.authentication.bearer muss der Name "
+            "einer Umgebungsvariable sein."
+        )
+    return bearer
+
+
+def _reject_static_authorization_header(
+    headers: tuple[tuple[str, str], ...],
+    *,
+    section: str,
+) -> None:
+    if any(name.strip().casefold() == "authorization" for name, _ in headers):
+        raise ValueError(
+            f"{section}.headers darf Authorization nicht statisch setzen. "
+            "Bearer-Authentifizierung wird ausschließlich über "
+            f"{section}.from_env.authentication.bearer konfiguriert."
+        )
+
+
 def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
     section = f"[[mcp.trusted_servers]] #{index + 1}"
     name = str(values.get("name", "")).strip()
@@ -258,18 +311,27 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
     command = str(command_value).strip() if command_value is not None else None
     env = _string_map(values.get("env", {}), section=section, key="env")
     headers = _string_map(values.get("headers", {}), section=section, key="headers")
+    bearer_token_env: str | None = None
 
     if transport == "streamable_http":
         if not url:
             raise ValueError(f"{section} benötigt für streamable_http eine url.")
         if command or raw_args or env:
             raise ValueError(f"{section} darf für streamable_http kein command, args oder env enthalten.")
+        _reject_static_authorization_header(headers, section=section)
+        if "from_env" in values:
+            bearer_token_env = _trusted_http_bearer_token_env(
+                values["from_env"],
+                section=section,
+            )
         url = _normalize_mcp_url(url, section=section)
     else:
         if not command:
             raise ValueError(f"{section} benötigt für stdio ein command.")
-        if url or headers:
-            raise ValueError(f"{section} darf für stdio keine url oder headers enthalten.")
+        if url or headers or "from_env" in values:
+            raise ValueError(
+                f"{section} darf für stdio keine url, headers oder from_env enthalten."
+            )
         if not _trusted_stdio_command_is_deterministic(command):
             raise ValueError(
                 f"{section}.command muss für einen trusted stdio-MCP ein absoluter "
@@ -284,6 +346,7 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
         args=tuple(raw_args),
         env=env,
         headers=headers,
+        bearer_token_env=bearer_token_env,
         auto_approve_tools=tools,
         trust_instructions=trust_instructions,
     )

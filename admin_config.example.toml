@@ -43,18 +43,28 @@ web_allowed_hosts = []
 # placeholder is also accepted because it resolves to sys.executable of the
 # managed cli-agent installation. Bare PATH commands are rejected.
 #
-# Streamable HTTP MCPs normally need no [[mcp.trusted_servers]] entry: their
-# host only needs to be present in network.mcp_allowed_hosts. Add a trusted
-# server entry for HTTP only when server instructions should be elevated into
-# the system prompt or when pinned permanent tool auto-approvals are required.
-# Untrusted MCP instructions remain available to the model as transient,
-# explicitly untrusted reference context.
+# Unauthenticated Streamable HTTP MCPs normally need no
+# [[mcp.trusted_servers]] entry: their host only needs to be present in
+# network.mcp_allowed_hosts. A trusted server entry is additionally required
+# when Bearer authentication, trusted server instructions, or pinned permanent
+# tool auto-approvals are configured.
+#
+# Bearer authentication is optional. The policy stores only the environment
+# variable name; the variable itself contains the raw token without "Bearer ".
+# cli-agent adds the Authorization header at runtime. Static Authorization
+# headers are rejected in both user and admin MCP configuration.
 #
 # [[mcp.trusted_servers]]
 # name = "fachsoftware"
 # transport = "streamable_http"
 # url = "https://mcp.intern.firma.de/mcp"
-# trust_instructions = true
+# trust_instructions = false
+#
+# [mcp.trusted_servers.from_env.authentication]
+# bearer = "CLI_AGENT_FACHSOFTWARE_TOKEN"
+#
+# Untrusted MCP instructions remain available to the model as transient,
+# explicitly untrusted reference context.
 #
 # Persistent auto-approvals pin the complete model-visible MCP tool contract.
 # Do not calculate contract_sha256 manually. Use:

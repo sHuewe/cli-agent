@@ -207,6 +207,7 @@ def _render_trusted_server_fragment(server: Any) -> str:
         f"name = {json.dumps(name, ensure_ascii=False)}",
         f"transport = {json.dumps(transport, ensure_ascii=False)}",
     ]
+    bearer_token_env = None
     if transport == "streamable_http":
         url = getattr(server, "url", None)
         if url:
@@ -215,6 +216,7 @@ def _render_trusted_server_fragment(server: Any) -> str:
         if headers:
             lines.append("# Header-Werte werden aus Sicherheitsgründen nicht ausgegeben; Werte aus der vorhandenen Konfiguration übernehmen.")
             lines.append(f"headers = {_render_inline_toml_table(headers, redact_values=True)}")
+        bearer_token_env = getattr(server, "bearer_token_env", None)
     elif transport == "stdio":
         command = getattr(server, "command", None)
         if command:
@@ -227,6 +229,14 @@ def _render_trusted_server_fragment(server: Any) -> str:
             lines.append("# Environment-Werte werden aus Sicherheitsgründen nicht ausgegeben; Werte aus der vorhandenen Admin-Konfiguration übernehmen.")
             lines.append(f"env = {_render_inline_toml_table(env, redact_values=True)}")
     lines.append(f"trust_instructions = {'true' if bool(getattr(server, 'trust_instructions', False)) else 'false'}")
+    if bearer_token_env:
+        lines.extend(
+            [
+                "",
+                "[mcp.trusted_servers.from_env.authentication]",
+                f"bearer = {json.dumps(str(bearer_token_env), ensure_ascii=False)}",
+            ]
+        )
     return "\n".join(lines)
 
 

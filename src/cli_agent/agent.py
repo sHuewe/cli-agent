@@ -259,13 +259,13 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 )
                 configured_headers = tuple(
                     sorted(
-                        (key, self._resolve_http_value(value))
+                        (key.casefold(), self._resolve_http_value(value))
                         for key, value in server_config.headers.items()
                     )
                 )
                 trusted_headers = tuple(
                     sorted(
-                        (key, self._resolve_http_value(value))
+                        (key.casefold(), self._resolve_http_value(value))
                         for key, value in trusted.headers
                     )
                 )
@@ -296,6 +296,17 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             )
         )
         return configured_command == trusted_command and configured_args == trusted_args and configured_env == trusted_env
+
+    def _http_bearer_token_env(self, server_config: ServerConfig) -> str | None:
+        if server_config.transport != "streamable_http":
+            return None
+        for trusted in self.mcp_policy.trusted_servers:
+            if (
+                trusted.bearer_token_env is not None
+                and self._trusted_server_matches(server_config, trusted)
+            ):
+                return trusted.bearer_token_env
+        return None
 
     def _instructions_are_trusted(self, server_config: ServerConfig) -> bool:
         if getattr(server_config, "built_in", False):
