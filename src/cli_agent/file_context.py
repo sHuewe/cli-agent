@@ -214,7 +214,9 @@ def _prepare_llm_input_file(
                 f"{purpose} überschreitet das großzügige Sicherheitslimit von "
                 f"{MAX_LLM_INPUT_FILE_BYTES} Bytes: {resolved}"
             )
-        content = raw.decode("utf-8-sig")
+        # Match Path.read_text()/text-mode universal-newline semantics on all
+        # platforms even though the bounded read itself is performed in binary mode.
+        content = raw.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
     except UnicodeDecodeError as exc:
         raise ValueError(
             f"{purpose} ist nicht als UTF-8-Text lesbar: {resolved}"
