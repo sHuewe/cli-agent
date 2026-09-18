@@ -360,3 +360,116 @@ def test_mutations_reject_symlinked_parent_directory(tmp_path) -> None:
     assert not (real_dir / "new.txt").exists()
     assert (real_dir / "existing.txt").read_text(encoding="utf-8") == "original"
     assert not (real_dir / "new-dir").exists()
+
+
+def test_list_files_hides_sensitive_entries(tmp_path) -> None:
+    (tmp_path / "visible.txt").write_text("visible", encoding="utf-8")
+    (tmp_path / ".env.production").write_text("SECRET=value", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("sensitive", encoding="utf-8")
+
+    listing = _workspace(tmp_path).list_files(".")
+
+    assert "visible.txt" in listing
+    assert ".env.production" not in listing
+    assert ".git" not in listing
+
+
+def test_list_files_skips_cyclic_symlink(tmp_path) -> None:
+    (tmp_path / "visible.txt").write_text("visible", encoding="utf-8")
+    loop = tmp_path / "loop"
+    loop.symlink_to("loop")
+
+    listing = _workspace(tmp_path).list_files(".")
+
+    assert "visible.txt" in listing
+    assert "loop" not in listing
+
+
+def test_list_files_rejects_sensitive_directory(tmp_path) -> None:
+    (tmp_path / ".git").mkdir()
+
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        _workspace(tmp_path).list_files(".git")
+
+
+def test_active_workspace_config_is_protected_across_read_operations(tmp_path) -> None:
+    config_path = tmp_path / "custom-agent.toml"
+    config_path.write_text('Authorization = "secret-sentinel"\n', encoding="utf-8")
+    (tmp_path / "normal.toml").write_text('value = "secret-sentinel"\n', encoding="utf-8")
+    workspace = Workspace.from_directory(
+        tmp_path,
+        McpServerConfig(name="os", config={"allow_write_files": True}),
+        protected_paths=(config_path,),
+    )
+
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.read_file("custom-agent.toml")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.file_info("custom-agent.toml")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.search_text("custom-agent.toml", "secret-sentinel")
+
+    found = workspace.find_files(".", "*.toml")
+    assert "normal.toml" in found
+    assert "custom-agent.toml" not in found
+
+    searched = workspace.search_text(".", "secret-sentinel")
+    assert "normal.toml" in searched
+    assert "custom-agent.toml" not in searched
+
+
+def test_active_workspace_config_is_hidden_from_listing_and_copy(tmp_path) -> None:
+    config_path = tmp_path / "custom-agent.toml"
+    config_path.write_text("secret", encoding="utf-8")
+    workspace = Workspace.from_directory(
+        tmp_path,
+        McpServerConfig(name="os", config={"allow_write_files": True}),
+        protected_paths=(config_path,),
+    )
+
+    assert "custom-agent.toml" not in workspace.list_files(".")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.copy_file("custom-agent.toml", "copy.toml")
+    assert not (tmp_path / "copy.toml").exists()
+
+
+@pytest.mark.parametrize(
+    "operation,args",
+    [
+        ("write_file", ("custom-agent.toml", "changed")),
+        ("delete_file", ("custom-agent.toml",)),
+        ("move_file", ("custom-agent.toml", "moved.toml")),
+        ("copy_file", ("normal.toml", "custom-agent.toml")),
+    ],
+)
+def test_active_workspace_config_rejects_mutations(tmp_path, operation, args) -> None:
+    config_path = tmp_path / "custom-agent.toml"
+    config_path.write_text("original", encoding="utf-8")
+    (tmp_path / "normal.toml").write_text("normal", encoding="utf-8")
+    workspace = Workspace.from_directory(
+        tmp_path,
+        McpServerConfig(name="os", config={"allow_write_files": True}),
+        protected_paths=(config_path,),
+    )
+
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        getattr(workspace, operation)(*args)
+
+    assert config_path.read_text(encoding="utf-8") == "original"
+
+
+def test_protected_config_outside_workspace_does_not_affect_workspace(tmp_path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    outside_config = tmp_path / "config.toml"
+    outside_config.write_text("outside", encoding="utf-8")
+    (workspace_dir / "config.toml").write_text("project file", encoding="utf-8")
+
+    workspace = Workspace.from_directory(
+        workspace_dir,
+        McpServerConfig(name="os", config={"allow_write_files": True}),
+        protected_paths=(outside_config,),
+    )
+
+    assert workspace.read_file("config.toml") == "project file"

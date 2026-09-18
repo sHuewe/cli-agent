@@ -126,9 +126,14 @@ Zusätzlich gelten unter anderem:
   Konfigurations- und strukturierte Datenformate,
 - `read_file` und `copy_file` verweigern `.env*`, Credential-/Private-Key-Dateien,
   `.git`-/`.cli-agent`-Artefakte und Logdateien,
+- die tatsächlich aktive Agent-Konfigurationsdatei wird, falls sie innerhalb des
+  Workspaces liegt, zusätzlich als konkreter geschützter Pfad behandelt; sie wird
+  von Lesen, Suche/Find, Kopieren und Mutationen ausgeschlossen,
+- `list_files` blendet sensible beziehungsweise geschützte Einträge aus und
+  verweigert das direkte Listing geschützter Verzeichnisse,
 - `read_file` begrenzt Textdateien auf 1 MB; für PDFs gelten die oben genannten Limits,
 - mutierende Operationen verweigern bekannte Secret-/Credential-, `.git`-,
-  `.cli-agent`- und Log-Ziele,
+  `.cli-agent`-, Log- und dynamisch geschützte Ziele,
 - der Parent-Ordner einer zu schreibenden Datei muss bereits existieren.
 
 Die MCP-`instructions` fordern das Modell außerdem auf, bestehende Dateien vor
