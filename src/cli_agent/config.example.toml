@@ -58,6 +58,11 @@ timeout = 120
 #
 # [mcp_servers.headers]
 # Authorization = "Bearer example-token"
+# X-Workspace = "{workspace_directory}"
+#
+# HTTP MCP URLs/headers may use {workspace_directory} or {project_directory}
+# when the server needs an explicit workspace binding. {python} and {config_file}
+# are intentionally restricted to administratively controlled stdio profiles.
 
 # -----------------------------------------------------------------------------
 # Optional OKF knowledge repository

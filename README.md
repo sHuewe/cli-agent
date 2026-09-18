@@ -137,6 +137,20 @@ url = "https://mcp.intern.firma.de/mcp"
 
 Der Host muss in `network.mcp_allowed_hosts` der Admin-Policy enthalten sein. Dafür ist **kein** `[[mcp.trusted_servers]]`-Eintrag erforderlich, solange weder permanente Auto-Approvals noch administrativ vertrauenswürdige Server-Instructions benötigt werden.
 
+HTTP-MCPs können den aktuellen Workspace bei Bedarf über einen Header erhalten. Das ist insbesondere für dauerhaft laufende lokale oder entfernte MCP-Dienste nützlich, die mehrere Agent-Sessions unterschiedlichen Projekten zuordnen müssen:
+
+```toml
+[[mcp_servers]]
+name = "workspace-service"
+transport = "streamable_http"
+url = "https://mcp.intern.firma.de/mcp"
+
+[mcp_servers.headers]
+X-Workspace = "{workspace_directory}"
+```
+
+Für HTTP-MCP-URL- und Headerwerte werden bewusst nur `{workspace_directory}` und der gleichbedeutende Alias `{project_directory}` aufgelöst. Damit kann der Agent den Workspace hostseitig an die MCP-Session binden, ohne ihn dem LLM als frei wählbaren Toolparameter zu überlassen. Die lokalen Runtime-Werte `{python}` und `{config_file}` sind für HTTP-MCPs nicht zulässig; sie bleiben ausschließlich für administrativ kontrollierte stdio-Launchprofile verfügbar. Ein Workspace-Header kann den absoluten lokalen Pfad auch an einen entfernten, administrativ erlaubten MCP-Host übermitteln und sollte daher nur konfiguriert werden, wenn dieser Server diese Information tatsächlich benötigt.
+
 Ein externer stdio-MCP wird in der Benutzerkonfiguration dagegen ausschließlich über seinen administrativ vergebenen Namen ausgewählt:
 
 ```toml
@@ -322,6 +336,39 @@ cli-agent `
 ```
 
 Der CLI-Aufruf verwendet denselben `add_web_context`-Pfad wie der interaktive Befehl. Daher gelten dieselben Security-Regeln: Nur Hosts aus `admin_config.toml`/`network.web_allowed_hosts` sind zulässig, Redirect-Ziele werden erneut geprüft, und geladener Web-Inhalt wird als nicht vertrauenswürdiger Referenzkontext behandelt. Ist ein URL-Aufruf nicht zulässig oder schlägt er fehl, wird der Agent-Prompt nicht ausgeführt.
+
+### Authentifizierte Web-Provider
+
+`add_web_context` kann zusätzlich administrativ konfigurierte Provider verwenden. Für den Benutzer bleibt der Aufruf identisch: Er übergibt weiterhin nur die normale Seiten-URL; `cli-agent` erkennt anhand der Admin-Policy, ob für diese URL ein spezieller Provider zuständig ist.
+
+Aktuell wird **Confluence Data Center mit Personal Access Token (PAT)** unterstützt. Der Provider wird ausschließlich in der maschinenweiten `admin_config.toml` eingerichtet:
+
+```toml
+[network]
+web_allowed_hosts = ["confluence.intern.firma.de"]
+
+[[web.providers]]
+type = "confluence"
+base_url = "https://confluence.intern.firma.de/wiki"
+token_env = "CLI_AGENT_CONFLUENCE_PAT"
+```
+
+Der Secret-Wert selbst steht nicht in der Konfiguration, sondern nur in der angegebenen Environment-Variable:
+
+```powershell
+$env:CLI_AGENT_CONFLUENCE_PAT = "<PAT>"
+cli-agent
+```
+
+Wird anschließend beispielsweise eine passende Confluence-Seite mit
+
+```text
+add_web_context https://confluence.intern.firma.de/wiki/spaces/ABC/pages/12345/Seite
+```
+
+geladen, verwendet `cli-agent` automatisch die Confluence REST API und den PAT. Der Token wird weder an das LLM übergeben noch im Web-Kontext gespeichert. Für URLs, die einem konfigurierten Provider entsprechen, gibt es bei fehlendem Credential oder fehlgeschlagenem Provider-Abruf keinen stillen Fallback auf normalen unauthentifizierten HTML-Abruf.
+
+Die Provider-Konfiguration gehört ausschließlich zur Admin-Policy; eine normale Projektkonfiguration kann weder einen Provider noch dessen Credential-Quelle definieren oder überschreiben. Details zur Provider-Auswahl, unterstützten Confluence-URL-Formen und den Credential-/Redirect-Sicherheitsregeln stehen unter [Web-Kontext und authentifizierte Provider](docs/web-context.md).
 
 ## Logging und Context Dumps
 

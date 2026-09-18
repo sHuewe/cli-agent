@@ -189,13 +189,38 @@ class McpLifecycleMixin:
             if server_config.command is None: raise ValueError(f"stdio-MCP-Server {server_config.name!r} ohne command.")
             built_in = bool(getattr(server_config, "built_in", False))
             environment = self._stdio_environment(built_in=built_in)
-            environment.update({key: self._resolve(value) for key, value in server_config.env.items()})
-            parameters = StdioServerParameters(command=self._resolve(server_config.command), args=[self._resolve(value) for value in server_config.args], env=environment)
+            environment.update(
+                {
+                    key: self._resolve_stdio_value(value)
+                    for key, value in server_config.env.items()
+                }
+            )
+            parameters = StdioServerParameters(
+                command=self._resolve_stdio_value(server_config.command),
+                args=[
+                    self._resolve_stdio_value(value)
+                    for value in server_config.args
+                ],
+                env=environment,
+            )
             read_stream, write_stream = await stack.enter_async_context(stdio_client(parameters))
         elif server_config.transport == "streamable_http":
             if server_config.url is None: raise ValueError(f"HTTP-MCP-Server {server_config.name!r} ohne URL.")
-            server_url = validate_http_url(self._resolve(server_config.url), allowed_hosts=self.network.mcp_allowed_hosts, purpose="MCP-Server")
-            http_client = await stack.enter_async_context(httpx.AsyncClient(headers={key: self._resolve(value) for key, value in server_config.headers.items()}, follow_redirects=False, trust_env=False))
+            server_url = validate_http_url(
+                self._resolve_http_value(server_config.url),
+                allowed_hosts=self.network.mcp_allowed_hosts,
+                purpose="MCP-Server",
+            )
+            http_client = await stack.enter_async_context(
+                httpx.AsyncClient(
+                    headers={
+                        key: self._resolve_http_value(value)
+                        for key, value in server_config.headers.items()
+                    },
+                    follow_redirects=False,
+                    trust_env=False,
+                )
+            )
             connection = await stack.enter_async_context(streamable_http_client(server_url, http_client=http_client)); read_stream, write_stream, _ = connection
         else: raise ValueError(f"Nicht unterstützter MCP-Transport: {server_config.transport!r}")
         session = await stack.enter_async_context(ClientSession(read_stream, write_stream)); initialize_result = await session.initialize(); return session, initialize_result.instructions
