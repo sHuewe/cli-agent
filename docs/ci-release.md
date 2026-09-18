@@ -77,7 +77,11 @@ Ein späterer öffentlicher Release-Prozess kann dieselben geprüften Artefakte 
 
 Der Workflow kann über `workflow_dispatch` manuell gestartet werden. Dabei gibt es den Boolean-Parameter `publish`, der standardmäßig `false` ist.
 
-Nur wenn `publish = true` gewählt wird und Test- sowie Package-Job erfolgreich sind, läuft der Publish-Job. Dieser lädt exakt die im selben Workflow erzeugten Python-Distributionen herunter und veröffentlicht Wheel und Source Distribution mit `uv publish`.
+Nur wenn `publish = true` gewählt wird, der Workflow explizit auf dem Branch `main` gestartet wurde und Test- sowie Package-Job erfolgreich sind, läuft der Publish-Job. Ein manueller Lauf von einem Feature-Branch oder Tag kann daher keine Produktionspakete veröffentlichen.
+
+Der Publish-Job verwendet zusätzlich das GitHub Environment `package-publish`. Für produktive Nutzung sollte dieses Environment in den Repository-Einstellungen mit den gewünschten Schutzregeln versehen werden, zum Beispiel Required Reviewers und einer Beschränkung auf den Branch `main`.
+
+Der Job lädt exakt die im selben Workflow erzeugten Python-Distributionen herunter und veröffentlicht Wheel und Source Distribution mit `uv publish`.
 
 Dafür müssen zwei Repository-Variablen konfiguriert sein:
 
