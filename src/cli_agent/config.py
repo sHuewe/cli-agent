@@ -36,7 +36,7 @@ def _validated_user_headers(\n    values: Any,\n    *,\n    section: str,\n    a
                 f"{section} darf den routing-/proxyrelevanten Header {name!r} nicht setzen. "
                 "Host und Routing werden ausschließlich aus der geprüften URL abgeleitet."
             )
-        if normalized == "authorization" and "MCP-Server" in section:
+        if normalized == "authorization" and not allow_authorization:
             raise ValueError(
                 f"{section} darf Authorization nicht statisch setzen. "
                 "Bearer-Authentifizierung für HTTP-MCPs wird ausschließlich "
