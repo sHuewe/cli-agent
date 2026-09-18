@@ -62,6 +62,16 @@ Für Ausnahmefälle kann ein Administrator bei einem konkret identifizierten Ser
 
 Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses exponierte Tool nur für den laufenden Prozess freigeben. Für vertrauenswürdige Skripte kann dieselbe prozesslokale Vertrauensentscheidung vor dem Start mit wiederholbarem `--approve-tool <exposed_name>` explizit getroffen werden. Diese CLI-Freigabe verwendet nur exakte Toolnamen, kennt kein `approve-all` und ersetzt ausschließlich die interaktive Nachfrage; Serveraktivierung, Admin-Policy, Netzwerk-, Workspace- und Sensitive-Path-Grenzen bleiben bestehen. Ohne TTY und ohne passende CLI-Vorabfreigabe wird weiterhin fail-closed abgelehnt. Unbekannte Tools, ungültige JSON-Argumente und Tools deaktivierter Server werden vor der Ausführung abgewiesen.
 
+### Approval-Anzeige von Toolargumenten
+
+**Problem:** Der Approval-Dialog ist die letzte lokale Kontrollstelle, bevor modellgenerierte Toolargumente an einen MCP-Server gesendet werden. Argumentnamen und Schemas externer MCPs sind jedoch serverkontrolliert. Eine namensbasierte Redaction wie bei `token`, `password`, `authorization` oder `api_key` würde es einem bösartigen MCP erlauben, beliebige Nutzdaten gerade im Moment der Benutzerfreigabe zu verbergen.
+
+**Gelöst / bewusste Designentscheidung:** Toolargumente werden deshalb unabhängig vom Argumentnamen in einer begrenzten lokalen Vorschau angezeigt. Lange Strings und große Collections werden weiterhin gekürzt, damit ein MCP den Dialog nicht mit unbeschränkten Daten fluten kann; Werte werden aber nicht allein aufgrund MCP-kontrollierter Feldnamen vollständig verborgen. Diese Entscheidung priorisiert die Nachvollziehbarkeit der tatsächlich ausgehenden Nutzdaten gegenüber dem Risiko, dass vertrauliche Inhalte lokal im Terminal sichtbar werden. Approval-Inhalte werden nicht zusätzlich als normale Security-Logs persistiert.
+
+MCP-Transport-Credentials sind davon getrennt. Bearer-Tokens und andere Verbindungs-Credentials werden vom Host aus administrativ kontrollierter Konfiguration beziehungsweise Environment-Variablen bezogen und beim Verbindungsaufbau gesetzt. Sie werden nicht als modellgenerierte Toolargumente an den MCP übergeben und tauchen daher regulär nicht in dieser Approval-Anzeige auf.
+
+Regressionstests stellen ausdrücklich sicher, dass auch serverkontrollierte Argumentnamen wie `token`, `password`, `authorization` und `api_key` den tatsächlichen Payload nicht aus der Approval-Vorschau entfernen.
+
 ### Built-in-OS-Schreiboperationen
 
 **Problem:** Schreibzugriff auf den Workspace ist eine höhere Fähigkeit als Lesen und darf weder implizit aktiv sein noch durch eine externe Tool-Auto-Approval-Regel versehentlich freigeschaltet werden.
