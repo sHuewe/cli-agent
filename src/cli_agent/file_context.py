@@ -248,6 +248,11 @@ def prepare_output_target(
         must_exist=False,
         purpose="Output-Datei",
     )
+    if Workspace._is_sensitive_file(resolved):
+        raise ValueError(
+            "Output-Datei ist als Secret-/Credential- oder interner "
+            f"Workspace-Pfad geschützt: {resolved}"
+        )
     if not resolved.parent.is_dir():
         raise ValueError(f"Output-Ordner existiert nicht: {resolved.parent}")
 
