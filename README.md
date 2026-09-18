@@ -137,6 +137,20 @@ url = "https://mcp.intern.firma.de/mcp"
 
 Der Host muss in `network.mcp_allowed_hosts` der Admin-Policy enthalten sein. Dafür ist **kein** `[[mcp.trusted_servers]]`-Eintrag erforderlich, solange weder permanente Auto-Approvals noch administrativ vertrauenswürdige Server-Instructions benötigt werden.
 
+HTTP-MCPs können den aktuellen Workspace bei Bedarf über einen Header erhalten. Das ist insbesondere für dauerhaft laufende lokale oder entfernte MCP-Dienste nützlich, die mehrere Agent-Sessions unterschiedlichen Projekten zuordnen müssen:
+
+```toml
+[[mcp_servers]]
+name = "workspace-service"
+transport = "streamable_http"
+url = "https://mcp.intern.firma.de/mcp"
+
+[mcp_servers.headers]
+X-Workspace = "{workspace_directory}"
+```
+
+Für HTTP-MCP-URL- und Headerwerte werden bewusst nur `{workspace_directory}` und der gleichbedeutende Alias `{project_directory}` aufgelöst. Damit kann der Agent den Workspace hostseitig an die MCP-Session binden, ohne ihn dem LLM als frei wählbaren Toolparameter zu überlassen. Die lokalen Runtime-Werte `{python}` und `{config_file}` sind für HTTP-MCPs nicht zulässig; sie bleiben ausschließlich für administrativ kontrollierte stdio-Launchprofile verfügbar. Ein Workspace-Header kann den absoluten lokalen Pfad auch an einen entfernten, administrativ erlaubten MCP-Host übermitteln und sollte daher nur konfiguriert werden, wenn dieser Server diese Information tatsächlich benötigt.
+
 Ein externer stdio-MCP wird in der Benutzerkonfiguration dagegen ausschließlich über seinen administrativ vergebenen Namen ausgewählt:
 
 ```toml
