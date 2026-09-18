@@ -303,8 +303,11 @@ class Workspace:
             return True
         try:
             resolved = path.resolve(strict=False)
-        except OSError:
-            resolved = path.absolute()
+        except (OSError, RuntimeError):
+            # Broken/cyclic filesystem indirection cannot be classified
+            # reliably. Treat it as protected so callers fail closed or hide
+            # the entry instead of aborting a directory listing.
+            return True
         return any(
             resolved == protected or protected in resolved.parents
             for protected in self.protected_paths
