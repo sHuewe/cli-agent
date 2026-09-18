@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,28 @@ MAX_PDF_BYTES = 10_000_000
 MAX_PDF_PAGES = 100
 MAX_PDF_TEXT_CHARS = 1_000_000
 PDF_TIMEOUT_SECONDS = 20
+
+_PDF_WORKER_ENV_NAMES = (
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "PYTHONIOENCODING",
+)
+
+
+def _pdf_worker_environment() -> dict[str, str]:
+    environment = {
+        name: os.environ[name]
+        for name in _PDF_WORKER_ENV_NAMES
+        if os.environ.get(name) is not None
+    }
+    environment["PYTHONSAFEPATH"] = "1"
+    return environment
 
 
 class PdfTextError(RuntimeError):
@@ -72,6 +95,7 @@ def read_pdf_text(path: Path) -> str:
             stderr=subprocess.DEVNULL,
             timeout=PDF_TIMEOUT_SECONDS,
             check=False,
+            env=_pdf_worker_environment(),
         )
     except subprocess.TimeoutExpired as exc:
         raise PdfTextError(

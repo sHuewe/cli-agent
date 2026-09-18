@@ -108,8 +108,12 @@ und Spalten können ihre ursprüngliche Struktur verlieren.
 
 PDFs dürfen maximal 10.000.000 Bytes und 100 Seiten umfassen. Die gesamte Ausgabe
 ist auf 1.000.000 Zeichen begrenzt (inklusive Markierungen). Die Extraktion läuft
-mit 20 Sekunden Timeout in einem separaten Prozess. Dies ist kein hartes
-Speicherlimit: komprimierte PDF-Inhalte können beim Parsen deutlich anwachsen.
+mit 20 Sekunden Timeout in einem separaten Prozess. Der Parser-Prozess erhält
+eine minimale Environment-Allowlist und `PYTHONSAFEPATH=1`; insbesondere werden
+beliebige Credential-Variablen und `PYTHONPATH` nicht geerbt. Der separate
+Prozess dient der Timeout-/Lifecycle-Isolation und ist keine vollwertige Sandbox.
+Dies ist kein hartes Speicherlimit: komprimierte PDF-Inhalte können beim Parsen
+deutlich anwachsen.
 Die Limits stehen zentral in `pdf_text.py`; Überschreitungen liefern einen Fehler,
 keinen still gekürzten Text. Verschlüsselte und nicht lesbare PDFs liefern ebenfalls
 einen Fehler. Die Originaldatei bleibt unverändert; es gibt keine externen Dienste
