@@ -155,12 +155,18 @@ jobs:
       - name: Validate publish configuration
         env:
           PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
+          PUBLISH_CHECK_URL: ${{ vars.PYTHON_PUBLISH_CHECK_URL }}
           PUBLISH_TOKEN: ${{ secrets.PYTHON_PUBLISH_TOKEN }}
           PUBLISH_USERNAME: ${{ secrets.PYTHON_PUBLISH_USERNAME }}
           PUBLISH_PASSWORD: ${{ secrets.PYTHON_PUBLISH_PASSWORD }}
         run: |
           if [ -z "$PUBLISH_URL" ]; then
             echo "Repository variable PYTHON_PUBLISH_URL is not configured." >&2
+            exit 1
+          fi
+
+          if [ -z "$PUBLISH_CHECK_URL" ]; then
+            echo "Repository variable PYTHON_PUBLISH_CHECK_URL is not configured." >&2
             exit 1
           fi
 
@@ -177,6 +183,7 @@ jobs:
       - name: Publish wheel and source distribution
         env:
           PUBLISH_URL: ${{ vars.PYTHON_PUBLISH_URL }}
+          PUBLISH_CHECK_URL: ${{ vars.PYTHON_PUBLISH_CHECK_URL }}
           PUBLISH_TOKEN: ${{ secrets.PYTHON_PUBLISH_TOKEN }}
           PUBLISH_USERNAME: ${{ secrets.PYTHON_PUBLISH_USERNAME }}
           PUBLISH_PASSWORD: ${{ secrets.PYTHON_PUBLISH_PASSWORD }}
@@ -192,4 +199,4 @@ jobs:
             export UV_PUBLISH_PASSWORD="$PUBLISH_PASSWORD"
           fi
 
-          uv publish package/*.whl package/*.tar.gz
+          uv publish --check-url "$PUBLISH_CHECK_URL" package/*.whl package/*.tar.gz
