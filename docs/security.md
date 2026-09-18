@@ -74,6 +74,12 @@ Zusätzlich kann der Benutzer bei einer Nachfrage `[s]` wählen und exakt dieses
 
 **Gelöst:** Die Workspace-Auflösung erzwingt relative, innerhalb des Root verbleibende Pfade und prüft auf Symlink-Escapes. Bekannte sensible Namen/Pfade wie `.env*`, Credentials, Schlüssel, `.git`, `.cli-agent`, `.ssh`, `.aws` und Logs werden beim Lesen blockiert; dieselbe Schutzklasse wird für Mutationsziele angewandt. Auch `copy_file` prüft sensible Quellen und Ziele. Zusätzlich begrenzt `read_file` die gelesene Textgröße. Regressionstests liegen in `tests/test_os_operations.py`.
 
+### Sensitive Output-Ziele
+
+**Problem:** `--output` ist zwar eine explizite Benutzerentscheidung und kein modellkontrollierter Dateipfad, konnte aber bislang sensible oder interne Workspace-Pfade wie `.env`, `.git`, `.cli-agent`, Schlüssel-/Credential-Dateien oder Logs als Ziel verwenden. Damit galt für diesen cli-agent-eigenen Schreibpfad eine schwächere Mutation-Policy als für den Workspace-OS-Server.
+
+**Gelöst:** `--output` verwendet jetzt dieselbe Sensitive-Path-Klassifikation wie mutierende Workspace-OS-Operationen. Geschützte Ziele werden unabhängig von `--overwrite-output` abgewiesen. Die Prüfung geschieht zusammen mit den übrigen Dateioptionen, bevor Modellclient und Agent konstruiert und bevor ein Agent-/LLM-Loop gestartet wird. Ein bewusst benötigter sensibler Zielname kann weiterhin außerhalb des Agenten durch einen manuellen Rename/Move erzeugt werden.
+
 ### Größenlimit für explizite Prompt-/Context-Dateien
 
 **Problem:** `--context-file` und `--prompt-file` wurden vollständig mit `read_text()` eingelesen. Eine extrem große Datei konnte dadurch bereits vor dem Modellaufruf unverhältnismäßig viel Speicher belegen.

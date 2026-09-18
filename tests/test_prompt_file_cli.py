@@ -135,6 +135,27 @@ def test_invalid_prompt_file_is_rejected_before_agent_start(tmp_path, monkeypatc
     assert "constructed" not in captured
 
 
+def test_sensitive_output_is_rejected_before_agent_start(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    captured = {}
+    _patch_run_dependencies(monkeypatch, captured)
+
+    with pytest.raises(ValueError, match="Output-Datei.*geschützt"):
+        asyncio.run(
+            cli_module.run(
+                _base_args(
+                    tmp_path,
+                    output=Path(".env"),
+                    prompt=["generate", "output"],
+                )
+            )
+        )
+
+    assert "constructed" not in captured
+
+
 def test_prompt_file_can_be_combined_with_context_and_output(
     tmp_path,
     monkeypatch,
