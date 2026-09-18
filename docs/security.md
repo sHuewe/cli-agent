@@ -36,6 +36,14 @@ Der Agent setzt Runtime-Platzhalter wie `{workspace_directory}` selbst ein. Dadu
 
 **Gelöst:** Bearer-Authentifizierung für HTTP-MCPs ist optional und ausschließlich an einen passenden `[[mcp.trusted_servers]]`-Eintrag der maschinenweiten Admin-Policy gebunden. Unter `[mcp.trusted_servers.from_env.authentication]` enthält `bearer` nur den Namen der zugelassenen Environment-Variable; deren Wert ist ausschließlich der rohe Token. `cli-agent` erzeugt erst beim Verbindungsaufbau `Authorization: Bearer <token>`. Fehlt die Variable oder ist sie leer, schlägt der Verbindungsaufbau fail-closed fehl. Statische `Authorization`-Header sind sowohl in der Benutzer- als auch in der Trusted-Server-Konfiguration unzulässig. Andere nicht-sensitive Header bleiben erlaubt. Nicht authentifizierte HTTP-MCPs funktionieren unverändert ohne Trusted-Server-Eintrag, sofern keine andere Trusted-Server-Funktion benötigt wird.
 
+### MCP-Toolnamen-Limit
+
+**Problem:** Toolnamen stammen bei externen MCP-Servern aus nicht vertrauenswürdigen Metadaten. Extrem lange Namen können unnötig Speicher, Logging-/Promptdarstellung und Routingstrukturen belasten.
+
+**Gelöst:** Toolnamen werden beim Validieren der MCP-Metadaten auf maximal **512 Zeichen** begrenzt. Die Grenze ist bewusst großzügig und dient ausschließlich als Hardening gegen offensichtlich missbräuchliche Metadaten. Sie ergänzt die bestehenden Limits für Toolanzahl, Instructions, Beschreibungen, Schemas und Gesamtmetadaten.
+
+**Noch offen aus F-05:** Diese Prüfung erfolgt weiterhin erst nach der Materialisierung der MCP-Antwort durch das SDK. Ob für sehr große Transport-/JSON-RPC-Frames bereits unterhalb dieser Ebene wirksame Limits existieren, bleibt separat zu verifizieren.
+
 ### MCP-Lifecycle- und Tool-Timeouts
 
 **Problem:** Ein nicht antwortender oder absichtlich hängender MCP-Server darf den Agenten nicht unbegrenzt in `initialize`, `list_tools` oder einem Tool-Aufruf blockieren.
@@ -115,6 +123,12 @@ Regressionstests stellen ausdrücklich sicher, dass auch serverkontrollierte Arg
 **Gelöst:** Ein OKF-Repository ist bewusst eine separat vom Benutzer gewählte read-only Knowledge-Quelle und darf außerhalb des normalen Projekt-Workspaces liegen. Der aufgelöste OKF-Repository-Root bildet eine eigene Dateisystemgrenze. Innerhalb dieser Grenze verwendet der OKF-Server eine root-begrenzte Pfadauflösung mit Schutz gegen absolute Pfade, `..`, Symlink-/Reparse-Escapes und Hardlink-Aliase sowie Größen-/Indexlimits und restriktiver Markdown-/UTF-8-Verarbeitung. Die Wahl eines externen OKF-Roots erweitert daher nicht die Workspace-OS-Grenze; sie aktiviert eine getrennte Datenquelle, deren Zugriffe auf genau diesen Root beschränkt bleiben.
 
 Der Knowledge-Lauf erhält ausschließlich die beiden internen Read-only-Tools `knowledge_index` und `knowledge_read`. Der Agent akzeptiert den internen OKF-MCP nur, wenn er exakt diese Toolmenge anbietet. Normale Main-Agent-Tools und externe MCP-Routen stehen im Knowledge-Lauf nicht zur Verfügung. Folgeaufrufe dürfen nur Pfade und `next_tool`-Kombinationen verwenden, die ein vorheriges Repository-Ergebnis tatsächlich angeboten hat. Doppelte/parallel unerlaubte Knowledge-Aufrufe werden verworfen, Tool- und Concept-Limits werden erzwungen und finale Selection-Tokens gegen die tatsächlich gelesenen Concepts validiert. Knowledge-Inhalt wird im Hauptlauf in dieselbe transiente untrusted Referenzmessage wie Web-/MCP-Referenzdaten aufgenommen. `tests/test_okf_repository.py`, `tests/test_agent_knowledge.py`, `tests/test_agent_tool_calls.py` und `tests/test_agent_loop.py` prüfen diese Grenzen.
+
+### PDF-Parser-Subprozess und Environment
+
+**Problem:** Der separate PDF-Parser-Prozess wurde bislang ohne explizites `env=` gestartet und erbte damit die Environment-Variablen seines direkten Parent-Prozesses. Im normalen Built-in-OS-MCP-Pfad ist diese Parent-Environment bereits reduziert; die Sicherheit des PDF-Workers sollte davon jedoch nicht implizit abhängen.
+
+**Gelöst:** Der PDF-Worker erhält jetzt selbst eine minimale Allowlist üblicher Laufzeitvariablen sowie `PYTHONSAFEPATH=1`. Variablen wie Cloud-Credentials oder `PYTHONPATH` werden nicht weitergegeben. Der Prozesswechsel bleibt eine Timeout-/Lifecycle-Isolation und wird nicht als vollwertige Sandbox betrachtet.
 
 ### Logging, Dumps und lokale Artefakte
 
