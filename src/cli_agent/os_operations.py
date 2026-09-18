@@ -626,7 +626,7 @@ class Workspace:
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     def delete_file(self, path: str) -> str:
-        file_path = self.resolve_path(path)
+        file_path = self.resolve_direct_path(path)
         if not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
         self._reject_hardlinked_file(file_path)
@@ -643,7 +643,7 @@ class Workspace:
         return f"Datei gelöscht: {relative}"
 
     def copy_file(self, path_src: str, path_dst: str) -> str:
-        src_path = self.resolve_path(path_src)
+        src_path = self.resolve_direct_path(path_src)
         if not src_path.is_file():
             raise WorkspaceError(f"Quellpfad ist keine Datei: {path_src!r}")
         self._reject_hardlinked_file(src_path)
@@ -653,7 +653,7 @@ class Workspace:
                 "Workspace-OS-Server ist nicht erlaubt."
             )
 
-        dst_path = self.resolve_path(path_dst, must_exist=False)
+        dst_path = self.resolve_direct_path(path_dst, must_exist=False)
         self._reject_sensitive_mutation(dst_path)
         if dst_path.exists() and not dst_path.is_file():
             raise WorkspaceError(f"Zielpfad ist keine Datei: {path_dst!r}")
@@ -707,7 +707,7 @@ class Workspace:
         return f"Datei verschoben: {relative}"
 
     def make_directory(self, path: str) -> str:
-        dir_path = self.resolve_path(path, must_exist=False)
+        dir_path = self.resolve_direct_path(path, must_exist=False)
         self._reject_sensitive_mutation(dir_path)
         if dir_path.exists() and not dir_path.is_dir():
             raise WorkspaceError(f"Pfad ist kein Ordner: {path!r}")
@@ -726,7 +726,7 @@ class Workspace:
         return f"Ordner erstellt: {relative}"
 
     def write_file(self, path: str, content: str) -> str:
-        file_path = self.resolve_path(path, must_exist=False)
+        file_path = self.resolve_direct_path(path, must_exist=False)
         self._reject_sensitive_mutation(file_path)
         if file_path.exists() and not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
