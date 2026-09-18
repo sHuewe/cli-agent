@@ -58,7 +58,7 @@ web_allowed_hosts = []
 # name = "fachsoftware"
 # transport = "streamable_http"
 # url = "https://mcp.intern.firma.de/mcp"
-# trust_instructions = true
+# trust_instructions = false
 #
 # [mcp.trusted_servers.from_env.authentication]
 # bearer = "CLI_AGENT_FACHSOFTWARE_TOKEN"
