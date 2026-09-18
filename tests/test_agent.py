@@ -41,10 +41,37 @@ def make_agent(tmp_path: Path, *, mcp_policy: McpPolicy | None = None) -> CliAge
     return CliAgent(tmp_path, OllamaClient(base_url="http://localhost:11434", model="test"), (), mcp_policy=mcp_policy)
 
 
-def test_resolves_workspace_placeholders(tmp_path: Path) -> None:
+def test_stdio_resolves_all_runtime_placeholders(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    agent = CliAgent(
+        tmp_path,
+        OllamaClient(base_url="http://localhost:11434", model="test"),
+        (),
+        config_file=config_file,
+    )
+
+    assert agent._resolve_stdio_value("{workspace_directory}") == str(tmp_path.resolve())
+    assert agent._resolve_stdio_value("{project_directory}") == str(tmp_path.resolve())
+    assert agent._resolve_stdio_value("{config_file}") == str(config_file)
+    assert agent._resolve_stdio_value("{python}")
+
+
+def test_http_resolves_only_workspace_placeholders(tmp_path: Path) -> None:
     agent = make_agent(tmp_path)
-    assert agent._resolve("{workspace_directory}") == str(tmp_path.resolve())
-    assert agent._resolve("{project_directory}") == str(tmp_path.resolve())
+
+    assert agent._resolve_http_value("{workspace_directory}") == str(tmp_path.resolve())
+    assert agent._resolve_http_value("{project_directory}") == str(tmp_path.resolve())
+
+
+@pytest.mark.parametrize("placeholder", ["{python}", "{config_file}"])
+def test_http_rejects_local_runtime_placeholders(
+    tmp_path: Path,
+    placeholder: str,
+) -> None:
+    agent = make_agent(tmp_path)
+
+    with pytest.raises(ValueError, match="HTTP-MCP-Werte.*nicht zulässig"):
+        agent._resolve_http_value(placeholder)
 
 
 def test_llm_context_is_dumped_as_json_when_enabled(tmp_path: Path) -> None:
