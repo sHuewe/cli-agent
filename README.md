@@ -135,7 +135,28 @@ transport = "streamable_http"
 url = "https://mcp.intern.firma.de/mcp"
 ```
 
-Der Host muss in `network.mcp_allowed_hosts` der Admin-Policy enthalten sein. Dafür ist **kein** `[[mcp.trusted_servers]]`-Eintrag erforderlich, solange weder permanente Auto-Approvals noch administrativ vertrauenswürdige Server-Instructions benötigt werden.
+Der Host muss in `network.mcp_allowed_hosts` der Admin-Policy enthalten sein. **Nicht authentifizierte HTTP-MCPs funktionieren weiterhin ohne** `[[mcp.trusted_servers]]`-Eintrag, solange weder permanente Auto-Approvals noch administrativ vertrauenswürdige Server-Instructions benötigt werden.
+
+Für Bearer-Authentifizierung wird dagegen ein identitätsgebundener Admin-Eintrag verwendet. Der Token selbst steht ausschließlich in einer Environment-Variable; in der Policy wird nur deren Name konfiguriert:
+
+```toml
+[[mcp.trusted_servers]]
+name = "fachsoftware"
+transport = "streamable_http"
+url = "https://mcp.intern.firma.de/mcp"
+
+[mcp.trusted_servers.from_env.authentication]
+bearer = "CLI_AGENT_FACHSOFTWARE_TOKEN"
+```
+
+Die Environment-Variable enthält **nur den Token**, nicht das Präfix `Bearer`:
+
+```powershell
+$env:CLI_AGENT_FACHSOFTWARE_TOKEN = "<token>"
+cli-agent
+```
+
+`cli-agent` erzeugt daraus beim Verbindungsaufbau den Header `Authorization: Bearer <token>`. Fehlt die konfigurierte Environment-Variable oder ist sie leer, schlägt der Verbindungsaufbau fail-closed fehl. Ein statischer `Authorization`-Header ist weder in `[mcp_servers.headers]` noch in `[mcp.trusted_servers.headers]` zulässig. Andere nicht-sensitive HTTP-Header bleiben weiterhin möglich.
 
 HTTP-MCPs können den aktuellen Workspace bei Bedarf über einen Header erhalten. Das ist insbesondere für dauerhaft laufende lokale oder entfernte MCP-Dienste nützlich, die mehrere Agent-Sessions unterschiedlichen Projekten zuordnen müssen:
 
