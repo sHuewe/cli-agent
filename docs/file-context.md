@@ -40,7 +40,7 @@ cli-agent `
   --output .review/review.md
 ```
 
-`--output` benötigt **kein** `--with-os-write`, weil der Zielpfad ausschließlich durch den Benutzer als CLI-Argument festgelegt wird und nicht vom Modell gewählt werden kann. Auch der Output muss innerhalb des Workspace liegen. Existiert die Datei bereits, bricht der Start vor dem ersten Modelllauf ab. Ein bewusstes Ersetzen wird explizit aktiviert:
+`--output` benötigt **kein** `--with-os-write`, weil der Zielpfad ausschließlich durch den Benutzer als CLI-Argument festgelegt wird und nicht vom Modell gewählt werden kann. Auch der Output muss innerhalb des Workspace liegen. Zusätzlich gelten dieselben Sensitive-Path-Kategorien wie für mutierende Workspace-OS-Operationen: beispielsweise `.env*`, `.git`, `.cli-agent`, `.ssh`, `.aws`, Schlüssel-/Credential-Dateien und Logs können weder neu als Output-Ziel angelegt noch mit `--overwrite-output` ersetzt werden. Diese Prüfung erfolgt vor Agent-Konstruktion und vor dem ersten Modelllauf. Existiert eine sonst zulässige Datei bereits, bricht der Start ebenfalls vor dem ersten Modelllauf ab. Ein bewusstes Ersetzen wird explizit aktiviert:
 
 ```powershell
 cli-agent `
