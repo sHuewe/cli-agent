@@ -62,3 +62,24 @@ def test_enable_typo_is_not_fuzzily_interpreted() -> None:
     result = classify_local_command("enabel server")
 
     assert result.is_local is False
+
+
+def test_web_context_identifier_is_not_swallowed_as_typo() -> None:
+    result = classify_local_command("web_context usage in Python")
+
+    assert result.is_local is False
+
+
+def test_longer_identifier_is_not_swallowed_as_typo() -> None:
+    result = classify_local_command("add_web_contextual usage")
+
+    assert result.is_local is False
+
+
+def test_exact_command_name_is_case_insensitive() -> None:
+    result = classify_local_command("ADD_WEB_CONTEXT https://example.org/docs")
+
+    assert result.is_local is True
+    assert result.command == "add_web_context"
+    assert result.arguments == ("https://example.org/docs",)
+    assert result.error is None
