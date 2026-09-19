@@ -83,3 +83,29 @@ def test_exact_command_name_is_case_insensitive() -> None:
     assert result.command == "add_web_context"
     assert result.arguments == ("https://example.org/docs",)
     assert result.error is None
+
+
+def test_add_web_context_typo_without_url_is_still_suggested() -> None:
+    result = classify_local_command("add_web_contex")
+
+    assert result.is_local is True
+    assert result.error is not None
+    assert "add_web_context <URL>" in result.error
+
+
+def test_add_web_contexts_prose_is_not_swallowed() -> None:
+    result = classify_local_command("add_web_contexts usage in Python")
+
+    assert result.is_local is False
+
+
+def test_add_web_context_call_syntax_prose_is_not_swallowed() -> None:
+    result = classify_local_command("add_web_context() usage")
+
+    assert result.is_local is False
+
+
+def test_add_web_context_typo_with_non_url_argument_is_not_swallowed() -> None:
+    result = classify_local_command("add_web_contex usage")
+
+    assert result.is_local is False
