@@ -276,7 +276,7 @@ Die zentrale Schnittstelle ist:
 async def chat(messages, tools, *, think=None) -> dict
 ```
 
-`model_factory.py` erzeugt abhängig von `ModelConfig.provider` den passenden Client und führt dabei Policy-Prüfungen für Modell-Host und Credential-Umgebungsvariablen durch.
+`model_factory.py` erzeugt abhängig von `ModelConfig.provider` den passenden Client und führt dabei Policy-Prüfungen für Modell-Host und Credential-Umgebungsvariablen durch. Modell-Credentials werden über `api_key_env` bezogen; ein statischer `Authorization`-Header in `[model.headers]` wird bereits beim Laden der Benutzerkonfiguration abgewiesen. Die administrative Credential-Regel begrenzt dabei den zulässigen **Environment-Variablennamen** für einen Remote-Provider/Host, nicht den vom Benutzer gesetzten Secret-Wert selbst.
 
 ## Konfiguration und Policy
 

@@ -44,8 +44,8 @@ def _validated_user_headers(
         if normalized == "authorization" and not allow_authorization:
             raise ValueError(
                 f"{section} darf Authorization nicht statisch setzen. "
-                "Bearer-Authentifizierung für HTTP-MCPs wird ausschließlich "
-                "über die maschinenweite Admin-Policy konfiguriert."
+                "Verwende den dafür vorgesehenen Credential-Mechanismus, "
+                "statt Secrets in der Benutzerkonfiguration abzulegen."
             )
         result[name] = str(raw_value)
     return result
@@ -201,7 +201,11 @@ def _model_config(values: dict[str, Any]) -> ModelConfig:
     api_key_env_value = values.get("api_key_env")
     api_key_env = str(api_key_env_value).strip() if api_key_env_value is not None else None
     raw_headers = values.get("headers", {})
-    headers = _validated_user_headers(raw_headers, section="[model].headers")
+    headers = _validated_user_headers(
+        raw_headers,
+        section="[model].headers",
+        allow_authorization=False,
+    )
     raw_context_length = values.get("context_length")
     if raw_context_length is None:
         context_length = None

@@ -68,6 +68,32 @@ in [mcp-okf.md](mcp-okf.md).
 
 Der Agent setzt Runtime-Platzhalter wie `{workspace_directory}` selbst ein. Dadurch können workspacegebundene MCPs wie Compose- oder Validator-Server weiterhin als 1:1-stdio-Prozess an den aktuellen Agent-Workspace gebunden werden, ohne den Workspace als modellkontrollierten Tool-Parameter offenzulegen. stdio-Prozesse erhalten außerdem nur eine reduzierte Umgebung; zusätzliche Werte stammen explizit aus dem administrativen Launchprofil. `PYTHONSAFEPATH=1` wird gesetzt und `PYTHONPATH` nicht geerbt.
 
+### Modell-Credentials nicht als statische Header
+
+**Problem:** `[model.headers]` ist normale Benutzer-/Projektkonfiguration. Wenn dort
+ein statischer `Authorization`-Header erlaubt ist, kann ein Benutzer zwar
+bewusst ein eigenes Credential verwenden, aber der Secret-Wert liegt dann
+direkt in einer möglicherweise versionierten oder weitergegebenen TOML-Datei.
+Das widerspricht dem vorgesehenen sicheren Credential-Handling über
+Environment-Variablen und erhöht das Risiko versehentlicher Secret-Persistenz.
+
+**Gelöst:** `Authorization` wird in `[model.headers]` jetzt unabhängig von
+Groß-/Kleinschreibung abgewiesen. Andere nicht-sensitive Modell-Header bleiben
+zulässig. OpenAI-kompatible Modell-Authentifizierung erfolgt über
+`model.api_key_env`; bei nichtlokalen Hosts wird dabei weiterhin administrativ
+begrenzt, **welche Environment-Variablennamen** als Credential-Quelle verwendet
+werden dürfen.
+
+Diese Admin-Regel soll nicht das konkrete Credential selbst kontrollieren: Der
+Benutzer kann den Inhalt seiner eigenen Environment-Variable weiterhin ändern.
+Sie verhindert vielmehr, dass eine Projektkonfiguration versehentlich irgendeine
+andere im Prozess vorhandene Secret-Variable an einen erlaubten Modellhost
+weitergibt. Das Verbot statischer `Authorization`-Header ist deshalb vor allem
+Credential-Hygiene und Schutz vor Klartext-Secrets in Projektkonfigurationen,
+kein zusätzlicher Host- oder Identitäts-Trust-Mechanismus.
+
+Regressionstests liegen in `tests/test_http_header_policy.py`.
+
 ### HTTP-MCP-Credentials
 
 **Problem:** Ein statischer `Authorization`-Header in der normalen Projektkonfiguration würde Bearer-Tokens im Klartext in einer benutzerkontrollierten Datei ablegen. Eine generische Environment-Expansion wäre ebenfalls zu weit gefasst, weil eine manipulierte Projektkonfiguration sonst beliebige vorhandene Prozess-Umgebungsvariablen an einen erlaubten MCP-Host weiterleiten könnte.

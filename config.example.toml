@@ -29,6 +29,8 @@ timeout = 120
 # model = "NAME-DES-MODELLS"
 # base_url = "https://llm.example.org/v1"
 # api_key_env = "LLM_API_KEY"
+# Authentication secrets must not be placed in [model.headers]. Static
+# Authorization headers are rejected; use api_key_env for model credentials.
 # timeout = 120
 # context_length = 262144
 

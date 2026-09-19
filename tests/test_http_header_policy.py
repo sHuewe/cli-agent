@@ -106,7 +106,30 @@ X-Workspace = "{workspace_directory}"
     }
 
 
-def test_model_authorization_header_remains_supported(tmp_path: Path) -> None:
+@pytest.mark.parametrize("header_name", ["Authorization", "authorization", "AUTHORIZATION"])
+def test_model_authorization_header_is_rejected_in_user_config(
+    tmp_path: Path,
+    header_name: str,
+) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        f'''
+[model]
+provider = "openai"
+model = "test-model"
+base_url = "https://allowed.example/v1"
+
+[model.headers]
+"{header_name}" = "Bearer model-token"
+'''.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Authorization|Credential"):
+        load_config(config_file)
+
+
+def test_non_authentication_model_headers_remain_allowed(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         '''
@@ -116,9 +139,9 @@ model = "test-model"
 base_url = "https://allowed.example/v1"
 
 [model.headers]
-Authorization = "Bearer model-token"
+X-Client-Id = "cli-agent"
 '''.strip(),
         encoding="utf-8",
     )
 
-    assert load_config(config_file).model.headers["Authorization"] == "Bearer model-token"
+    assert load_config(config_file).model.headers == {"X-Client-Id": "cli-agent"}

@@ -112,6 +112,8 @@ api_key_env = "LLM_API_KEY"
 
 Die eigentliche Secret-Zeichenfolge steht weiterhin nur in der Environment-Variable; `admin_config.toml` enthält lediglich den **Namen** der erlaubten Variable. Lokale Modellziele (`localhost`, `127.0.0.1`, `::1`) bleiben von dieser zusätzlichen Credential-Bindung ausgenommen.
 
+Statische `Authorization`-Header in `[model.headers]` sind nicht zulässig. Damit landen Modell-Credentials nicht versehentlich als Klartext in einer Benutzer-/Projektkonfiguration und können dort nicht unbemerkt versioniert oder weitergegeben werden. Andere nicht-sensitive benutzerdefinierte Modell-Header bleiben möglich. Für authentifizierte OpenAI-kompatible Endpunkte ist `api_key_env` der vorgesehene Credential-Pfad.
+
 ## Benutzer-/Projektkonfiguration
 
 Beispiel Modell:
