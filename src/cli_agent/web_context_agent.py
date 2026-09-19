@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .agent import CliAgent
 from .admin_config import WebProviderConfig
+from .local_commands import classify_local_command
 from .model import TokenUsage
 from .network_policy import NetworkConfig
 from .web_context import WebContext, fetch_web_context
@@ -128,12 +128,15 @@ class WebContextCliAgent(CliAgent):
         if self._exit_stack is None:
             raise RuntimeError("Der Agent wurde noch nicht gestartet.")
         stripped = prompt.strip()
-        if re.fullmatch(r"tokens", stripped):
+        local_command = classify_local_command(stripped)
+        if local_command.is_local and local_command.error is not None:
+            return local_command.error
+        if local_command.command == "tokens":
             return self.token_usage_text()
-        add_command = re.fullmatch(r"add_web_context\s+(\S+)", stripped)
-        if add_command:
+        if local_command.command == "add_web_context":
+            url = local_command.arguments[0]
             context = await fetch_web_context(
-                add_command.group(1),
+                url,
                 allowed_hosts=self._web_allowed_hosts,
                 providers=self._web_providers,
             )
@@ -151,13 +154,13 @@ class WebContextCliAgent(CliAgent):
             action = "aktualisiert" if replaced else "hinzugefügt"
             truncated = ", gekürzt" if context.truncated else ""
             return f"Web-Kontext {action}: {context.final_url} ({len(context.content)} Zeichen{truncated})."
-        if re.fullmatch(r"clear_web_context", stripped):
+        if local_command.command == "clear_web_context":
             count = len(self._web_contexts)
             self._web_contexts.clear()
             logger.info("web_context_cleared count=%d", count)
             noun = "Eintrag" if count == 1 else "Einträge"
             return f"Web-Kontext gelöscht ({count} {noun})."
-        if re.fullmatch(r"(enable|disable)\s+(\S+)", stripped):
+        if local_command.command in {"enable", "disable"}:
             return await super().ask(prompt)
         self._reset_last_usage()
         return await super().ask(prompt)
