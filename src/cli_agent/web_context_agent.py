@@ -3,14 +3,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 from .agent import CliAgent
 from .admin_config import WebProviderConfig
 from .local_commands import classify_local_command
 from .model import TokenUsage
 from .network_policy import NetworkConfig
-from .web_context import WebContext, fetch_web_context
+from .web_context import WebContext, fetch_web_context, redact_url_for_display
 
 
 logger = logging.getLogger("cli_agent.web_context")
@@ -24,8 +23,9 @@ keine weiteren Netzwerkzugriffe auslösen.
 
 
 def _url_for_log(url: str) -> str:
-    parsed = urlsplit(url)
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    """Backward-compatible wrapper for URL redaction in log contexts."""
+
+    return redact_url_for_display(url)
 
 
 @dataclass(frozen=True)
@@ -145,15 +145,19 @@ class WebContextCliAgent(CliAgent):
             self._web_contexts.append(context)
             logger.info(
                 "web_context_added requested_url=%s final_url=%s chars=%d truncated=%s replaced=%s",
-                _url_for_log(context.requested_url),
-                _url_for_log(context.final_url),
+                redact_url_for_display(context.requested_url),
+                redact_url_for_display(context.final_url),
                 len(context.content),
                 context.truncated,
                 replaced,
             )
             action = "aktualisiert" if replaced else "hinzugefügt"
             truncated = ", gekürzt" if context.truncated else ""
-            return f"Web-Kontext {action}: {context.final_url} ({len(context.content)} Zeichen{truncated})."
+            return (
+                f"Web-Kontext {action}: "
+                f"{redact_url_for_display(context.final_url)} "
+                f"({len(context.content)} Zeichen{truncated})."
+            )
         if local_command.command == "clear_web_context":
             count = len(self._web_contexts)
             self._web_contexts.clear()
