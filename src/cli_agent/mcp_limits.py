@@ -5,7 +5,16 @@ import json
 from typing import Any, Awaitable, TypeVar
 
 import re2
-from jsonschema import ValidationError, validators
+from jsonschema import (
+    Draft3Validator,
+    Draft4Validator,
+    Draft6Validator,
+    Draft7Validator,
+    Draft201909Validator,
+    Draft202012Validator,
+    ValidationError,
+    validators,
+)
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
@@ -29,16 +38,6 @@ _T = TypeVar("_T")
 
 
 _SAFE_VALIDATOR_CLASSES: dict[type, type] = {}
-
-
-def _safe_regex_search(pattern: str, text: str, *, tool_name: str):
-    try:
-        return re2.search(pattern, text)
-    except re2.error as exc:
-        raise RuntimeError(
-            f"MCP-Tool {tool_name} verwendet einen regulären Ausdruck, "
-            "der von der sicheren RE2-Engine nicht unterstützt wird."
-        ) from exc
 
 
 def _safe_pattern(validator, pattern, instance, schema):
@@ -93,6 +92,26 @@ def _safe_validator_class(base_validator: type) -> type:
     )
     _SAFE_VALIDATOR_CLASSES[base_validator] = safe
     return safe
+
+
+def _install_safe_jsonschema_validators() -> None:
+    # jsonschema may switch dialect while descending into an embedded resource
+    # that declares its own $schema. Register the RE2-backed variants under the
+    # standard metaschema identifiers so those transitions remain safe too.
+    supported = (
+        Draft3Validator,
+        Draft4Validator,
+        Draft6Validator,
+        Draft7Validator,
+        Draft201909Validator,
+        Draft202012Validator,
+    )
+    for base_validator in supported:
+        safe = _safe_validator_class(base_validator)
+        validators.validates(f"{base_validator.__name__}-re2")(safe)
+
+
+_install_safe_jsonschema_validators()
 
 
 async def await_mcp_operation(
