@@ -4,6 +4,8 @@ import asyncio
 import json
 from typing import Any, Awaitable, TypeVar
 
+import re2
+from jsonschema import ValidationError, validators
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
@@ -24,6 +26,73 @@ MCP_LIST_TOOLS_TIMEOUT_SECONDS = 120.0
 MCP_TOOL_CALL_TIMEOUT_SECONDS = 600.0
 
 _T = TypeVar("_T")
+
+
+_SAFE_VALIDATOR_CLASSES: dict[type, type] = {}
+
+
+def _safe_regex_search(pattern: str, text: str, *, tool_name: str):
+    try:
+        return re2.search(pattern, text)
+    except re2.error as exc:
+        raise RuntimeError(
+            f"MCP-Tool {tool_name} verwendet einen regulären Ausdruck, "
+            "der von der sicheren RE2-Engine nicht unterstützt wird."
+        ) from exc
+
+
+def _safe_pattern(validator, pattern, instance, schema):
+    if not validator.is_type(instance, "string"):
+        return
+    try:
+        matched = re2.search(pattern, instance)
+    except re2.error as exc:
+        yield ValidationError(
+            "Der JSON-Schema-Regex wird von der sicheren RE2-Engine "
+            f"nicht unterstützt: {exc}"
+        )
+        return
+    if not matched:
+        yield ValidationError(f"{instance!r} does not match {pattern!r}")
+
+
+def _safe_pattern_properties(validator, pattern_properties, instance, schema):
+    if not validator.is_type(instance, "object"):
+        return
+
+    for pattern, subschema in pattern_properties.items():
+        try:
+            compiled = re2.compile(pattern)
+        except re2.error as exc:
+            yield ValidationError(
+                "Der JSON-Schema-Regex wird von der sicheren RE2-Engine "
+                f"nicht unterstützt: {exc}"
+            )
+            continue
+        for key, value in instance.items():
+            if compiled.search(key):
+                yield from validator.descend(
+                    value,
+                    subschema,
+                    path=key,
+                    schema_path=pattern,
+                )
+
+
+def _safe_validator_class(base_validator: type) -> type:
+    safe = _SAFE_VALIDATOR_CLASSES.get(base_validator)
+    if safe is not None:
+        return safe
+
+    safe = validators.extend(
+        base_validator,
+        validators={
+            "pattern": _safe_pattern,
+            "patternProperties": _safe_pattern_properties,
+        },
+    )
+    _SAFE_VALIDATOR_CLASSES[base_validator] = safe
+    return safe
 
 
 async def await_mcp_operation(
@@ -67,7 +136,7 @@ def _reject_external_schema_references(schema: Any, *, tool_name: str) -> None:
 def _schema_validator(schema: dict[str, Any], *, tool_name: str):
     _reject_external_schema_references(schema, tool_name=tool_name)
     try:
-        validator_class = validator_for(schema)
+        validator_class = _safe_validator_class(validator_for(schema))
         validator_class.check_schema(schema)
     except SchemaError as exc:
         raise RuntimeError(
