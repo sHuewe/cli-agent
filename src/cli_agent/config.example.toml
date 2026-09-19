@@ -34,6 +34,8 @@ timeout = 120
 # Optional: omit api_key_env for endpoints that do not require authentication.
 # If configured, the environment variable must exist and be non-empty.
 # api_key_env = "LLM_API_KEY"
+# Authentication secrets must not be placed in [model.headers]. Static
+# Authorization headers are rejected; use api_key_env for model credentials.
 # timeout = 120
 # context_length = 262144
 
