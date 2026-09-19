@@ -273,6 +273,7 @@ def test_pattern_properties_are_validated_with_re2() -> None:
 def test_embedded_schema_dialect_keeps_re2_validation() -> None:
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
         "$defs": {
             "legacy": {
                 "$schema": "http://json-schema.org/draft-07/schema#",
@@ -280,13 +281,16 @@ def test_embedded_schema_dialect_keeps_re2_validation() -> None:
                 "pattern": "a(?=b)",
             }
         },
-        "$ref": "#/$defs/legacy",
+        "properties": {
+            "value": {"$ref": "#/$defs/legacy"},
+        },
+        "required": ["value"],
     }
 
     error = limits.validate_mcp_tool_arguments(
         tool_name="external__search",
         schema=schema,
-        arguments={"value": "irrelevant"},
+        arguments={"value": "ab"},
     )
 
     assert error is not None
