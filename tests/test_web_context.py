@@ -319,3 +319,37 @@ def test_tokens_command_does_not_clear_previous_usage(tmp_path: Path) -> None:
     assert first == second
     assert "Main-Loop:" in first
     assert "Knowledge-Loop: nicht ausgeführt." in first
+
+
+def test_add_web_context_typo_does_not_call_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(
+        agent.ask("add_web_contex http://localhost:8080/docs")
+    )
+
+    assert "Meintest du: add_web_context <URL>?" in answer
+    assert model.calls == []
+    assert agent.history == []
+
+
+def test_add_web_context_missing_url_does_not_call_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("add_web_context"))
+
+    assert "Verwendung: add_web_context <URL>" in answer
+    assert model.calls == []
+    assert agent.history == []
+
+
+def test_normal_similar_text_still_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("Erkläre mir add web context"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
