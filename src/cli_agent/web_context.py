@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, quote, unquote, unquote_plus, urlencode, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, unquote, unquote_plus, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 from trafilatura import bare_extraction
@@ -21,6 +21,19 @@ WEB_REQUEST_TIMEOUT_SECONDS = 20.0
 MAX_WEB_REDIRECTS = 5
 
 
+def redact_url_for_display(url: str) -> str:
+    """Return a URL safe for model, terminal, and log disclosure.
+
+    Query strings and fragments can contain credentials or other sensitive
+    values. They remain available on the internal WebContext for fetching,
+    provider routing, and deduplication, but are removed at disclosure
+    boundaries.
+    """
+
+    parsed = urlsplit(url)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
 @dataclass(frozen=True)
 class WebContext:
     requested_url: str
@@ -32,8 +45,8 @@ class WebContext:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "requested_url": self.requested_url,
-            "final_url": self.final_url,
+            "requested_url": redact_url_for_display(self.requested_url),
+            "final_url": redact_url_for_display(self.final_url),
             "title": self.title,
             "content": self.content,
             "fetched_at": self.fetched_at,
