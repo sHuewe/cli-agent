@@ -22,6 +22,10 @@ web_allowed_hosts = []
 
 # Optional remote model credentials are bound to provider + host. This section
 # is only needed when the user config actually sets model.api_key_env.
+# It restricts which environment-variable NAMES may be selected by user/project
+# configuration; it does not pin the credential value itself. Static
+# Authorization headers in [model.headers] are rejected, so secrets should be
+# supplied through api_key_env instead of being stored in TOML.
 # [[model.credentials]]
 # provider = "openai"
 # host = "llm.intern.firma.de"
