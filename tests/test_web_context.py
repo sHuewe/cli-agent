@@ -389,3 +389,23 @@ def test_uppercase_disable_is_normalized_before_delegation(tmp_path: Path) -> No
     assert answer == "MCP-Server docs deaktiviert."
     assert called == [("docs", False)]
     assert model.calls == []
+
+
+def test_add_web_contexts_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("add_web_contexts usage in Python"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
+
+
+def test_add_web_context_call_syntax_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("add_web_context() usage"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
