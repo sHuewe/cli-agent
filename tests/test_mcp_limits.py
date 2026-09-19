@@ -198,3 +198,121 @@ def test_tool_result_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     assert limits.enforce_mcp_tool_result_limit("1234567890") == "1234567890"
     with pytest.raises(RuntimeError, match="Sicherheitslimit"):
         limits.enforce_mcp_tool_result_limit("12345678901")
+
+
+@pytest.mark.parametrize(
+    "schema, keyword",
+    [
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "pattern": "^(a+)+$",
+                    }
+                },
+            },
+            "pattern",
+        ),
+        (
+            {
+                "type": "object",
+                "patternProperties": {
+                    "^x-": {"type": "string"},
+                },
+            },
+            "patternProperties",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "payload": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "string", "pattern": "^(a+)+$"},
+                        ]
+                    }
+                },
+            },
+            "pattern",
+        ),
+    ],
+)
+def test_regex_constraints_in_mcp_schemas_are_rejected(
+    schema: dict,
+    keyword: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=keyword):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_property_named_pattern_is_not_mistaken_for_schema_keyword() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "pattern": {
+                "type": "string",
+                "minLength": 1,
+            }
+        },
+        "required": ["pattern"],
+        "additionalProperties": False,
+    }
+
+    limits.validate_mcp_server_metadata(
+        server_name="external",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
+
+
+def test_non_regex_schema_constraints_remain_supported() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "enum": ["read", "write"]},
+            "name": {"type": "string", "minLength": 1, "maxLength": 100},
+            "count": {"type": "integer", "minimum": 0, "maximum": 100},
+        },
+        "required": ["mode"],
+        "additionalProperties": False,
+    }
+
+    limits.validate_mcp_server_metadata(
+        server_name="external",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"mode": "read", "name": "docs", "count": 1},
+        )
+        is None
+    )
+
+
+def test_regex_schema_is_rejected_before_argument_validation() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "string",
+                "pattern": "^(a+)+$",
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="pattern"):
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"value": "a" * 24 + "!"},
+        )
