@@ -148,6 +148,7 @@ def _reject_regex_schema_constraints(schema: Any, *, tool_name: str) -> None:
                     if isinstance(item, (dict, bool))
                 )
 
+
 def _schema_validator(schema: dict[str, Any], *, tool_name: str):
     _reject_external_schema_references(schema, tool_name=tool_name)
     _reject_regex_schema_constraints(schema, tool_name=tool_name)
