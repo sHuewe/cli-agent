@@ -378,3 +378,102 @@ def test_harmless_draft7_tuple_schema_remains_supported() -> None:
         instructions=None,
         tools=[tool(schema=schema)],
     )
+
+
+def test_local_ref_target_with_regex_is_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$ref": "#/hidden",
+        "hidden": {
+            "type": "string",
+            "pattern": "^(a+)+$",
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="pattern"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_local_ref_target_without_regex_remains_supported() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$ref": "#/definitions/value",
+        "definitions": {
+            "value": {
+                "type": "string",
+                "minLength": 1,
+            }
+        },
+    }
+
+    limits.validate_mcp_server_metadata(
+        server_name="external",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
+
+
+def test_non_pointer_local_ref_is_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$ref": "#named-anchor",
+        "definitions": {
+            "value": {"type": "string"},
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="kein JSON-Pointer-Fragment"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+@pytest.mark.parametrize("keyword", ["$dynamicRef", "$recursiveRef"])
+def test_dynamic_or_recursive_refs_are_rejected(keyword: str) -> None:
+    schema = {
+        keyword: "#",
+    }
+
+    with pytest.raises(RuntimeError, match="nicht zulässig"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_draft3_schema_is_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-03/schema#",
+        "extends": {
+            "type": "string",
+            "pattern": "^(a+)+$",
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="Draft 3"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_harmless_draft3_schema_is_still_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-03/schema#",
+        "type": "string",
+    }
+
+    with pytest.raises(RuntimeError, match="Draft 3"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
