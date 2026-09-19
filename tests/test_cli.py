@@ -19,6 +19,7 @@ from cli_agent.config import AppConfig, McpServerConfig, ModelConfig
 from cli_agent.mcp_contracts import tool_contract_fingerprint
 from cli_agent.network_policy import NetworkConfig
 from cli_agent.os_mcp_server import resolve_mcp_config
+from cli_agent.terminal_output import sanitize_terminal_text
 
 
 def test_approval_summary_shows_payload_even_for_sensitive_looking_argument_names() -> None:
@@ -259,3 +260,68 @@ def test_model_cli_override_replaces_only_model_name() -> None:
 def test_without_model_cli_argument_keeps_config_unchanged() -> None:
     original = AppConfig(model=ModelConfig(model="configured-model"))
     assert apply_model_cli_override(original, model=None) is original
+
+
+def test_terminal_sanitizer_preserves_normal_unicode_and_emoji() -> None:
+    value = "Grüße ✅ 🚀 👨‍💻 ❤️"
+
+    assert sanitize_terminal_text(value) == value
+
+
+def test_terminal_sanitizer_escapes_terminal_and_bidi_controls() -> None:
+    value = "safe\x1b[2Jhidden\u202eexe.txt\x07"
+
+    sanitized = sanitize_terminal_text(value)
+
+    assert "\x1b" not in sanitized
+    assert "\u202e" not in sanitized
+    assert "\x07" not in sanitized
+    assert "\\x1b[2J" in sanitized
+    assert "\\u202e" in sanitized
+    assert "\\x07" in sanitized
+
+
+def test_terminal_sanitizer_single_line_escapes_line_controls() -> None:
+    value = "tool\nforged\tname\roverwrite"
+
+    assert sanitize_terminal_text(value, multiline=False) == (
+        "tool\\nforged\\tname\\roverwrite"
+    )
+
+
+def test_approval_summary_escapes_bidi_but_preserves_emoji() -> None:
+    summary = _approval_arguments(
+        {
+            "message": "Deploy ✅ \u202edanger",
+        }
+    )
+
+    assert "Deploy ✅" in summary
+    assert "\u202e" not in summary
+    assert "\\u202e" in summary
+
+
+def test_approval_tool_name_cannot_inject_terminal_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli_module.sys,
+        "stdin",
+        SimpleNamespace(isatty=lambda: True),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+
+    approved = asyncio.run(
+        cli_module.approve_tool_call(
+            "evil\x1b[2J\u202etool\nforged",
+            {"message": "ok ✅"},
+        )
+    )
+
+    assert approved is False
+    output = capsys.readouterr().out
+    assert "\x1b" not in output
+    assert "\u202e" not in output
+    assert "evil\\x1b[2J\\u202etool\\nforged" in output
+    assert "ok ✅" in output
