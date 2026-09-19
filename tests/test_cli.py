@@ -450,3 +450,45 @@ def test_terminal_sanitizer_escapes_lone_unicode_surrogates() -> None:
 
     assert sanitized == "before\\ud800middle\\udfffafter ✅"
     sanitized.encode("utf-8")
+
+
+def test_strict_identifier_rendering_distinguishes_literal_escape_from_control() -> None:
+    actual_escape = sanitize_terminal_text(
+        "a\x1bb",
+        multiline=False,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+    literal_escape = sanitize_terminal_text(
+        "a\\u001bb",
+        multiline=False,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+
+    assert actual_escape == "a\\u001bb"
+    assert literal_escape == "a\\\\u001bb"
+    assert actual_escape != literal_escape
+
+
+def test_approval_tool_name_escapes_literal_backslashes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli_module.sys,
+        "stdin",
+        SimpleNamespace(isatty=lambda: True),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+
+    approved = asyncio.run(
+        cli_module.approve_tool_call(
+            "tool\\u001bname",
+            {},
+        )
+    )
+
+    assert approved is False
+    output = capsys.readouterr().out
+    assert "tool\\\\u001bname" in output
