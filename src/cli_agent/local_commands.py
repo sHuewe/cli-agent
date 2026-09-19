@@ -12,7 +12,8 @@ class LocalCommandSpec:
     usage: str
     argument_count: int
     fuzzy_suggestion: bool = False
-    fuzzy_argument_validator: Callable[[tuple[str, ...]], bool] | None = None
+    argument_validator: Callable[[tuple[str, ...]], bool] | None = None
+    incomplete_command_error: bool = False
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,8 @@ _LOCAL_COMMAND_SPECS = (
         "add_web_context <URL>",
         1,
         fuzzy_suggestion=True,
-        fuzzy_argument_validator=_looks_like_web_context_arguments,
+        argument_validator=_looks_like_web_context_arguments,
+        incomplete_command_error=True,
     ),
     LocalCommandSpec(
         "clear_web_context",
@@ -74,7 +76,25 @@ def classify_local_command(prompt: str) -> LocalCommandInput:
 
     spec = _LOCAL_COMMAND_BY_NAME.get(command_name)
     if spec is not None:
-        if len(arguments) != spec.argument_count:
+        if len(arguments) == spec.argument_count:
+            if (
+                spec.argument_validator is not None
+                and not spec.argument_validator(arguments)
+            ):
+                return LocalCommandInput(is_local=False)
+            return LocalCommandInput(
+                is_local=True,
+                command=spec.name,
+                arguments=arguments,
+            )
+
+        # Preserve prose that merely starts with a command word. Only a
+        # deliberately marked bare/incomplete command is intercepted locally.
+        if (
+            not arguments
+            and spec.argument_count > 0
+            and spec.incomplete_command_error
+        ):
             return LocalCommandInput(
                 is_local=True,
                 command=spec.name,
@@ -84,11 +104,7 @@ def classify_local_command(prompt: str) -> LocalCommandInput:
                     f"Verwendung: {spec.usage}"
                 ),
             )
-        return LocalCommandInput(
-            is_local=True,
-            command=spec.name,
-            arguments=arguments,
-        )
+        return LocalCommandInput(is_local=False)
 
     # Fuzzy matching is deliberately limited to distinctive command-shaped
     # names. Short ordinary words such as "tokens", "enable" and "disable"
@@ -125,7 +141,7 @@ def classify_local_command(prompt: str) -> LocalCommandInput:
     # "add_web_contexts usage in Python" or "add_web_context() usage" on the
     # normal LLM path.
     if arguments:
-        validator = suggested.fuzzy_argument_validator
+        validator = suggested.argument_validator
         if validator is None:
             if len(arguments) != suggested.argument_count:
                 return LocalCommandInput(is_local=False)
