@@ -26,7 +26,9 @@ Für die lokale Open-Source-Nutzung ist keine Admin-Datei zwingend erforderlich.
 
 ## Zwei getrennte Konfigurationsebenen
 
-Die normale `config.toml` bestimmt, **was der Benutzer verwenden möchte**. Die maschinenweite `admin_config.toml` bestimmt unabhängig davon, **was verwendet werden darf**. Security-relevante Netzwerk- und MCP-Freigaben können deshalb nicht über die normale Benutzerkonfiguration gelockert werden.
+Die normale `config.toml` bestimmt, **was der Benutzer verwenden möchte**. Die maschinenweite `admin_config.toml` bestimmt unabhängig davon, **was für die administrativ kontrollierten Netzwerk-, MCP- und Credential-Grenzen verwendet werden darf**. Diese Freigaben können deshalb nicht über die normale Benutzerkonfiguration gelockert werden.
+
+Eine bewusste Ausnahme von diesem Policy-Modell ist der optionale OKF-Knowledge-Root: `[okf].repository` ist eine vom Benutzer ausgewählte **lokale read-only Datenquelle** und keine administrative Freigabe. Der Root darf außerhalb des Projekt-Workspaces liegen. Damit erweitert eine aktivierte OKF-Konfiguration die Menge lokaler Markdown-/Knowledge-Inhalte, die der Knowledge-Lauf lesen und bei Relevanz an das konfigurierte LLM weitergeben kann. Für einen gemanagten Unternehmenseinsatz muss deshalb zusätzlich organisatorisch beziehungsweise über eine zentral bereitgestellte Benutzerkonfiguration festgelegt werden, welche OKF-Repositories verwendet werden dürfen. Details stehen unter [OKF MCP](docs/mcp-okf.md).
 
 Unter Windows wird die Admin-Policy ausschließlich von folgendem festen Pfad geladen:
 
@@ -336,6 +338,10 @@ max_read_bytes = 2560000
 compress_min_chars = 20000
 required = true
 ```
+
+`repository` kann bewusst auch außerhalb des Projekt-Workspaces liegen. Der konfigurierte Pfad ist eine **separate lokale read-only Trust Boundary**: Innerhalb dieses Roots begrenzt der OKF-Server seine Dateizugriffe deterministisch, aber die Wahl des Roots selbst stammt aus der normalen Benutzerkonfiguration und wird derzeit nicht durch eine `okf_allowed_roots`-Admin-Policy eingeschränkt. Ein Benutzer oder eine bereitgestellte Projektkonfiguration sollte deshalb nur Knowledge-Repositories auswählen, deren Inhalt an das konfigurierte LLM übermittelt werden darf.
+
+Für einen Unternehmens-Rollout sollte OKF entweder weggelassen werden, wenn es nicht benötigt wird, oder die zulässigen Knowledge-Repositories sollten im Deployment-/Konfigurationsprozess zentral festgelegt und überprüft werden.
 
 Details: [OKF MCP](docs/mcp-okf.md).
 
