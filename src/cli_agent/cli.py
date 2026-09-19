@@ -57,6 +57,7 @@ async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> boo
         tool_name,
         multiline=False,
         escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
     )
     print(
         "\nExplizite Freigabe erforderlich: "
@@ -270,12 +271,14 @@ async def run_admin(args: argparse.Namespace) -> None:
             inspection.server_name,
             multiline=False,
             escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
         )
         + " ("
         + sanitize_terminal_text(
             inspection.transport,
             multiline=False,
             escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
         )
         + ")"
     )
@@ -285,6 +288,7 @@ async def run_admin(args: argparse.Namespace) -> None:
             inspection.tool_name,
             multiline=False,
             escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
         )
     )
     if inspection.description:
