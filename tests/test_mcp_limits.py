@@ -316,3 +316,65 @@ def test_regex_schema_is_rejected_before_argument_validation() -> None:
             schema=schema,
             arguments={"value": "a" * 24 + "!"},
         )
+
+
+def test_draft7_tuple_items_with_regex_are_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+            "values": {
+                "type": "array",
+                "items": [
+                    {
+                        "type": "string",
+                        "pattern": "^(a+)+$",
+                    }
+                ],
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="pattern"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_legacy_additional_items_with_regex_are_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "array",
+        "items": [{"type": "string"}],
+        "additionalItems": {
+            "type": "string",
+            "pattern": "^(a+)+$",
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="pattern"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_harmless_draft7_tuple_schema_remains_supported() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "array",
+        "items": [
+            {"type": "string", "minLength": 1},
+            {"type": "integer", "minimum": 0},
+        ],
+        "additionalItems": False,
+    }
+
+    limits.validate_mcp_server_metadata(
+        server_name="external",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
