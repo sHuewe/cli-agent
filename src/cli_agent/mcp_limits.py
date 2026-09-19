@@ -64,8 +64,93 @@ def _reject_external_schema_references(schema: Any, *, tool_name: str) -> None:
             stack.extend(current)
 
 
+def _reject_regex_schema_constraints(schema: Any, *, tool_name: str) -> None:
+    """Reject JSON-Schema regex keywords from MCP-controlled schemas.
+
+    Python's regular-expression engine can exhibit catastrophic backtracking.
+    MCP servers control their tool schemas, so evaluating server-supplied
+    pattern or patternProperties constraints would let an untrusted server
+    consume CPU during local argument validation.
+
+    The traversal follows standard schema-bearing keywords rather than blindly
+    inspecting every dictionary. This avoids treating instance property names
+    such as properties.pattern as JSON-Schema keywords.
+    """
+
+    single_schema_keywords = {
+        "additionalProperties",
+        "contains",
+        "contentSchema",
+        "else",
+        "if",
+        "items",
+        "not",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+    schema_array_keywords = {"allOf", "anyOf", "oneOf", "prefixItems"}
+    schema_map_keywords = {
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+        "properties",
+    }
+
+    stack: list[Any] = [schema]
+    while stack:
+        current = stack.pop()
+        if not isinstance(current, dict):
+            continue
+
+        if "pattern" in current:
+            raise RuntimeError(
+                f"MCP-Tool {tool_name} verwendet den JSON-Schema-Constraint "
+                "'pattern'. Regex-basierte Constraints aus MCP-Schemas sind "
+                "aus Ressourcenschutzgründen nicht zulässig."
+            )
+        if "patternProperties" in current:
+            raise RuntimeError(
+                f"MCP-Tool {tool_name} verwendet den JSON-Schema-Constraint "
+                "'patternProperties'. Regex-basierte Constraints aus MCP-Schemas "
+                "sind aus Ressourcenschutzgründen nicht zulässig."
+            )
+
+        for key, value in current.items():
+            if key in single_schema_keywords:
+                if isinstance(value, (dict, bool)):
+                    stack.append(value)
+                continue
+
+            if key in schema_array_keywords:
+                if isinstance(value, list):
+                    stack.extend(
+                        item for item in value if isinstance(item, (dict, bool))
+                    )
+                continue
+
+            if key in schema_map_keywords:
+                if isinstance(value, dict):
+                    stack.extend(
+                        item
+                        for item in value.values()
+                        if isinstance(item, (dict, bool))
+                    )
+                continue
+
+            # In older drafts, dependencies may contain either property-name
+            # arrays or schemas.
+            if key == "dependencies" and isinstance(value, dict):
+                stack.extend(
+                    item
+                    for item in value.values()
+                    if isinstance(item, (dict, bool))
+                )
+
 def _schema_validator(schema: dict[str, Any], *, tool_name: str):
     _reject_external_schema_references(schema, tool_name=tool_name)
+    _reject_regex_schema_constraints(schema, tool_name=tool_name)
     try:
         validator_class = validator_for(schema)
         validator_class.check_schema(schema)
