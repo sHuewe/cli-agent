@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from .terminal_output import sanitize_terminal_text
+
 MAX_APPROVAL_STRING_CHARS = 2_000
 MAX_APPROVAL_STRING_HEAD = 1_500
 MAX_APPROVAL_STRING_TAIL = 500
@@ -58,4 +60,5 @@ def approval_arguments(arguments: dict[str, object]) -> str:
         str(name): _approval_value(value)
         for name, value in arguments.items()
     }
-    return json.dumps(summary, ensure_ascii=False, sort_keys=True)
+    rendered = json.dumps(summary, ensure_ascii=False, sort_keys=True)
+    return sanitize_terminal_text(rendered, multiline=False)
