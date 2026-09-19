@@ -36,6 +36,7 @@ def sanitize_terminal_text(
     *,
     multiline: bool = True,
     escape_invisible_formatting: bool = False,
+    escape_literal_backslashes: bool = False,
 ) -> str:
     """Neutralize terminal/display controls without restricting normal Unicode.
 
@@ -53,6 +54,12 @@ def sanitize_terminal_text(
     JOINER. Use this stricter mode for MCP/security displays where exact visible
     identity matters. Leave it disabled for normal LLM prose so emoji sequences
     such as 👨‍💻 remain unchanged.
+
+    With escape_literal_backslashes=True, literal backslashes are doubled before
+    display. This keeps security-sensitive raw identifiers collision-free:
+    a literal "\\u001b" remains distinguishable from an actual ESC code point
+    rendered as "\u001b". Do not enable this for already serialized config/JSON
+    fragments, whose serializers already provide unambiguous escaping.
     """
 
     text = str(value)
@@ -66,6 +73,10 @@ def sanitize_terminal_text(
             continue
         if character == "\t" and multiline:
             result.append(character)
+            continue
+
+        if character == "\\" and escape_literal_backslashes:
+            result.append("\\\\")
             continue
 
         if (
