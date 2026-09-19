@@ -302,7 +302,16 @@ admin_config.toml
       └─ TrustedMcpServer[]
 ```
 
-Die Benutzerkonfiguration beschreibt überwiegend, **was verwendet werden soll**. Die Maschinenpolicy begrenzt, **was verwendet werden darf**.
+Die Benutzerkonfiguration beschreibt überwiegend, **was verwendet werden soll**. Die Maschinenpolicy begrenzt für Netzwerkziele, externe stdio-Launches, Credential-Quellen und dauerhafte Trust-Entscheidungen, **was verwendet werden darf**.
+
+Der optionale OKF-Root ist eine bewusste Ausnahme von diesem allgemeinen
+Policy-Schnitt: `[okf].repository` wird vom Benutzer gewählt, kann außerhalb des
+Projekt-Workspaces liegen und ist derzeit nicht über eine administrative
+Root-Allowlist begrenzt. Nach der Auswahl bildet dieser Root jedoch eine feste
+read-only Dateisystemgrenze für den internen Knowledge-Server. Architektur- und
+Security-Dokumentation behandeln OKF deshalb als **separate lokale
+Read-Boundary**, nicht als Erweiterung der Workspace-OS-Grenze oder als
+administrativ freigegebene Root-Liste.
 
 Für HTTP-MCPs reicht im Normalfall die Hostfreigabe über `mcp_allowed_hosts`; ein `TrustedMcpServer` ist dort nur für permanente Auto-Approvals oder explizit privilegierte Instructions erforderlich. Für externe stdio-MCPs ist dagegen immer ein `TrustedMcpServer` erforderlich, weil dessen Launch selbst lokale Prozessausführung darstellt.
 
@@ -332,6 +341,8 @@ Wichtige Grundannahmen:
 - Web-, Datei-, OKF-Inhalte und nicht privilegierte externe MCP-Instructions sind nicht vertrauenswürdige Referenzdaten.
 - Externe MCP-Server bilden eine eigene Trust Boundary.
 - Normale Benutzerkonfiguration darf keine administrativen Netzwerk-, Prozessstart- oder Trust-Grenzen erweitern.
+- Der OKF-Knowledge-Root ist davon ausdrücklich getrennt: seine Auswahl ist
+  benutzerkonfigurierbar und stellt eine eigene lokale read-only Datenfreigabe dar.
 - Vom Host verwaltete Dateizugriffe – insbesondere der eingebaute OS-MCP sowie Datei-Kontext und Output – werden deterministisch auf die vorgesehenen Workspace-Grenzen geprüft. Externe MCP-Server sind eigenständige Prozesse bzw. Dienste; ihre internen Datei- oder Systemzugriffe kann `cli-agent` nicht auf den Workspace beschränken.
 
 Weitere Details stehen in [`security.md`](security.md) und [`company-deployment-checklist.md`](company-deployment-checklist.md).

@@ -16,6 +16,44 @@
 
 **Gelöst:** Security-relevante Netzwerkregeln, externe stdio-Launchprofile und permanente Tool-Auto-Approvals liegen in der separaten `admin_config.toml`. Permanente Tool-Auto-Approvals sind zusätzlich an eine konkrete, administrativ definierte MCP-Serveridentität unter `[[mcp.trusted_servers]]` gebunden. Der Agent liest die Policy ausschließlich aus dem festen maschinenweiten Pfad (`C:\ProgramData\cli-agent\admin_config.toml` beziehungsweise `/etc/cli-agent/admin_config.toml`); die normale `config.toml` kann diese Regeln nicht überschreiben. Fehlt die Admin-Datei, greifen restriktive Defaults. Das frühere globale `allow_untrusted_stdio` wird nicht mehr unterstützt. `tests/test_admin_config.py` und `tests/test_cli.py` prüfen die Trennung und Weitergabe der Policy.
 
+### OKF-Knowledge-Root als separate lokale Read-Boundary
+
+**Design / dokumentiertes Restrisiko:** Der optionale OKF-Root ist bewusst nicht
+an den Projekt-Workspace gebunden. `[okf].repository` wird aus der normalen
+Benutzer-/Projektkonfiguration gelesen und darf absolut sein beziehungsweise auf
+ein Verzeichnis außerhalb des Workspaces zeigen. Eine administrative
+`okf_allowed_roots`-Policy existiert derzeit nicht.
+
+Das bedeutet nicht, dass der OKF-Server beliebige lokale Dateien lesen darf:
+Nach der Auflösung ist der konfigurierte Repository-Root eine feste read-only
+Dateisystemgrenze. Absolute Folgepfade, `..`, Symlink-/Reparse-Escapes und
+Hardlink-Aliase werden innerhalb der Knowledge-Tools abgefangen; der
+Knowledge-Lauf besitzt ausschließlich die vorgesehenen read-only OKF-Tools und
+akzeptiert nur zuvor vom Repository angebotene Folgepfade.
+
+Die **Wahl des Roots selbst** ist jedoch eine bewusste lokale
+Datenfreigabeentscheidung des Benutzers. Ein außerhalb des Workspace liegender
+Root kann zusätzliche Markdown-/Knowledge-Inhalte in den Retrieval-Pfad
+einbeziehen und ausgewählte Inhalte an das konfigurierte LLM weitergeben. Diese
+Boundary wird daher nicht als Teil der maschinenweiten Workspace- oder
+Netzwerkpolicy dargestellt.
+
+Für einen gemanagten Unternehmenseinsatz gilt:
+
+- OKF nur aktivieren, wenn die Knowledge-Quelle für den vorgesehenen
+  Datenklassifizierungs- und LLM-Einsatz freigegeben ist;
+- zulässige `[okf].repository`-Werte über zentral bereitgestellte bzw. geprüfte
+  Benutzerkonfigurationen festlegen;
+- projektlokale oder individuell veränderte Konfigurationen nicht als
+  administrative Freigabe interpretieren;
+- OKF deaktivieren, wenn keine zentral freigegebene Knowledge-Quelle benötigt
+  wird.
+
+Damit ist die technische Garantie klar abgegrenzt: `cli-agent` erzwingt die
+Containment-Grenze **innerhalb des gewählten OKF-Roots**, erzwingt derzeit aber
+nicht administrativ, **welcher lokale Root gewählt werden darf**. Details stehen
+in [mcp-okf.md](mcp-okf.md).
+
 ### Schutz der Windows-Admin-Policy
 
 **Problem:** Eine maschinenweite Policy schützt nur dann vor normalen Benutzeränderungen, wenn nicht nur die Datei, sondern auch ihr Verzeichnis gegen Ersetzen/Umbenennen geschützt ist und Fehler beim Setzen der ACLs nicht unbemerkt bleiben.

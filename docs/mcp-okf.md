@@ -29,6 +29,38 @@ absolute Pfade oder Symlinks verlassen. Die Möglichkeit, einen externen
 Knowledge-Root auszuwählen, ist damit eine vorgesehene Funktion und keine
 Freigabe für beliebige Dateizugriffe außerhalb dieses Roots.
 
+### Sicherheits- und Betriebsbedeutung des gewählten Roots
+
+Die Wahl des OKF-Roots selbst ist **keine administrativ erzwungene
+Security-Policy**. `[okf].repository` gehört zur normalen Benutzer- bzw.
+Projektkonfiguration. Es existiert derzeit keine `okf_allowed_roots`-Liste in
+`admin_config.toml`, die diese Auswahl auf zentral freigegebene lokale
+Verzeichnisse beschränkt.
+
+Daraus folgt bewusst ein anderes Vertrauensmodell als beim Workspace-OS-MCP:
+
+- der Workspace-OS-MCP darf seinen administrativ/hostseitig festgelegten
+  Workspace nicht verlassen;
+- der OKF-MCP darf den **vom Benutzer konfigurierten** Repository-Root nicht
+  verlassen;
+- ein außerhalb des Workspaces liegender OKF-Root erweitert deshalb die Menge
+  lokaler Knowledge-/Markdown-Inhalte, die der Agent lesen kann;
+- gelesene und ausgewählte OKF-Inhalte können als Referenzkontext an das
+  konfigurierte LLM übertragen werden.
+
+Das ist für lokale Entwickler-Setups ein beabsichtigter Funktionsumfang. Für
+einen gemanagten Unternehmenseinsatz muss die Organisation jedoch bewusst
+festlegen, welche Knowledge-Repositories verwendet werden dürfen. Empfohlen ist,
+OKF nur über zentral bereitgestellte bzw. geprüfte Benutzerkonfigurationen zu
+aktivieren oder die Funktion zu deaktivieren, wenn kein freigegebenes
+Knowledge-Repository benötigt wird.
+
+Eine manipulierte oder versehentlich falsch ausgewählte Benutzerkonfiguration
+kann zwar **nicht aus dem konfigurierten Root ausbrechen**, aber einen zu weit
+gefassten oder fachlich ungeeigneten Root auswählen. Die Root-Auswahl ist daher
+eine lokale Datenfreigabeentscheidung und sollte wie die Auswahl anderer
+LLM-Kontextquellen behandelt werden.
+
 Mit `required = true` wird die Benutzeraufgabe nicht weiterbearbeitet, wenn die
 Knowledge-Phase nicht gestartet werden kann oder fehlschlägt. Mit
 `required = false` darf die Main-Phase ohne OKF-Kontext fortfahren.

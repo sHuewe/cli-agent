@@ -64,6 +64,11 @@ timeout = 120
 # -----------------------------------------------------------------------------
 # Optional OKF knowledge repository
 # -----------------------------------------------------------------------------
+# repository is a user-selected read-only knowledge root. It may intentionally
+# be outside the project workspace and is currently not restricted by an
+# admin-side OKF root allowlist. In managed deployments, use only centrally
+# reviewed/configured knowledge repositories whose contents may be sent to the
+# configured LLM.
 # [okf]
 # repository = "C:/dev/knowledge/okf/bundle"
 # max_tool_calls = 200
