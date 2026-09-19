@@ -94,6 +94,30 @@ Die organisationsspezifische `admin_config.toml` gehört nicht in das öffentlic
 
 Ein gemanagtes Deployment darf die Trennung zwischen maschinenweiter Admin-Policy und benutzerkontrollierter Konfiguration nicht aufweichen.
 
+### OKF-Knowledge-Roots
+
+Der optionale OKF-Root ist bewusst **nicht** Teil der maschinenweiten
+`admin_config.toml`. `[okf].repository` gehört zur normalen
+Benutzer-/Projektkonfiguration und darf außerhalb des Projekt-Workspaces liegen.
+Nach Auswahl dieses Roots sind die OKF-Tools zwar read-only und deterministisch
+auf genau diesen Root begrenzt; die Anwendung besitzt derzeit jedoch keine
+administrative `okf_allowed_roots`-Liste.
+
+Für ein gemanagtes Deployment bedeutet das:
+
+- OKF nur aktivieren, wenn die konkrete Knowledge-Quelle für den vorgesehenen
+  LLM-Einsatz freigegeben ist;
+- zulässige Repository-Pfade in der zentral ausgelieferten Benutzerkonfiguration
+  beziehungsweise im Deployment-Profil festlegen und reviewen;
+- Änderungen an diesen Pfaden als Datenfreigabeänderung behandeln;
+- OKF deaktivieren beziehungsweise den `[okf]`-Block weglassen, wenn keine
+  freigegebene Knowledge-Quelle benötigt wird.
+
+Die technische Garantie des Core-Agenten ist das Containment **innerhalb des
+gewählten Roots**. Welche lokalen Roots organisatorisch genutzt werden dürfen,
+ist derzeit eine Deployment-/Governance-Entscheidung und keine maschinenweit
+erzwungene Produktpolicy.
+
 ## 4. Referenzweg für Windows
 
 Für gemanagte Windows-Arbeitsplätze ist ein MSI oder ein äquivalentes unternehmensinternes Softwarepaket der vorgesehene Referenzweg.
