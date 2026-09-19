@@ -21,7 +21,7 @@ class LocalCommandInput:
 
 
 _LOCAL_COMMAND_SPECS = (
-    LocalCommandSpec("tokens", "tokens", 0, fuzzy_suggestion=True),
+    LocalCommandSpec("tokens", "tokens", 0),
     LocalCommandSpec(
         "add_web_context",
         "add_web_context <URL>",
@@ -79,16 +79,12 @@ def classify_local_command(prompt: str) -> LocalCommandInput:
             arguments=arguments,
         )
 
-    # Long underscore/hyphen commands are highly distinctive.  For the short
-    # "tokens" command, only a single-token input is considered command-like.
-    if "_" in command_name or "-" in command_name:
-        candidates = tuple(
-            name for name in _FUZZY_COMMAND_NAMES if "_" in name
-        )
-    elif not arguments:
-        candidates = ("tokens",)
-    else:
+    # Fuzzy matching is deliberately limited to distinctive command-shaped
+    # names. Short ordinary words such as "tokens", "enable" and "disable"
+    # would otherwise create too many false positives in normal prompts.
+    if "_" not in command_name and "-" not in command_name:
         return LocalCommandInput(is_local=False)
+    candidates = _FUZZY_COMMAND_NAMES
 
     matches = get_close_matches(
         command_name,
