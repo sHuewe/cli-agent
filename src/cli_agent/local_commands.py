@@ -41,7 +41,7 @@ _LOCAL_COMMAND_BY_NAME = {spec.name: spec for spec in _LOCAL_COMMAND_SPECS}
 _FUZZY_COMMAND_NAMES = tuple(
     spec.name for spec in _LOCAL_COMMAND_SPECS if spec.fuzzy_suggestion
 )
-_FUZZY_CUTOFF = 0.82
+_FUZZY_CUTOFF = 0.93
 
 
 def classify_local_command(prompt: str) -> LocalCommandInput:
@@ -84,7 +84,18 @@ def classify_local_command(prompt: str) -> LocalCommandInput:
     # would otherwise create too many false positives in normal prompts.
     if "_" not in command_name and "-" not in command_name:
         return LocalCommandInput(is_local=False)
-    candidates = _FUZZY_COMMAND_NAMES
+
+    # Require the command-family prefix as well as a high SequenceMatcher
+    # similarity. This avoids swallowing valid technical prompts such as
+    # "web_context usage in Python" or identifiers like "add_web_contextual".
+    prefix = command_name.split("_", 1)[0].split("-", 1)[0]
+    candidates = tuple(
+        name
+        for name in _FUZZY_COMMAND_NAMES
+        if name.startswith(prefix + "_")
+    )
+    if not candidates:
+        return LocalCommandInput(is_local=False)
 
     matches = get_close_matches(
         command_name,
