@@ -374,3 +374,73 @@ def test_re2_incompatible_pattern_properties_fail_closed_everywhere() -> None:
 
     assert error is not None
     assert "RE2" in error
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "not": {
+                        "pattern": "a(?=b)",
+                    }
+                }
+            },
+        },
+        {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "anyOf": [
+                        {"type": "integer"},
+                        {"pattern": "a(?=b)"},
+                    ]
+                }
+            },
+        },
+        {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "if": {"pattern": "a(?=b)"},
+                    "then": {"type": "string"},
+                }
+            },
+        },
+    ],
+)
+def test_re2_incompatible_regex_is_not_masked_by_combinators(
+    schema: dict,
+) -> None:
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"value": "ab"},
+    )
+
+    assert error is not None
+    assert "RE2" in error
+
+
+def test_not_with_supported_pattern_keeps_json_schema_semantics() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "not": {
+                    "pattern": "^ab$",
+                }
+            }
+        },
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"value": "ab"},
+    )
+
+    assert error is not None
+    assert "should not be valid" in error
