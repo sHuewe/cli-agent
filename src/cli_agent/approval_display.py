@@ -61,4 +61,8 @@ def approval_arguments(arguments: dict[str, object]) -> str:
         for name, value in arguments.items()
     }
     rendered = json.dumps(summary, ensure_ascii=False, sort_keys=True)
-    return sanitize_terminal_text(rendered, multiline=False)
+    return sanitize_terminal_text(
+        rendered,
+        multiline=False,
+        escape_invisible_formatting=True,
+    )
