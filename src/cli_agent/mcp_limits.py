@@ -44,15 +44,8 @@ _SAFE_VALIDATOR_CLASSES: dict[type, type] = {}
 def _safe_pattern(validator, pattern, instance, schema):
     if not validator.is_type(instance, "string"):
         return
-    try:
-        matched = re2.search(pattern, instance)
-    except re2.error as exc:
-        yield ValidationError(
-            "Der JSON-Schema-Regex wird von der sicheren RE2-Engine "
-            f"nicht unterstützt: {exc}"
-        )
-        return
-    if not matched:
+    compiled = _compile_safe_regex(pattern)
+    if not compiled.search(instance):
         yield ValidationError(f"{instance!r} does not match {pattern!r}")
 
 
@@ -61,14 +54,7 @@ def _safe_pattern_properties(validator, pattern_properties, instance, schema):
         return
 
     for pattern, subschema in pattern_properties.items():
-        try:
-            compiled = re2.compile(pattern)
-        except re2.error as exc:
-            yield ValidationError(
-                "Der JSON-Schema-Regex wird von der sicheren RE2-Engine "
-                f"nicht unterstützt: {exc}"
-            )
-            continue
+        compiled = _compile_safe_regex(pattern)
         for key, value in instance.items():
             if compiled.search(key):
                 yield from validator.descend(
@@ -90,13 +76,6 @@ def _compile_safe_regex(pattern: str):
         raise _UnsupportedSafeRegex(str(exc)) from exc
 
 
-def _safe_regex_validation_error(exc: _UnsupportedSafeRegex) -> ValidationError:
-    return ValidationError(
-        "Der JSON-Schema-Regex wird von der sicheren RE2-Engine "
-        f"nicht unterstützt: {exc}"
-    )
-
-
 def _extras_msg(extras):
     verb = "was" if len(extras) == 1 else "were"
     return ", ".join(repr(extra) for extra in extras), verb
@@ -108,13 +87,10 @@ def _is_valid(errors) -> bool:
 
 def _safe_find_additional_properties(instance, schema):
     properties = schema.get("properties", {})
-    try:
-        patterns = [
-            _compile_safe_regex(pattern)
-            for pattern in schema.get("patternProperties", {})
-        ]
-    except _UnsupportedSafeRegex:
-        raise
+    patterns = [
+        _compile_safe_regex(pattern)
+        for pattern in schema.get("patternProperties", {})
+    ]
 
     for property_name in instance:
         if property_name in properties:
@@ -128,11 +104,7 @@ def _safe_additional_properties(validator, additional, instance, schema):
     if not validator.is_type(instance, "object"):
         return
 
-    try:
-        extras = set(_safe_find_additional_properties(instance, schema))
-    except _UnsupportedSafeRegex as exc:
-        yield _safe_regex_validation_error(exc)
-        return
+    extras = set(_safe_find_additional_properties(instance, schema))
 
     if validator.is_type(additional, "object"):
         for extra in extras:
@@ -249,13 +221,9 @@ def _safe_unevaluated_properties(validator, unevaluated, instance, schema):
     if not validator.is_type(instance, "object"):
         return
 
-    try:
-        evaluated_keys = _safe_find_evaluated_property_keys(
-            validator, instance, schema
-        )
-    except _UnsupportedSafeRegex as exc:
-        yield _safe_regex_validation_error(exc)
-        return
+    evaluated_keys = _safe_find_evaluated_property_keys(
+        validator, instance, schema
+    )
 
     unevaluated_keys = []
     for property_name in instance:
@@ -399,13 +367,9 @@ def _safe_unevaluated_properties_draft2019(
     if not validator.is_type(instance, "object"):
         return
 
-    try:
-        evaluated_keys = _safe_find_evaluated_property_keys_draft2019(
-            validator, instance, schema
-        )
-    except _UnsupportedSafeRegex as exc:
-        yield _safe_regex_validation_error(exc)
-        return
+    evaluated_keys = _safe_find_evaluated_property_keys_draft2019(
+        validator, instance, schema
+    )
 
     unevaluated_keys = []
     for property_name in instance:
@@ -538,14 +502,20 @@ def validate_mcp_tool_arguments(
     """Return a concise validation error, or ``None`` for valid arguments."""
 
     validator = _schema_validator(schema, tool_name=tool_name)
-    errors = sorted(
-        validator.iter_errors(arguments),
-        key=lambda error: (
-            tuple(str(part) for part in error.absolute_path),
-            str(error.validator),
-            error.message,
-        ),
-    )
+    try:
+        errors = sorted(
+            validator.iter_errors(arguments),
+            key=lambda error: (
+                tuple(str(part) for part in error.absolute_path),
+                str(error.validator),
+                error.message,
+            ),
+        )
+    except _UnsupportedSafeRegex as exc:
+        return (
+            "$: JSON-Schema-Regex wird von der sicheren RE2-Engine "
+            f"nicht unterstützt: {exc}"
+        )
     if not errors:
         return None
     error = errors[0]
