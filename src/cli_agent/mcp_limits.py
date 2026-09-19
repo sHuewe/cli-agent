@@ -78,12 +78,12 @@ def _reject_regex_schema_constraints(schema: Any, *, tool_name: str) -> None:
     """
 
     single_schema_keywords = {
+        "additionalItems",
         "additionalProperties",
         "contains",
         "contentSchema",
         "else",
         "if",
-        "items",
         "not",
         "propertyNames",
         "then",
@@ -118,6 +118,19 @@ def _reject_regex_schema_constraints(schema: Any, *, tool_name: str) -> None:
             )
 
         for key, value in current.items():
+            # Draft-04/06/07 allow tuple validation via an array-valued
+            # "items". Newer drafts use a single schema here and
+            # "prefixItems" for tuples. Support both forms because
+            # validator_for() honors the schema's declared draft.
+            if key == "items":
+                if isinstance(value, (dict, bool)):
+                    stack.append(value)
+                elif isinstance(value, list):
+                    stack.extend(
+                        item for item in value if isinstance(item, (dict, bool))
+                    )
+                continue
+
             if key in single_schema_keywords:
                 if isinstance(value, (dict, bool)):
                     stack.append(value)
