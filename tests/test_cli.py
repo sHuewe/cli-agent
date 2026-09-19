@@ -268,6 +268,24 @@ def test_terminal_sanitizer_preserves_normal_unicode_and_emoji() -> None:
     assert sanitize_terminal_text(value) == value
 
 
+def test_terminal_sanitizer_strict_mode_escapes_invisible_formatting() -> None:
+    value = "a\u200bb\u200cc\u200dd\u2060e 👨‍💻 ❤️"
+
+    sanitized = sanitize_terminal_text(
+        value,
+        escape_invisible_formatting=True,
+    )
+
+    assert sanitized == (
+        "a\\u200bb\\u200cc\\u200dd\\u2060e "
+        "👨\\u200d💻 ❤️"
+    )
+    assert "\u200b" not in sanitized
+    assert "\u200c" not in sanitized
+    assert "\u200d" not in sanitized
+    assert "\u2060" not in sanitized
+
+
 def test_terminal_sanitizer_escapes_terminal_and_bidi_controls() -> None:
     value = "safe\x1b[2Jhidden\u202eexe.txt\x07"
 
