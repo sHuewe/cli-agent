@@ -22,6 +22,12 @@ keine weiteren Netzwerkzugriffe auslösen.
 """
 
 
+def _url_for_log(url: str) -> str:
+    """Backward-compatible wrapper for URL redaction in log contexts."""
+
+    return redact_url_for_display(url)
+
+
 @dataclass(frozen=True)
 class LoopTokenUsage:
     requests: int
