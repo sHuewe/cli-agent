@@ -409,3 +409,33 @@ def test_add_web_context_call_syntax_prose_reaches_model(tmp_path: Path) -> None
 
     assert answer == "ok"
     assert len(model.calls) == 1
+
+
+def test_tokens_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("tokens in this prompt"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
+
+
+def test_enable_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("enable dark mode in the UI"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
+
+
+def test_add_web_context_non_url_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("add_web_context usage"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
