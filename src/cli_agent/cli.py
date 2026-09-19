@@ -151,7 +151,8 @@ def exception_details(exc: BaseException) -> str:
 
 def print_error(exc: BaseException, *, debug: bool) -> None:
     if debug:
-        traceback.print_exception(exc)
+        rendered = "".join(traceback.format_exception(exc))
+        sys.stderr.write(sanitize_terminal_text(rendered, multiline=True))
     else:
         print(
             "Fehler: "
