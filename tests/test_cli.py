@@ -423,3 +423,12 @@ def test_preloaded_web_context_status_is_sanitized(
     assert "\u202e" not in output
     assert "\\u001b[2J" in output
     assert "\\u202e" in output
+
+
+def test_terminal_sanitizer_escapes_lone_unicode_surrogates() -> None:
+    value = "before\ud800middle\udfffafter ✅"
+
+    sanitized = sanitize_terminal_text(value)
+
+    assert sanitized == "before\\ud800middle\\udfffafter ✅"
+    sanitized.encode("utf-8")
