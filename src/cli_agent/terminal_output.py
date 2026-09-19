@@ -22,8 +22,8 @@ _BIDI_CONTROLS = frozenset(
 
 
 def _escaped_codepoint(codepoint: int) -> str:
-    if codepoint <= 0xFF:
-        return f"\\x{codepoint:02x}"
+    # Use Unicode escapes rather than \\xNN so the rendered representation is
+    # also valid when it appears inside generated TOML basic strings.
     if codepoint <= 0xFFFF:
         return f"\\u{codepoint:04x}"
     return f"\\U{codepoint:08x}"
