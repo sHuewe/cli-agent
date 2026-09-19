@@ -198,3 +198,282 @@ def test_tool_result_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     assert limits.enforce_mcp_tool_result_limit("1234567890") == "1234567890"
     with pytest.raises(RuntimeError, match="Sicherheitslimit"):
         limits.enforce_mcp_tool_result_limit("12345678901")
+
+
+@pytest.mark.parametrize(
+    "schema, keyword",
+    [
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "pattern": "^(a+)+$",
+                    }
+                },
+            },
+            "pattern",
+        ),
+        (
+            {
+                "type": "object",
+                "patternProperties": {
+                    "^x-": {"type": "string"},
+                },
+            },
+            "patternProperties",
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "payload": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "string", "pattern": "^(a+)+$"},
+                        ]
+                    }
+                },
+            },
+            "pattern",
+        ),
+    ],
+)
+def test_regex_constraints_in_mcp_schemas_are_rejected(
+    schema: dict,
+    keyword: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=keyword):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_property_named_pattern_is_not_mistaken_for_schema_keyword() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "pattern": {
+                "type": "string",
+                "minLength": 1,
+            }
+        },
+        "required": ["pattern"],
+        "additionalProperties": False,
+    }
+
+    limits.validate_mcp_server_metadata(
+        server_name="external",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
+
+
+def test_non_regex_schema_constraints_remain_supported() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "enum": ["read", "write"]},
+            "name": {"type": "string", "minLength": 1, "maxLength": 100},
+            "count": {"type": "integer", "minimum": 0, "maximum": 100},
+        },
+        "required": ["mode"],
+        "additionalProperties": False,
+    }
+
+    limits.validate_mcp_server_metadata(
+        server_name="external",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"mode": "read", "name": "docs", "count": 1},
+        )
+        is None
+    )
+
+
+def test_regex_schema_is_rejected_before_argument_validation() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "string",
+                "pattern": "^(a+)+$",
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="pattern"):
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"value": "a" * 24 + "!"},
+        )
+
+
+def test_draft7_tuple_items_with_regex_are_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+            "values": {
+                "type": "array",
+                "items": [
+                    {
+                        "type": "string",
+                        "pattern": "^(a+)+$",
+                    }
+                ],
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="pattern"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_legacy_additional_items_with_regex_are_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "array",
+        "items": [{"type": "string"}],
+        "additionalItems": {
+            "type": "string",
+            "pattern": "^(a+)+$",
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="pattern"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_harmless_draft7_tuple_schema_remains_supported() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "array",
+        "items": [
+            {"type": "string", "minLength": 1},
+            {"type": "integer", "minimum": 0},
+        ],
+        "additionalItems": False,
+    }
+
+    limits.validate_mcp_server_metadata(
+        server_name="external",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
+
+
+def test_local_ref_target_with_regex_is_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$ref": "#/hidden",
+        "hidden": {
+            "type": "string",
+            "pattern": "^(a+)+$",
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="pattern"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_local_ref_target_without_regex_remains_supported() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$ref": "#/definitions/value",
+        "definitions": {
+            "value": {
+                "type": "string",
+                "minLength": 1,
+            }
+        },
+    }
+
+    limits.validate_mcp_server_metadata(
+        server_name="external",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
+
+
+def test_non_pointer_local_ref_is_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$ref": "#named-anchor",
+        "definitions": {
+            "value": {"type": "string"},
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="kein JSON-Pointer-Fragment"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+@pytest.mark.parametrize("keyword", ["$dynamicRef", "$recursiveRef"])
+def test_dynamic_or_recursive_refs_are_rejected(keyword: str) -> None:
+    schema = {
+        keyword: "#",
+    }
+
+    with pytest.raises(RuntimeError, match="nicht zulässig"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_draft3_schema_is_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-03/schema#",
+        "extends": {
+            "type": "string",
+            "pattern": "^(a+)+$",
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="Draft 3"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_harmless_draft3_schema_is_still_rejected() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-03/schema#",
+        "type": "string",
+    }
+
+    with pytest.raises(RuntimeError, match="Draft 3"):
+        limits.validate_mcp_server_metadata(
+            server_name="external",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
