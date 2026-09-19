@@ -161,7 +161,11 @@ class WebContextCliAgent(CliAgent):
             noun = "Eintrag" if count == 1 else "Einträge"
             return f"Web-Kontext gelöscht ({count} {noun})."
         if local_command.command in {"enable", "disable"}:
-            return await super().ask(prompt)
+            # Delegate the normalized command parsed above. The base
+            # ConversationMixin intentionally owns the actual server toggle,
+            # while this layer accepts harmless case variants consistently.
+            normalized = f"{local_command.command} {local_command.arguments[0]}"
+            return await super().ask(normalized)
         self._reset_last_usage()
         return await super().ask(prompt)
 
