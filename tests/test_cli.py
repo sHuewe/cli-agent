@@ -325,3 +325,19 @@ def test_approval_tool_name_cannot_inject_terminal_controls(
     assert "\u202e" not in output
     assert "evil\\x1b[2J\\u202etool\\nforged" in output
     assert "ok ✅" in output
+
+
+def test_debug_error_sanitizes_traceback_terminal_controls(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    try:
+        raise RuntimeError("boom\x1b[2J\u202edanger")
+    except RuntimeError as exc:
+        cli_module.print_error(exc, debug=True)
+
+    captured = capsys.readouterr()
+    assert "\x1b" not in captured.err
+    assert "\u202e" not in captured.err
+    assert "\\x1b[2J" in captured.err
+    assert "\\u202e" in captured.err
+    assert "RuntimeError: boom" in captured.err
