@@ -295,3 +295,82 @@ def test_embedded_schema_dialect_keeps_re2_validation() -> None:
 
     assert error is not None
     assert "RE2" in error
+
+
+def test_pattern_properties_with_additional_properties_uses_re2() -> None:
+    schema = {
+        "type": "object",
+        "patternProperties": {
+            "^(a+)+$": {},
+        },
+        "additionalProperties": False,
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"a" * 100_000 + "!": 1},
+    )
+
+    assert error is not None
+    assert "does not match any of the regexes" in error
+
+
+def test_unevaluated_properties_draft202012_uses_re2() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "patternProperties": {
+            "^(a+)+$": {},
+        },
+        "unevaluatedProperties": False,
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"a" * 100_000 + "!": 1},
+    )
+
+    assert error is not None
+    assert "Unevaluated properties are not allowed" in error
+
+
+def test_unevaluated_properties_draft201909_uses_re2() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2019-09/schema",
+        "type": "object",
+        "patternProperties": {
+            "^(a+)+$": {},
+        },
+        "unevaluatedProperties": False,
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"a" * 100_000 + "!": 1},
+    )
+
+    assert error is not None
+    assert "Unevaluated properties are not allowed" in error
+
+
+def test_re2_incompatible_pattern_properties_fail_closed_everywhere() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "patternProperties": {
+            "a(?=b)": {},
+        },
+        "additionalProperties": False,
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"ab": 1},
+    )
+
+    assert error is not None
+    assert "RE2" in error
