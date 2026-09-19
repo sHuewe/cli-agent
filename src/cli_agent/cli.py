@@ -398,7 +398,12 @@ async def run(args: argparse.Namespace) -> None:
 
     async with agent:
         for url in getattr(args, "add_web_context", ()):
-            print(await agent.ask(f"add_web_context {url}"))
+            print(
+                sanitize_terminal_text(
+                    await agent.ask(f"add_web_context {url}"),
+                    multiline=True,
+                )
+            )
         if one_shot_prompt is not None:
             emit_answer(one_shot_prompt, await agent.ask(one_shot_prompt))
             print(await agent.ask("tokens"))
