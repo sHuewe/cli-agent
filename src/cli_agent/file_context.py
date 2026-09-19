@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
 from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
+from .local_commands import classify_local_command
 from .os_operations import Workspace
 from .web_context_agent import WebContextCliAgent
 
@@ -269,13 +269,7 @@ def prepare_output_target(
 
 
 def is_local_agent_command(prompt: str) -> bool:
-    stripped = prompt.strip()
-    return bool(
-        re.fullmatch(r"tokens", stripped)
-        or re.fullmatch(r"add_web_context\s+(\S+)", stripped)
-        or re.fullmatch(r"clear_web_context", stripped)
-        or re.fullmatch(r"(enable|disable)\s+(\S+)", stripped)
-    )
+    return classify_local_command(prompt).is_local
 
 
 def _lexical_workspace_candidate(workspace: Path, path: Path) -> Path:

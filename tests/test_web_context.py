@@ -319,3 +319,123 @@ def test_tokens_command_does_not_clear_previous_usage(tmp_path: Path) -> None:
     assert first == second
     assert "Main-Loop:" in first
     assert "Knowledge-Loop: nicht ausgeführt." in first
+
+
+def test_add_web_context_typo_does_not_call_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(
+        agent.ask("add_web_contex http://localhost:8080/docs")
+    )
+
+    assert "Meintest du: add_web_context <URL>?" in answer
+    assert model.calls == []
+    assert agent.history == []
+
+
+def test_add_web_context_missing_url_does_not_call_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("add_web_context"))
+
+    assert "Verwendung: add_web_context <URL>" in answer
+    assert model.calls == []
+    assert agent.history == []
+
+
+def test_normal_similar_text_still_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("Erkläre mir add web context"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
+
+
+def test_uppercase_enable_is_normalized_before_delegation(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+    called: list[tuple[str, bool]] = []
+
+    async def fake_set_server_enabled(server_name: str, *, enabled: bool) -> bool:
+        called.append((server_name, enabled))
+        return True
+
+    agent.set_server_enabled = fake_set_server_enabled  # type: ignore[method-assign]
+
+    answer = asyncio.run(agent.ask("ENABLE docs"))
+
+    assert answer == "MCP-Server docs aktiviert."
+    assert called == [("docs", True)]
+    assert model.calls == []
+
+
+def test_uppercase_disable_is_normalized_before_delegation(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+    called: list[tuple[str, bool]] = []
+
+    async def fake_set_server_enabled(server_name: str, *, enabled: bool) -> bool:
+        called.append((server_name, enabled))
+        return True
+
+    agent.set_server_enabled = fake_set_server_enabled  # type: ignore[method-assign]
+
+    answer = asyncio.run(agent.ask("DISABLE docs"))
+
+    assert answer == "MCP-Server docs deaktiviert."
+    assert called == [("docs", False)]
+    assert model.calls == []
+
+
+def test_add_web_contexts_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("add_web_contexts usage in Python"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
+
+
+def test_add_web_context_call_syntax_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("add_web_context() usage"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
+
+
+def test_tokens_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("tokens in this prompt"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
+
+
+def test_enable_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("enable dark mode in the UI"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
+
+
+def test_add_web_context_non_url_prose_reaches_model(tmp_path: Path) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+
+    answer = asyncio.run(agent.ask("add_web_context usage"))
+
+    assert answer == "ok"
+    assert len(model.calls) == 1
