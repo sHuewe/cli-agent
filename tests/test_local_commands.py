@@ -12,7 +12,7 @@ def test_exact_local_command_is_parsed() -> None:
     assert result.error is None
 
 
-def test_exact_local_command_with_wrong_arity_fails_locally() -> None:
+def test_bare_add_web_context_is_treated_as_incomplete_command() -> None:
     result = classify_local_command("add_web_context")
 
     assert result.is_local is True
@@ -107,5 +107,35 @@ def test_add_web_context_call_syntax_prose_is_not_swallowed() -> None:
 
 def test_add_web_context_typo_with_non_url_argument_is_not_swallowed() -> None:
     result = classify_local_command("add_web_contex usage")
+
+    assert result.is_local is False
+
+
+def test_tokens_prose_is_not_swallowed() -> None:
+    result = classify_local_command("tokens in this prompt")
+
+    assert result.is_local is False
+
+
+def test_clear_web_context_prose_is_not_swallowed() -> None:
+    result = classify_local_command("clear_web_context please explain")
+
+    assert result.is_local is False
+
+
+def test_enable_prose_is_not_swallowed() -> None:
+    result = classify_local_command("enable dark mode in the UI")
+
+    assert result.is_local is False
+
+
+def test_disable_prose_is_not_swallowed() -> None:
+    result = classify_local_command("disable dark mode in the UI")
+
+    assert result.is_local is False
+
+
+def test_exact_add_web_context_with_non_url_argument_is_not_swallowed() -> None:
+    result = classify_local_command("add_web_context usage")
 
     assert result.is_local is False
