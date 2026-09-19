@@ -58,6 +58,7 @@ def sanitize_terminal_text(value: object, *, multiline: bool = True) -> str:
         if (
             codepoint < 0x20
             or 0x7F <= codepoint <= 0x9F
+            or 0xD800 <= codepoint <= 0xDFFF
             or codepoint in _BIDI_CONTROLS
             or codepoint in {0x2028, 0x2029}
         ):
