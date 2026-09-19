@@ -53,7 +53,11 @@ class _InspectionModel:
 async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> bool | str:
     if not sys.stdin.isatty():
         return False
-    safe_tool_name = sanitize_terminal_text(tool_name, multiline=False)
+    safe_tool_name = sanitize_terminal_text(
+        tool_name,
+        multiline=False,
+        escape_invisible_formatting=True,
+    )
     print(
         "\nExplizite Freigabe erforderlich: "
         f"{safe_tool_name}({_approval_arguments(arguments)})"
@@ -262,19 +266,35 @@ async def run_admin(args: argparse.Namespace) -> None:
     inspection = await _inspect_mcp_tool(server=server, tool_name=args.tool, workspace=workspace, config_file=config_file, admin_config=admin_config)
     print(
         "MCP-Server: "
-        + sanitize_terminal_text(inspection.server_name, multiline=False)
+        + sanitize_terminal_text(
+            inspection.server_name,
+            multiline=False,
+            escape_invisible_formatting=True,
+        )
         + " ("
-        + sanitize_terminal_text(inspection.transport, multiline=False)
+        + sanitize_terminal_text(
+            inspection.transport,
+            multiline=False,
+            escape_invisible_formatting=True,
+        )
         + ")"
     )
     print(
         "Tool: "
-        + sanitize_terminal_text(inspection.tool_name, multiline=False)
+        + sanitize_terminal_text(
+            inspection.tool_name,
+            multiline=False,
+            escape_invisible_formatting=True,
+        )
     )
     if inspection.description:
         print(
             "Beschreibung: "
-            + sanitize_terminal_text(inspection.description, multiline=True)
+            + sanitize_terminal_text(
+                inspection.description,
+                multiline=True,
+                escape_invisible_formatting=True,
+            )
         )
     print(f"Contract: {inspection.contract_sha256}")
     print("Input-Schema:")
@@ -287,6 +307,7 @@ async def run_admin(args: argparse.Namespace) -> None:
                 sort_keys=True,
             ),
             multiline=True,
+            escape_invisible_formatting=True,
         )
     )
     if args.admin_command == "inspect-tool":
@@ -321,6 +342,7 @@ async def run_admin(args: argparse.Namespace) -> None:
         sanitize_terminal_text(
             _render_trusted_server_fragment(fragment_server),
             multiline=True,
+            escape_invisible_formatting=True,
         )
     )
     print("\nAuto-Approval für dieses Tool:")
@@ -328,6 +350,7 @@ async def run_admin(args: argparse.Namespace) -> None:
         sanitize_terminal_text(
             _render_tool_approval_fragment(inspection),
             multiline=True,
+            escape_invisible_formatting=True,
         )
     )
 
