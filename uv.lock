@@ -1,6 +1,6 @@
 version = 1
 revision = 3
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
@@ -307,6 +307,7 @@ name = "cli-agent"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "google-re2" },
     { name = "httpx" },
     { name = "mcp" },
     { name = "pypdf" },
@@ -323,6 +324,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "google-re2", specifier = ">=1.1.20251105,<2" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "mcp", specifier = ">=1.9,<2" },
     { name = "pypdf", specifier = ">=6.18.1,<7" },
@@ -554,6 +556,26 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c7/5d/bd21ba1519b6b1e222b29878301d2e1fb928e890dc7d085fa4222ac5671b/dateparser-1.4.3.tar.gz", hash = "sha256:bab8c43a746266e68142f4926e69438ce551441aa88e54e78bb6410bf3ee7000", size = 362152, upload-time = "2026-09-03T10:07:54.545Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/30/5f/63f927b5ffd1cc2c030fc2bd362bf920890e8806cf42f701198de5b3f9c7/dateparser-1.4.3-py3-none-any.whl", hash = "sha256:cbce86c64e0cea5c54c84c015d34c903d46c51bfad50632bf2f05a6141d10c05", size = 322384, upload-time = "2026-09-03T10:07:52.913Z" },
+]
+
+[[package]]
+name = "google-re2"
+version = "1.1.20251105"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/60/805c654ba53d685513df955ee745f71920fe8e6a284faf0f9b9dc19b659c/google_re2-1.1.20251105.tar.gz", hash = "sha256:1db14a292ee8303b91e91e7c37e05ac17d3c467f29416c79ac70a78be3e65bda" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/21/4566fc344c21cf3c49082d13ddab785994b5e3b8b7fd4631242538f698a2/google_re2-1.1.20251105-1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:03156291269f145eccddff63118f2df02d395792f51fc039f09955818943815a" },
+    { url = "https://files.pythonhosted.org/packages/0e/f2/6e470338271e164dd3c5e508876f99aec3ed23bf419c7d54a5672fd5b05f/google_re2-1.1.20251105-1-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:18a5610b26742b90cb1d64ead2b16fe0e3bd7e67add03fd3779cd1b85e401661" },
+    { url = "https://files.pythonhosted.org/packages/49/e5/f83053a36cfc4762d843748e4f7a9c1141937dcf74cd6fc3f4598292dda3/google_re2-1.1.20251105-1-cp311-cp311-win_amd64.whl", hash = "sha256:f5f856ff5036a8f22b3bad57f376d4e3b97b59b64f311bdb1f83c8dabded2492" },
+    { url = "https://files.pythonhosted.org/packages/0d/1c/8b1ccbeade96a21435d55b5185cd6d9b2ceab5a9af998a4d9099e0540759/google_re2-1.1.20251105-1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:809c5fa5d08279413b29c2e2c5c528e85cd94a0e0fd897db595a0c09eeee2782" },
+    { url = "https://files.pythonhosted.org/packages/8a/0a/6add090c917ee39f6f0be753037cafceb3bad904b424efc155fb38082635/google_re2-1.1.20251105-1-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:2b7a3b90f747130310d4b3b8e19ebb845d0d97c1deb63b36f76c7242dacbd736" },
+    { url = "https://files.pythonhosted.org/packages/31/e9/5dd951c35acaabfe87c67228b9af2cdcd7779d9167edbe6b9094b8a8e529/google_re2-1.1.20251105-1-cp312-cp312-win_amd64.whl", hash = "sha256:062313c309f93dfeb6966372f4c446580e98879133ec155522eea8aaf568a5cd" },
+    { url = "https://files.pythonhosted.org/packages/f0/8c/23075e589038284c9487f41cde531d35873f9da622fb4ac7d1d97bd9086e/google_re2-1.1.20251105-1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a52cb204e49d20cdbb66faf394d57f476e96c39c23a328442ab0194fc6bd1a2b" },
+    { url = "https://files.pythonhosted.org/packages/71/71/f927ddc7aef1b8d7ccc8a649c335d311f29f3dea658209e30e37720e4891/google_re2-1.1.20251105-1-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0b1458d9ca588124cd61aa1bf5388a216e1247e7d474f8e5e1530498044f5c87" },
+    { url = "https://files.pythonhosted.org/packages/08/24/6ea87fe682e115ffd296e91eb5c5a266349d1ee8414ce8ece3f99ec1ac84/google_re2-1.1.20251105-1-cp313-cp313-win_amd64.whl", hash = "sha256:0bcba63ad3ea8926fb0c71bb5044e33d405bb9395f5b5444393cd5f28f0bf6d3" },
+    { url = "https://files.pythonhosted.org/packages/03/be/a8def96aa4a80b233e105767d22e3de961dcde5a04f0a05cb4f3ddb4df78/google_re2-1.1.20251105-1-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a7bfaa2cf55daf0c5c650e68526bb20b61e37d7f3ae53f6893013acc1c91c116" },
+    { url = "https://files.pythonhosted.org/packages/c4/9d/213dce5de401527369fb5af11096b18c06001d9eb71f3318fe5eba1ec706/google_re2-1.1.20251105-1-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:85feec3161ffdc12f6b144e37a2f91f80b771c72ffadde60191e89a49f6d7e81" },
+    { url = "https://files.pythonhosted.org/packages/96/b3/74e301211699f1b650ba7690a3e4e52146ac4266fcd62f3ea0a945b9eda4/google_re2-1.1.20251105-1-cp314-cp314-win_amd64.whl", hash = "sha256:6d4d5fdadd329a2ed193463899d00ef2fd126172f36a4c01c9def271f19801b6" },
 ]
 
 [[package]]

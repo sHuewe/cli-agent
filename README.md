@@ -12,7 +12,7 @@ Docker Compose und der Docker-basierte Python Validator gehören nicht zum Kern.
 
 ## Setup / Installation
 
-Python 3.11 oder neuer wird benötigt. Für eine lokale Installation aus dem ausgecheckten Repository unter Windows:
+Unterstützt werden aktuell CPython 3.11 bis 3.14 unter Windows x86-64 sowie Linux x86-64/ARM64. Diese Begrenzung stellt insbesondere sicher, dass für die sicherheitsrelevante RE2-Abhängigkeit vorgebaute Binär-Wheels verfügbar sind; ein lokaler C++-Build ist auf diesen Zielen nicht erforderlich. Die CI testet Windows und Linux x86-64 mit Python 3.11. Für eine lokale Installation aus dem ausgecheckten Repository unter Windows:
 
 ```powershell
 py -m pip install pipx

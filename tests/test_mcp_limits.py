@@ -198,3 +198,249 @@ def test_tool_result_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     assert limits.enforce_mcp_tool_result_limit("1234567890") == "1234567890"
     with pytest.raises(RuntimeError, match="Sicherheitslimit"):
         limits.enforce_mcp_tool_result_limit("12345678901")
+
+
+def test_catastrophic_backtracking_pattern_is_handled_safely() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "string",
+                "pattern": "^(a+)+$",
+            }
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"value": "a" * 100_000 + "!"},
+    )
+
+    assert error is not None
+    assert "does not match" in error
+
+
+def test_re2_incompatible_pattern_fails_closed() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "string",
+                "pattern": "a(?=b)",
+            }
+        },
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"value": "ab"},
+    )
+
+    assert error is not None
+    assert "RE2" in error
+
+
+def test_pattern_properties_are_validated_with_re2() -> None:
+    schema = {
+        "type": "object",
+        "patternProperties": {
+            "^x-[a-z]+$": {"type": "integer"},
+        },
+        "additionalProperties": False,
+    }
+
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"x-count": 3},
+        )
+        is None
+    )
+    assert "not of type 'integer'" in str(
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"x-count": "three"},
+        )
+    )
+
+
+def test_embedded_schema_dialect_keeps_re2_validation() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "$defs": {
+            "legacy": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "string",
+                "pattern": "a(?=b)",
+            }
+        },
+        "properties": {
+            "value": {"$ref": "#/$defs/legacy"},
+        },
+        "required": ["value"],
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"value": "ab"},
+    )
+
+    assert error is not None
+    assert "RE2" in error
+
+
+def test_pattern_properties_with_additional_properties_uses_re2() -> None:
+    schema = {
+        "type": "object",
+        "patternProperties": {
+            "^(a+)+$": {},
+        },
+        "additionalProperties": False,
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"a" * 100_000 + "!": 1},
+    )
+
+    assert error is not None
+    assert "does not match any of the regexes" in error
+
+
+def test_unevaluated_properties_draft202012_uses_re2() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "patternProperties": {
+            "^(a+)+$": {},
+        },
+        "unevaluatedProperties": False,
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"a" * 100_000 + "!": 1},
+    )
+
+    assert error is not None
+    assert "Unevaluated properties are not allowed" in error
+
+
+def test_unevaluated_properties_draft201909_uses_re2() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2019-09/schema",
+        "type": "object",
+        "patternProperties": {
+            "^(a+)+$": {},
+        },
+        "unevaluatedProperties": False,
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"a" * 100_000 + "!": 1},
+    )
+
+    assert error is not None
+    assert "Unevaluated properties are not allowed" in error
+
+
+def test_re2_incompatible_pattern_properties_fail_closed_everywhere() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "patternProperties": {
+            "a(?=b)": {},
+        },
+        "additionalProperties": False,
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"ab": 1},
+    )
+
+    assert error is not None
+    assert "RE2" in error
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "not": {
+                        "pattern": "a(?=b)",
+                    }
+                }
+            },
+        },
+        {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "anyOf": [
+                        {"type": "integer"},
+                        {"pattern": "a(?=b)"},
+                    ]
+                }
+            },
+        },
+        {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "if": {"pattern": "a(?=b)"},
+                    "then": {"type": "string"},
+                }
+            },
+        },
+    ],
+)
+def test_re2_incompatible_regex_is_not_masked_by_combinators(
+    schema: dict,
+) -> None:
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"value": "ab"},
+    )
+
+    assert error is not None
+    assert "RE2" in error
+
+
+def test_not_with_supported_pattern_keeps_json_schema_semantics() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "not": {
+                    "pattern": "^ab$",
+                }
+            }
+        },
+    }
+
+    error = limits.validate_mcp_tool_arguments(
+        tool_name="external__search",
+        schema=schema,
+        arguments={"value": "ab"},
+    )
+
+    assert error is not None
+    assert "should not be valid" in error

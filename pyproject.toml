@@ -7,10 +7,11 @@ name = "cli-agent"
 version = "1.0.0"
 description = "General local CLI agent with configurable MCP servers"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 dependencies = [
     "pypdf>=6.18.1,<7",
     "httpx>=0.27,<1",
+    "google-re2>=1.1.20251105,<2",
     "mcp>=1.9,<2",
     "PyYAML>=6.0",
     "trafilatura>=2.2,<3",
