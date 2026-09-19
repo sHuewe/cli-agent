@@ -549,6 +549,11 @@ def validate_mcp_server_metadata(
     seen_tool_names: set[str] = set()
     for tool in tools:
         tool_name = str(getattr(tool, "name", "<unbekannt>"))
+        if any(0xD800 <= ord(character) <= 0xDFFF for character in tool_name):
+            raise RuntimeError(
+                f"MCP-Server {server_name!r} liefert einen Toolnamen mit "
+                "einem ungültigen Unicode-Surrogate."
+            )
         if len(tool_name) > MAX_MCP_TOOL_NAME_CHARS:
             raise RuntimeError(
                 f"MCP-Server {server_name!r} liefert einen zu langen Toolnamen "
