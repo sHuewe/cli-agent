@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import unicodedata
+
 # Unicode controls which can change the visual ordering of otherwise ordinary
 # text. They are legitimate in bidirectional text, but unsafe at terminal
 # trust boundaries where the exact identity of a tool, path, or action matters.
@@ -29,17 +31,28 @@ def _escaped_codepoint(codepoint: int) -> str:
     return f"\\U{codepoint:08x}"
 
 
-def sanitize_terminal_text(value: object, *, multiline: bool = True) -> str:
+def sanitize_terminal_text(
+    value: object,
+    *,
+    multiline: bool = True,
+    escape_invisible_formatting: bool = False,
+) -> str:
     """Neutralize terminal/display controls without restricting normal Unicode.
 
-    Ordinary Unicode text, emoji, variation selectors and zero-width joiners are
-    preserved. C0/C1 controls, carriage returns, Unicode line/paragraph
-    separators and bidirectional formatting controls are rendered visibly as
-    escapes instead of being interpreted by the terminal.
+    Ordinary Unicode text, emoji and emoji composition remain intact by default.
+    C0/C1 controls, carriage returns, Unicode line/paragraph separators,
+    bidirectional formatting controls and lone UTF-16 surrogates are always
+    rendered visibly as escapes instead of being interpreted by the terminal.
 
     With multiline=True, LF and TAB are preserved for normal prose. Security-
     sensitive identifiers should use multiline=False so they cannot create
     additional terminal lines or indentation.
+
+    With escape_invisible_formatting=True, all Unicode format characters (Cf)
+    are escaped as well. This includes ZERO WIDTH SPACE, ZWNJ, ZWJ and WORD
+    JOINER. Use this stricter mode for MCP/security displays where exact visible
+    identity matters. Leave it disabled for normal LLM prose so emoji sequences
+    such as 👨‍💻 remain unchanged.
     """
 
     text = str(value)
@@ -61,6 +74,10 @@ def sanitize_terminal_text(value: object, *, multiline: bool = True) -> str:
             or 0xD800 <= codepoint <= 0xDFFF
             or codepoint in _BIDI_CONTROLS
             or codepoint in {0x2028, 0x2029}
+            or (
+                escape_invisible_formatting
+                and unicodedata.category(character) == "Cf"
+            )
         ):
             if character == "\n":
                 result.append("\\n")
