@@ -91,6 +91,7 @@ def _safe_validator_class(base_validator: type) -> type:
         },
     )
     _SAFE_VALIDATOR_CLASSES[base_validator] = safe
+    _SAFE_VALIDATOR_CLASSES[safe] = safe
     return safe
 
 
