@@ -276,9 +276,9 @@ def test_terminal_sanitizer_escapes_terminal_and_bidi_controls() -> None:
     assert "\x1b" not in sanitized
     assert "\u202e" not in sanitized
     assert "\x07" not in sanitized
-    assert "\\x1b[2J" in sanitized
+    assert "\\u001b[2J" in sanitized
     assert "\\u202e" in sanitized
-    assert "\\x07" in sanitized
+    assert "\\u0007" in sanitized
 
 
 def test_terminal_sanitizer_single_line_escapes_line_controls() -> None:
@@ -323,7 +323,7 @@ def test_approval_tool_name_cannot_inject_terminal_controls(
     output = capsys.readouterr().out
     assert "\x1b" not in output
     assert "\u202e" not in output
-    assert "evil\\x1b[2J\\u202etool\\nforged" in output
+    assert "evil\\u001b[2J\\u202etool\\nforged" in output
     assert "ok ✅" in output
 
 
@@ -338,6 +338,88 @@ def test_debug_error_sanitizes_traceback_terminal_controls(
     captured = capsys.readouterr()
     assert "\x1b" not in captured.err
     assert "\u202e" not in captured.err
-    assert "\\x1b[2J" in captured.err
+    assert "\\u001b[2J" in captured.err
     assert "\\u202e" in captured.err
     assert "RuntimeError: boom" in captured.err
+
+
+def test_rendered_tool_fragment_with_c1_control_remains_valid_toml() -> None:
+    inspection = cli_module.McpToolInspection(
+        server_name="docs",
+        transport="stdio",
+        tool_name="search\u009btool",
+        description="",
+        input_schema={"type": "object"},
+        contract_sha256="sha256:" + "0" * 64,
+        trusted_server_found=False,
+        existing_contract_sha256=None,
+    )
+
+    rendered = sanitize_terminal_text(
+        cli_module._render_tool_approval_fragment(inspection),
+        multiline=True,
+    )
+    parsed = tomllib.loads(rendered)
+
+    approval = parsed["mcp"]["trusted_servers"]["auto_approve_tools"][0]
+    assert approval["name"] == "search\u009btool"
+
+
+def test_preloaded_web_context_status_is_sanitized(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = AppConfig(
+        model=ModelConfig(
+            provider="openai",
+            model="internal-model",
+            base_url="https://llm.internal/v1",
+        )
+    )
+    admin_config = AdminConfig(
+        network=NetworkConfig(
+            model_allowed_hosts=("llm.internal",),
+            web_allowed_hosts=("docs.internal",),
+        )
+    )
+
+    class FakeAgent:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            if prompt.startswith("add_web_context "):
+                return "Web-Kontext hinzugefügt: https://docs.internal/a\x1b[2J\u202eevil"
+            return "ok"
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "load_admin_config", lambda: admin_config)
+    monkeypatch.setattr(cli_module, "configure_logging", lambda _config: None)
+    monkeypatch.setattr(cli_module, "WebContextCliAgent", FakeAgent)
+
+    args = SimpleNamespace(
+        config=None,
+        model=None,
+        os_access=None,
+        approve_tool=[],
+        add_web_context=["https://docs.internal/reference"],
+        debug=False,
+        workspace=tmp_path,
+        prompt=[],
+    )
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: (_ for _ in ()).throw(EOFError()))
+    asyncio.run(cli_module.run(args))
+
+    output = capsys.readouterr().out
+    assert "\x1b" not in output
+    assert "\u202e" not in output
+    assert "\\u001b[2J" in output
+    assert "\\u202e" in output
