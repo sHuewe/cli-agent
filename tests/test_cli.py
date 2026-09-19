@@ -492,3 +492,22 @@ def test_approval_tool_name_escapes_literal_backslashes(
     assert approved is False
     output = capsys.readouterr().out
     assert "tool\\\\u001bname" in output
+
+
+def test_mcp_description_rendering_distinguishes_literal_escape_from_control() -> None:
+    actual_escape = sanitize_terminal_text(
+        "desc \x1b here",
+        multiline=True,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+    literal_escape = sanitize_terminal_text(
+        "desc \\u001b here",
+        multiline=True,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+
+    assert actual_escape == "desc \\u001b here"
+    assert literal_escape == "desc \\\\u001b here"
+    assert actual_escape != literal_escape
