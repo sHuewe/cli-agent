@@ -298,6 +298,7 @@ async def run_admin(args: argparse.Namespace) -> None:
                 inspection.description,
                 multiline=True,
                 escape_invisible_formatting=True,
+                escape_literal_backslashes=True,
             )
         )
     print(f"Contract: {inspection.contract_sha256}")
