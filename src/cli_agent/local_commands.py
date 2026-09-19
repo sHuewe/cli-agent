@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from difflib import get_close_matches
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
@@ -10,6 +12,7 @@ class LocalCommandSpec:
     usage: str
     argument_count: int
     fuzzy_suggestion: bool = False
+    fuzzy_argument_validator: Callable[[tuple[str, ...]], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -20,6 +23,13 @@ class LocalCommandInput:
     error: str | None = None
 
 
+def _looks_like_web_context_arguments(arguments: tuple[str, ...]) -> bool:
+    if len(arguments) != 1:
+        return False
+    parsed = urlsplit(arguments[0])
+    return parsed.scheme.casefold() in {"http", "https"} and bool(parsed.netloc)
+
+
 _LOCAL_COMMAND_SPECS = (
     LocalCommandSpec("tokens", "tokens", 0),
     LocalCommandSpec(
@@ -27,6 +37,7 @@ _LOCAL_COMMAND_SPECS = (
         "add_web_context <URL>",
         1,
         fuzzy_suggestion=True,
+        fuzzy_argument_validator=_looks_like_web_context_arguments,
     ),
     LocalCommandSpec(
         "clear_web_context",
@@ -107,6 +118,20 @@ def classify_local_command(prompt: str) -> LocalCommandInput:
         return LocalCommandInput(is_local=False)
 
     suggested = _LOCAL_COMMAND_BY_NAME[matches[0]]
+
+    # A bare near-match is very likely an incomplete local command. If more
+    # tokens follow, only intercept the input when they also have the expected
+    # invocation shape. This keeps prose/code references such as
+    # "add_web_contexts usage in Python" or "add_web_context() usage" on the
+    # normal LLM path.
+    if arguments:
+        validator = suggested.fuzzy_argument_validator
+        if validator is None:
+            if len(arguments) != suggested.argument_count:
+                return LocalCommandInput(is_local=False)
+        elif not validator(arguments):
+            return LocalCommandInput(is_local=False)
+
     return LocalCommandInput(
         is_local=True,
         error=(
