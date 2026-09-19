@@ -7,7 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from cli_agent.model import TokenUsage
-from cli_agent.web_context import WebContext, _extract_web_content, _validate_web_url
+from cli_agent.web_context import (
+    WebContext,
+    _extract_web_content,
+    _validate_web_url,
+    redact_url_for_display,
+)
 from cli_agent.web_context_agent import LoopTokenUsage, WebContextCliAgent
 
 
@@ -127,6 +132,110 @@ def example_context(url: str = "http://localhost:8080/docs") -> WebContext:
         content="Users API\nGET /users",
         fetched_at="2026-09-08T15:00:00+00:00",
     )
+
+
+def test_redact_url_for_display_removes_query_and_fragment() -> None:
+    assert (
+        redact_url_for_display(
+            "https://example.org/docs?access_token=secret#session-secret"
+        )
+        == "https://example.org/docs"
+    )
+
+
+def test_web_context_model_payload_redacts_query_and_fragment() -> None:
+    context = WebContext(
+        requested_url=(
+            "https://example.org/docs?access_token=request-secret"
+            "#request-fragment"
+        ),
+        final_url=(
+            "https://example.org/final?signature=final-secret"
+            "#final-fragment"
+        ),
+        title="Docs",
+        content="Reference content",
+        fetched_at="2026-09-19T18:00:00+00:00",
+    )
+
+    payload = context.as_dict()
+    serialized = str(payload)
+
+    assert payload["requested_url"] == "https://example.org/docs"
+    assert payload["final_url"] == "https://example.org/final"
+    assert "request-secret" not in serialized
+    assert "request-fragment" not in serialized
+    assert "final-secret" not in serialized
+    assert "final-fragment" not in serialized
+
+
+def test_add_web_context_keeps_full_url_internal_but_redacts_cli_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested = (
+        "http://localhost:8080/docs?access_token=request-secret"
+        "#request-fragment"
+    )
+    seen: list[str] = []
+
+    async def fake_fetch(url: str, **_: object) -> WebContext:
+        seen.append(url)
+        return WebContext(
+            requested_url=url,
+            final_url=(
+                "http://localhost:8080/final?signature=final-secret"
+                "#final-fragment"
+            ),
+            title="Local API",
+            content="Users API",
+            fetched_at="2026-09-19T18:00:00+00:00",
+        )
+
+    monkeypatch.setattr("cli_agent.web_context_agent.fetch_web_context", fake_fetch)
+    agent = make_agent(tmp_path)
+
+    answer = asyncio.run(agent.ask(f"add_web_context {requested}"))
+
+    assert seen == [requested]
+    assert agent._web_contexts[0].requested_url == requested
+    assert "http://localhost:8080/final" in answer
+    assert "request-secret" not in answer
+    assert "request-fragment" not in answer
+    assert "final-secret" not in answer
+    assert "final-fragment" not in answer
+
+
+def test_model_reference_context_does_not_disclose_url_secrets(
+    tmp_path: Path,
+) -> None:
+    model = RecordingModel()
+    agent = make_agent(tmp_path, model)
+    agent._web_contexts.append(
+        WebContext(
+            requested_url=(
+                "http://localhost:8080/docs?access_token=request-secret"
+                "#request-fragment"
+            ),
+            final_url=(
+                "http://localhost:8080/final?signature=final-secret"
+                "#final-fragment"
+            ),
+            title="Local API",
+            content="Users API\nGET /users",
+            fetched_at="2026-09-19T18:00:00+00:00",
+        )
+    )
+
+    assert asyncio.run(agent.ask("Welche API ist beschrieben?")) == "ok"
+
+    reference_content = model.calls[-1][0][-2]["content"]
+    assert "http://localhost:8080/docs" in reference_content
+    assert "http://localhost:8080/final" in reference_content
+    assert "request-secret" not in reference_content
+    assert "request-fragment" not in reference_content
+    assert "final-secret" not in reference_content
+    assert "final-fragment" not in reference_content
 
 
 def test_add_web_context_is_session_command_not_history(
