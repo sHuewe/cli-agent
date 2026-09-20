@@ -1090,7 +1090,7 @@ async def run_flow(
                     ),
                     mutation_protected_paths=mutation_protected_paths,
                     dump_file_prefix=(
-                        f"{step.step_id}_{index}"
+                        f"{step.step_id}.foreach-{index}"
                         if step.foreach is not None
                         else step.step_id
                     ),
