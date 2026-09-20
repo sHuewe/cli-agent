@@ -77,7 +77,8 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         if dump_file_prefix is not None:
             if (
                 not dump_file_prefix
-                or Path(dump_file_prefix).name != dump_file_prefix
+                or "/" in dump_file_prefix
+                or "\\" in dump_file_prefix
                 or dump_file_prefix in {".", ".."}
             ):
                 raise ValueError("dump_file_prefix muss ein einfacher Dateipräfix sein.")
