@@ -24,6 +24,7 @@ from .execution import (
     ExecutionDependencies,
     OneShotRunOptions,
     apply_model_override,
+    build_preapproval_callback,
     apply_workspace_access_override,
     os_mcp_server_config,
     run_once,
@@ -80,15 +81,10 @@ async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> boo
 
 
 def build_approval_callback(preapproved_tools: Iterable[str]) -> Callable[[str, dict[str, object]], Awaitable[bool | str]]:
-    approved = frozenset(preapproved_tools)
-
-    async def callback(tool_name: str, arguments: dict[str, object]) -> bool | str:
-        if tool_name in approved:
-            logger.info("tool_call_cli_preapproved name=%s", tool_name)
-            return True
-        return await approve_tool_call(tool_name, arguments)
-
-    return callback
+    return build_preapproval_callback(
+        preapproved_tools,
+        fallback=approve_tool_call,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
