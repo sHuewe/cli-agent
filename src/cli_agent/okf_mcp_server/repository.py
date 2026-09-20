@@ -82,18 +82,12 @@ class OkfRepository(RepositoryMetadataMixin):
             }
 
         entries: list[dict[str, Any]] = []
+        inspected_candidates = 0
         visible_entries = sorted(
             (entry for entry in directory.iterdir() if not entry.name.startswith(".")),
             key=lambda entry: (not entry.is_dir(), entry.name.casefold()),
         )
         for entry in visible_entries:
-            if len(entries) >= self.max_index_entries:
-                warnings.append(
-                    "Index wurde nach "
-                    f"{self.max_index_entries} Einträgen abgeschnitten."
-                )
-                break
-
             relative_path = self.workspace.relative(entry)
             try:
                 safe_entry = self.workspace.resolve(relative_path)
@@ -103,7 +97,24 @@ class OkfRepository(RepositoryMetadataMixin):
                 )
                 continue
 
-            if safe_entry.is_dir():
+            is_directory = safe_entry.is_dir()
+            is_markdown = (
+                safe_entry.is_file()
+                and safe_entry.suffix.casefold() == ".md"
+                and safe_entry.name != "index.md"
+            )
+            if not is_directory and not is_markdown:
+                continue
+
+            if inspected_candidates >= self.max_index_entries:
+                warnings.append(
+                    "Index-Prüfung wurde nach "
+                    f"{self.max_index_entries} Kandidaten abgeschnitten."
+                )
+                break
+            inspected_candidates += 1
+
+            if is_directory:
                 entries.append(
                     {
                         "kind": "directory",
@@ -113,10 +124,6 @@ class OkfRepository(RepositoryMetadataMixin):
                 )
                 continue
 
-            if not safe_entry.is_file() or safe_entry.suffix.casefold() != ".md":
-                continue
-            if safe_entry.name == "index.md":
-                continue
             if safe_entry.name == "log.md":
                 entries.append(
                     {
@@ -130,8 +137,8 @@ class OkfRepository(RepositoryMetadataMixin):
             metadata = self._concept_metadata(safe_entry)
             if metadata is None:
                 # Non-OKF Markdown is intentionally invisible to the knowledge
-                # tools. This prevents a broadly chosen root from turning into
-                # a generic Markdown file reader.
+                # tools. Count it toward the inspection budget so an untrusted
+                # directory cannot trigger unbounded full-file parsing.
                 continue
             entries.append(self._concept_summary(relative_path, metadata))
 
