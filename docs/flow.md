@@ -41,7 +41,7 @@ id = "discover"
 config = "config-discover.toml"
 model = "qwen3.5:9b"
 prompt_file = "prompts/discover.md"
-add_file_context = "manual.txt"
+add_file_context = ["manual.txt", "architecture.md"]
 add_web_context = [
   "https://docs.example/reference",
 ]
@@ -79,10 +79,13 @@ Schritt explizit auf `none`, `read` oder `write` gesetzt. Ohne Angabe gilt
 Workspace-OS-MCP in einen Flow-Schritt hineintragen.
 
 `add_file_context` entspricht dem CLI-Dateikontext (`--add-file-context`,
-Alias von `--context-file`) und lädt genau eine explizit gewählte UTF-8-Datei
-aus dem festen Workspace als nicht vertrauenswürdigen Referenzkontext. Der Pfad
-wird vor dem Agentenlauf durch dieselben Workspace-, Sensitive-File-, Symlink-
-und Hardlink-Prüfungen wie beim normalen CLI validiert.
+Alias von `--context-file`) und akzeptiert entweder einen einzelnen Pfad oder
+eine Liste von Pfaden. Im normalen CLI sind beide Schalter wiederholbar. Alle
+explizit gewählten UTF-8-Dateien werden aus dem festen Workspace als nicht
+vertrauenswürdiger Referenzkontext geladen. Jeder Pfad wird vor dem Agentenlauf
+durch dieselben Workspace-, Sensitive-File-, Symlink- und Hardlink-Prüfungen
+validiert; zusätzlich gilt ein kumulatives Größenlimit über alle ausgewählten
+Context-Dateien.
 
 `add_web_context` entspricht dem wiederholbaren CLI-Schalter
 `--add-web-context`. Im Flow wird dafür eine Liste von URLs angegeben; sie
