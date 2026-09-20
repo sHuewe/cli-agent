@@ -388,15 +388,19 @@ cli-agent-flow run flow.toml --workspace C:\Projekte\mein-projekt
 Der Workspace wird einmal für den gesamten Flow festgelegt. Ein einzelner Schritt
 kann ihn nicht überschreiben. Jeder Schritt darf dagegen seine eigene normale
 `cli-agent`-Konfiguration auswählen und damit z. B. ein anderes Modell oder
-andere benutzerseitig konfigurierte MCP-Server verwenden. Die maschinenweite
-Admin-Policy bleibt unverändert maßgeblich.
+andere benutzerseitig konfigurierte MCP-Server verwenden. Zusätzlich wird der
+Workspace-Zugriff pro Schritt explizit mit `workspace_access = "none" | "read" |
+"write"` festgelegt. Die maschinenweite Admin-Policy bleibt unverändert
+maßgeblich.
 
 Die erste Version führt Schritte bewusst sequenziell aus. Ein Schritt kann den
 strikt als JSON geparsten Output eines vorherigen Schritts über `foreach`
 auffächern. Aus den Elementen dürfen nur Variablen und workspace-lokale
 Output-Pfade parametrisiert werden; Workspace, Config, Prompt-Datei,
 Context-Datei und Tool-Capabilities werden ausschließlich durch die statische
-Flow-Datei festgelegt.
+Flow-Datei festgelegt. Die einzelnen Schritte starten keinen separaten
+`cli-agent`-Prozess, sondern verwenden direkt denselben internen One-Shot-
+Execution-Core wie der normale CLI-One-Shot-Modus.
 
 Beispiel:
 
@@ -410,6 +414,7 @@ prompt_file = "prompts/discover.md"
 context_file = "manual.txt"
 output = "work/items.json"
 overwrite_output = true
+workspace_access = "read"
 
 [[steps]]
 id = "process"
@@ -418,7 +423,7 @@ prompt_file = "prompts/process.md"
 foreach = "steps.discover.output.items"
 output = "result/${item.id}.md"
 overwrite_output = true
-os_access = "write"
+workspace_access = "write"
 
 [steps.vars]
 id = "${item.id}"
