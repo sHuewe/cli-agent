@@ -294,3 +294,107 @@ def test_explicit_index_bounds_and_deduplicates_link_validation(
         "angebotene Folgepfade sichtbar sind."
     ]
     assert calls == [target.resolve()]
+
+
+def test_knowledge_index_rejects_file_path(tmp_path: Path) -> None:
+    (tmp_path / "index.md").write_text("[Concept](concept.md)\n", encoding="utf-8")
+    (tmp_path / "concept.md").write_text(_concept(), encoding="utf-8")
+    repository = OkfRepository.from_directory(tmp_path)
+
+    with pytest.raises(OkfRepositoryError, match="kein OKF-Ordner"):
+        repository.knowledge_index("concept.md")
+
+
+def test_knowledge_read_classifies_index_and_log(tmp_path: Path) -> None:
+    (tmp_path / "index.md").write_text("[Log](log.md)\n", encoding="utf-8")
+    (tmp_path / "log.md").write_text("Operational notes", encoding="utf-8")
+    repository = OkfRepository.from_directory(tmp_path)
+
+    root = repository.knowledge_read("index.md")
+    log = repository.knowledge_read("log.md")
+
+    assert root["kind"] == "index"
+    assert root["summary"] is None
+    assert log["kind"] == "log"
+    assert log["summary"] is None
+
+
+def test_knowledge_read_rejects_missing_file(tmp_path: Path) -> None:
+    (tmp_path / "index.md").write_text("Root", encoding="utf-8")
+    repository = OkfRepository.from_directory(tmp_path)
+
+    with pytest.raises(OkfRepositoryError, match="Pfad konnte nicht aufgelöst werden"):
+        repository.knowledge_read("missing.md")
+
+
+def test_repository_rejects_hardlinked_root_index(tmp_path: Path) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("Root", encoding="utf-8")
+    root_index = tmp_path / "index.md"
+    try:
+        root_index.hardlink_to(source)
+    except (OSError, NotImplementedError):
+        pytest.skip("hardlinks are not available in this test environment")
+
+    with pytest.raises(OkfRepositoryError, match="mehreren Hardlinks"):
+        OkfRepository.from_directory(tmp_path)
+
+
+def test_knowledge_read_rejects_hardlinked_concept(tmp_path: Path) -> None:
+    (tmp_path / "index.md").write_text("[Concept](concept.md)\n", encoding="utf-8")
+    source = tmp_path / "source.md"
+    source.write_text(_concept(), encoding="utf-8")
+    concept = tmp_path / "concept.md"
+    try:
+        concept.hardlink_to(source)
+    except (OSError, NotImplementedError):
+        pytest.skip("hardlinks are not available in this test environment")
+
+    repository = OkfRepository.from_directory(tmp_path)
+
+    with pytest.raises(OkfRepositoryError, match="mehreren Hardlinks"):
+        repository.knowledge_read("concept.md")
+
+
+def test_synthesized_index_skips_symlink_escape_with_warning(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-okf"
+    outside.mkdir()
+    (outside / "secret.md").write_text(_concept(title="Secret"), encoding="utf-8")
+
+    area = tmp_path / "area"
+    area.mkdir()
+    link = area / "escape.md"
+    try:
+        link.symlink_to(outside / "secret.md")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available in this test environment")
+
+    (tmp_path / "index.md").write_text("[Area](area)\n", encoding="utf-8")
+    repository = OkfRepository.from_directory(tmp_path)
+    result = repository.knowledge_index("area")
+
+    assert result["entries"] == []
+    assert result["warnings"] == [
+        "Unsicherer oder nach außen führender Link wurde ausgelassen."
+    ]
+
+
+def test_knowledge_read_reports_truncated_internal_links(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text(_concept(title="A"), encoding="utf-8")
+    (tmp_path / "b.md").write_text(_concept(title="B"), encoding="utf-8")
+    (tmp_path / "concept.md").write_text(
+        _concept(title="Main")
+        + "[A](a.md)\n"
+        + "[B](b.md)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "index.md").write_text("[Main](concept.md)\n", encoding="utf-8")
+    repository = OkfRepository.from_directory(
+        tmp_path,
+        max_index_entries=1,
+    )
+
+    result = repository.knowledge_read("concept.md")
+
+    assert len(result["internal_links"]) == 1
+    assert result["warning"] == "Interne Links wurden auf 1 Einträge begrenzt."

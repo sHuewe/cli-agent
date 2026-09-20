@@ -20,6 +20,15 @@ from .file_context import (
     is_local_agent_command,
     prepare_file_options,
 )
+from .execution import (
+    ExecutionDependencies,
+    OneShotRunOptions,
+    apply_model_override,
+    build_preapproval_callback,
+    apply_workspace_access_override,
+    os_mcp_server_config,
+    run_once,
+)
 from .logging_setup import configure_logging
 from .mcp_contracts import tool_contract_fingerprint
 from .model_factory import create_model_client
@@ -72,15 +81,10 @@ async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> boo
 
 
 def build_approval_callback(preapproved_tools: Iterable[str]) -> Callable[[str, dict[str, object]], Awaitable[bool | str]]:
-    approved = frozenset(preapproved_tools)
-
-    async def callback(tool_name: str, arguments: dict[str, object]) -> bool | str:
-        if tool_name in approved:
-            logger.info("tool_call_cli_preapproved name=%s", tool_name)
-            return True
-        return await approve_tool_call(tool_name, arguments)
-
-    return callback
+    return build_preapproval_callback(
+        preapproved_tools,
+        fallback=approve_tool_call,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,7 +96,20 @@ def build_parser() -> argparse.ArgumentParser:
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
-    parser.add_argument("--context-file", type=Path, default=None, metavar="FILE", help="Add one explicit UTF-8 text file from the workspace as untrusted reference context.")
+    parser.add_argument(
+        "--context-file",
+        "--add-file-context",
+        dest="context_files",
+        action="append",
+        type=Path,
+        default=[],
+        metavar="FILE",
+        help=(
+            "Add one explicit UTF-8 text file from the workspace as "
+            "untrusted reference context. Repeat for multiple files. "
+            "--add-file-context is an alias."
+        ),
+    )
     parser.add_argument("--prompt-file", type=Path, default=None, metavar="FILE", help="Read the one-shot user prompt from one explicit UTF-8 text file inside the workspace. Supports {{var:name}} template variables.")
     parser.add_argument("--var", action="append", default=[], metavar="NAME=VALUE", help="Set one prompt-template variable. Repeat for multiple variables.")
     parser.add_argument("--output", type=Path, default=None, metavar="FILE", help="Write the latest model answer to a workspace-local UTF-8 text file in addition to stdout.")
@@ -121,22 +138,18 @@ def build_admin_parser() -> argparse.ArgumentParser:
 
 
 def _os_mcp_server_config(access: str) -> McpServerConfig:
-    if access not in {"read", "write"}:
-        raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
-    return McpServerConfig(name=OS_MCP_SERVER_NAME, transport="stdio", command="{python}", args=("-m", "cli_agent.os_mcp_server", "--project-directory", "{workspace_directory}", "--config-file", "{config_file}", "--access", access), config={"allow_write_files": access == "write"}, built_in=True)
+    return os_mcp_server_config(access)
 
 
 def apply_mcp_cli_overrides(config: AppConfig, *, os_access: str | None) -> AppConfig:
-    if os_access is None:
-        return config
-    servers = tuple(server for server in config.mcp_servers if server.name != OS_MCP_SERVER_NAME) + (_os_mcp_server_config(os_access),)
-    return replace(config, mcp_servers=servers)
+    return apply_workspace_access_override(
+        config,
+        workspace_access=os_access,
+    )
 
 
 def apply_model_cli_override(config: AppConfig, *, model: str | None) -> AppConfig:
-    if model is None:
-        return config
-    return replace(config, model=replace(config.model, model=model))
+    return apply_model_override(config, model=model)
 
 
 def exception_details(exc: BaseException) -> str:
@@ -376,9 +389,9 @@ async def run(args: argparse.Namespace) -> None:
     if prompt_file_arg is not None and args.prompt:
         raise ValueError("--prompt-file darf nicht zusammen mit einem positional Prompt verwendet werden.")
 
-    file_context, prompt_file, output_target = prepare_file_options(
+    file_contexts, prompt_file, output_target = prepare_file_options(
         workspace,
-        context_file=getattr(args, "context_file", None),
+        context_files=tuple(getattr(args, "context_files", ()) or ()),
         prompt_file=prompt_file_arg,
         output=getattr(args, "output", None),
         overwrite_output=bool(getattr(args, "overwrite_output", False)),
@@ -419,9 +432,59 @@ async def run(args: argparse.Namespace) -> None:
     else:
         one_shot_prompt = " ".join(args.prompt) if args.prompt else None
 
-    configure_logging(config.logging)
-    model_client = create_model_client(config.model, network=admin_config.network, credential_rules=admin_config.model_credentials)
+    print(f"Arbeitsordner: {workspace}")
+    print(f"Admin-Policy: {default_admin_config_file()}")
+    print("MCP-Server: " + (", ".join(server.name for server in config.mcp_servers) or "(keine)"))
+    print(f"Modell: {config.model.model} ({config.model.provider}, {config.model.base_url})")
+    if config.logging.enabled:
+        print(f"Logdatei: {config.logging.file}")
+    if config.okf:
+        print(f"OKF-Repository: {config.okf.repository}")
+    for file_context in file_contexts:
+        print(
+            f"Context-Datei: {file_context.relative_path} "
+            f"({len(file_context.content)} Zeichen)"
+        )
+    if prompt_file is not None:
+        print(f"Prompt-Datei: {prompt_file.relative_path} ({len(prompt_file.content)} Zeichen)")
+    if output_target is not None:
+        print(f"Output-Datei: {output_target.path}")
+
     approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
+
+    if one_shot_prompt is not None:
+        result = await run_once(
+            OneShotRunOptions(
+                workspace=workspace,
+                prompt=one_shot_prompt,
+                config_file=args.config,
+                model=args.model,
+                workspace_access=args.os_access,
+                add_web_context=tuple(getattr(args, "add_web_context", ()) or ()),
+                approval_callback=approval_callback,
+                prepared_file_contexts=file_contexts,
+                prepared_output_target=output_target,
+            ),
+            dependencies=ExecutionDependencies(
+                load_config=load_config,
+                load_admin_config=load_admin_config,
+                configure_logging=configure_logging,
+                create_model_client=create_model_client,
+                agent_type=WebContextCliAgent,
+            ),
+        )
+        for status in result.web_context_statuses:
+            print(sanitize_terminal_text(status, multiline=True))
+        print(sanitize_terminal_text(result.answer, multiline=True))
+        print(result.usage)
+        return
+
+    configure_logging(config.logging)
+    model_client = create_model_client(
+        config.model,
+        network=admin_config.network,
+        credential_rules=admin_config.model_credentials,
+    )
     agent = WebContextCliAgent(
         workspace,
         model_client,
@@ -434,27 +497,8 @@ async def run(args: argparse.Namespace) -> None:
         mcp_policy=admin_config.mcp,
         approval_callback=approval_callback,
         okf=config.okf,
-        file_context=file_context,
+        file_contexts=file_contexts,
     )
-    print(f"Arbeitsordner: {workspace}")
-    print(f"Admin-Policy: {default_admin_config_file()}")
-    print("MCP-Server: " + (", ".join(server.name for server in config.mcp_servers) or "(keine)"))
-    print(f"Modell: {config.model.model} ({config.model.provider}, {config.model.base_url})")
-    if config.logging.enabled:
-        print(f"Logdatei: {config.logging.file}")
-    if config.okf:
-        print(f"OKF-Repository: {config.okf.repository}")
-    if file_context is not None:
-        print(f"Context-Datei: {file_context.relative_path} ({len(file_context.content)} Zeichen)")
-    if prompt_file is not None:
-        print(f"Prompt-Datei: {prompt_file.relative_path} ({len(prompt_file.content)} Zeichen)")
-    if output_target is not None:
-        print(f"Output-Datei: {output_target.path}")
-
-    def emit_answer(prompt: str, answer: str) -> None:
-        print(sanitize_terminal_text(answer, multiline=True))
-        if output_target is not None and not is_local_agent_command(prompt):
-            output_target.write_text(answer)
 
     async with agent:
         for url in getattr(args, "add_web_context", ()):
@@ -464,10 +508,6 @@ async def run(args: argparse.Namespace) -> None:
                     multiline=True,
                 )
             )
-        if one_shot_prompt is not None:
-            emit_answer(one_shot_prompt, await agent.ask(one_shot_prompt))
-            print(await agent.ask("tokens"))
-            return
         print("Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung.")
         while True:
             try:
@@ -480,7 +520,10 @@ async def run(args: argparse.Namespace) -> None:
             if not prompt:
                 continue
             try:
-                emit_answer(prompt, await agent.ask(prompt))
+                answer = await agent.ask(prompt)
+                print(sanitize_terminal_text(answer, multiline=True))
+                if output_target is not None and not is_local_agent_command(prompt):
+                    output_target.write_text(answer)
             except Exception as exc:
                 print_error(exc, debug=args.debug)
 

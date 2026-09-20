@@ -453,3 +453,165 @@ def test_not_with_supported_pattern_keeps_json_schema_semantics() -> None:
 
     assert error is not None
     assert "should not be valid" in error
+
+
+def test_unevaluated_properties_tracks_dependent_schemas() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string"},
+        },
+        "dependentSchemas": {
+            "mode": {
+                "properties": {
+                    "detail": {"type": "integer"},
+                }
+            }
+        },
+        "unevaluatedProperties": False,
+    }
+
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"mode": "full", "detail": 3},
+        )
+        is None
+    )
+    assert "not of type 'integer'" in str(
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"mode": "full", "detail": "three"},
+        )
+    )
+
+
+@pytest.mark.parametrize("keyword", ["allOf", "anyOf", "oneOf"])
+def test_unevaluated_properties_tracks_successful_combinator_branches(
+    keyword: str,
+) -> None:
+    first = {
+        "properties": {"a": {"type": "integer"}},
+        "required": ["a"],
+    }
+    second = {
+        "properties": {"b": {"type": "integer"}},
+        "required": ["b"],
+    }
+    branches = [first, second]
+    arguments = {"a": 1, "b": 2} if keyword == "allOf" else {"a": 1}
+    if keyword == "allOf":
+        schema = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            keyword: branches,
+            "unevaluatedProperties": False,
+        }
+    else:
+        schema = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            keyword: branches,
+            "unevaluatedProperties": False,
+        }
+
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments=arguments,
+        )
+        is None
+    )
+
+
+def test_unevaluated_properties_tracks_if_then_and_else() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string"},
+        },
+        "if": {
+            "properties": {"kind": {"const": "a"}},
+            "required": ["kind"],
+        },
+        "then": {
+            "properties": {"a": {"type": "integer"}},
+        },
+        "else": {
+            "properties": {"b": {"type": "integer"}},
+        },
+        "unevaluatedProperties": False,
+    }
+
+    for arguments in (
+        {"kind": "a", "a": 1},
+        {"kind": "b", "b": 2},
+    ):
+        assert (
+            limits.validate_mcp_tool_arguments(
+                tool_name="external__search",
+                schema=schema,
+                arguments=arguments,
+            )
+            is None
+        )
+
+
+def test_draft2019_unevaluated_properties_tracks_dependent_and_conditionals() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2019-09/schema",
+        "type": "object",
+        "properties": {"mode": {"type": "string"}},
+        "dependentSchemas": {
+            "mode": {
+                "if": {
+                    "properties": {"mode": {"const": "a"}},
+                },
+                "then": {
+                    "properties": {"a": {"type": "integer"}},
+                },
+                "else": {
+                    "properties": {"b": {"type": "integer"}},
+                },
+            }
+        },
+        "unevaluatedProperties": False,
+    }
+
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"mode": "a", "a": 1},
+        )
+        is None
+    )
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"mode": "b", "b": 2},
+        )
+        is None
+    )
+
+
+def test_metadata_rejects_non_object_and_non_serializable_schemas() -> None:
+    with pytest.raises(RuntimeError, match="kein JSON-Objekt"):
+        limits.validate_mcp_server_metadata(
+            server_name="broken",
+            instructions=None,
+            tools=[tool(schema=["not", "an", "object"])],
+        )
+
+    with pytest.raises(RuntimeError, match="serialisierbares Schema"):
+        limits.validate_mcp_server_metadata(
+            server_name="broken",
+            instructions=None,
+            tools=[tool(schema={"default": object()})],
+        )

@@ -5,7 +5,12 @@ from typing import Any
 
 import httpx
 
-from .model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
+from .model import (
+    CONTEXT_LIMIT_MARGIN,
+    ContextLimitReachedError,
+    ModelRequestError,
+    TokenUsage,
+)
 from .model_http import (
     MAX_MODEL_ERROR_BODY_BYTES,
     MAX_MODEL_RESPONSE_BYTES,
@@ -19,7 +24,7 @@ from .network_policy import LOCAL_HOSTS, validate_http_url
 MAX_HTTP_ERROR_DETAIL_CHARS = 4_000
 
 
-class OpenAIError(RuntimeError):
+class OpenAIError(ModelRequestError):
     pass
 
 
@@ -262,9 +267,12 @@ class OpenAIClient:
                         if truncated and detail:
                             detail += "... [HTTP-Fehlerantwort gekürzt]"
                         suffix = f": {detail}" if detail else ""
+                        status = response.status_code
+                        retryable = status == 429 or 500 <= status <= 599
                         raise OpenAIError(
                             f"OpenAI-kompatibles Modell unter {self.base_url} hat die Anfrage "
-                            f"mit HTTP {response.status_code} abgelehnt{suffix}"
+                            f"mit HTTP {status} abgelehnt{suffix}",
+                            retryable=retryable,
                         ) from exc
                     data = await read_bounded_json_response(
                         response,
@@ -274,16 +282,21 @@ class OpenAIClient:
             raise
         except ModelResponseTooLargeError as exc:
             raise OpenAIError(
-                f"OpenAI-kompatibles Modell unter {self.base_url}: {exc}"
+                f"OpenAI-kompatibles Modell unter {self.base_url}: {exc}",
+                retryable=False,
             ) from exc
         except httpx.HTTPError as exc:
             raise OpenAIError(
                 f"OpenAI-kompatibles Modell unter "
-                f"{self.base_url} nicht erreichbar: {exc}"
+                f"{self.base_url} nicht erreichbar: {exc}",
+                retryable=True,
             ) from exc
 
         if not isinstance(data, dict):
-            raise OpenAIError("Unerwartete Modellantwort: JSON-Root ist kein Objekt.")
+            raise OpenAIError(
+                "Unerwartete Modellantwort: JSON-Root ist kein Objekt.",
+                retryable=False,
+            )
         self.last_usage = self._token_usage(data)
         self.usage_history.append(self.last_usage)
         self._check_context_limit()
@@ -291,6 +304,9 @@ class OpenAIClient:
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise OpenAIError(f"Unerwartete Modellantwort: {data}") from exc
+            raise OpenAIError(
+                f"Unerwartete Modellantwort: {data}",
+                retryable=False,
+            ) from exc
 
         return self._normalize_message(message)

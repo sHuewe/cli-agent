@@ -449,3 +449,193 @@ def test_disabling_server_closes_transport_and_reenable_reconnects(tmp_path: Pat
         assert len(resources) == 2; assert resources[1].closed is False
         await parent.aclose(); assert resources[1].closed is True
     asyncio.run(exercise())
+
+
+def test_approval_callback_missing_or_failing_is_fail_closed(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+
+    assert asyncio.run(agent._approve_tool_call("external__write", {})) is False
+
+    async def failing_callback(_tool_name, _arguments):
+        raise RuntimeError("approval backend failed")
+
+    agent.approval_callback = failing_callback
+    assert asyncio.run(agent._approve_tool_call("external__write", {})) is False
+
+
+def test_session_approval_is_remembered_for_exact_exposed_tool(
+    tmp_path: Path,
+) -> None:
+    async def approve_for_session(_tool_name, _arguments):
+        return "session"
+
+    agent = make_agent(tmp_path)
+    agent.approval_callback = approve_for_session
+    external = McpServerConfig(name="external", command="external-mcp")
+
+    assert (
+        asyncio.run(
+            agent._approve_tool_call(
+                "external__write",
+                {"path": "a.txt"},
+            )
+        )
+        is True
+    )
+    assert (
+        agent._requires_approval(
+            external,
+            "write",
+            "external__write",
+        )
+        is False
+    )
+    assert (
+        agent._requires_approval(
+            external,
+            "delete",
+            "external__delete",
+        )
+        is True
+    )
+
+
+def test_trusted_instructions_require_exact_server_identity(
+    tmp_path: Path,
+) -> None:
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="docs",
+                transport="stdio",
+                command="/trusted/docs-mcp",
+                trust_instructions=True,
+            ),
+        )
+    )
+    agent = make_agent(tmp_path, mcp_policy=policy)
+
+    matching = McpServerConfig(
+        name="docs",
+        command="/trusted/docs-mcp",
+    )
+    wrong_command = McpServerConfig(
+        name="docs",
+        command="/other/docs-mcp",
+    )
+    built_in = McpServerConfig(
+        name="os",
+        built_in=True,
+    )
+
+    assert agent._instructions_are_trusted(matching) is True
+    assert agent._instructions_are_trusted(wrong_command) is False
+    assert agent._instructions_are_trusted(built_in) is True
+
+
+def test_http_trusted_identity_fails_closed_on_invalid_runtime_placeholder(
+    tmp_path: Path,
+) -> None:
+    trusted = TrustedMcpServer(
+        name="docs",
+        transport="streamable_http",
+        url="https://mcp.internal/{config_file}",
+    )
+    agent = make_agent(tmp_path)
+    server = McpServerConfig(
+        name="docs",
+        transport="streamable_http",
+        url="https://mcp.internal/{config_file}",
+    )
+
+    assert agent._trusted_server_matches(server, trusted) is False
+
+
+def test_auto_approval_fails_closed_when_current_contract_is_missing(
+    tmp_path: Path,
+) -> None:
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="continuous",
+                transport="stdio",
+                command="external-mcp",
+                auto_approve_tools=(
+                    TrustedMcpToolApproval("search", "sha256:missing"),
+                ),
+            ),
+        )
+    )
+    agent = make_agent(tmp_path, mcp_policy=policy)
+    server = McpServerConfig(
+        name="continuous",
+        command="external-mcp",
+    )
+
+    assert agent._requires_approval(
+        server,
+        "search",
+        "continuous__search",
+    ) is True
+
+
+def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protected = str(tmp_path / "{config_file}" / "{workspace_directory}.md")
+    server = McpServerConfig(
+        name="os",
+        command="{python}",
+        args=("--config", "{config_file}"),
+        literal_args=("--mutation-protected-path", protected),
+        built_in=True,
+    )
+    agent = CliAgent(
+        tmp_path,
+        OllamaClient(base_url="http://localhost:11434", model="test"),
+        (),
+        config_file=tmp_path / "config.toml",
+    )
+    captured = {}
+
+    class DummyContext:
+        async def __aenter__(self):
+            return object(), object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class DummySession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def initialize(self):
+            return SimpleNamespace(instructions=None)
+
+    def fake_stdio_client(parameters):
+        captured["parameters"] = parameters
+        return DummyContext()
+
+    monkeypatch.setattr("cli_agent.agent_mcp.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("cli_agent.agent_mcp.ClientSession", lambda *_args: DummySession())
+
+    async def exercise() -> None:
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        try:
+            await agent._connect_server(stack, server)
+        finally:
+            await stack.aclose()
+
+    asyncio.run(exercise())
+
+    args = captured["parameters"].args
+    assert args[0] == "--config"
+    assert args[1] == str(tmp_path / "config.toml")
+    assert args[-2:] == ["--mutation-protected-path", protected]

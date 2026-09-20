@@ -4,7 +4,12 @@ from typing import Any
 
 import httpx
 
-from .model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
+from .model import (
+    CONTEXT_LIMIT_MARGIN,
+    ContextLimitReachedError,
+    ModelRequestError,
+    TokenUsage,
+)
 from .model_http import (
     MAX_MODEL_RESPONSE_BYTES,
     ModelResponseTooLargeError,
@@ -16,7 +21,7 @@ ctx_large = 24576
 ctx_small = 8192
 
 
-class OllamaError(RuntimeError):
+class OllamaError(ModelRequestError):
     """Ollama could not provide a usable response."""
 
 
@@ -128,19 +133,36 @@ class OllamaClient:
                         max_bytes=MAX_MODEL_RESPONSE_BYTES,
                     )
         except ModelResponseTooLargeError as exc:
-            raise OllamaError(f"Ollama unter {self.base_url}: {exc}") from exc
+            raise OllamaError(
+                f"Ollama unter {self.base_url}: {exc}",
+                retryable=False,
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            retryable = status == 429 or 500 <= status <= 599
+            raise OllamaError(
+                f"Ollama unter {self.base_url} antwortete mit HTTP {status}: {exc}",
+                retryable=retryable,
+            ) from exc
         except httpx.HTTPError as exc:
             raise OllamaError(
-                f"Ollama unter {self.base_url} ist nicht erreichbar: {exc}"
+                f"Ollama unter {self.base_url} ist nicht erreichbar: {exc}",
+                retryable=True,
             ) from exc
 
         if not isinstance(data, dict):
-            raise OllamaError("Unerwartete Ollama-Antwort: JSON-Root ist kein Objekt.")
+            raise OllamaError(
+                "Unerwartete Ollama-Antwort: JSON-Root ist kein Objekt.",
+                retryable=False,
+            )
         self.last_usage = self._token_usage(data)
         self.usage_history.append(self.last_usage)
         self._check_context_limit()
 
         message = data.get("message")
         if not isinstance(message, dict):
-            raise OllamaError(f"Unerwartete Ollama-Antwort: {data}")
+            raise OllamaError(
+                f"Unerwartete Ollama-Antwort: {data}",
+                retryable=False,
+            )
         return message

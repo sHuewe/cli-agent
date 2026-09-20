@@ -6,9 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from cli_agent.admin_config import WebProviderConfig
 from cli_agent.model import TokenUsage
 from cli_agent.web_context import (
     WebContext,
+    _confluence_api_url,
+    _confluence_document,
+    _confluence_page_reference,
     _extract_web_content,
     _validate_web_url,
     redact_url_for_display,
@@ -548,3 +552,107 @@ def test_add_web_context_non_url_prose_reaches_model(tmp_path: Path) -> None:
 
     assert answer == "ok"
     assert len(model.calls) == 1
+
+
+def _confluence_provider() -> WebProviderConfig:
+    return WebProviderConfig(
+        provider_type="confluence",
+        base_url="https://wiki.example.org/confluence",
+        token_env="CONFLUENCE_TOKEN",
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://wiki.example.org/confluence/pages/viewpage.action?pageId=12345",
+            ("id", "12345"),
+        ),
+        (
+            "https://wiki.example.org/confluence/pages/67890/Page-Title",
+            ("id", "67890"),
+        ),
+        (
+            "https://wiki.example.org/confluence/display/DEV/My+Page",
+            ("title", ("DEV", "My Page")),
+        ),
+    ],
+)
+def test_confluence_page_reference_supported_forms(url, expected) -> None:
+    assert _confluence_page_reference(
+        url,
+        _confluence_provider(),
+    ) == expected
+
+
+def test_confluence_page_reference_rejects_invalid_page_id() -> None:
+    with pytest.raises(ValueError, match="numerisch"):
+        _confluence_page_reference(
+            "https://wiki.example.org/confluence/pages/viewpage.action?pageId=abc",
+            _confluence_provider(),
+        )
+
+
+def test_confluence_api_url_for_id_and_title() -> None:
+    provider = _confluence_provider()
+
+    by_id = _confluence_api_url(provider, ("id", "123"))
+    by_title = _confluence_api_url(
+        provider,
+        ("title", ("DEV", "My Page")),
+    )
+
+    assert "/rest/api/content/123?" in by_id
+    assert "expand=body.view%2Cbody.storage" in by_id
+    assert "/rest/api/content?" in by_title
+    assert "spaceKey=DEV" in by_title
+    assert "title=My+Page" in by_title
+
+
+def test_confluence_document_accepts_single_search_result() -> None:
+    title, content = _confluence_document(
+        {
+            "results": [
+                {
+                    "title": "API Docs",
+                    "body": {
+                        "view": {
+                            "value": "<h1>Users API</h1><p>GET /users</p>"
+                        }
+                    },
+                }
+            ]
+        }
+    )
+
+    assert title == "API Docs"
+    assert "Users API" in content
+    assert "GET /users" in content
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"results": []}, "nicht gefunden"),
+        (
+            {"results": [{"title": "A"}, {"title": "B"}]},
+            "nicht eindeutig",
+        ),
+        (
+            {"results": ["invalid"]},
+            "ungültiges Seitenergebnis",
+        ),
+        (
+            {"title": "No body"},
+            "keinen Seiteninhalt",
+        ),
+        (
+            {"title": "Empty", "body": {"view": {"value": "   "}}},
+            "keinen verwertbaren Seiteninhalt",
+        ),
+    ],
+)
+def test_confluence_document_rejects_invalid_payloads(payload, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        _confluence_document(payload)

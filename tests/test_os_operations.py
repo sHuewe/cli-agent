@@ -512,3 +512,33 @@ def test_protected_config_outside_workspace_does_not_affect_workspace(tmp_path) 
     )
 
     assert workspace.read_file("config.toml") == "project file"
+
+
+def test_mutation_protected_path_is_readable_but_not_mutable(tmp_path) -> None:
+    protected = tmp_path / "prompt.md"
+    protected.write_text("trusted prompt", encoding="utf-8")
+    source = tmp_path / "source.md"
+    source.write_text("source", encoding="utf-8")
+    workspace = Workspace.from_directory(
+        tmp_path,
+        McpServerConfig(
+            name="os",
+            config={"allow_write_files": True},
+        ),
+        mutation_protected_paths=(protected,),
+    )
+
+    assert workspace.read_file("prompt.md") == "trusted prompt"
+
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.write_file("prompt.md", "changed")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.delete_file("prompt.md")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.copy_file("source.md", "prompt.md")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.move_file("prompt.md", "moved.md")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.move_file("source.md", "prompt.md")
+
+    assert protected.read_text(encoding="utf-8") == "trusted prompt"

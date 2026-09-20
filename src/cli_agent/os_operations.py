@@ -212,6 +212,7 @@ class Workspace:
     directory: Path
     config: McpServerConfig
     protected_paths: frozenset[Path] = frozenset()
+    mutation_protected_paths: frozenset[Path] = frozenset()
 
     @classmethod
     def from_directory(
@@ -220,26 +221,32 @@ class Workspace:
         config: McpServerConfig,
         *,
         protected_paths: tuple[Path, ...] = (),
+        mutation_protected_paths: tuple[Path, ...] = (),
     ) -> Workspace:
         resolved = directory.resolve()
         if not resolved.is_dir():
             raise WorkspaceError(f"Projekt-Workspace existiert nicht: {resolved}")
 
-        protected: set[Path] = set()
-        for path in protected_paths:
-            protected_path = path.expanduser().resolve(strict=False)
-            try:
-                protected_path.relative_to(resolved)
-            except ValueError:
-                # Paths outside the workspace are unreachable through this
-                # server and therefore need no additional protection here.
-                continue
-            protected.add(protected_path)
+        def collect_workspace_paths(paths: tuple[Path, ...]) -> frozenset[Path]:
+            collected: set[Path] = set()
+            for path in paths:
+                protected_path = path.expanduser().resolve(strict=False)
+                try:
+                    protected_path.relative_to(resolved)
+                except ValueError:
+                    # Paths outside the workspace are unreachable through this
+                    # server and therefore need no additional protection here.
+                    continue
+                collected.add(protected_path)
+            return frozenset(collected)
 
         return cls(
             directory=resolved,
             config=config,
-            protected_paths=frozenset(protected),
+            protected_paths=collect_workspace_paths(protected_paths),
+            mutation_protected_paths=collect_workspace_paths(
+                mutation_protected_paths
+            ),
         )
 
     def resolve_path(self, path: str, *, must_exist: bool = True) -> Path:
@@ -328,8 +335,22 @@ class Workspace:
                 "Agent-Dateien ist über den Workspace-OS-Server nicht erlaubt."
             )
 
-    def _reject_protected_mutation(self, path: Path) -> None:
+    def _is_mutation_protected_path(self, path: Path) -> bool:
         if self._is_protected_path(path):
+            return True
+        try:
+            if path_entry_is_symlink_or_reparse(path):
+                return True
+            resolved = path.resolve(strict=False)
+        except (OSError, RuntimeError):
+            return True
+        return any(
+            resolved == protected or protected in resolved.parents
+            for protected in self.mutation_protected_paths
+        )
+
+    def _reject_protected_mutation(self, path: Path) -> None:
+        if self._is_mutation_protected_path(path):
             raise WorkspaceError(
                 "Das Ändern von Secret-/Credential- oder geschützten "
                 "Workspace-Dateien ist über den Workspace-OS-Server nicht erlaubt."

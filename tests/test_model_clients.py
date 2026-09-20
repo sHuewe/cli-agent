@@ -279,8 +279,10 @@ def test_openai_chat_wraps_http_error(monkeypatch) -> None:
         api_key=None,
     )
 
-    with pytest.raises(OpenAIError, match="nicht erreichbar"):
+    with pytest.raises(OpenAIError, match="nicht erreichbar") as exc_info:
         asyncio.run(client.chat([], []))
+
+    assert exc_info.value.retryable is True
 
 
 def test_openai_chat_rejects_unexpected_response_shape(monkeypatch) -> None:
@@ -388,12 +390,19 @@ def test_ollama_chat_builds_secure_request_and_tracks_usage(monkeypatch) -> None
 def test_ollama_chat_wraps_http_error(monkeypatch) -> None:
     monkeypatch.setattr("cli_agent.ollama.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse(
-        {}, error=httpx.HTTPStatusError("500", request=SimpleNamespace(), response=SimpleNamespace())
+        {},
+        error=httpx.HTTPStatusError(
+            "500",
+            request=SimpleNamespace(),
+            response=SimpleNamespace(status_code=500),
+        ),
     )
     client = OllamaClient(base_url="http://localhost:11434", model="m")
 
-    with pytest.raises(OllamaError, match="nicht erreichbar"):
+    with pytest.raises(OllamaError, match="HTTP 500") as exc_info:
         asyncio.run(client.chat([], []))
+
+    assert exc_info.value.retryable is True
 
 
 def test_ollama_chat_rejects_missing_message(monkeypatch) -> None:
