@@ -376,6 +376,58 @@ Es gibt absichtlich keine Bedingungen, Schleifen oder impliziten
 Environment-Zugriffe. Insbesondere liest die erste Version keine
 `{{ENV:...}}`-Werte aus der Prozessumgebung.
 
+## Multi-Step-Flows
+
+Für deterministische, mehrstufige Abläufe gibt es einen getrennten Entry-Point:
+
+```powershell
+cli-agent-flow validate flow.toml --workspace C:\Projekte\mein-projekt
+cli-agent-flow run flow.toml --workspace C:\Projekte\mein-projekt
+```
+
+Der Workspace wird einmal für den gesamten Flow festgelegt. Ein einzelner Schritt
+kann ihn nicht überschreiben. Jeder Schritt darf dagegen seine eigene normale
+`cli-agent`-Konfiguration auswählen und damit z. B. ein anderes Modell oder
+andere benutzerseitig konfigurierte MCP-Server verwenden. Die maschinenweite
+Admin-Policy bleibt unverändert maßgeblich.
+
+Die erste Version führt Schritte bewusst sequenziell aus. Ein Schritt kann den
+strikt als JSON geparsten Output eines vorherigen Schritts über `foreach`
+auffächern. Aus den Elementen dürfen nur Variablen und workspace-lokale
+Output-Pfade parametrisiert werden; Workspace, Config, Prompt-Datei,
+Context-Datei und Tool-Capabilities werden ausschließlich durch die statische
+Flow-Datei festgelegt.
+
+Beispiel:
+
+```toml
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config-discover.toml"
+prompt_file = "prompts/discover.md"
+context_file = "manual.txt"
+output = "work/items.json"
+overwrite_output = true
+
+[[steps]]
+id = "process"
+config = "config-process.toml"
+prompt_file = "prompts/process.md"
+foreach = "steps.discover.output.items"
+output = "result/${item.id}.md"
+overwrite_output = true
+os_access = "write"
+
+[steps.vars]
+id = "${item.id}"
+title = "${item.title}"
+```
+
+Weitere Details und die aktuellen Einschränkungen stehen unter
+[Multi-Step-Flows](docs/flow.md).
+
 ## OKF
 
 ```toml
