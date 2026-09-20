@@ -20,7 +20,11 @@ from .execution import (
     build_preapproval_callback,
     run_once,
 )
-from .file_context import prepare_output_target, prepare_prompt_file
+from .file_context import (
+    prepare_file_options,
+    prepare_output_target,
+    prepare_prompt_file,
+)
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .model import ModelRetryPolicy
 from .prompt_template import PromptTemplate
@@ -797,11 +801,10 @@ def validate_flow(
     *,
     workspace: Path,
     config_loader: Callable[[Path | None], AppConfig] = load_config,
-) -> dict[str, AppConfig]:
+) -> None:
     workspace = workspace.expanduser().resolve()
     flow_dir = flow.source.parent
     produced: set[str] = set()
-    config_snapshots: dict[str, AppConfig] = {}
     planned_static_outputs: dict[str, str] = {}
 
     for step in flow.steps:
@@ -838,10 +841,17 @@ def validate_flow(
                 + ", ".join(missing)
             )
 
-        _contexts_for_step(
+        context_paths = _contexts_for_step(
             step,
             workspace=workspace,
             flow_dir=flow_dir,
+        )
+        prepare_file_options(
+            workspace,
+            context_files=context_paths,
+            prompt_file=None,
+            output=None,
+            overwrite_output=False,
         )
 
         config = _resolve_config(
@@ -862,7 +872,7 @@ def validate_flow(
                 )
             config_argument = config
         try:
-            config_snapshots[step.step_id] = config_loader(config_argument)
+            config_loader(config_argument)
         except Exception as exc:
             raise ValueError(
                 f"Konfiguration von Schritt {step.step_id!r} "
@@ -909,6 +919,7 @@ def validate_flow(
         flow,
         workspace=workspace,
     )
+    mutation_protected_paths = tuple(reserved_inputs.values())
     for step in flow.steps:
         if step.foreach is not None or step.output is None:
             continue
@@ -929,8 +940,6 @@ def validate_flow(
                 f"{reserved_input}"
             )
 
-    return config_snapshots
-
 
 async def run_flow(
     flow: FlowDefinition,
@@ -941,7 +950,7 @@ async def run_flow(
 ) -> None:
     workspace = workspace.expanduser().resolve()
     deps = dependencies or ExecutionDependencies()
-    config_snapshots = validate_flow(
+    validate_flow(
         flow,
         workspace=workspace,
         config_loader=deps.load_config,
@@ -1051,7 +1060,7 @@ async def run_flow(
                         step.approve_tools,
                         fallback=approval_callback,
                     ),
-                    prepared_config=config_snapshots[step.step_id],
+                    mutation_protected_paths=mutation_protected_paths,
                 ),
                 dependencies=deps,
             )
