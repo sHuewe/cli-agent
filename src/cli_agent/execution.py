@@ -73,12 +73,12 @@ class OneShotRunOptions:
     model: str | None = None
     workspace_access: str | None = None
     retry_policy: ModelRetryPolicy | None = None
-    context_file: Path | None = None
+    context_files: tuple[Path, ...] = ()
     output: Path | None = None
     overwrite_output: bool = False
     add_web_context: tuple[str, ...] = ()
     approval_callback: ApprovalCallback | None = None
-    prepared_file_context: FileContext | None = None
+    prepared_file_contexts: tuple[FileContext, ...] = ()
     prepared_output_target: OutputTarget | None = None
 
 
@@ -88,7 +88,7 @@ class OneShotRunResult:
     usage: str
     web_context_statuses: tuple[str, ...]
     config: AppConfig
-    file_context: FileContext | None
+    file_contexts: tuple[FileContext, ...]
     output_target: OutputTarget | None
 
 
@@ -168,21 +168,18 @@ async def run_once(
         workspace_access=options.workspace_access,
     )
 
-    if (
-        options.prepared_file_context is not None
-        or options.prepared_output_target is not None
-    ):
-        if options.context_file is not None or options.output is not None:
+    if options.prepared_file_contexts or options.prepared_output_target is not None:
+        if options.context_files or options.output is not None:
             raise ValueError(
                 "Vorbereitete Dateioptionen dürfen nicht zusammen mit "
-                "context_file/output übergeben werden."
+                "context_files/output übergeben werden."
             )
-        file_context = options.prepared_file_context
+        file_contexts = options.prepared_file_contexts
         output_target = options.prepared_output_target
     else:
-        file_context, _, output_target = prepare_file_options(
+        file_contexts, _, output_target = prepare_file_options(
             workspace,
-            context_file=options.context_file,
+            context_files=options.context_files,
             prompt_file=None,
             output=options.output,
             overwrite_output=options.overwrite_output,
@@ -211,7 +208,7 @@ async def run_once(
         mcp_policy=admin_config.mcp,
         approval_callback=options.approval_callback,
         okf=config.okf,
-        file_context=file_context,
+        file_contexts=file_contexts,
     )
 
     web_statuses: list[str] = []
@@ -234,6 +231,6 @@ async def run_once(
         usage=usage,
         web_context_statuses=tuple(web_statuses),
         config=config,
-        file_context=file_context,
+        file_contexts=file_contexts,
         output_target=output_target,
     )
