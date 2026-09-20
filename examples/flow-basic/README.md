@@ -35,9 +35,13 @@ They are not part of the repository.
 From the repository root:
 
 ```bash
-cli-agent-flow validate examples/flow-basic/flow.toml --workspace .
-cli-agent-flow run examples/flow-basic/flow.toml --workspace .
+cli-agent-flow validate flow.toml --workspace examples/flow-basic
+cli-agent-flow run flow.toml --workspace examples/flow-basic
 ```
+
+The workspace is deliberately limited to `examples/flow-basic`. This keeps the
+demo isolated from the rest of the repository: its context, prompts and generated
+outputs all live inside that directory.
 
 No `config = ...` entry is present in the flow. Every step therefore uses the normal default user configuration.
 
