@@ -639,3 +639,34 @@ def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
     assert args[0] == "--config"
     assert args[1] == str(tmp_path / "config.toml")
     assert args[-2:] == ["--mutation-protected-path", protected]
+
+
+def test_json_response_format_adds_german_system_instruction(tmp_path: Path) -> None:
+    agent = CliAgent(
+        tmp_path,
+        OllamaClient(base_url="http://localhost:11434", model="test"),
+        (),
+        response_format="json",
+    )
+
+    prompt = agent._build_system_prompt()
+
+    assert "JSON als finales Antwortformat vorgeschrieben" in prompt
+    assert "ausschließlich syntaktisch gültiges JSON" in prompt
+    assert "Markdown-Codeblöcke" in prompt
+
+
+def test_text_response_format_does_not_add_json_instruction(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+
+    assert "JSON als finales Antwortformat vorgeschrieben" not in agent._build_system_prompt()
+
+
+def test_agent_rejects_unknown_response_format(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="response_format"):
+        CliAgent(
+            tmp_path,
+            OllamaClient(base_url="http://localhost:11434", model="test"),
+            (),
+            response_format="yaml",
+        )
