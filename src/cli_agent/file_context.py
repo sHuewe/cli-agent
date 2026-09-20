@@ -94,8 +94,14 @@ class ContextFileCliAgent(WebContextCliAgent):
             else ((file_context,) if file_context is not None else ())
         )
 
-    def _build_system_prompt(self) -> str:
-        prompt = super()._build_system_prompt()
+    def _build_system_prompt(
+        self,
+        *,
+        has_reference_context: bool = False,
+    ) -> str:
+        prompt = super()._build_system_prompt(
+            has_reference_context=has_reference_context,
+        )
         if not self._file_contexts:
             return prompt
         return prompt + "\n\n" + FILE_CONTEXT_SYSTEM_RULE.strip()
