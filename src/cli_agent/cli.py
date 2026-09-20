@@ -23,6 +23,7 @@ from .file_context import (
 from .logging_setup import configure_logging
 from .mcp_contracts import tool_contract_fingerprint
 from .model_factory import create_model_client
+from .prompt_template import PromptTemplate, parse_variable_assignments
 from .terminal_output import sanitize_terminal_text
 
 OS_MCP_SERVER_NAME = "os"
@@ -92,7 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
     parser.add_argument("--context-file", type=Path, default=None, metavar="FILE", help="Add one explicit UTF-8 text file from the workspace as untrusted reference context.")
-    parser.add_argument("--prompt-file", type=Path, default=None, metavar="FILE", help="Read the one-shot user prompt from one explicit UTF-8 text file inside the workspace.")
+    parser.add_argument("--prompt-file", type=Path, default=None, metavar="FILE", help="Read the one-shot user prompt from one explicit UTF-8 text file inside the workspace. Supports {{var:name}} template variables.")
+    parser.add_argument("--var", action="append", default=[], metavar="NAME=VALUE", help="Set one prompt-template variable. Repeat for multiple variables.")
     parser.add_argument("--output", type=Path, default=None, metavar="FILE", help="Write the latest model answer to a workspace-local UTF-8 text file in addition to stdout.")
     parser.add_argument("--overwrite-output", action="store_true", help="Allow --output to replace an existing regular file. Requires --output.")
     parser.add_argument("--approve-tool", action="append", default=[], metavar="TOOL", help="Pre-approve one exact exposed tool name for this process run; repeat for multiple tools.")
@@ -381,11 +383,41 @@ async def run(args: argparse.Namespace) -> None:
         output=getattr(args, "output", None),
         overwrite_output=bool(getattr(args, "overwrite_output", False)),
     )
-    one_shot_prompt = (
-        prompt_file.content
-        if prompt_file is not None
-        else (" ".join(args.prompt) if args.prompt else None)
-    )
+    raw_variables = tuple(getattr(args, "var", ()) or ())
+    if raw_variables and prompt_file is None:
+        raise ValueError("--var ist nur zusammen mit --prompt-file erlaubt.")
+
+    if prompt_file is not None:
+        template = PromptTemplate.parse(prompt_file.content)
+        variable_values = parse_variable_assignments(raw_variables)
+        unknown_variables = sorted(set(variable_values) - set(template.variables))
+        if unknown_variables:
+            raise ValueError(
+                "Mit --var gesetzte Variable(n) kommen im Prompt-Template nicht vor: "
+                + ", ".join(unknown_variables)
+            )
+
+        missing_variables = [
+            name for name in template.variables if name not in variable_values
+        ]
+        if missing_variables and not sys.stdin.isatty():
+            raise ValueError(
+                "Prompt-Template benötigt interaktive Variablenwerte, aber stdin "
+                "ist kein TTY. Fehlend: "
+                + ", ".join(missing_variables)
+            )
+        for name in missing_variables:
+            variable_values[name] = await asyncio.to_thread(
+                input,
+                f"Wert für Prompt-Variable {name}: ",
+            )
+        one_shot_prompt = template.render(variable_values)
+        if not one_shot_prompt or one_shot_prompt.isspace():
+            raise ValueError(
+                "Gerenderter Prompt darf nicht leer sein oder nur aus Leerraum bestehen."
+            )
+    else:
+        one_shot_prompt = " ".join(args.prompt) if args.prompt else None
 
     configure_logging(config.logging)
     model_client = create_model_client(config.model, network=admin_config.network, credential_rules=admin_config.model_credentials)
