@@ -118,6 +118,7 @@ class McpServerConfig:
     transport: str = "stdio"
     command: str | None = None
     args: tuple[str, ...] = ()
+    literal_args: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
