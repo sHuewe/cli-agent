@@ -33,10 +33,14 @@ akzeptiert nur zuvor vom Repository angebotene Folgepfade.
 
 Die **Wahl des Roots selbst** ist jedoch eine bewusste lokale
 Datenfreigabeentscheidung des Benutzers. Ein außerhalb des Workspace liegender
-Root kann zusätzliche Markdown-/Knowledge-Inhalte in den Retrieval-Pfad
-einbeziehen und ausgewählte Inhalte an das konfigurierte LLM weitergeben. Diese
-Boundary wird daher nicht als Teil der maschinenweiten Workspace- oder
-Netzwerkpolicy dargestellt.
+Root kann zusätzliche OKF-Knowledge-Inhalte in den Retrieval-Pfad
+einbeziehen und ausgewählte Inhalte an das konfigurierte LLM weitergeben. Ein
+beliebiger Ordner wird dabei nicht als generischer Markdown-Root akzeptiert:
+der OKF-Server verlangt mindestens ein gültiges OKF-Concept und blendet
+nicht-konformes Markdown sowie Unterverzeichnisse ohne gültige OKF-Concepts aus.
+Damit führt die versehentliche Konfiguration eines normalen Ordners ohne OKF zu
+keiner Inhaltsfreigabe über die Knowledge-Tools. Diese Boundary wird weiterhin
+nicht als Teil der maschinenweiten Workspace- oder Netzwerkpolicy dargestellt.
 
 Für einen gemanagten Unternehmenseinsatz gilt:
 
