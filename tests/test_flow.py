@@ -54,11 +54,11 @@ config = "config-b.toml"
 prompt_file = "prompts/process.md"
 workspace_access = "write"
 foreach = "steps.discover.output.items"
-output = "work/\${item.id}.md"
+output = "work/${item.id}.md"
 overwrite_output = true
 
 [steps.vars]
-id = "\${item.id}"
+id = "${item.id}"
 """.strip(),
         encoding="utf-8",
     )
@@ -213,11 +213,11 @@ id = "process"
 config = "config.toml"
 prompt_file = "process.md"
 foreach = "steps.discover.output.items"
-output = "work/\${item.path}"
+output = "work/${item.path}"
 overwrite_output = true
 
 [steps.vars]
-path = "\${item.path}"
+path = "${item.path}"
 """.strip(),
         encoding="utf-8",
     )
