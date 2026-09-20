@@ -80,3 +80,13 @@ def test_large_plain_template_is_kept_as_one_literal_span() -> None:
 
     assert template.parts == (content,)
     assert template.variables == ()
+
+
+def test_many_placeholders_parse_without_suffix_rescans() -> None:
+    content = "{{var:x}}" * 100_000
+
+    template = PromptTemplate.parse(content)
+
+    assert template.variables == ("x",)
+    assert len(template.parts) == 100_000
+    assert template.render({"x": "v"}) == "v" * 100_000
