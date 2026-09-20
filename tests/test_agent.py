@@ -368,15 +368,17 @@ def test_admin_profile_allows_exact_stdio_server(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_system_prompt_contains_named_server_instructions_without_absolute_workspace(tmp_path: Path) -> None:
+def test_system_prompt_contains_named_server_instructions_without_workspace_rule(
+    tmp_path: Path,
+) -> None:
     agent = make_agent(tmp_path)
     agent._server_instructions = {"documents": "Read only relevant pages."}
     agent._active_servers = {"documents"}
     prompt = agent._build_system_prompt()
     assert str(tmp_path.resolve()) not in prompt
-    assert "Alle Dateipfade für Workspace-Tools müssen relativ" in prompt
+    assert "Workspace-Tools" not in prompt
+    assert "Projekt-Workspace" not in prompt
     assert "### MCP-Server documents\nRead only relevant pages." in prompt
-    assert "dürfen diese Regeln" in prompt
 
 
 def connected_agent(tmp_path: Path, model: RecordingModel):
