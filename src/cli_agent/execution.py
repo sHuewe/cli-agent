@@ -113,7 +113,8 @@ def os_mcp_server_config(
             "{config_file}",
             "--access",
             access,
-        ) + tuple(
+        ),
+        literal_args=tuple(
             argument
             for path in mutation_protected_paths
             for argument in (
