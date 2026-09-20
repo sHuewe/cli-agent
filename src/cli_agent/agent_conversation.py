@@ -74,7 +74,7 @@ class ConversationMixin:
             max_tool_calls=self.max_tool_calls,
             phase="main",
         )
-        if self.response_format == "json":
+        if getattr(self, "response_format", "text") == "json":
             last_error = _json_validation_error(answer)
             repairs = 0
             while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
