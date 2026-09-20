@@ -99,13 +99,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--context-file",
         "--add-file-context",
-        dest="context_file",
+        dest="context_files",
+        action="append",
         type=Path,
-        default=None,
+        default=[],
         metavar="FILE",
         help=(
             "Add one explicit UTF-8 text file from the workspace as "
-            "untrusted reference context. --add-file-context is an alias."
+            "untrusted reference context. Repeat for multiple files. "
+            "--add-file-context is an alias."
         ),
     )
     parser.add_argument("--prompt-file", type=Path, default=None, metavar="FILE", help="Read the one-shot user prompt from one explicit UTF-8 text file inside the workspace. Supports {{var:name}} template variables.")
@@ -387,9 +389,9 @@ async def run(args: argparse.Namespace) -> None:
     if prompt_file_arg is not None and args.prompt:
         raise ValueError("--prompt-file darf nicht zusammen mit einem positional Prompt verwendet werden.")
 
-    file_context, prompt_file, output_target = prepare_file_options(
+    file_contexts, prompt_file, output_target = prepare_file_options(
         workspace,
-        context_file=getattr(args, "context_file", None),
+        context_files=tuple(getattr(args, "context_files", ()) or ()),
         prompt_file=prompt_file_arg,
         output=getattr(args, "output", None),
         overwrite_output=bool(getattr(args, "overwrite_output", False)),
@@ -438,8 +440,11 @@ async def run(args: argparse.Namespace) -> None:
         print(f"Logdatei: {config.logging.file}")
     if config.okf:
         print(f"OKF-Repository: {config.okf.repository}")
-    if file_context is not None:
-        print(f"Context-Datei: {file_context.relative_path} ({len(file_context.content)} Zeichen)")
+    for file_context in file_contexts:
+        print(
+            f"Context-Datei: {file_context.relative_path} "
+            f"({len(file_context.content)} Zeichen)"
+        )
     if prompt_file is not None:
         print(f"Prompt-Datei: {prompt_file.relative_path} ({len(prompt_file.content)} Zeichen)")
     if output_target is not None:
@@ -457,7 +462,7 @@ async def run(args: argparse.Namespace) -> None:
                 workspace_access=args.os_access,
                 add_web_context=tuple(getattr(args, "add_web_context", ()) or ()),
                 approval_callback=approval_callback,
-                prepared_file_context=file_context,
+                prepared_file_contexts=file_contexts,
                 prepared_output_target=output_target,
             ),
             dependencies=ExecutionDependencies(
@@ -492,7 +497,7 @@ async def run(args: argparse.Namespace) -> None:
         mcp_policy=admin_config.mcp,
         approval_callback=approval_callback,
         okf=config.okf,
-        file_context=file_context,
+        file_contexts=file_contexts,
     )
 
     async with agent:
