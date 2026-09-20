@@ -754,3 +754,50 @@ def test_json_response_format_repairs_non_standard_constants(
 
     assert asyncio.run(agent.ask("Antworte als JSON.")) == '{"ok":true}'
     assert len(model.calls) == 2
+
+
+def test_json_repairs_share_main_tool_call_budget(tmp_path: Path) -> None:
+    model = RecordingModel(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "read-1",
+                        "function": {
+                            "name": "documents__read",
+                            "arguments": {},
+                        },
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "not json"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "read-2",
+                        "function": {
+                            "name": "documents__read",
+                            "arguments": {},
+                        },
+                    }
+                ],
+            },
+        ]
+    )
+    agent, session = connected_agent(tmp_path, model)
+    agent.response_format = "json"
+    agent.max_tool_calls = 1
+    agent._server_tools["documents"][0]["function"]["parameters"] = {
+        "type": "object",
+        "properties": {},
+    }
+
+    with pytest.raises(RuntimeError, match="nach 1 Tool-Aufrufen"):
+        asyncio.run(agent.ask("Lies das Dokument und antworte als JSON."))
+
+    assert session.tool_calls == [("read", {})]
+    assert len(model.calls) == 3
