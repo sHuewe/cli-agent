@@ -470,7 +470,7 @@ async def run(args: argparse.Namespace) -> None:
                 config_file=args.config,
                 model=args.model,
                 workspace_access=args.os_access,
-                response_format=args.response_format,
+                response_format=getattr(args, "response_format", "text"),
                 add_web_context=tuple(getattr(args, "add_web_context", ()) or ()),
                 approval_callback=approval_callback,
                 prepared_file_contexts=file_contexts,
@@ -509,7 +509,7 @@ async def run(args: argparse.Namespace) -> None:
         approval_callback=approval_callback,
         okf=config.okf,
         file_contexts=file_contexts,
-        response_format=args.response_format,
+        response_format=getattr(args, "response_format", "text"),
     )
 
     async with agent:
