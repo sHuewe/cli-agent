@@ -39,11 +39,18 @@ version = 1
 [[steps]]
 id = "discover"
 config = "config-discover.toml"
+model = "qwen3.5:9b"
 prompt_file = "prompts/discover.md"
 context_file = "manual.txt"
 output = "work/items.json"
 overwrite_output = true
 workspace_access = "read"
+
+[steps.retry]
+max_attempts = 3
+initial_delay_seconds = 1
+backoff_multiplier = 2
+max_delay_seconds = 10
 
 [[steps]]
 id = "process"
@@ -61,10 +68,22 @@ title = "${item.title}"
 ```
 
 `config` ist optional. Ohne Angabe wird dieselbe Default-Konfiguration verwendet,
-die auch `cli-agent` nutzt. `workspace_access` ist davon getrennt und wird pro
+die auch `cli-agent` nutzt. Mit `model` kann ein Schritt zusätzlich nur den
+Modellnamen dieser Config überschreiben; Provider, `base_url`, Credentials,
+Timeouts und weitere Modellparameter bleiben aus der gewählten Config erhalten. `workspace_access` ist davon getrennt und wird pro
 Schritt explizit auf `none`, `read` oder `write` gesetzt. Ohne Angabe gilt
 `none`; damit kann eine Config nicht implizit Schreibzugriff auf den eingebauten
 Workspace-OS-MCP in einen Flow-Schritt hineintragen.
+
+Die optionale Tabelle `[steps.retry]` steuert ausschließlich Wiederholungen
+transient fehlgeschlagener **Modellanfragen** innerhalb dieses Schritts. Sie
+wiederholt niemals einen vollständigen Step und führt daher bereits ausgeführte
+MCP-Tool-Aufrufe nicht erneut aus. `max_attempts` zählt den ersten Versuch mit;
+`max_attempts = 1` deaktiviert Retries. Wiederholt werden derzeit
+Verbindungs-/Transportfehler sowie HTTP 429 und HTTP 5xx von OpenAI-kompatiblen
+bzw. Ollama-Endpunkten. Konfigurations-, Authentifizierungs-/4xx-Fehler (außer
+429), Context-Limits, zu große Antworten und ungültige Modellantworten werden
+nicht automatisch erneut versucht.
 
 `approve_tools` entspricht semantisch dem wiederholbaren CLI-Schalter
 `--approve-tool`: Die Liste enthält exakte exponierte Toolnamen, z. B.
@@ -104,8 +123,8 @@ wird dagegen als nicht vertrauenswürdige Daten behandelt.
 Insbesondere gilt:
 
 - Ein Step kann den Workspace nicht überschreiben.
-- `config`, `prompt_file`, `context_file`, `workspace_access` und
-  `approve_tools` werden niemals aus `foreach`-Daten interpoliert.
+- `config`, `model`, `prompt_file`, `context_file`, `workspace_access`,
+  `retry` und `approve_tools` werden niemals aus `foreach`-Daten interpoliert.
 - LLM-generierte Werte dürfen Prompt-Variablen und Output-Dateinamen
   parametrisieren. Resultierende Output-Pfade werden erneut gegen den festen
   Workspace geprüft; `..`, absolute Escapes und Symlink-/Reparse-Ausbrüche
@@ -129,7 +148,6 @@ Die erste Version ist bewusst klein:
 - kein Resume
 - keine Parallelisierung
 - keine Conditions
-- keine Retries
 - keine verschachtelten `foreach`-Outputs als neue Quelle
 - keine JSON-Schema-Validierung; `foreach` verlangt derzeit nur syntaktisch
   gültiges JSON und den erwarteten Listenpfad
