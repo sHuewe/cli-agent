@@ -104,8 +104,8 @@ def test_add_file_context_is_alias_for_context_file() -> None:
         ["--add-file-context", "reference.txt", "prompt"]
     )
 
-    assert direct.context_file == alias.context_file
-    assert alias.context_file.name == "reference.txt"
+    assert direct.context_files == alias.context_files
+    assert alias.context_files == [Path("reference.txt")]
 
 def test_cli_automation_options_are_repeatable() -> None:
     args = build_parser().parse_args(
@@ -114,6 +114,10 @@ def test_cli_automation_options_are_repeatable() -> None:
             "os__write_file",
             "--approve-tool",
             "external__run",
+            "--add-file-context",
+            "one.txt",
+            "--context-file",
+            "two.txt",
             "--add-web-context",
             "https://docs.example/a",
             "--add-web-context",
@@ -122,6 +126,7 @@ def test_cli_automation_options_are_repeatable() -> None:
         ]
     )
     assert args.approve_tool == ["os__write_file", "external__run"]
+    assert args.context_files == [Path("one.txt"), Path("two.txt")]
     assert args.add_web_context == ["https://docs.example/a", "https://docs.example/b"]
     assert args.prompt == ["prompt"]
 
