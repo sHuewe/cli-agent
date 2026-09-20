@@ -682,9 +682,13 @@ async def run_flow(
                 OneShotRunOptions(
                     workspace=workspace,
                     prompt=prompt,
-                    config_file=_resolve_config(
-                        step,
-                        flow_dir=flow_dir,
+                    config_file=(
+                        _resolve_config(
+                            step,
+                            flow_dir=flow_dir,
+                        )
+                        if step.config is not None
+                        else None
                     ),
                     workspace_access=step.workspace_access,
                     context_file=context,
