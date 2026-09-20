@@ -6,6 +6,9 @@ import pytest
 
 import cli_agent.file_context as file_context_module
 from cli_agent.file_context import (
+    FILE_CONTEXT_SYSTEM_RULE,
+    ContextFileCliAgent,
+    FileContext,
     OutputTarget,
     prepare_context_file,
     prepare_file_options,
@@ -82,6 +85,74 @@ def test_multiple_context_files_have_aggregate_size_limit(
             overwrite_output=False,
         )
 
+
+
+def test_context_agent_exposes_multiple_files_as_reference_payload(
+    tmp_path: Path,
+) -> None:
+    contexts = (
+        FileContext("one.txt", "one", tmp_path / "one.txt", 3),
+        FileContext("two.txt", "two", tmp_path / "two.txt", 3),
+    )
+    agent = ContextFileCliAgent(
+        tmp_path,
+        object(),
+        (),
+        file_contexts=contexts,
+    )
+
+    payload = agent._reference_context_payload(knowledge="known")
+
+    assert payload["retrieved_okf_knowledge"] == "known"
+    assert payload["local_reference_files"] == [
+        {"workspace_path": "one.txt", "content": "one"},
+        {"workspace_path": "two.txt", "content": "two"},
+    ]
+    assert FILE_CONTEXT_SYSTEM_RULE.strip() in agent._build_system_prompt()
+
+
+def test_context_agent_keeps_single_file_payload_compatible(
+    tmp_path: Path,
+) -> None:
+    context = FileContext("one.txt", "one", tmp_path / "one.txt", 3)
+    agent = ContextFileCliAgent(
+        tmp_path,
+        object(),
+        (),
+        file_context=context,
+    )
+
+    payload = agent._reference_context_payload(knowledge=None)
+
+    assert payload["local_reference_file"] == {
+        "workspace_path": "one.txt",
+        "content": "one",
+    }
+    assert "local_reference_files" not in payload
+
+
+def test_context_agent_rejects_legacy_and_multi_context_arguments_together(
+    tmp_path: Path,
+) -> None:
+    context = FileContext("one.txt", "one", tmp_path / "one.txt", 3)
+
+    with pytest.raises(ValueError, match="nicht gleichzeitig"):
+        ContextFileCliAgent(
+            tmp_path,
+            object(),
+            (),
+            file_context=context,
+            file_contexts=(context,),
+        )
+
+
+def test_context_agent_without_files_does_not_add_file_rule(
+    tmp_path: Path,
+) -> None:
+    agent = ContextFileCliAgent(tmp_path, object(), ())
+
+    assert agent._reference_context_payload(knowledge=None) == {}
+    assert FILE_CONTEXT_SYSTEM_RULE.strip() not in agent._build_system_prompt()
 
 def test_context_file_accepts_absolute_path_inside_workspace(tmp_path: Path) -> None:
     context = tmp_path / "review" / "repository.txt"
