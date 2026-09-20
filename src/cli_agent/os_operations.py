@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 
 from .config import McpServerConfig
-from .filesystem_security import regular_file_has_multiple_links
+from .filesystem_security import (
+    path_entry_is_symlink_or_reparse,
+    regular_file_has_multiple_links,
+)
 from .pdf_text import PdfTextError, read_pdf_text
 
 TEXT_SUFFIXES = frozenset(
@@ -301,12 +304,16 @@ class Workspace:
     def _is_protected_path(self, path: Path) -> bool:
         if self._is_sensitive_file(path):
             return True
+        # Detect filesystem indirection explicitly instead of relying on
+        # Path.resolve(strict=False) to raise for cyclic symlinks. Python 3.13
+        # changed that pathlib behaviour, while lstat/reparse-point detection
+        # remains the security property we actually need here.
+        if path_entry_is_symlink_or_reparse(path):
+            return True
         try:
             resolved = path.resolve(strict=False)
         except (OSError, RuntimeError):
-            # Broken/cyclic filesystem indirection cannot be classified
-            # reliably. Treat it as protected so callers fail closed or hide
-            # the entry instead of aborting a directory listing.
+            # Other filesystem errors still fail closed.
             return True
         return any(
             resolved == protected or protected in resolved.parents
