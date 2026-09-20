@@ -251,6 +251,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if effective_context_value is not None
             else None
         )
+        if (
+            effective_context_value is not None
+            and _ITEM_EXPR.search(str(effective_context_value))
+        ):
+            raise ValueError(
+                f"steps[{index}].add_file_context darf nicht aus "
+                "foreach-Daten parametrisiert werden."
+            )
 
         raw_web_context = raw.get("add_web_context", [])
         if (
