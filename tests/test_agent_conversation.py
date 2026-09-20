@@ -280,3 +280,174 @@ def test_compress_tool_result_wraps_nonempty_response() -> None:
         "[Komprimiertes MCP-Tool-Ergebnis]\n"
         "Originalgröße: 6 Zeichen\n\nshort summary"
     )
+
+
+class KnowledgeRootSession:
+    def __init__(self, result) -> None:
+        self.result = result
+        self.calls = []
+
+    async def call_tool(self, name, arguments):
+        self.calls.append((name, arguments))
+        return self.result
+
+
+def _knowledge_root_result(*, is_error=False):
+    return SimpleNamespace(
+        isError=is_error,
+        structuredContent={
+            "kind": "index",
+            "path": ".",
+            "content": "root",
+            "internal_links": [
+                {
+                    "path": "concepts/a.md",
+                    "next_tool": "knowledge_read",
+                    "exists": True,
+                }
+            ],
+        },
+        content=[],
+    )
+
+
+def _configure_knowledge(agent: ConversationHarness, session) -> None:
+    agent._okf_options = SimpleNamespace(
+        required=True,
+        max_tool_calls=3,
+        max_concept_reads=2,
+    )
+    agent._knowledge_session = session
+    agent._knowledge_tools = [
+        {
+            "type": "function",
+            "function": {"name": "okf__knowledge_read"},
+        }
+    ]
+    agent._knowledge_routes = {
+        "okf__knowledge_index": (
+            session,
+            "knowledge_index",
+            SimpleNamespace(name="okf"),
+        )
+    }
+
+
+def test_collect_knowledge_success_returns_selected_concept_payload() -> None:
+    agent = ConversationHarness()
+    session = KnowledgeRootSession(_knowledge_root_result())
+    _configure_knowledge(agent, session)
+
+    async def fake_loop(**kwargs):
+        state = kwargs["knowledge_state"]
+        token = state.register_concept(
+            {
+                "kind": "concept",
+                "path": "concepts/a.md",
+                "content": "Relevant knowledge",
+                "warning": "check version",
+            }
+        )
+        assert token is not None
+        assert state.allowed_calls == {
+            "concepts/a.md": {"knowledge_read"}
+        }
+        return json.dumps(
+            {
+                "found_content": True,
+                "selected_okf_tokens": [token],
+                "warnings": ["model warning"],
+            }
+        )
+
+    agent._run_model_loop = fake_loop
+
+    result = asyncio.run(agent._collect_knowledge("question"))
+
+    assert result is not None
+    payload = json.loads(result)
+    assert payload["found_content"] is True
+    assert payload["content"] == [
+        {
+            "concept": "concepts/a.md",
+            "content_type": "full",
+            "content": "Relevant knowledge",
+        }
+    ]
+    assert payload["warnings"] == [
+        "model warning",
+        "concepts/a.md: check version",
+    ]
+    assert session.calls == [("knowledge_index", {"path": "."})]
+    selection_dump = [
+        value
+        for name, value in agent.dumped
+        if name == "knowledge_selection.json"
+    ]
+    result_dump = [
+        value
+        for name, value in agent.dumped
+        if name == "knowledge_result.json"
+    ]
+    assert selection_dump
+    assert result_dump[-1] == payload
+
+
+def test_collect_knowledge_valid_negative_selection_returns_none() -> None:
+    agent = ConversationHarness()
+    session = KnowledgeRootSession(_knowledge_root_result())
+    _configure_knowledge(agent, session)
+
+    async def fake_loop(**kwargs):
+        request = json.loads(kwargs["messages"][-1]["content"])
+        assert request["original_user_request"] == "not relevant"
+        assert request["root_index"]["kind"] == "index"
+        return json.dumps(
+            {
+                "found_content": False,
+                "selected_okf_tokens": [],
+                "reason_code": "not_applicable",
+            }
+        )
+
+    agent._run_model_loop = fake_loop
+
+    result = asyncio.run(agent._collect_knowledge("not relevant"))
+
+    assert result is None
+    assert any(
+        name == "knowledge_selection.json"
+        for name, _ in agent.dumped
+    )
+
+
+def test_collect_knowledge_rejects_non_object_selection() -> None:
+    agent = ConversationHarness()
+    session = KnowledgeRootSession(_knowledge_root_result())
+    _configure_knowledge(agent, session)
+
+    async def fake_loop(**_kwargs):
+        return "[]"
+
+    agent._run_model_loop = fake_loop
+
+    with pytest.raises(RuntimeError, match="Wissensvorlauf fehlgeschlagen"):
+        asyncio.run(agent._collect_knowledge("question"))
+
+    assert "kein JSON-Objekt" in agent.dumped[-1][1]["error"]
+
+
+def test_collect_knowledge_fails_on_root_index_error() -> None:
+    agent = ConversationHarness()
+    session = KnowledgeRootSession(
+        SimpleNamespace(
+            isError=True,
+            content=[SimpleNamespace(text="root unavailable")],
+        )
+    )
+    _configure_knowledge(agent, session)
+
+    with pytest.raises(RuntimeError, match="Wissensvorlauf fehlgeschlagen"):
+        asyncio.run(agent._collect_knowledge("question"))
+
+    assert "Root-Index" in agent.dumped[-1][1]["error"]
