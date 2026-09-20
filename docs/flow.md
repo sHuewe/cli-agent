@@ -2,15 +2,17 @@
 
 `cli-agent-flow` ist der erste Orchestrierungs-Entry-Point für mehrere
 `cli-agent`-Läufe. Die Flow-Engine besitzt absichtlich keine zusätzlichen
-Agent-Capabilities. Sie startet für jeden Schritt einen normalen
-`cli-agent`-Prozess und bindet ihn an denselben festen Workspace.
+Agent-Capabilities. `cli-agent` und `cli-agent-flow` verwenden denselben
+wiederverwendbaren One-Shot-Execution-Core. Für jeden Schritt bzw. jede
+Iteration wird eine frische Agent-Instanz aufgebaut, aber kein neuer
+`cli-agent`-Prozess gestartet.
 
 ## Ziele der ersten Version
 
 - sequenzielle Schritte
 - pro Schritt eine eigene normale `cli-agent`-Config
 - pro Schritt eigene Prompt-/Context-Dateien
-- optionaler OS-MCP-Zugriff `none`, `read` oder `write`
+- expliziter Workspace-Zugriff `none`, `read` oder `write` pro Schritt
 - Weitergabe statischer Variablen
 - `foreach` über strikt geparsten JSON-Output eines vorherigen Schritts
 - harte Obergrenzen für Schritte und Loop-Elemente
@@ -41,7 +43,7 @@ prompt_file = "prompts/discover.md"
 context_file = "manual.txt"
 output = "work/items.json"
 overwrite_output = true
-os_access = "read"
+workspace_access = "read"
 
 [[steps]]
 id = "process"
@@ -50,7 +52,7 @@ prompt_file = "prompts/process.md"
 foreach = "steps.discover.output.items"
 output = "result/${item.id}.md"
 overwrite_output = true
-os_access = "write"
+workspace_access = "write"
 
 [steps.vars]
 id = "${item.id}"
@@ -58,7 +60,10 @@ title = "${item.title}"
 ```
 
 `config` ist optional. Ohne Angabe wird dieselbe Default-Konfiguration verwendet,
-die auch `cli-agent` nutzt.
+die auch `cli-agent` nutzt. `workspace_access` ist davon getrennt und wird pro
+Schritt explizit auf `none`, `read` oder `write` gesetzt. Ohne Angabe gilt
+`none`; damit kann eine Config nicht implizit Schreibzugriff auf den eingebauten
+Workspace-OS-MCP in einen Flow-Schritt hineintragen.
 
 `foreach` muss auf `steps.<id>.output` oder ein darunterliegendes Feld
 verweisen, zum Beispiel:
@@ -67,9 +72,10 @@ verweisen, zum Beispiel:
 foreach = "steps.discover.output.items"
 ```
 
-Die Quelle muss ein vorheriger, nicht aufgefächerter Schritt mit `output` sein.
-Sein Output muss gültiges JSON sein und der ausgewählte Wert muss eine Liste
-sein.
+Die Quelle muss ein vorheriger, nicht aufgefächerter Schritt sein. Mit `output`
+ist hier der Modell-Output dieses Schritts gemeint; eine persistierte Output-Datei
+ist dafür nicht erforderlich. Sobald ein späteres `foreach` darauf zugreift, muss
+der Modell-Output gültiges JSON sein und der ausgewählte Wert eine Liste sein.
 
 Während einer Iteration können Werte aus dem aktuellen Element mit
 `${item.<feld>}` verwendet werden. Verschachtelte Objektfelder sind möglich:
@@ -90,17 +96,17 @@ wird dagegen als nicht vertrauenswürdige Daten behandelt.
 Insbesondere gilt:
 
 - Ein Step kann den Workspace nicht überschreiben.
-- `config`, `prompt_file`, `context_file` und `os_access` werden niemals
+- `config`, `prompt_file`, `context_file` und `workspace_access` werden niemals
   aus `foreach`-Daten interpoliert.
 - LLM-generierte Werte dürfen Prompt-Variablen und Output-Dateinamen
   parametrisieren. Resultierende Output-Pfade werden erneut gegen den festen
   Workspace geprüft; `..`, absolute Escapes und Symlink-/Reparse-Ausbrüche
   werden abgewiesen.
-- Es gibt keinen Shell-/Command-Step und `subprocess` wird ohne Shell mit einer
-  expliziten Argumentliste verwendet.
-- Netzwerk-, MCP- und Credential-Grenzen werden weiterhin vom normalen
-  `cli-agent` und der Admin-Policy erzwungen.
-- Jeder Step bzw. jede Iteration ist ein neuer `cli-agent`-Prozess. Session-
+- Es gibt keinen Shell-/Command-Step und der Flow-Runner startet keine
+  `cli-agent`-Subprozesse. Er ruft denselben One-Shot-Execution-Core direkt auf.
+- Netzwerk-, MCP- und Credential-Grenzen werden weiterhin im gemeinsamen
+  Execution-Core und durch die Admin-Policy erzwungen.
+- Jeder Step bzw. jede Iteration erhält eine frische Agent-Instanz. Session-
   Approvals und Conversation History werden daher nicht implizit auf den nächsten
   Step übertragen.
 
