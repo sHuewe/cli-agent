@@ -412,6 +412,10 @@ async def run(args: argparse.Namespace) -> None:
                 f"Wert für Prompt-Variable {name}: ",
             )
         one_shot_prompt = template.render(variable_values)
+        if not one_shot_prompt or one_shot_prompt.isspace():
+            raise ValueError(
+                "Gerenderter Prompt darf nicht leer sein oder nur aus Leerraum bestehen."
+            )
     else:
         one_shot_prompt = " ".join(args.prompt) if args.prompt else None
 
