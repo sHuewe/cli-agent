@@ -330,6 +330,52 @@ cli-agent --with-os-write
 
 Details: [Workspace OS MCP](docs/mcp-os.md).
 
+## Prompt-Dateien und Templates
+
+Ein One-Shot-Prompt kann aus einer expliziten UTF-8-Datei innerhalb des
+Workspaces geladen werden:
+
+```powershell
+cli-agent --prompt-file prompts/review.md
+```
+
+Prompt-Dateien unterstützen bewusst nur eine kleine, deterministische
+Template-Syntax. Variablen werden als `{{var:name}}` geschrieben:
+
+```text
+Analysiere {{var:project}} für {{var:name}}.
+Berücksichtige besonders {{var:area}}.
+```
+
+Fehlende Werte werden vor dem Start des Agenten in der Reihenfolge ihres ersten
+Auftretens interaktiv abgefragt. Wiederholte Verwendung derselben Variable fragt
+den Wert nur einmal ab. Steht kein interaktives TTY zur Verfügung, schlägt der
+Aufruf fehl, statt auf Eingabe zu warten.
+
+Werte können mit wiederholbarem `--var NAME=WERT` direkt gesetzt werden:
+
+```powershell
+cli-agent --prompt-file prompts/review.md `
+  --var project=cli-agent `
+  --var name=Stephan `
+  --var area=Security
+```
+
+Bei `NAME=WERT` wird nur am ersten `=` getrennt; ein Wert wie
+`query=a=b=c` bleibt deshalb vollständig erhalten. Unbekannte Variablennamen,
+doppelte `--var`-Definitionen und `--var` ohne `--prompt-file` werden als
+Fehler abgewiesen.
+
+Die Ersetzung erfolgt genau einmal auf Basis des ursprünglichen Templates.
+Enthält ein Variablenwert selbst beispielsweise `{{var:other}}`, wird diese
+Zeichenfolge nicht erneut interpretiert. Ein Platzhalter kann mit einem
+vorangestellten Backslash wörtlich geschrieben werden:
+`\{{var:name}}` ergibt im fertigen Prompt `{{var:name}}`.
+
+Es gibt absichtlich keine Bedingungen, Schleifen oder impliziten
+Environment-Zugriffe. Insbesondere liest die erste Version keine
+`{{ENV:...}}`-Werte aus der Prozessumgebung.
+
 ## OKF
 
 ```toml
