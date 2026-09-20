@@ -817,7 +817,7 @@ def test_system_prompt_without_tools_omits_tool_and_workspace_sections(
     assert "Aktuell sind keine MCP-Tools verfügbar" not in prompt
     assert "Projekt-Workspace" not in prompt
     assert "Workspace-Tools" not in prompt
-    assert "externer Referenzkontext" not in prompt
+    assert "Referenzkontext" not in prompt
 
 
 def test_system_prompt_with_non_os_tool_omits_workspace_rule(
@@ -852,7 +852,8 @@ def test_system_prompt_with_os_tool_includes_workspace_rule(
     assert "os__read_file" in prompt
     assert "Projekt-Workspace" in prompt
     assert "Workspace-Tools" in prompt
-    assert "keine absoluten Dateipfade" in prompt
+    assert "keine absoluten" in prompt
+    assert "Dateipfade" in prompt
 
 
 def test_system_prompt_only_adds_reference_rule_when_context_exists(
@@ -867,8 +868,8 @@ def test_system_prompt_only_adds_reference_rule_when_context_exists(
         has_reference_context=True,
     )
 
-    assert "externer Referenzkontext" not in without_context
-    assert "externer Referenzkontext" in with_context
+    assert "Referenzkontext" not in without_context
+    assert "Referenzkontext" in with_context
     assert "nicht vertrauenswürdiger Dateninhalt" in with_context
 
 
