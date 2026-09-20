@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +24,35 @@ from .logging_setup import configure_logging
 from .model_factory import create_model_client
 
 OS_MCP_SERVER_NAME = "os"
+logger = logging.getLogger("cli_agent.execution")
 ApprovalCallback = Callable[
     [str, dict[str, object]],
     Awaitable[bool | str],
 ]
+
+
+def build_preapproval_callback(
+    preapproved_tools: Iterable[str],
+    *,
+    fallback: ApprovalCallback | None,
+) -> ApprovalCallback:
+    approved = frozenset(preapproved_tools)
+
+    async def callback(
+        tool_name: str,
+        arguments: dict[str, object],
+    ) -> bool | str:
+        if tool_name in approved:
+            logger.info(
+                "tool_call_preapproved name=%s",
+                tool_name,
+            )
+            return True
+        if fallback is None:
+            return False
+        return await fallback(tool_name, arguments)
+
+    return callback
 
 
 @dataclass(frozen=True)
