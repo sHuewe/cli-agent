@@ -901,3 +901,138 @@ prompt_file = "prompt.md"
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
     validate_flow(definition, workspace=tmp_path)
+
+
+def test_flow_renders_null_foreach_item_as_empty_string(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text(
+        "value={{var:value}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+output = "result-${item}.txt"
+
+[steps.vars]
+value = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[null]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[1].prompt == "value="
+    assert calls[1].output == (tmp_path / "result-.txt").resolve()
+
+
+def test_flow_detects_equivalent_resolved_output_paths_before_running_iterations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    (tmp_path / "work").mkdir()
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+output = "work/${item.path}"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"path":"a.md"},{"path":"./a.md"}]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="nicht eindeutige Output-Pfade"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(calls) == 1
+
+
+def test_flow_prints_answer_when_step_has_no_output_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    (tmp_path / "prompt.md").write_text("final", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "final"
+config = "config.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(
+            answer="visible answer",
+            web_context_statuses=("context loaded",),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    output = capsys.readouterr().out
+    assert "context loaded" in output
+    assert "visible answer" in output
