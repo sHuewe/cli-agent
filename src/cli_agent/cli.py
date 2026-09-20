@@ -20,6 +20,14 @@ from .file_context import (
     is_local_agent_command,
     prepare_file_options,
 )
+from .execution import (
+    ExecutionDependencies,
+    OneShotRunOptions,
+    apply_model_override,
+    apply_workspace_access_override,
+    os_mcp_server_config,
+    run_once,
+)
 from .logging_setup import configure_logging
 from .mcp_contracts import tool_contract_fingerprint
 from .model_factory import create_model_client
@@ -121,22 +129,18 @@ def build_admin_parser() -> argparse.ArgumentParser:
 
 
 def _os_mcp_server_config(access: str) -> McpServerConfig:
-    if access not in {"read", "write"}:
-        raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
-    return McpServerConfig(name=OS_MCP_SERVER_NAME, transport="stdio", command="{python}", args=("-m", "cli_agent.os_mcp_server", "--project-directory", "{workspace_directory}", "--config-file", "{config_file}", "--access", access), config={"allow_write_files": access == "write"}, built_in=True)
+    return os_mcp_server_config(access)
 
 
 def apply_mcp_cli_overrides(config: AppConfig, *, os_access: str | None) -> AppConfig:
-    if os_access is None:
-        return config
-    servers = tuple(server for server in config.mcp_servers if server.name != OS_MCP_SERVER_NAME) + (_os_mcp_server_config(os_access),)
-    return replace(config, mcp_servers=servers)
+    return apply_workspace_access_override(
+        config,
+        workspace_access=os_access,
+    )
 
 
 def apply_model_cli_override(config: AppConfig, *, model: str | None) -> AppConfig:
-    if model is None:
-        return config
-    return replace(config, model=replace(config.model, model=model))
+    return apply_model_override(config, model=model)
 
 
 def exception_details(exc: BaseException) -> str:
@@ -419,23 +423,6 @@ async def run(args: argparse.Namespace) -> None:
     else:
         one_shot_prompt = " ".join(args.prompt) if args.prompt else None
 
-    configure_logging(config.logging)
-    model_client = create_model_client(config.model, network=admin_config.network, credential_rules=admin_config.model_credentials)
-    approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
-    agent = WebContextCliAgent(
-        workspace,
-        model_client,
-        config.mcp_servers,
-        logging_config=config.logging,
-        config_file=args.config or default_config_file(),
-        dump_llm_context=config.dump_llm_context,
-        network=admin_config.network,
-        web_providers=admin_config.web.providers,
-        mcp_policy=admin_config.mcp,
-        approval_callback=approval_callback,
-        okf=config.okf,
-        file_context=file_context,
-    )
     print(f"Arbeitsordner: {workspace}")
     print(f"Admin-Policy: {default_admin_config_file()}")
     print("MCP-Server: " + (", ".join(server.name for server in config.mcp_servers) or "(keine)"))
@@ -451,10 +438,55 @@ async def run(args: argparse.Namespace) -> None:
     if output_target is not None:
         print(f"Output-Datei: {output_target.path}")
 
-    def emit_answer(prompt: str, answer: str) -> None:
-        print(sanitize_terminal_text(answer, multiline=True))
-        if output_target is not None and not is_local_agent_command(prompt):
-            output_target.write_text(answer)
+    approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
+
+    if one_shot_prompt is not None:
+        result = await run_once(
+            OneShotRunOptions(
+                workspace=workspace,
+                prompt=one_shot_prompt,
+                config_file=args.config,
+                model=args.model,
+                workspace_access=args.os_access,
+                add_web_context=tuple(getattr(args, "add_web_context", ()) or ()),
+                approval_callback=approval_callback,
+                prepared_file_context=file_context,
+                prepared_output_target=output_target,
+            ),
+            dependencies=ExecutionDependencies(
+                load_config=load_config,
+                load_admin_config=load_admin_config,
+                configure_logging=configure_logging,
+                create_model_client=create_model_client,
+                agent_type=WebContextCliAgent,
+            ),
+        )
+        for status in result.web_context_statuses:
+            print(sanitize_terminal_text(status, multiline=True))
+        print(sanitize_terminal_text(result.answer, multiline=True))
+        print(result.usage)
+        return
+
+    configure_logging(config.logging)
+    model_client = create_model_client(
+        config.model,
+        network=admin_config.network,
+        credential_rules=admin_config.model_credentials,
+    )
+    agent = WebContextCliAgent(
+        workspace,
+        model_client,
+        config.mcp_servers,
+        logging_config=config.logging,
+        config_file=args.config or default_config_file(),
+        dump_llm_context=config.dump_llm_context,
+        network=admin_config.network,
+        web_providers=admin_config.web.providers,
+        mcp_policy=admin_config.mcp,
+        approval_callback=approval_callback,
+        okf=config.okf,
+        file_context=file_context,
+    )
 
     async with agent:
         for url in getattr(args, "add_web_context", ()):
@@ -464,10 +496,6 @@ async def run(args: argparse.Namespace) -> None:
                     multiline=True,
                 )
             )
-        if one_shot_prompt is not None:
-            emit_answer(one_shot_prompt, await agent.ask(one_shot_prompt))
-            print(await agent.ask("tokens"))
-            return
         print("Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung.")
         while True:
             try:
@@ -480,7 +508,10 @@ async def run(args: argparse.Namespace) -> None:
             if not prompt:
                 continue
             try:
-                emit_answer(prompt, await agent.ask(prompt))
+                answer = await agent.ask(prompt)
+                print(sanitize_terminal_text(answer, multiline=True))
+                if output_target is not None and not is_local_agent_command(prompt):
+                    output_target.write_text(answer)
             except Exception as exc:
                 print_error(exc, debug=args.debug)
 
