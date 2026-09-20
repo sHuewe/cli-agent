@@ -306,7 +306,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             ):
                 raise ValueError(
                     f"steps[{index}] verwendet "
-                    "\${item...} ohne foreach."
+                    "${item...} ohne foreach."
                 )
 
         steps.append(
