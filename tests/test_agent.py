@@ -579,3 +579,63 @@ def test_auto_approval_fails_closed_when_current_contract_is_missing(
         "search",
         "continuous__search",
     ) is True
+
+
+def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protected = str(tmp_path / "{config_file}" / "{workspace_directory}.md")
+    server = McpServerConfig(
+        name="os",
+        command="{python}",
+        args=("--config", "{config_file}"),
+        literal_args=("--mutation-protected-path", protected),
+        built_in=True,
+    )
+    agent = CliAgent(
+        tmp_path,
+        OllamaClient(base_url="http://localhost:11434", model="test"),
+        (),
+        config_file=tmp_path / "config.toml",
+    )
+    captured = {}
+
+    class DummyContext:
+        async def __aenter__(self):
+            return object(), object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class DummySession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def initialize(self):
+            return SimpleNamespace(instructions=None)
+
+    def fake_stdio_client(parameters):
+        captured["parameters"] = parameters
+        return DummyContext()
+
+    monkeypatch.setattr("cli_agent.agent_mcp.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("cli_agent.agent_mcp.ClientSession", lambda *_args: DummySession())
+
+    async def exercise() -> None:
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        try:
+            await agent._connect_server(stack, server)
+        finally:
+            await stack.aclose()
+
+    asyncio.run(exercise())
+
+    args = captured["parameters"].args
+    assert args[0] == "--config"
+    assert args[1] == str(tmp_path / "config.toml")
+    assert args[-2:] == ["--mutation-protected-path", protected]
