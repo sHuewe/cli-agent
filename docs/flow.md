@@ -161,9 +161,12 @@ Wenn `dump_llm_context = true` in der normalen User-Config gesetzt ist,
 erhalten die Dump-Dateien eines Flow-Schritts automatisch dessen Step-ID als
 Präfix. Ein normaler Schritt `extract` erzeugt beispielsweise
 `extract_main_system_prompt.json`. Bei `foreach` wird zusätzlich die
-Iterationsnummer verwendet, z. B. `process_1_main_system_prompt.json` und
-`process_2_main_system_prompt.json`. Dadurch überschreiben sich die Dumps der
-einzelnen Flow-Läufe nicht mehr gegenseitig.
+Iterationsnummer mit einem von Step-IDs nicht verwendbaren Trenner verwendet,
+z. B. `process.foreach-1_main_system_prompt.json` und
+`process.foreach-2_main_system_prompt.json`. Dadurch können die Präfixe nicht
+mit normalen Step-IDs kollidieren. Sehr lange Step-IDs werden für den tatsächlichen
+Dump-Dateinamen deterministisch gekürzt und mit einem Hash ergänzt, sodass die
+Dateinamen innerhalb eines sicheren Längenlimits bleiben.
 
 ## Sicherheitsmodell
 
