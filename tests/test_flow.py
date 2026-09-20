@@ -132,11 +132,58 @@ add_web_context = [
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
     step = definition.steps[0]
 
-    assert step.context_file == Path("context.txt")
+    assert step.context_files == (Path("context.txt"),)
     assert step.add_web_context == (
         "https://docs.example/a",
         "https://docs.example/b",
     )
+
+
+
+def test_flow_parses_multiple_file_contexts(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("b", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+add_file_context = ["a.txt", "b.txt"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+    assert definition.steps[0].context_files == (
+        Path("a.txt"),
+        Path("b.txt"),
+    )
+
+
+def test_flow_rejects_duplicate_file_contexts(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+add_file_context = ["a.txt", "a.txt"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="doppelten Dateien"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
 def test_flow_passes_step_contexts_to_execution_core(
@@ -172,7 +219,7 @@ add_web_context = ["https://docs.example/reference"]
     asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert len(calls) == 1
-    assert calls[0].context_file == (tmp_path / "context.txt").resolve()
+    assert calls[0].context_files == ((tmp_path / "context.txt").resolve(),)
     assert calls[0].add_web_context == ("https://docs.example/reference",)
 
 
