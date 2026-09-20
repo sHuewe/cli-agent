@@ -1109,3 +1109,136 @@ def test_filesystem_path_key_collapses_case_when_filesystem_is_case_insensitive(
     lower = flow_module._filesystem_path_key(tmp_path / "result" / "a.TXT")
 
     assert upper == lower
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_foreach_rejects_non_standard_json_constants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    constant: str,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(
+            answer=f'{{"items":[{constant}]}}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="gültiges JSON"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+
+def test_validate_flow_parses_explicit_step_config(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "bad.toml").write_text(
+        "[model\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "bad.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="Konfiguration.*ungültig"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+def test_validate_flow_rejects_static_output_escape(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+output = "../escape.txt"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="darf '..' nicht enthalten"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+def test_run_flow_uses_injected_config_loader_for_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = []
+
+    def fake_load_config(path):
+        loaded.append(path)
+        return flow_module.load_config(path)
+
+    dependencies = flow_module.ExecutionDependencies(
+        load_config=fake_load_config,
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(
+            answer="ok",
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(
+        run_flow(
+            definition,
+            workspace=tmp_path,
+            dependencies=dependencies,
+        )
+    )
+
+    assert loaded == [(tmp_path / "config.toml").resolve()]
