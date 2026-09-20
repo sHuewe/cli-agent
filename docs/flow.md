@@ -70,6 +70,18 @@ id = "${item.id}"
 title = "${item.title}"
 ```
 
+`response_format` steuert das erwartete finale Antwortformat eines Schritts.
+Ohne Angabe gilt `"text"`. Mit `response_format = "json"` ergänzt der Agent
+eine entsprechende Systemanweisung, akzeptiert als finale Antwort nur
+syntaktisch gültiges JSON und fordert das Modell bei einem Formatfehler bis zu
+zweimal zur Korrektur auf. Die Korrektur erfolgt im selben Agentenlauf mit
+derselben Conversation-Historie und denselben verfügbaren Tools. Das
+Tool-Aufruflimit gilt gemeinsam für Initialantwort und Korrekturversuche; auch
+die Token-Usage wird über alle zugehörigen Modellaufrufe aufsummiert. Die konkrete
+JSON-Struktur, Feldnamen und fachlichen Inhalte müssen weiterhin im Prompt
+beschrieben werden. `output = ...` bleibt davon unabhängig und steuert nur,
+ob die finale Antwort zusätzlich in eine Datei geschrieben wird.
+
 `config` ist optional. Ohne Angabe wird dieselbe Default-Konfiguration verwendet,
 die auch `cli-agent` nutzt. Mit `model` kann ein Schritt zusätzlich nur den
 Modellnamen dieser Config überschreiben; Provider, `base_url`, Credentials,

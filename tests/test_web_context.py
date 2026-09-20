@@ -656,3 +656,59 @@ def test_confluence_document_accepts_single_search_result() -> None:
 def test_confluence_document_rejects_invalid_payloads(payload, message) -> None:
     with pytest.raises(ValueError, match=message):
         _confluence_document(payload)
+
+
+def test_json_repairs_accumulate_main_usage(tmp_path: Path) -> None:
+    class JsonRepairUsageModel(UsageRecordingModel):
+        def __init__(self) -> None:
+            super().__init__(
+                [
+                    TokenUsage(
+                        input_tokens=100,
+                        output_tokens=10,
+                        total_tokens=110,
+                    ),
+                    TokenUsage(
+                        input_tokens=200,
+                        output_tokens=20,
+                        total_tokens=220,
+                    ),
+                ]
+            )
+            self.responses = ["not json", '{"ok":true}']
+
+        async def chat(self, messages, tools, **kwargs):
+            self.calls.append((messages.copy(), tools.copy()))
+            self.last_usage = self.pending_usages.pop(0)
+            self.usage_history.append(self.last_usage)
+            return {
+                "role": "assistant",
+                "content": self.responses.pop(0),
+            }
+
+    model = JsonRepairUsageModel()
+    agent = WebContextCliAgent(
+        tmp_path,
+        model,
+        (),
+        response_format="json",
+    )
+    agent._exit_stack = SimpleNamespace()
+
+    assert asyncio.run(agent.ask("Antworte als JSON.")) == '{"ok":true}'
+
+    usage = agent._last_main_usage
+    assert usage == LoopTokenUsage(
+        requests=2,
+        usage_requests=2,
+        input_tokens=300,
+        output_tokens=30,
+        total_tokens=330,
+        max_input_tokens=200,
+        last_input_tokens=200,
+    )
+    tokens = asyncio.run(agent.ask("tokens"))
+    assert "Modellaufrufe: 2" in tokens
+    assert "Input gesamt: 300 Tokens" in tokens
+    assert "Output gesamt: 30 Tokens" in tokens
+    assert "Tokens gesamt: 330 Tokens" in tokens

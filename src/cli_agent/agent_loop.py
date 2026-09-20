@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from .agent_knowledge import (
@@ -17,6 +18,11 @@ from .agent_types import ToolRoute
 logger = logging.getLogger("cli_agent.agent_loop")
 
 
+@dataclass
+class ModelLoopRunState:
+    tool_calls: int = 0
+
+
 async def run_model_loop(
     agent,
     *,
@@ -28,8 +34,10 @@ async def run_model_loop(
     phase: str,
     knowledge_state: _KnowledgeRunState | None = None,
     max_concept_reads: int | None = None,
+    run_state: ModelLoopRunState | None = None,
 ) -> str:
-    calls = 0
+    state = run_state or ModelLoopRunState()
+    calls = state.tool_calls
     empty_responses = 0
     premature_knowledge_responses = 0
     invalid_knowledge_responses = 0
@@ -323,6 +331,7 @@ async def run_model_loop(
             knowledge_selection_only_mode=knowledge_selection_only_mode,
             transient_rejections=transient_rejections,
         )
+        state.tool_calls = calls
 
         if knowledge_concept_limit_notice_pending and knowledge_state is not None:
             knowledge_selection_only_mode = True

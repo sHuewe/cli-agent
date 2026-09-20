@@ -53,6 +53,24 @@ class LoopTokenUsage:
             last_input_tokens=usages[-1].input_tokens if usages[-1] is not None else None,
         )
 
+    def merged_with(self, other: LoopTokenUsage) -> LoopTokenUsage:
+        return LoopTokenUsage(
+            requests=self.requests + other.requests,
+            usage_requests=self.usage_requests + other.usage_requests,
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+            max_input_tokens=max(
+                (
+                    value
+                    for value in (self.max_input_tokens, other.max_input_tokens)
+                    if value is not None
+                ),
+                default=None,
+            ),
+            last_input_tokens=other.last_input_tokens,
+        )
+
 
 class WebContextCliAgent(CliAgent):
     """CliAgent with explicit, session-scoped web reference contexts."""
@@ -121,8 +139,16 @@ class WebContextCliAgent(CliAgent):
         finally:
             usage_history = getattr(self.model_client, "usage_history", None)
             usage = None if start_index is None or not isinstance(usage_history, list) else LoopTokenUsage.from_requests(usage_history[start_index:])
-            if phase == "main": self._last_main_usage = usage
-            elif phase == "knowledge": self._last_knowledge_usage = usage
+            if phase == "main":
+                if usage is not None and self._last_main_usage is not None:
+                    self._last_main_usage = self._last_main_usage.merged_with(usage)
+                elif usage is not None:
+                    self._last_main_usage = usage
+            elif phase == "knowledge":
+                if usage is not None and self._last_knowledge_usage is not None:
+                    self._last_knowledge_usage = self._last_knowledge_usage.merged_with(usage)
+                elif usage is not None:
+                    self._last_knowledge_usage = usage
 
     async def ask(self, prompt: str) -> str:
         if self._exit_stack is None:

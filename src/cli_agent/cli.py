@@ -93,6 +93,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", type=Path, default=Path.cwd(), help="Fixed workspace directory (default: current directory)")
     parser.add_argument("--config", type=Path, default=None, help=f"Configuration file (default: {default_config_file()})")
     parser.add_argument("--model", default=None, help="Override model.model from the configuration file")
+    parser.add_argument(
+        "--response-format",
+        choices=("text", "json"),
+        default="text",
+        help=(
+            "Expected final response format. 'text' is the default; 'json' "
+            "requires syntactically valid JSON and triggers up to two format "
+            "correction attempts."
+        ),
+    )
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
@@ -460,6 +470,7 @@ async def run(args: argparse.Namespace) -> None:
                 config_file=args.config,
                 model=args.model,
                 workspace_access=args.os_access,
+                response_format=getattr(args, "response_format", "text"),
                 add_web_context=tuple(getattr(args, "add_web_context", ()) or ()),
                 approval_callback=approval_callback,
                 prepared_file_contexts=file_contexts,
@@ -498,6 +509,7 @@ async def run(args: argparse.Namespace) -> None:
         approval_callback=approval_callback,
         okf=config.okf,
         file_contexts=file_contexts,
+        response_format=getattr(args, "response_format", "text"),
     )
 
     async with agent:

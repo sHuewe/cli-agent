@@ -13,11 +13,23 @@ from .agent_knowledge import (
     _knowledge_call_key,
     tool_result_text,
 )
-from .agent_loop import run_model_loop
+from .agent_loop import ModelLoopRunState, run_model_loop
 from .agent_types import ToolRoute
 from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
 logger = logging.getLogger("cli_agent.agent_conversation")
+MAX_RESPONSE_FORMAT_REPAIRS = 2
+
+
+def _json_validation_error(answer: str) -> str | None:
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"nicht standardkonstante JSON-Zahl {value!r}")
+
+    try:
+        json.loads(answer, parse_constant=reject_constant)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return str(exc)
+    return None
 
 
 class ConversationMixin:
@@ -51,14 +63,58 @@ class ConversationMixin:
             )
         working_messages.append({"role": "user", "content": prompt})
 
+        tools = self._model_tools()
+        routes = self._tool_routes
+        enabled_server_names = set(self._active_servers)
+        main_run_state = ModelLoopRunState()
         answer = await self._run_model_loop(
             messages=working_messages,
-            tools=self._model_tools(),
-            routes=self._tool_routes,
-            enabled_server_names=set(self._active_servers),
+            tools=tools,
+            routes=routes,
+            enabled_server_names=enabled_server_names,
             max_tool_calls=self.max_tool_calls,
             phase="main",
+            run_state=main_run_state,
         )
+        if getattr(self, "response_format", "text") == "json":
+            last_error = _json_validation_error(answer)
+            repairs = 0
+            while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
+                repairs += 1
+                working_messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Deine letzte finale Antwort entspricht nicht dem "
+                            "verlangten JSON-Format. Korrigiere die Antwort jetzt "
+                            "so, dass sie ausschließlich aus syntaktisch gültigem "
+                            "JSON besteht. Behalte die inhaltliche Aufgabe und die "
+                            "verlangte Struktur bei. Du darfst die verfügbaren Tools "
+                            "verwenden, falls das für eine korrekte Antwort "
+                            "erforderlich ist. Verwende keine Markdown-Codeblöcke "
+                            "und keinen Text außerhalb des JSON-Werts. "
+                            f"Validierungsfehler: {last_error}"
+                        ),
+                    }
+                )
+                answer = await self._run_model_loop(
+                    messages=working_messages,
+                    tools=tools,
+                    routes=routes,
+                    enabled_server_names=enabled_server_names,
+                    max_tool_calls=self.max_tool_calls,
+                    phase="main",
+                    run_state=main_run_state,
+                )
+                last_error = _json_validation_error(answer)
+
+            if last_error is not None:
+                raise ValueError(
+                    "Das Modell hat auch nach "
+                    f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
+                    f"gültiges JSON geliefert: {last_error}"
+                )
+
         self.history.extend(
             [
                 {"role": "user", "content": prompt},
@@ -240,6 +296,7 @@ class ConversationMixin:
         phase: str,
         knowledge_state: _KnowledgeRunState | None = None,
         max_concept_reads: int | None = None,
+        run_state: ModelLoopRunState | None = None,
     ) -> str:
         return await run_model_loop(
             self,
@@ -251,6 +308,7 @@ class ConversationMixin:
             phase=phase,
             knowledge_state=knowledge_state,
             max_concept_reads=max_concept_reads,
+            run_state=run_state,
         )
 
     def _append_tool_error(

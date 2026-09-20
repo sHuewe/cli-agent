@@ -97,6 +97,16 @@ def test_model_cli_argument_is_parsed() -> None:
     assert build_parser().parse_args(["--model", "gwen100"]).model == "gwen100"
 
 
+def test_response_format_defaults_to_text_and_parses_json() -> None:
+    assert build_parser().parse_args(["prompt"]).response_format == "text"
+    assert (
+        build_parser().parse_args(
+            ["--response-format", "json", "prompt"]
+        ).response_format
+        == "json"
+    )
+
+
 
 def test_add_file_context_is_alias_for_context_file() -> None:
     direct = build_parser().parse_args(

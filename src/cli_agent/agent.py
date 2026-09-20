@@ -56,7 +56,7 @@ Antworte abschließend knapp und in der Sprache des Benutzers.
 
 
 class CliAgent(McpLifecycleMixin, ConversationMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, okf: OkfConfigLike | str | Path | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, okf: OkfConfigLike | str | Path | None = None, response_format: str = "text") -> None:
         self.workspace_directory = workspace_directory.resolve()
         self.model_client = model_client
         self.mcp_servers = mcp_servers
@@ -67,6 +67,9 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self.network = network or NetworkConfig()
         self.mcp_policy = mcp_policy or McpPolicy()
         self.approval_callback = approval_callback
+        if response_format not in {"text", "json"}:
+            raise ValueError("response_format muss 'text' oder 'json' sein.")
+        self.response_format = response_format
         self._session_approved_tools: set[str] = set()
         self._okf_options = self._normalize_okf_config(okf)
         self.history: list[dict[str, Any]] = []
@@ -211,6 +214,13 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             "verwende keine absoluten Dateipfade.",
             f"Aktuelles Datum (isoformat): {datetime.datetime.now(datetime.UTC).isoformat()}",
         ]
+        if self.response_format == "json":
+            parts.append(
+                "Für diesen Lauf ist JSON als finales Antwortformat vorgeschrieben. "
+                "Liefere als finale Antwort ausschließlich syntaktisch gültiges JSON. "
+                "Verwende keine Markdown-Codeblöcke und füge außerhalb des JSON-Werts "
+                "keine Erklärungen oder sonstigen Texte hinzu."
+            )
         available_tool_names = [tool["function"]["name"] for tool in self._model_tools()]
         if available_tool_names:
             parts.append("Aktuell verfügbare MCP-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(available_tool_names))

@@ -73,6 +73,7 @@ class OneShotRunOptions:
     model: str | None = None
     workspace_access: str | None = None
     retry_policy: ModelRetryPolicy | None = None
+    response_format: str = "text"
     context_files: tuple[Path, ...] = ()
     output: Path | None = None
     overwrite_output: bool = False
@@ -157,6 +158,12 @@ def apply_workspace_access_override(
     return replace(config, mcp_servers=servers)
 
 
+def _validate_response_format(value: str) -> str:
+    if value not in {"text", "json"}:
+        raise ValueError("response_format muss 'text' oder 'json' sein.")
+    return value
+
+
 def apply_model_override(
     config: AppConfig,
     *,
@@ -178,6 +185,7 @@ async def run_once(
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
     if not options.prompt or options.prompt.isspace():
         raise ValueError("One-Shot-Prompt darf nicht leer sein.")
+    response_format = _validate_response_format(options.response_format)
 
     config = deps.load_config(options.config_file)
     admin_config = deps.load_admin_config()
@@ -229,6 +237,7 @@ async def run_once(
         approval_callback=options.approval_callback,
         okf=config.okf,
         file_contexts=file_contexts,
+        response_format=response_format,
     )
 
     web_statuses: list[str] = []

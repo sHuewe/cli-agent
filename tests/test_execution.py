@@ -445,3 +445,63 @@ def test_workspace_write_passes_mutation_protected_paths_to_os_server(
         "--mutation-protected-path",
         str(context),
     )
+
+
+def test_run_once_defaults_to_text_response_format(tmp_path: Path) -> None:
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, *_args, **kwargs):
+            captured["response_format"] = kwargs["response_format"]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            return "usage" if prompt == "tokens" else "plain text"
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+
+    result = asyncio.run(
+        run_once(
+            OneShotRunOptions(
+                workspace=tmp_path,
+                prompt="work",
+            ),
+            dependencies=dependencies,
+        )
+    )
+
+    assert result.answer == "plain text"
+    assert captured["response_format"] == "text"
+
+
+def test_run_once_rejects_unknown_response_format(tmp_path: Path) -> None:
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=object,
+    )
+
+    with pytest.raises(ValueError, match="response_format"):
+        asyncio.run(
+            run_once(
+                OneShotRunOptions(
+                    workspace=tmp_path,
+                    prompt="work",
+                    response_format="yaml",
+                ),
+                dependencies=dependencies,
+            )
+        )
