@@ -15,10 +15,10 @@ from .filesystem_security import path_entry_is_symlink_or_reparse
 
 MAX_FLOW_STEPS = 100
 MAX_FOREACH_ITEMS = 1000
-_STEP_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\\Z")
-_ITEM_EXPR = re.compile(r"\\$\\{item(?:\\.([A-Za-z_][A-Za-z0-9_-]*(?:\\.[A-Za-z_][A-Za-z0-9_-]*)*))?\\}")
+_STEP_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
+_ITEM_EXPR = re.compile(r"\$\{item(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}")
 _FOREACH = re.compile(
-    r"steps\\.([A-Za-z_][A-Za-z0-9_-]*)\\.output(?:\\.([A-Za-z_][A-Za-z0-9_-]*(?:\\.[A-Za-z_][A-Za-z0-9_-]*)*))?\\Z"
+    r"steps\.([A-Za-z_][A-Za-z0-9_-]*)\.output(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\Z"
 )
 
 
