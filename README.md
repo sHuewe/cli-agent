@@ -388,9 +388,10 @@ cli-agent-flow run flow.toml --workspace C:\Projekte\mein-projekt
 Der Workspace wird einmal für den gesamten Flow festgelegt. Ein einzelner Schritt
 kann ihn nicht überschreiben. Jeder Schritt darf dagegen seine eigene normale
 `cli-agent`-Konfiguration auswählen und damit z. B. ein anderes Modell oder
-andere benutzerseitig konfigurierte MCP-Server verwenden. Zusätzlich wird der
-Workspace-Zugriff pro Schritt explizit mit `workspace_access = "none" | "read" |
-"write"` festgelegt. Die maschinenweite Admin-Policy bleibt unverändert
+andere benutzerseitig konfigurierte MCP-Server verwenden. Der Modellname kann
+zusätzlich mit `model = "..."` pro Schritt überschrieben werden. Zusätzlich wird
+der Workspace-Zugriff pro Schritt explizit mit `workspace_access = "none" |
+"read" | "write"` festgelegt. Die maschinenweite Admin-Policy bleibt unverändert
 maßgeblich.
 
 Die erste Version führt Schritte bewusst sequenziell aus. Ein Schritt kann den
@@ -412,11 +413,18 @@ version = 1
 [[steps]]
 id = "discover"
 config = "config-discover.toml"
+model = "qwen3.5:9b"
 prompt_file = "prompts/discover.md"
 context_file = "manual.txt"
 output = "work/items.json"
 overwrite_output = true
 workspace_access = "read"
+
+[steps.retry]
+max_attempts = 3
+initial_delay_seconds = 1
+backoff_multiplier = 2
+max_delay_seconds = 10
 
 [[steps]]
 id = "process"
@@ -432,6 +440,8 @@ approve_tools = ["os__write_file"]
 id = "${item.id}"
 title = "${item.title}"
 ```
+
+`[steps.retry]` kann pro Schritt bounded Retries für transient fehlgeschlagene Modellrequests konfigurieren (z. B. Verbindungsfehler, HTTP 429/5xx). Dabei wird nur der konkrete Modellrequest wiederholt, nicht der gesamte Step oder bereits ausgeführte Tool-Aufrufe.
 
 Weitere Details und die aktuellen Einschränkungen stehen unter
 [Multi-Step-Flows](docs/flow.md).
