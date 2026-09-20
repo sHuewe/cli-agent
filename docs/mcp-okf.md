@@ -61,9 +61,13 @@ gefassten oder fachlich ungeeigneten Root auswählen. Die Root-Auswahl ist daher
 eine lokale Datenfreigabeentscheidung und sollte wie die Auswahl anderer
 LLM-Kontextquellen behandelt werden.
 
+Ein konfiguriertes Verzeichnis wird **nicht automatisch zu einem OKF-Repository**. Beim Start muss darunter mindestens ein gültiges OKF-Concept gefunden werden. Ein Concept ist für diese Erkennung nur dann gültig, wenn es als UTF-8-Markdown gelesen werden kann, ein korrekt begrenztes YAML-Frontmatter besitzt und dort ein nicht-leeres Feld `type` enthält. Fehlt ein solcher Nachweis, startet der OKF-MCP fail-closed nicht und gibt keine Verzeichnis- oder Markdown-Inhalte an den Retrieval-Lauf weiter.
+
+Auch in einem gültigen OKF-Root fungieren die Knowledge-Tools nicht als allgemeiner Markdown-Browser: nicht OKF-konforme `.md`-Dateien werden nicht in synthetischen Indizes angeboten und `knowledge_read` verweigert sie. Unterverzeichnisse ohne gültige OKF-Concepts werden ebenfalls nicht angeboten. `index.md` und `log.md` gelten nur innerhalb eines Verzeichnisbereichs, der zu einem validierten OKF-Baum gehört.
+
 Mit `required = true` wird die Benutzeraufgabe nicht weiterbearbeitet, wenn die
 Knowledge-Phase nicht gestartet werden kann oder fehlschlägt. Mit
-`required = false` darf die Main-Phase ohne OKF-Kontext fortfahren.
+`required = false` darf die Main-Phase ohne OKF-Kontext fortfahren. Das gilt insbesondere auch für einen versehentlich konfigurierten normalen Ordner, der kein gültiges OKF enthält.
 
 ## Tools
 
