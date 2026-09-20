@@ -47,6 +47,7 @@ class FlowStep:
     model: str | None
     prompt_file: Path
     context_file: Path | None
+    add_web_context: tuple[str, ...]
     output: str | None
     overwrite_output: bool
     workspace_access: str
@@ -182,6 +183,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "model",
         "prompt_file",
         "context_file",
+        "add_file_context",
+        "add_web_context",
         "output",
         "overwrite_output",
         "workspace_access",
@@ -223,16 +226,59 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         )
         context_value = raw.get("context_file")
+        add_file_context_value = raw.get("add_file_context")
+        if context_value is not None and add_file_context_value is not None:
+            raise ValueError(
+                f"steps[{index}] darf nicht gleichzeitig context_file "
+                "und add_file_context setzen."
+            )
+        effective_context_value = (
+            add_file_context_value
+            if add_file_context_value is not None
+            else context_value
+        )
         context_file = (
             Path(
                 _string(
-                    context_value,
-                    field=f"steps[{index}].context_file",
+                    effective_context_value,
+                    field=(
+                        f"steps[{index}].add_file_context"
+                        if add_file_context_value is not None
+                        else f"steps[{index}].context_file"
+                    ),
                 )
             )
-            if context_value is not None
+            if effective_context_value is not None
             else None
         )
+
+        raw_web_context = raw.get("add_web_context", [])
+        if (
+            not isinstance(raw_web_context, list)
+            or not all(
+                isinstance(value, str) and value.strip()
+                for value in raw_web_context
+            )
+        ):
+            raise ValueError(
+                f"steps[{index}].add_web_context muss eine Liste "
+                "nichtleerer URLs sein."
+            )
+        add_web_context = tuple(
+            value.strip()
+            for value in raw_web_context
+        )
+        if len(add_web_context) != len(set(add_web_context)):
+            raise ValueError(
+                f"steps[{index}].add_web_context darf keine "
+                "doppelten URLs enthalten."
+            )
+        if any(_ITEM_EXPR.search(value) for value in add_web_context):
+            raise ValueError(
+                f"steps[{index}].add_web_context darf nicht aus "
+                "foreach-Daten parametrisiert werden."
+            )
+
         config_value = raw.get("config")
         config = (
             Path(
@@ -392,6 +438,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 model=model,
                 prompt_file=prompt_file,
                 context_file=context_file,
+                add_web_context=add_web_context,
                 output=output,
                 overwrite_output=overwrite_output,
                 workspace_access=workspace_access,
@@ -773,6 +820,7 @@ async def run_flow(
                     workspace_access=step.workspace_access,
                     retry_policy=step.retry_policy,
                     context_file=context,
+                    add_web_context=step.add_web_context,
                     output=output,
                     overwrite_output=step.overwrite_output,
                     approval_callback=build_preapproval_callback(
