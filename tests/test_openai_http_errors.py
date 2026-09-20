@@ -72,6 +72,7 @@ def test_openai_http_status_error_includes_status_and_provider_body(monkeypatch)
     assert "hat die Anfrage" in message
     assert "context length" in message
     assert "nicht erreichbar" not in message
+    assert exc_info.value.retryable is False
 
 
 def test_openai_http_status_error_without_body_still_reports_status(monkeypatch) -> None:
@@ -87,8 +88,10 @@ def test_openai_http_status_error_without_body_still_reports_status(monkeypatch)
         allowed_hosts=("openrouter.ai",),
     )
 
-    with pytest.raises(OpenAIError, match="HTTP 429"):
+    with pytest.raises(OpenAIError, match="HTTP 429") as exc_info:
         asyncio.run(client.chat([], []))
+
+    assert exc_info.value.retryable is True
 
 
 def test_http_error_detail_is_bounded_and_terminal_safe() -> None:
