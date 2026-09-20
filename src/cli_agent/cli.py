@@ -96,7 +96,18 @@ def build_parser() -> argparse.ArgumentParser:
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
-    parser.add_argument("--context-file", type=Path, default=None, metavar="FILE", help="Add one explicit UTF-8 text file from the workspace as untrusted reference context.")
+    parser.add_argument(
+        "--context-file",
+        "--add-file-context",
+        dest="context_file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Add one explicit UTF-8 text file from the workspace as "
+            "untrusted reference context. --add-file-context is an alias."
+        ),
+    )
     parser.add_argument("--prompt-file", type=Path, default=None, metavar="FILE", help="Read the one-shot user prompt from one explicit UTF-8 text file inside the workspace. Supports {{var:name}} template variables.")
     parser.add_argument("--var", action="append", default=[], metavar="NAME=VALUE", help="Set one prompt-template variable. Repeat for multiple variables.")
     parser.add_argument("--output", type=Path, default=None, metavar="FILE", help="Write the latest model answer to a workspace-local UTF-8 text file in addition to stdout.")
