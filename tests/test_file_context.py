@@ -420,3 +420,41 @@ def test_output_target_updates_same_new_file_during_session(tmp_path: Path) -> N
     target.write_text("second")
 
     assert (tmp_path / "review.md").read_text(encoding="utf-8") == "second"
+
+
+def test_aggregate_context_limit_stops_before_loading_later_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(file_context_module, "MAX_LLM_CONTEXT_TOTAL_BYTES", 6)
+    (tmp_path / "one.txt").write_text("1234", encoding="utf-8")
+    (tmp_path / "two.txt").write_text("5678", encoding="utf-8")
+    (tmp_path / "three.txt").write_text("later", encoding="utf-8")
+
+    original = file_context_module.prepare_context_file
+    loaded = []
+
+    def recording_prepare(workspace: Path, path: Path):
+        loaded.append(path)
+        return original(workspace, path)
+
+    monkeypatch.setattr(
+        file_context_module,
+        "prepare_context_file",
+        recording_prepare,
+    )
+
+    with pytest.raises(ValueError, match="zusammen das Sicherheitslimit"):
+        prepare_file_options(
+            tmp_path,
+            context_files=(
+                Path("one.txt"),
+                Path("two.txt"),
+                Path("three.txt"),
+            ),
+            prompt_file=None,
+            output=None,
+            overwrite_output=False,
+        )
+
+    assert loaded == [Path("one.txt"), Path("two.txt")]
