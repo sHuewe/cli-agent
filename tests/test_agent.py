@@ -670,3 +670,83 @@ def test_agent_rejects_unknown_response_format(tmp_path: Path) -> None:
             (),
             response_format="yaml",
         )
+
+
+def test_json_response_repair_keeps_tools_and_tool_history(tmp_path: Path) -> None:
+    model = RecordingModel(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "read-1",
+                        "function": {
+                            "name": "documents__read",
+                            "arguments": {},
+                        },
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "not json"},
+            {"role": "assistant", "content": '{"ok":true}'},
+        ]
+    )
+    agent, session = connected_agent(tmp_path, model)
+    agent.response_format = "json"
+
+    answer = asyncio.run(agent.ask("Lies das Dokument und antworte als JSON."))
+
+    assert answer == '{"ok":true}'
+    assert session.tool_calls == [("read", {})]
+    assert len(model.calls) == 3
+    repair_messages, repair_tools = model.calls[2]
+    assert repair_tools
+    assert any(message.get("role") == "tool" for message in repair_messages)
+    assert "Korrigiere die Antwort jetzt" in repair_messages[-1]["content"]
+    assert "verfügbaren Tools verwenden" in repair_messages[-1]["content"]
+
+
+def test_json_response_format_fails_after_two_repairs(tmp_path: Path) -> None:
+    model = RecordingModel(
+        [
+            {"role": "assistant", "content": "not json 1"},
+            {"role": "assistant", "content": "not json 2"},
+            {"role": "assistant", "content": "not json 3"},
+        ]
+    )
+    agent = CliAgent(
+        tmp_path,
+        model,
+        (),
+        response_format="json",
+    )
+    agent._exit_stack = SimpleNamespace()
+
+    with pytest.raises(ValueError, match="nach 2 Korrekturversuchen"):
+        asyncio.run(agent.ask("Antworte als JSON."))
+
+    assert len(model.calls) == 3
+
+
+@pytest.mark.parametrize("invalid_json", ["NaN", "Infinity", "-Infinity"])
+def test_json_response_format_repairs_non_standard_constants(
+    tmp_path: Path,
+    invalid_json: str,
+) -> None:
+    model = RecordingModel(
+        [
+            {"role": "assistant", "content": invalid_json},
+            {"role": "assistant", "content": '{"ok":true}'},
+        ]
+    )
+    agent = CliAgent(
+        tmp_path,
+        model,
+        (),
+        response_format="json",
+    )
+    agent._exit_stack = SimpleNamespace()
+
+    assert asyncio.run(agent.ask("Antworte als JSON.")) == '{"ok":true}'
+    assert len(model.calls) == 2
