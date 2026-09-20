@@ -31,17 +31,29 @@ class OkfRepository(RepositoryMetadataMixin):
             workspace = WorkspaceRoot.from_directory(directory)
         except WorkspacePathError as exc:
             raise OkfRepositoryError(str(exc)) from exc
-        return cls(
+
+        repository = cls(
             workspace=workspace,
             max_read_bytes=max_read_bytes,
             max_index_entries=max_index_entries,
         )
+        if not repository._directory_contains_okf_concept(workspace.directory):
+            raise OkfRepositoryError(
+                "Der konfigurierte Pfad enthält kein gültiges OKF-Repository: "
+                "Es wurde kein lesbares OKF-Concept mit gültigem YAML-Frontmatter "
+                "und nicht-leerem Feld 'type' gefunden."
+            )
+        return repository
 
     def knowledge_index(self, path: str = ".") -> dict[str, Any]:
         """Read or synthesize the progressive index for one OKF directory."""
         directory = self._resolve(path)
         if not directory.is_dir():
             raise OkfRepositoryError(f"Pfad ist kein OKF-Ordner: {path!r}")
+        if not self._directory_contains_okf_concept(directory):
+            raise OkfRepositoryError(
+                "Der angeforderte Ordner enthält keine gültigen OKF-Concepts."
+            )
 
         relative_directory = self.workspace.relative(directory)
         unresolved_index_path = directory / "index.md"
@@ -54,7 +66,7 @@ class OkfRepository(RepositoryMetadataMixin):
 
         if index_path.is_file():
             content = self._read_text(index_path)
-            links = self._extract_internal_links(content, index_path)
+            links = self._safe_internal_links(content, index_path)
             return {
                 "directory": relative_directory,
                 "source": self.workspace.relative(index_path),
@@ -82,12 +94,13 @@ class OkfRepository(RepositoryMetadataMixin):
                 safe_entry = self.workspace.resolve(relative_path)
             except WorkspacePathError:
                 warnings.append(
-                    f"Unsicherer oder nach außen führender Link wurde ausgelassen: "
-                    f"{relative_path}"
+                    "Unsicherer oder nach außen führender Link wurde ausgelassen."
                 )
                 continue
 
             if safe_entry.is_dir():
+                if not self._directory_contains_okf_concept(safe_entry):
+                    continue
                 entries.append(
                     {
                         "kind": "directory",
@@ -111,19 +124,13 @@ class OkfRepository(RepositoryMetadataMixin):
                 )
                 continue
 
-            try:
-                metadata = self._parse_frontmatter(self._read_text(safe_entry))
-                entries.append(self._concept_summary(relative_path, metadata))
-            except OkfRepositoryError as exc:
-                entries.append(
-                    {
-                        "kind": "concept",
-                        "path": relative_path,
-                        "title": safe_entry.stem,
-                        "next_tool": "knowledge_read",
-                        "warning": str(exc),
-                    }
-                )
+            metadata = self._concept_metadata(safe_entry)
+            if metadata is None:
+                # Non-OKF Markdown is intentionally invisible to the knowledge
+                # tools. This prevents a broadly chosen root from turning into
+                # a generic Markdown file reader.
+                continue
+            entries.append(self._concept_summary(relative_path, metadata))
 
         return {
             "directory": relative_directory,
@@ -135,7 +142,7 @@ class OkfRepository(RepositoryMetadataMixin):
         }
 
     def knowledge_read(self, path: str) -> dict[str, Any]:
-        """Read one OKF concept, index, or log document."""
+        """Read one validated OKF concept, index, or log document."""
         file_path = self._resolve(path)
         if not file_path.is_file():
             raise OkfRepositoryError(f"Pfad ist keine Datei: {path!r}")
@@ -144,36 +151,130 @@ class OkfRepository(RepositoryMetadataMixin):
                 "knowledge_read liest ausschließlich OKF-Markdown-Dateien (.md)."
             )
 
-        content = self._read_text(file_path)
         relative_path = self.workspace.relative(file_path)
-        warning: str | None = None
-        if file_path.name == "index.md":
-            kind = "index"
+        if file_path.name in {"index.md", "log.md"}:
+            if not self._directory_contains_okf_concept(file_path.parent):
+                raise OkfRepositoryError(
+                    "Die angeforderte strukturelle Markdown-Datei gehört nicht "
+                    "zu einem gültigen OKF-Bereich."
+                )
+            content = self._read_text(file_path)
+            kind = "index" if file_path.name == "index.md" else "log"
             summary: dict[str, Any] | None = None
-        elif file_path.name == "log.md":
-            kind = "log"
-            summary = None
         else:
-            kind = "concept"
+            content = self._read_text(file_path)
             try:
                 metadata = self._parse_frontmatter(content)
-                summary = self._concept_summary(relative_path, metadata)
             except OkfRepositoryError as exc:
-                summary = {
-                    "kind": "concept",
-                    "path": relative_path,
-                    "title": file_path.stem,
-                }
-                warning = str(exc)
+                raise OkfRepositoryError(
+                    "knowledge_read verweigert nicht konformes Markdown; "
+                    "OKF-Concepts benötigen gültiges YAML-Frontmatter mit "
+                    "nicht-leerem Feld 'type'."
+                ) from exc
+            kind = "concept"
+            summary = self._concept_summary(relative_path, metadata)
 
         return {
             "path": relative_path,
             "kind": kind,
             "summary": self._json_safe(summary),
-            "warning": warning,
+            "warning": None,
             "content": content,
-            "internal_links": self._extract_internal_links(content, file_path),
+            "internal_links": self._safe_internal_links(content, file_path),
         }
+
+    def _safe_internal_links(
+        self,
+        content: str,
+        source_path: Path,
+    ) -> list[dict[str, Any]]:
+        links = self._extract_internal_links(content, source_path)
+        safe_links: list[dict[str, Any]] = []
+        for link in links:
+            if link.get("exists") is False:
+                safe_links.append(link)
+                continue
+
+            path = link.get("path")
+            if not isinstance(path, str):
+                continue
+            try:
+                target = self.workspace.resolve(path)
+            except WorkspacePathError:
+                continue
+
+            if target.is_dir():
+                if self._directory_contains_okf_concept(target):
+                    safe_links.append(link)
+                continue
+
+            if self._is_okf_document(target):
+                safe_links.append(link)
+        return safe_links
+
+    def _is_okf_document(self, file_path: Path) -> bool:
+        if not file_path.is_file() or file_path.suffix.casefold() != ".md":
+            return False
+        if file_path.name in {"index.md", "log.md"}:
+            return self._directory_contains_okf_concept(file_path.parent)
+        return self._concept_metadata(file_path) is not None
+
+    def _concept_metadata(self, file_path: Path) -> dict[str, Any] | None:
+        if (
+            not file_path.is_file()
+            or file_path.suffix.casefold() != ".md"
+            or file_path.name in {"index.md", "log.md"}
+        ):
+            return None
+        try:
+            return self._parse_frontmatter(self._read_text(file_path))
+        except OkfRepositoryError:
+            return None
+
+    def _directory_contains_okf_concept(
+        self,
+        directory: Path,
+        *,
+        _visited: set[Path] | None = None,
+    ) -> bool:
+        try:
+            resolved_directory = directory.resolve(strict=True)
+            resolved_directory.relative_to(self.workspace.directory)
+        except (OSError, RuntimeError, ValueError):
+            return False
+        if not resolved_directory.is_dir():
+            return False
+
+        visited = _visited if _visited is not None else set()
+        if resolved_directory in visited:
+            return False
+        visited.add(resolved_directory)
+
+        try:
+            entries = tuple(resolved_directory.iterdir())
+        except OSError:
+            return False
+
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            try:
+                relative_path = self.workspace.relative(entry)
+                safe_entry = self.workspace.resolve(relative_path)
+            except WorkspacePathError:
+                continue
+
+            if safe_entry.is_dir():
+                if self._directory_contains_okf_concept(
+                    safe_entry,
+                    _visited=visited,
+                ):
+                    return True
+                continue
+
+            if self._concept_metadata(safe_entry) is not None:
+                return True
+        return False
 
     def _resolve(self, path: str) -> Path:
         try:
@@ -194,7 +295,7 @@ class OkfRepository(RepositoryMetadataMixin):
             raise
         except OSError as exc:
             raise OkfRepositoryError(
-                f"Dateigröße konnte nicht sicher gelesen werden: "
+                "Dateigröße konnte nicht sicher gelesen werden: "
                 f"{self.workspace.relative(file_path)}"
             ) from exc
         if size > self.max_read_bytes:
@@ -207,11 +308,11 @@ class OkfRepository(RepositoryMetadataMixin):
             return file_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise OkfRepositoryError(
-                f"OKF-Datei ist kein gültiger UTF-8-Text: "
+                "OKF-Datei ist kein gültiger UTF-8-Text: "
                 f"{self.workspace.relative(file_path)}"
             ) from exc
         except OSError as exc:
             raise OkfRepositoryError(
-                f"OKF-Datei konnte nicht gelesen werden: "
+                "OKF-Datei konnte nicht gelesen werden: "
                 f"{self.workspace.relative(file_path)}"
             ) from exc
