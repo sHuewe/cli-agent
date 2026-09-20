@@ -220,3 +220,166 @@ def test_knowledge_concept_limit_disables_tools_on_next_model_request() -> None:
     assert result["reason_code"] == "not_found"
     assert agent.model_client.tool_sets[0] == tools
     assert agent.model_client.tool_sets[1] == []
+
+
+def test_knowledge_loop_retries_premature_positive_then_accepts_not_applicable() -> None:
+    state = _KnowledgeRunState()
+    agent = LoopAgent(
+        [
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "found_content": True,
+                        "selected_okf_tokens": ["not-yet-valid"],
+                    }
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "found_content": False,
+                        "selected_okf_tokens": [],
+                        "reason_code": "not_applicable",
+                    }
+                ),
+            },
+        ]
+    )
+
+    result = json.loads(_run(agent, phase="knowledge", state=state))
+
+    assert result["found_content"] is False
+    assert result["reason_code"] == "not_applicable"
+    assert len(agent.model_client.tool_sets) == 2
+
+
+def test_knowledge_loop_falls_back_after_repeated_premature_positive() -> None:
+    state = _KnowledgeRunState()
+    premature = {
+        "role": "assistant",
+        "content": json.dumps(
+            {
+                "found_content": True,
+                "selected_okf_tokens": ["not-yet-valid"],
+            }
+        ),
+    }
+    agent = LoopAgent(
+        [premature.copy(), premature.copy(), premature.copy()]
+    )
+
+    result = json.loads(_run(agent, phase="knowledge", state=state))
+
+    assert result["found_content"] is False
+    assert result["reason_code"] == "retrieval_incomplete"
+    assert result["agent_fallback"]["strategy"] == "no_read_concepts"
+    assert any(
+        name == "knowledge_selection_fallback.json"
+        for name, _ in agent.dumps
+    )
+
+
+def test_knowledge_selection_only_mode_rejects_tools_then_falls_back() -> None:
+    state = _KnowledgeRunState()
+    token = state.register_concept(
+        {"kind": "concept", "path": "a.md", "content": "A"}
+    )
+    assert token is not None
+
+    invalid_selection = {
+        "role": "assistant",
+        "content": json.dumps(
+            {
+                "found_content": True,
+                "selected_okf_tokens": ["bad-token"],
+            }
+        ),
+    }
+    rejected_tool_call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "okf__knowledge_read",
+            "arguments": {"path": "another.md"},
+        },
+    }
+    agent = LoopAgent(
+        [
+            invalid_selection,
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [rejected_tool_call],
+            },
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [rejected_tool_call],
+            },
+        ]
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "okf__knowledge_read"},
+        }
+    ]
+
+    result = json.loads(
+        _run(agent, phase="knowledge", state=state, tools=tools)
+    )
+
+    assert result["found_content"] is True
+    assert result["selected_okf_tokens"] == [token]
+    assert result["agent_fallback"]["strategy"] == "all_read_concepts"
+    assert agent.model_client.tool_sets[0] == tools
+    assert agent.model_client.tool_sets[1] == []
+    assert agent.model_client.tool_sets[2] == []
+    assert len(agent.discarded) == 1
+
+
+def test_knowledge_invalid_positive_cannot_be_corrected_to_false() -> None:
+    state = _KnowledgeRunState()
+    token = state.register_concept(
+        {"kind": "concept", "path": "a.md", "content": "A"}
+    )
+    assert token is not None
+    agent = LoopAgent(
+        [
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "found_content": True,
+                        "selected_okf_tokens": ["bad-token"],
+                    }
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "found_content": False,
+                        "selected_okf_tokens": [],
+                        "reason_code": "not_found",
+                    }
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "found_content": True,
+                        "selected_okf_tokens": [token],
+                    }
+                ),
+            },
+        ]
+    )
+
+    result = json.loads(_run(agent, phase="knowledge", state=state))
+
+    assert result["found_content"] is True
+    assert result["selected_okf_tokens"] == [token]
