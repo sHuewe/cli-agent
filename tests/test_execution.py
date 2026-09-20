@@ -421,3 +421,26 @@ def test_retrying_model_client_caps_initial_delay_at_maximum(
 
     assert result == {"content": "ok"}
     assert sleeps == []
+
+
+def test_workspace_write_passes_mutation_protected_paths_to_os_server(
+    tmp_path: Path,
+) -> None:
+    prompt = (tmp_path / "prompt.md").resolve()
+    context = (tmp_path / "context.txt").resolve()
+
+    config = apply_workspace_access_override(
+        _config(),
+        workspace_access="write",
+        mutation_protected_paths=(prompt, context),
+    )
+
+    server = config.mcp_servers[0]
+    assert server.name == "os"
+    assert server.allow_write_files() is True
+    assert server.args[-4:] == (
+        "--mutation-protected-path",
+        str(prompt),
+        "--mutation-protected-path",
+        str(context),
+    )
