@@ -32,20 +32,42 @@ class ModelRetryPolicy:
     max_delay_seconds: float = 10.0
 
     def __post_init__(self) -> None:
-        if isinstance(self.max_attempts, bool) or not 1 <= self.max_attempts <= 10:
-            raise ValueError("max_attempts muss zwischen 1 und 10 liegen.")
-        if not 0 <= self.initial_delay_seconds <= 60:
+        if (
+            isinstance(self.max_attempts, bool)
+            or not isinstance(self.max_attempts, int)
+            or not 1 <= self.max_attempts <= 10
+        ):
             raise ValueError(
-                "initial_delay_seconds muss zwischen 0 und 60 liegen."
+                "max_attempts muss eine Ganzzahl zwischen 1 und 10 sein."
             )
-        if not 1 <= self.backoff_multiplier <= 10:
-            raise ValueError(
-                "backoff_multiplier muss zwischen 1 und 10 liegen."
-            )
-        if not 0 <= self.max_delay_seconds <= 300:
-            raise ValueError(
-                "max_delay_seconds muss zwischen 0 und 300 liegen."
-            )
+        for name, value, lower, upper in (
+            (
+                "initial_delay_seconds",
+                self.initial_delay_seconds,
+                0,
+                60,
+            ),
+            (
+                "backoff_multiplier",
+                self.backoff_multiplier,
+                1,
+                10,
+            ),
+            (
+                "max_delay_seconds",
+                self.max_delay_seconds,
+                0,
+                300,
+            ),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not lower <= value <= upper
+            ):
+                raise ValueError(
+                    f"{name} muss eine Zahl zwischen {lower} und {upper} sein."
+                )
 
 
 class RetryingModelClient:
