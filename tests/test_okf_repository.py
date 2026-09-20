@@ -245,3 +245,42 @@ def test_json_safe_converts_dates_tuples_and_unknown_objects() -> None:
     assert value["when"] == "2026-09-12"
     assert value["values"][0] == 1
     assert isinstance(value["values"][1], str)
+
+
+def test_explicit_index_bounds_and_deduplicates_link_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "concept.md"
+    target.write_text(_concept(title="Concept"), encoding="utf-8")
+    (tmp_path / "index.md").write_text(
+        "\n".join(
+            [
+                "[One](concept.md)",
+                "[Two](concept.md)",
+                "[Three](concept.md)",
+                "[Four](concept.md)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    repository = OkfRepository.from_directory(tmp_path, max_index_entries=3)
+
+    calls: list[Path] = []
+    original = repository._is_okf_document
+
+    def counting_is_okf_document(path: Path) -> bool:
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(repository, "_is_okf_document", counting_is_okf_document)
+
+    result = repository.knowledge_index()
+
+    assert [link["label"] for link in result["internal_links"]] == [
+        "One",
+        "Two",
+        "Three",
+    ]
+    assert calls == [target.resolve()]
