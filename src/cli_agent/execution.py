@@ -5,7 +5,6 @@ from dataclasses import dataclass, replace
 import logging
 from pathlib import Path
 from typing import Any
-import json
 
 from .admin_config import AdminConfig, load_admin_config
 from .config import (
@@ -26,7 +25,6 @@ from .model import ModelRetryPolicy, RetryingModelClient
 from .model_factory import create_model_client
 
 OS_MCP_SERVER_NAME = "os"
-MAX_RESPONSE_FORMAT_REPAIRS = 2
 logger = logging.getLogger("cli_agent.execution")
 ApprovalCallback = Callable[
     [str, dict[str, object]],
@@ -166,54 +164,6 @@ def _validate_response_format(value: str) -> str:
     return value
 
 
-def _validate_json_answer(answer: str) -> None:
-    def reject_constant(value: str) -> None:
-        raise ValueError(f"nicht standardkonstante JSON-Zahl {value!r}")
-
-    try:
-        json.loads(answer, parse_constant=reject_constant)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise ValueError(f"Antwort ist kein gültiges JSON: {exc}") from exc
-
-
-async def ensure_response_format(
-    agent: Any,
-    answer: str,
-    *,
-    response_format: str,
-) -> str:
-    response_format = _validate_response_format(response_format)
-    if response_format == "text":
-        return answer
-
-    last_error: ValueError | None = None
-    for repair_attempt in range(MAX_RESPONSE_FORMAT_REPAIRS + 1):
-        try:
-            _validate_json_answer(answer)
-            return answer
-        except ValueError as exc:
-            last_error = exc
-            if repair_attempt >= MAX_RESPONSE_FORMAT_REPAIRS:
-                break
-            answer = await agent.ask(
-                "Deine letzte finale Antwort entspricht nicht dem verlangten "
-                "JSON-Format. Korrigiere die Antwort jetzt so, dass sie "
-                "ausschließlich aus syntaktisch gültigem JSON besteht. "
-                "Behalte die inhaltliche Aufgabe und die verlangte Struktur "
-                "bei. Du darfst die verfügbaren Tools verwenden, falls das "
-                "für eine korrekte Antwort erforderlich ist. Verwende keine "
-                "Markdown-Codeblöcke und keinen Text außerhalb des JSON-Werts. "
-                f"Validierungsfehler: {exc}"
-            )
-
-    assert last_error is not None
-    raise ValueError(
-        "Das Modell hat auch nach "
-        f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
-        f"gültiges JSON geliefert: {last_error}"
-    )
-
-
 def apply_model_override(
     config: AppConfig,
     *,
@@ -297,11 +247,6 @@ async def run_once(
                 await agent.ask(f"add_web_context {url}")
             )
         answer = await agent.ask(options.prompt)
-        answer = await ensure_response_format(
-            agent,
-            answer,
-            response_format=response_format,
-        )
         usage = await agent.ask("tokens")
 
     if (
