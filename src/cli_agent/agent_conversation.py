@@ -13,7 +13,7 @@ from .agent_knowledge import (
     _knowledge_call_key,
     tool_result_text,
 )
-from .agent_loop import run_model_loop
+from .agent_loop import ModelLoopRunState, run_model_loop
 from .agent_types import ToolRoute
 from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
@@ -66,6 +66,7 @@ class ConversationMixin:
         tools = self._model_tools()
         routes = self._tool_routes
         enabled_server_names = set(self._active_servers)
+        main_run_state = ModelLoopRunState()
         answer = await self._run_model_loop(
             messages=working_messages,
             tools=tools,
@@ -73,6 +74,7 @@ class ConversationMixin:
             enabled_server_names=enabled_server_names,
             max_tool_calls=self.max_tool_calls,
             phase="main",
+            run_state=main_run_state,
         )
         if getattr(self, "response_format", "text") == "json":
             last_error = _json_validation_error(answer)
@@ -102,6 +104,7 @@ class ConversationMixin:
                     enabled_server_names=enabled_server_names,
                     max_tool_calls=self.max_tool_calls,
                     phase="main",
+                    run_state=main_run_state,
                 )
                 last_error = _json_validation_error(answer)
 
@@ -293,6 +296,7 @@ class ConversationMixin:
         phase: str,
         knowledge_state: _KnowledgeRunState | None = None,
         max_concept_reads: int | None = None,
+        run_state: ModelLoopRunState | None = None,
     ) -> str:
         return await run_model_loop(
             self,
@@ -304,6 +308,7 @@ class ConversationMixin:
             phase=phase,
             knowledge_state=knowledge_state,
             max_concept_reads=max_concept_reads,
+            run_state=run_state,
         )
 
     def _append_tool_error(
