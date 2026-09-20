@@ -88,6 +88,10 @@ def test_index_md_is_used_and_only_internal_safe_links_are_exposed(tmp_path: Pat
 
 def test_synthesized_index_classifies_entries_and_respects_limit(tmp_path: Path) -> None:
     (tmp_path / "a-dir").mkdir()
+    (tmp_path / "a-dir" / "nested.md").write_text(
+        _concept(title="Nested"),
+        encoding="utf-8",
+    )
     (tmp_path / "b.md").write_text(_concept(title="B"), encoding="utf-8")
     (tmp_path / "c.md").write_text("no frontmatter", encoding="utf-8")
     (tmp_path / "ignored.txt").write_text("ignored", encoding="utf-8")
@@ -136,9 +140,10 @@ def test_unrelated_directory_is_not_exposed_from_valid_okf_root(tmp_path: Path) 
 
 
 def test_read_rejects_non_markdown_and_oversized_file(tmp_path: Path) -> None:
+    (tmp_path / "valid.md").write_text(_concept(title="V"), encoding="utf-8")
     (tmp_path / "data.txt").write_text("text", encoding="utf-8")
-    (tmp_path / "large.md").write_text("12345", encoding="utf-8")
-    repository = OkfRepository.from_directory(tmp_path, max_read_bytes=4)
+    (tmp_path / "large.md").write_text("x" * 101, encoding="utf-8")
+    repository = OkfRepository.from_directory(tmp_path, max_read_bytes=100)
 
     with pytest.raises(OkfRepositoryError, match="Markdown"):
         repository.knowledge_read("data.txt")
@@ -147,10 +152,11 @@ def test_read_rejects_non_markdown_and_oversized_file(tmp_path: Path) -> None:
 
 
 def test_read_rejects_invalid_utf8(tmp_path: Path) -> None:
+    (tmp_path / "valid.md").write_text(_concept(title="Valid"), encoding="utf-8")
     (tmp_path / "invalid.md").write_bytes(b"\xff\xfe")
     repository = OkfRepository.from_directory(tmp_path)
 
-    with pytest.raises(OkfRepositoryError, match="UTF-8"):
+    with pytest.raises(OkfRepositoryError, match="nicht konformes Markdown"):
         repository.knowledge_read("invalid.md")
 
 
