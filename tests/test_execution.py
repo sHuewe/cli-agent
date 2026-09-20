@@ -4,6 +4,8 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from cli_agent.admin_config import AdminConfig
 from cli_agent.config import AppConfig, ModelConfig
 from cli_agent.execution import (
