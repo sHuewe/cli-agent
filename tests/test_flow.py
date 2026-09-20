@@ -1242,3 +1242,87 @@ prompt_file = "prompt.md"
     )
 
     assert loaded == [(tmp_path / "config.toml").resolve()]
+
+
+def test_flow_uses_preflight_config_snapshot_after_workspace_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    (tmp_path / "second.md").write_text("second", encoding="utf-8")
+    _write_config(tmp_path / "first.toml")
+    _write_config(tmp_path / "second.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "first"
+config = "first.toml"
+prompt_file = "first.md"
+workspace_access = "write"
+
+[[steps]]
+id = "second"
+config = "second.toml"
+prompt_file = "second.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    seen_configs = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        seen_configs.append(options.prepared_config)
+        if options.prompt == "first":
+            (tmp_path / "second.toml").write_text(
+                "[model]\n"
+                'provider = "ollama"\n'
+                'model = "tampered"\n'
+                'base_url = "http://localhost:11434"\n',
+                encoding="utf-8",
+            )
+        return SimpleNamespace(
+            answer="ok",
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(seen_configs) == 2
+    assert seen_configs[1] is not None
+    assert seen_configs[1].model.model == "test"
+
+
+def test_validate_flow_rejects_duplicate_static_output_without_overwrite(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "one.md").write_text("one", encoding="utf-8")
+    (tmp_path / "two.md").write_text("two", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "one.md"
+output = "result.txt"
+
+[[steps]]
+id = "two"
+config = "config.toml"
+prompt_file = "two.md"
+output = "./result.txt"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="geplanten Output"):
+        validate_flow(definition, workspace=tmp_path)
