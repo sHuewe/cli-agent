@@ -121,9 +121,9 @@ def test_flow_cli_reports_validation_error(
 @pytest.mark.parametrize(
     ("flow_text", "message"),
     [
-        ("version = 1\\nunknown = true", "Unbekannte Flow-Schlüssel"),
-        ("version = 2\\nsteps = []", "version = 1"),
-        ("version = 1\\nsteps = []", "mindestens einen"),
+        ("version = 1\nunknown = true", "Unbekannte Flow-Schlüssel"),
+        ("version = 2\nsteps = []", "version = 1"),
+        ("version = 1\nsteps = []", "mindestens einen"),
         (
             """
 version = 1
