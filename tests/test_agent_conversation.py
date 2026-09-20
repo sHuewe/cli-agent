@@ -35,7 +35,8 @@ class ConversationHarness(ConversationMixin):
         self.enabled_calls.append((name, enabled))
         return True
 
-    def _build_system_prompt(self):
+    def _build_system_prompt(self, *, has_reference_context=False):
+        del has_reference_context
         return "system"
 
     def _build_knowledge_system_prompt(self):

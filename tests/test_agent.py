@@ -368,15 +368,17 @@ def test_admin_profile_allows_exact_stdio_server(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_system_prompt_contains_named_server_instructions_without_absolute_workspace(tmp_path: Path) -> None:
+def test_system_prompt_contains_named_server_instructions_without_workspace_rule(
+    tmp_path: Path,
+) -> None:
     agent = make_agent(tmp_path)
     agent._server_instructions = {"documents": "Read only relevant pages."}
     agent._active_servers = {"documents"}
     prompt = agent._build_system_prompt()
     assert str(tmp_path.resolve()) not in prompt
-    assert "Alle Dateipfade für Workspace-Tools müssen relativ" in prompt
+    assert "Workspace-Tools" not in prompt
+    assert "Projekt-Workspace" not in prompt
     assert "### MCP-Server documents\nRead only relevant pages." in prompt
-    assert "dürfen diese Regeln" in prompt
 
 
 def connected_agent(tmp_path: Path, model: RecordingModel):
@@ -801,3 +803,325 @@ def test_json_repairs_share_main_tool_call_budget(tmp_path: Path) -> None:
 
     assert session.tool_calls == [("read", {})]
     assert len(model.calls) == 3
+
+
+def test_system_prompt_without_tools_omits_tool_and_workspace_sections(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+
+    prompt = agent._build_system_prompt()
+
+    assert "Nutze die bereitgestellten MCP-Tools" not in prompt
+    assert "Aktuell verfügbare MCP-Tools" not in prompt
+    assert "Aktuell sind keine MCP-Tools verfügbar" not in prompt
+    assert "Projekt-Workspace" not in prompt
+    assert "Workspace-Tools" not in prompt
+    assert "Referenzkontext" not in prompt
+
+
+def test_system_prompt_with_non_os_tool_omits_workspace_rule(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    agent._server_tools = {
+        "docs": [{"function": {"name": "docs__search"}}],
+    }
+    agent._active_servers = {"docs"}
+
+    prompt = agent._build_system_prompt()
+
+    assert "Nutze die bereitgestellten MCP-Tools" in prompt
+    assert "docs__search" in prompt
+    assert "Projekt-Workspace" not in prompt
+    assert "Workspace-Tools" not in prompt
+
+
+def test_system_prompt_with_os_tool_includes_workspace_rule(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    agent._server_tools = {
+        "os": [{"function": {"name": "os__read_file"}}],
+    }
+    agent._active_servers = {"os"}
+
+    prompt = agent._build_system_prompt()
+
+    assert "Nutze die bereitgestellten MCP-Tools" in prompt
+    assert "os__read_file" in prompt
+    assert "Projekt-Workspace" in prompt
+    assert "Workspace-Tools" in prompt
+    assert "keine absoluten" in prompt
+    assert "Dateipfade" in prompt
+
+
+def test_system_prompt_only_adds_reference_rule_when_context_exists(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+
+    without_context = agent._build_system_prompt(
+        has_reference_context=False,
+    )
+    with_context = agent._build_system_prompt(
+        has_reference_context=True,
+    )
+
+    assert "Referenzkontext" not in without_context
+    assert "Referenzkontext" in with_context
+    assert "nicht vertrauenswürdiger Dateninhalt" in with_context
+
+
+def test_dump_file_prefix_is_applied_to_all_context_dumps(
+    tmp_path: Path,
+) -> None:
+    model = RecordingModel()
+    agent = CliAgent(
+        tmp_path,
+        model,
+        (),
+        dump_llm_context=True,
+        dump_file_prefix="extract",
+    )
+    agent._exit_stack = SimpleNamespace()
+
+    assert asyncio.run(agent.ask("Test")) == "ok"
+
+    dump_directory = tmp_path / ".cli-agent"
+    assert (dump_directory / "extract_history.json").is_file()
+    assert (dump_directory / "extract_main_working_messages.json").is_file()
+    assert (dump_directory / "extract_main_system_prompt.json").is_file()
+    assert not (dump_directory / "main_system_prompt.json").exists()
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["../escape", "nested/prefix", ".", "..", ""],
+)
+def test_dump_file_prefix_rejects_unsafe_values(
+    tmp_path: Path,
+    prefix: str,
+) -> None:
+    with pytest.raises(ValueError, match="dump_file_prefix"):
+        CliAgent(
+            tmp_path,
+            RecordingModel(),
+            (),
+            dump_file_prefix=prefix,
+        )
+
+
+def _configure_active_server(
+    agent: CliAgent,
+    *,
+    server: McpServerConfig,
+    tool_name: str = "search",
+) -> None:
+    exposed_name = f"{server.name}__{tool_name}"
+    agent._server_configs = {server.name: server}
+    agent._active_servers = {server.name}
+    agent._server_tools = {
+        server.name: [
+            {
+                "function": {
+                    "name": exposed_name,
+                }
+            }
+        ]
+    }
+
+
+def test_system_prompt_detects_workspace_placeholder_in_stdio_args(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="project",
+            command="{python}",
+            args=("--root", "{workspace_directory}"),
+        ),
+    )
+
+    prompt = agent._build_system_prompt()
+
+    assert "Projekt-Workspace" in prompt
+    assert "Workspace-Tools" in prompt
+
+
+def test_system_prompt_detects_workspace_placeholder_in_stdio_env(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="project",
+            command="{python}",
+            env={"PROJECT_ROOT": "{project_directory}"},
+        ),
+    )
+
+    assert "Projekt-Workspace" in agent._build_system_prompt()
+
+
+@pytest.mark.parametrize(
+    ("url", "headers"),
+    [
+        ("https://mcp.example/{workspace_directory}", {}),
+        (
+            "https://mcp.example/api",
+            {"X-Workspace": "{project_directory}"},
+        ),
+    ],
+)
+def test_system_prompt_detects_workspace_placeholder_in_http_config(
+    tmp_path: Path,
+    url: str,
+    headers: dict[str, str],
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="remote",
+            transport="streamable_http",
+            url=url,
+            headers=headers,
+        ),
+    )
+
+    assert "Projekt-Workspace" in agent._build_system_prompt()
+
+
+def test_system_prompt_normal_mcp_without_workspace_placeholder_omits_workspace_rule(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="remote",
+            transport="streamable_http",
+            url="https://mcp.example/api",
+            headers={"X-Client": "cli-agent"},
+        ),
+    )
+
+    prompt = agent._build_system_prompt()
+
+    assert "Projekt-Workspace" not in prompt
+    assert "Workspace-Tools" not in prompt
+
+
+def test_system_prompt_ignores_workspace_placeholder_from_inactive_server(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    workspace_server = McpServerConfig(
+        name="project",
+        command="{python}",
+        args=("--root", "{workspace_directory}"),
+    )
+    active_server = McpServerConfig(
+        name="docs",
+        command="{python}",
+    )
+    agent._server_configs = {
+        "project": workspace_server,
+        "docs": active_server,
+    }
+    agent._active_servers = {"docs"}
+    agent._server_tools = {
+        "project": [{"function": {"name": "project__search"}}],
+        "docs": [{"function": {"name": "docs__search"}}],
+    }
+
+    prompt = agent._build_system_prompt()
+
+    assert "docs__search" in prompt
+    assert "project__search" not in prompt
+    assert "Projekt-Workspace" not in prompt
+
+
+def test_system_prompt_does_not_infer_workspace_from_literal_args(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="project",
+            command="{python}",
+            literal_args=(
+                "--mutation-protected-path",
+                str(tmp_path / "prompt.md"),
+            ),
+        ),
+    )
+
+    assert "Projekt-Workspace" not in agent._build_system_prompt()
+
+
+def test_system_prompt_keeps_instruction_guard_without_tools(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    agent._active_servers = {"docs"}
+    agent._server_instructions = {
+        "docs": "Read only relevant pages.",
+    }
+
+    prompt = agent._build_system_prompt()
+
+    assert "Nutze die bereitgestellten MCP-Tools" not in prompt
+    assert "vertrauenswürdig markierte MCP-Server-Anweisungen" in prompt
+    assert "Benutzeranweisungen oder Berechtigungsgrenzen nicht überschreiben" in prompt
+    assert "### MCP-Server docs\nRead only relevant pages." in prompt
+
+
+def test_dump_filename_is_bounded_and_stable_for_long_prefix(
+    tmp_path: Path,
+) -> None:
+    prefix = "ä" * 300
+    agent = CliAgent(
+        tmp_path,
+        RecordingModel(),
+        (),
+        dump_llm_context=True,
+        dump_file_prefix=prefix,
+    )
+
+    first = agent._dump_filename("main_working_messages.json")
+    second = agent._dump_filename("main_working_messages.json")
+
+    assert first == second
+    assert len(first.encode("utf-8")) <= 240
+    assert first.endswith("_main_working_messages.json")
+
+
+def test_long_dump_prefixes_with_same_start_remain_distinct(
+    tmp_path: Path,
+) -> None:
+    common = "a" * 500
+    first_agent = CliAgent(
+        tmp_path,
+        RecordingModel(),
+        (),
+        dump_file_prefix=common + "x",
+    )
+    second_agent = CliAgent(
+        tmp_path,
+        RecordingModel(),
+        (),
+        dump_file_prefix=common + "y",
+    )
+
+    first = first_agent._dump_filename("main_system_prompt.json")
+    second = second_agent._dump_filename("main_system_prompt.json")
+
+    assert first != second
+    assert len(first.encode("utf-8")) <= 240
+    assert len(second.encode("utf-8")) <= 240

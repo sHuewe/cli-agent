@@ -82,6 +82,7 @@ class OneShotRunOptions:
     prepared_file_contexts: tuple[FileContext, ...] = ()
     prepared_output_target: OutputTarget | None = None
     mutation_protected_paths: tuple[Path, ...] = ()
+    dump_file_prefix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,7 @@ async def run_once(
         logging_config=config.logging,
         config_file=options.config_file or default_config_file(),
         dump_llm_context=config.dump_llm_context,
+        dump_file_prefix=options.dump_file_prefix,
         network=admin_config.network,
         web_providers=admin_config.web.providers,
         mcp_policy=admin_config.mcp,

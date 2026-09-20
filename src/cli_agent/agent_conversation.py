@@ -54,7 +54,12 @@ class ConversationMixin:
         knowledge = await self._collect_knowledge(prompt)
         reference_context = self._build_reference_context_message(knowledge=knowledge)
         working_messages = [
-            {"role": "system", "content": self._build_system_prompt()},
+            {
+                "role": "system",
+                "content": self._build_system_prompt(
+                    has_reference_context=reference_context is not None,
+                ),
+            },
             *copy.deepcopy(self.history),
         ]
         if reference_context is not None:

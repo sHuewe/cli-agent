@@ -199,8 +199,17 @@ class WebContextCliAgent(CliAgent):
         self._reset_last_usage()
         return await super().ask(prompt)
 
-    def _build_system_prompt(self) -> str:
-        return super()._build_system_prompt() + "\n\n" + WEB_CONTEXT_SYSTEM_RULE.strip()
+    def _build_system_prompt(
+        self,
+        *,
+        has_reference_context: bool = False,
+    ) -> str:
+        prompt = super()._build_system_prompt(
+            has_reference_context=has_reference_context,
+        )
+        if not self._web_contexts:
+            return prompt
+        return prompt + "\n\n" + WEB_CONTEXT_SYSTEM_RULE.strip()
 
     def _reference_context_payload(self, *, knowledge: str | None) -> dict[str, Any]:
         payload = super()._reference_context_payload(knowledge=knowledge)

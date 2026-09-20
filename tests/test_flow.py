@@ -1476,3 +1476,235 @@ response_format = "json"
     asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls[0].response_format == "json"
+
+
+def test_flow_assigns_dump_prefix_per_step_and_foreach_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text(
+        "process {{var:name}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "extract"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.extract.output.items"
+
+[steps.vars]
+name = "${item.name}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"name":"one"},{"name":"two"}]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(
+            answer="done",
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.dump_file_prefix for call in calls] == [
+        "extract",
+        "process.foreach-1",
+        "process.foreach-2",
+    ]
+
+
+def test_flow_dump_prefixes_cannot_collide_with_step_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "process_1"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[1]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.dump_file_prefix for call in calls] == [
+        "process_1",
+        "discover",
+        "process.foreach-1",
+    ]
+    assert len({call.dump_file_prefix for call in calls}) == 3
+
+
+def test_flow_accepts_long_step_id_without_oversized_dump_filename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    long_id = "step_" + ("a" * 400)
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        f"""
+version = 1
+
+[[steps]]
+id = "{long_id}"
+config = "config.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    prefix = calls[0].dump_file_prefix
+    assert prefix == long_id
+
+    agent = flow_module.ExecutionDependencies().agent_type
+    assert agent is not None
+
+
+def test_flow_disambiguates_case_colliding_step_ids_on_case_insensitive_filesystem(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "Build"
+config = "config.toml"
+prompt_file = "prompt.md"
+
+[[steps]]
+id = "build"
+config = "config.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module,
+        "_filesystem_is_case_insensitive",
+        lambda _path: True,
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    prefixes = [call.dump_file_prefix for call in calls]
+    assert prefixes[0].startswith("Build.case-")
+    assert prefixes[1].startswith("build.case-")
+    assert prefixes[0].casefold() != prefixes[1].casefold()
+
+
+def test_flow_keeps_case_distinct_prefixes_readable_on_case_sensitive_filesystem(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "Build"
+config = "config.toml"
+prompt_file = "prompt.md"
+
+[[steps]]
+id = "build"
+config = "config.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module,
+        "_filesystem_is_case_insensitive",
+        lambda _path: False,
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.dump_file_prefix for call in calls] == ["Build", "build"]

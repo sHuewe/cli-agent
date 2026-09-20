@@ -155,6 +155,19 @@ in drei kurzen Schritten. Für die Demo wechselt man direkt in
 `examples/flow-basic` und startet dort `cli-agent-flow`; der aktuelle Ordner
 ist damit automatisch der Workspace und der Repository-Root bleibt außen vor.
 
+## LLM-Context-Dumps im Flow
+
+Wenn `dump_llm_context = true` in der normalen User-Config gesetzt ist,
+erhalten die Dump-Dateien eines Flow-Schritts automatisch dessen Step-ID als
+Präfix. Ein normaler Schritt `extract` erzeugt beispielsweise
+`extract_main_system_prompt.json`. Bei `foreach` wird zusätzlich die
+Iterationsnummer mit einem von Step-IDs nicht verwendbaren Trenner verwendet,
+z. B. `process.foreach-1_main_system_prompt.json` und
+`process.foreach-2_main_system_prompt.json`. Dadurch können die Präfixe nicht
+mit normalen Step-IDs kollidieren. Sehr lange Step-IDs werden für den tatsächlichen
+Dump-Dateinamen deterministisch gekürzt und mit einem Hash ergänzt, sodass die
+Dateinamen innerhalb eines sicheren Längenlimits bleiben.
+
 ## Sicherheitsmodell
 
 Die Flow-Datei ist benutzerkontrollierte Orchestrierungskonfiguration. LLM-Output
