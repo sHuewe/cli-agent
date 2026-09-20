@@ -71,3 +71,12 @@ def test_variable_assignments_reject_duplicates_and_invalid_syntax() -> None:
         parse_variable_assignments(["name"])
     with pytest.raises(ValueError, match="Variablenname"):
         parse_variable_assignments(["1name=value"])
+
+
+def test_large_plain_template_is_kept_as_one_literal_span() -> None:
+    content = "x" * 1_000_000
+
+    template = PromptTemplate.parse(content)
+
+    assert template.parts == (content,)
+    assert template.variables == ()
