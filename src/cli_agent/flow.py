@@ -968,12 +968,9 @@ async def run_flow(
             outputs=outputs,
         )
 
-        if (
-            step.foreach is not None
-            and step.output is not None
-            and len(items) > 1
-        ):
-            resolved_outputs = [
+        preflight_outputs: list[Path | None] | None = None
+        if step.foreach is not None and step.output is not None:
+            preflight_outputs = [
                 _output_for_iteration(
                     step,
                     workspace=workspace,
@@ -984,13 +981,29 @@ async def run_flow(
             ]
             output_keys = [
                 _filesystem_path_key(path)
-                for path in resolved_outputs
+                for path in preflight_outputs
                 if path is not None
             ]
             if len(output_keys) != len(set(output_keys)):
                 raise ValueError(
                     f"Schritt {step.step_id!r} erzeugt für mehrere "
                     "foreach-Elemente nicht eindeutige Output-Pfade."
+                )
+            for output in preflight_outputs:
+                assert output is not None
+                reserved_input = reserved_inputs.get(
+                    _filesystem_path_key(output)
+                )
+                if reserved_input is not None:
+                    raise ValueError(
+                        f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                        "mit einer reservierten Flow-Eingabe: "
+                        f"{reserved_input}"
+                    )
+                prepare_output_target(
+                    workspace,
+                    output,
+                    overwrite=step.overwrite_output,
                 )
 
         iteration_answers: list[str] = []
@@ -1020,11 +1033,15 @@ async def run_flow(
                 workspace=workspace,
                 flow_dir=flow_dir,
             )
-            output = _output_for_iteration(
-                step,
-                workspace=workspace,
-                flow_dir=flow_dir,
-                item=item,
+            output = (
+                preflight_outputs[index - 1]
+                if preflight_outputs is not None
+                else _output_for_iteration(
+                    step,
+                    workspace=workspace,
+                    flow_dir=flow_dir,
+                    item=item,
+                )
             )
             if output is not None:
                 reserved_input = reserved_inputs.get(
