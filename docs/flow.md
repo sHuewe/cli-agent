@@ -75,7 +75,9 @@ Ohne Angabe gilt `"text"`. Mit `response_format = "json"` ergänzt der Agent
 eine entsprechende Systemanweisung, akzeptiert als finale Antwort nur
 syntaktisch gültiges JSON und fordert das Modell bei einem Formatfehler bis zu
 zweimal zur Korrektur auf. Die Korrektur erfolgt im selben Agentenlauf mit
-derselben Conversation-Historie und denselben verfügbaren Tools. Die konkrete
+derselben Conversation-Historie und denselben verfügbaren Tools. Das
+Tool-Aufruflimit gilt gemeinsam für Initialantwort und Korrekturversuche; auch
+die Token-Usage wird über alle zugehörigen Modellaufrufe aufsummiert. Die konkrete
 JSON-Struktur, Feldnamen und fachlichen Inhalte müssen weiterhin im Prompt
 beschrieben werden. `output = ...` bleibt davon unabhängig und steuert nur,
 ob die finale Antwort zusätzlich in eine Datei geschrieben wird.
