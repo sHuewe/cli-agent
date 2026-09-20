@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import subprocess
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,7 +20,7 @@ def _write_config(path: Path) -> None:
     )
 
 
-def test_flow_uses_fixed_workspace_and_per_step_configs(
+def test_flow_uses_execution_core_fixed_workspace_configs_and_access(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -43,6 +44,7 @@ version = 1
 id = "discover"
 config = "config-a.toml"
 prompt_file = "prompts/discover.md"
+workspace_access = "read"
 output = "work/items.json"
 overwrite_output = true
 
@@ -50,47 +52,57 @@ overwrite_output = true
 id = "process"
 config = "config-b.toml"
 prompt_file = "prompts/process.md"
+workspace_access = "write"
 foreach = "steps.discover.output.items"
-output = "work/${item.id}.md"
+output = "work/\${item.id}.md"
 overwrite_output = true
 
 [steps.vars]
-id = "${item.id}"
+id = "\${item.id}"
 """.strip(),
         encoding="utf-8",
     )
 
-    calls: list[list[str]] = []
+    calls = []
 
-    def fake_run(command, *, cwd, check):
-        calls.append(list(command))
-        if "discover.md" in " ".join(command):
-            output = Path(command[command.index("--output") + 1])
-            output.write_text(
-                '{"items":[{"id":"one"},{"id":"two"}]}',
-                encoding="utf-8",
-            )
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "Discover items":
+            answer = '{"items":[{"id":"one"},{"id":"two"}]}'
         else:
-            output = Path(command[command.index("--output") + 1])
-            output.write_text("done", encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0)
+            answer = "done"
+        if options.output is not None:
+            options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer)
 
-    monkeypatch.setattr(flow_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
-    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    run_flow(definition, workspace=tmp_path)
+    definition = load_flow(
+        tmp_path / "flow.toml",
+        workspace=tmp_path,
+    )
+    asyncio.run(
+        run_flow(
+            definition,
+            workspace=tmp_path,
+        )
+    )
 
     assert len(calls) == 3
-    assert all(
-        command[command.index("--workspace") + 1] == str(tmp_path.resolve())
-        for command in calls
-    )
-    assert calls[0][calls[0].index("--config") + 1].endswith("config-a.toml")
-    assert calls[1][calls[1].index("--config") + 1].endswith("config-b.toml")
-    assert "id=one" in calls[1]
-    assert "id=two" in calls[2]
+    assert all(call.workspace == tmp_path.resolve() for call in calls)
+    assert calls[0].config_file.name == "config-a.toml"
+    assert calls[1].config_file.name == "config-b.toml"
+    assert calls[0].workspace_access == "read"
+    assert calls[1].workspace_access == "write"
+    assert calls[2].workspace_access == "write"
+    assert calls[1].prompt == "Process one"
+    assert calls[2].prompt == "Process two"
     assert (tmp_path / "work" / "one.md").read_text(encoding="utf-8") == "done"
     assert (tmp_path / "work" / "two.md").read_text(encoding="utf-8") == "done"
+
+
+def test_flow_has_no_subprocess_execution_dependency() -> None:
+    assert not hasattr(flow_module, "subprocess")
 
 
 def test_flow_rejects_workspace_override_in_step(tmp_path: Path) -> None:
@@ -113,12 +125,78 @@ workspace = "../other"
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
+@pytest.mark.parametrize("access", ["none", "read", "write"])
+def test_flow_accepts_explicit_workspace_access(
+    tmp_path: Path,
+    access: str,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        f"""
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+workspace_access = "{access}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    assert definition.steps[0].workspace_access == access
+
+
+def test_flow_defaults_workspace_access_to_none(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    assert definition.steps[0].workspace_access == "none"
+
+
+def test_flow_rejects_invalid_workspace_access(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+workspace_access = "admin"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="workspace_access"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
 def test_flow_rejects_llm_controlled_output_escape(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (tmp_path / "prompt.md").write_text("discover", encoding="utf-8")
-    (tmp_path / "process.md").write_text("process {{var:path}}", encoding="utf-8")
+    (tmp_path / "process.md").write_text(
+        "process {{var:path}}",
+        encoding="utf-8",
+    )
     (tmp_path / "work").mkdir()
     _write_config(tmp_path / "config.toml")
     (tmp_path / "flow.toml").write_text(
@@ -129,33 +207,39 @@ version = 1
 id = "discover"
 config = "config.toml"
 prompt_file = "prompt.md"
-output = "work/items.json"
-overwrite_output = true
 
 [[steps]]
 id = "process"
 config = "config.toml"
 prompt_file = "process.md"
 foreach = "steps.discover.output.items"
-output = "work/${item.path}"
+output = "work/\${item.path}"
 overwrite_output = true
 
 [steps.vars]
-path = "${item.path}"
+path = "\${item.path}"
 """.strip(),
         encoding="utf-8",
     )
 
-    def fake_run(command, *, cwd, check):
-        output = Path(command[command.index("--output") + 1])
-        output.write_text('{"items":[{"path":"../../../escape.txt"}]}', encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0)
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(
+            answer='{"items":[{"path":"../../../escape.txt"}]}'
+        )
 
-    monkeypatch.setattr(flow_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
-    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    definition = load_flow(
+        tmp_path / "flow.toml",
+        workspace=tmp_path,
+    )
     with pytest.raises(ValueError, match="darf '..' nicht enthalten"):
-        run_flow(definition, workspace=tmp_path)
+        asyncio.run(
+            run_flow(
+                definition,
+                workspace=tmp_path,
+            )
+        )
 
 
 def test_foreach_requires_strict_json_output(
@@ -164,7 +248,6 @@ def test_foreach_requires_strict_json_output(
 ) -> None:
     (tmp_path / "prompt.md").write_text("discover", encoding="utf-8")
     (tmp_path / "process.md").write_text("process", encoding="utf-8")
-    (tmp_path / "work").mkdir()
     _write_config(tmp_path / "config.toml")
     (tmp_path / "flow.toml").write_text(
         """
@@ -174,8 +257,6 @@ version = 1
 id = "discover"
 config = "config.toml"
 prompt_file = "prompt.md"
-output = "work/items.json"
-overwrite_output = true
 
 [[steps]]
 id = "process"
@@ -186,19 +267,57 @@ foreach = "steps.discover.output.items"
         encoding="utf-8",
     )
 
-    def fake_run(command, *, cwd, check):
-        if "--output" in command:
-            Path(command[command.index("--output") + 1]).write_text(
-                "not json",
-                encoding="utf-8",
-            )
-        return subprocess.CompletedProcess(command, 0)
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(answer="not json")
 
-    monkeypatch.setattr(flow_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
-    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    definition = load_flow(
+        tmp_path / "flow.toml",
+        workspace=tmp_path,
+    )
     with pytest.raises(ValueError, match="gültiges JSON"):
-        run_flow(definition, workspace=tmp_path)
+        asyncio.run(
+            run_flow(
+                definition,
+                workspace=tmp_path,
+            )
+        )
+
+
+def test_plain_final_step_does_not_require_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("final", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "final"
+config = "config.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(answer="ordinary prose")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(
+        tmp_path / "flow.toml",
+        workspace=tmp_path,
+    )
+    asyncio.run(
+        run_flow(
+            definition,
+            workspace=tmp_path,
+        )
+    )
 
 
 def test_validate_rejects_future_foreach_reference(tmp_path: Path) -> None:
@@ -218,7 +337,6 @@ foreach = "steps.later.output.items"
 id = "later"
 config = "config.toml"
 prompt_file = "prompt.md"
-output = "later.json"
 """.strip(),
         encoding="utf-8",
     )
