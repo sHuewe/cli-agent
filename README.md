@@ -415,7 +415,7 @@ id = "discover"
 config = "config-discover.toml"
 model = "qwen3.5:9b"
 prompt_file = "prompts/discover.md"
-add_file_context = "manual.txt"
+add_file_context = ["manual.txt", "architecture.md"]
 add_web_context = ["https://docs.example/reference"]
 output = "work/items.json"
 overwrite_output = true
@@ -444,7 +444,7 @@ title = "${item.title}"
 
 `[steps.retry]` kann pro Schritt bounded Retries für transient fehlgeschlagene Modellrequests konfigurieren (z. B. Verbindungsfehler, HTTP 429/5xx). Dabei wird nur der konkrete Modellrequest wiederholt, nicht der gesamte Step oder bereits ausgeführte Tool-Aufrufe.
 
-Pro Step können zusätzlich `add_file_context = "..."` für genau eine workspace-lokale Referenzdatei und `add_web_context = ["...", ...]` für einen oder mehrere Web-Kontexte gesetzt werden. Beide verwenden dieselben Sicherheits- und Netzwerkregeln wie die entsprechenden CLI-Optionen.
+Pro Step kann `add_file_context` entweder als einzelner Pfad oder als Liste mehrerer workspace-lokaler Referenzdateien gesetzt werden, z. B. `add_file_context = ["manual.txt", "architecture.md"]`. Im normalen CLI sind `--add-file-context` und sein Alias `--context-file` dafür wiederholbar. `add_web_context = ["...", ...]` akzeptiert weiterhin einen oder mehrere Web-Kontexte. Für alle Dateien gelten dieselben Workspace-, Sensitive-Path-, Symlink-, Hardlink- und Größenprüfungen; zusätzlich ist die Gesamtgröße aller ausgewählten Dateikontexte begrenzt.
 
 Weitere Details und die aktuellen Einschränkungen stehen unter
 [Multi-Step-Flows](docs/flow.md).
