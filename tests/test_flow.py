@@ -1324,3 +1324,70 @@ output = "./result.txt"
 
     with pytest.raises(ValueError, match="geplanten Output"):
         validate_flow(definition, workspace=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("items_json", "expected_message"),
+    [
+        (
+            '{"items":[{"path":"ok.md"},{"path":"process.md"}]}',
+            "reservierten Flow-Eingabe",
+        ),
+        (
+            '{"items":[{"path":"ok.md"},{"path":"existing.md"}]}',
+            "existiert bereits",
+        ),
+        (
+            '{"items":[{"path":"ok.md"},{"path":"missing/out.md"}]}',
+            "Output-Ordner existiert nicht",
+        ),
+    ],
+)
+def test_foreach_output_batch_preflight_blocks_before_first_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    items_json: str,
+    expected_message: str,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    (tmp_path / "existing.md").write_text("existing", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+output = "\${item.path}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer=items_json,
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="processed", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match=expected_message):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(calls) == 1
+    assert calls[0].prompt == "discover"
