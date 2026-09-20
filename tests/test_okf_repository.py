@@ -287,4 +287,10 @@ def test_explicit_index_bounds_and_deduplicates_link_validation(
         "Two",
         "Three",
     ]
+    assert result["content"] is None
+    assert result["warnings"] == [
+        "Index enthält mehr als 3 interne Links. "
+        "Der freie Index-Inhalt wird ausgeblendet, damit nur tatsächlich "
+        "angebotene Folgepfade sichtbar sind."
+    ]
     assert calls == [target.resolve()]
