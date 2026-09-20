@@ -38,6 +38,7 @@ class FileContext:
     relative_path: str
     content: str
     source_path: Path = field(repr=False, compare=False)
+    input_bytes: int = field(repr=False, compare=False, default=0)
 
 
 @dataclass(frozen=True)
@@ -156,7 +157,7 @@ def prepare_file_options(
             "Dieselbe Context-Datei darf nicht mehrfach angegeben werden."
         )
     total_context_bytes = sum(
-        context.source_path.stat().st_size
+        context.input_bytes
         for context in prepared_contexts
     )
     if total_context_bytes > MAX_LLM_CONTEXT_TOTAL_BYTES:
@@ -206,7 +207,7 @@ def prepare_file_options(
 
 
 def prepare_context_file(workspace: Path, path: Path) -> FileContext:
-    relative, resolved, content = _prepare_llm_input_file(
+    relative, resolved, content, input_bytes = _prepare_llm_input_file(
         workspace,
         path,
         purpose="Context-Datei",
@@ -215,11 +216,12 @@ def prepare_context_file(workspace: Path, path: Path) -> FileContext:
         relative_path=relative,
         content=content,
         source_path=resolved,
+        input_bytes=input_bytes,
     )
 
 
 def prepare_prompt_file(workspace: Path, path: Path) -> PromptFile:
-    relative, resolved, content = _prepare_llm_input_file(
+    relative, resolved, content, _ = _prepare_llm_input_file(
         workspace,
         path,
         purpose="Prompt-Datei",
@@ -238,7 +240,7 @@ def _prepare_llm_input_file(
     path: Path,
     *,
     purpose: str,
-) -> tuple[str, Path, str]:
+) -> tuple[str, Path, str, int]:
     resolved = _resolve_workspace_path(
         workspace,
         path,
@@ -275,7 +277,7 @@ def _prepare_llm_input_file(
         ) from exc
 
     relative = resolved.relative_to(workspace.resolve()).as_posix()
-    return relative, resolved, content
+    return relative, resolved, content, len(raw)
 
 
 def prepare_output_target(
