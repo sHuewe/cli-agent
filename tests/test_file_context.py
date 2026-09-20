@@ -20,17 +20,67 @@ def test_context_file_does_not_require_os_access(tmp_path: Path) -> None:
 
     prepared, prompt, output = prepare_file_options(
         tmp_path,
-        context_file=Path("repository.txt"),
+        context_files=(Path("repository.txt"),),
         prompt_file=None,
         output=None,
         overwrite_output=False,
     )
 
-    assert prepared is not None
-    assert prepared.relative_path == "repository.txt"
-    assert prepared.content == "complete repository"
+    assert len(prepared) == 1
+    assert prepared[0].relative_path == "repository.txt"
+    assert prepared[0].content == "complete repository"
     assert prompt is None
     assert output is None
+
+
+
+def test_multiple_context_files_are_prepared_in_order(tmp_path: Path) -> None:
+    (tmp_path / "one.txt").write_text("one", encoding="utf-8")
+    (tmp_path / "two.txt").write_text("two", encoding="utf-8")
+
+    contexts, prompt, output = prepare_file_options(
+        tmp_path,
+        context_files=(Path("one.txt"), Path("two.txt")),
+        prompt_file=None,
+        output=None,
+        overwrite_output=False,
+    )
+
+    assert [context.relative_path for context in contexts] == ["one.txt", "two.txt"]
+    assert [context.content for context in contexts] == ["one", "two"]
+    assert prompt is None
+    assert output is None
+
+
+def test_multiple_context_files_reject_duplicate_resolved_path(tmp_path: Path) -> None:
+    (tmp_path / "one.txt").write_text("one", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="nicht mehrfach"):
+        prepare_file_options(
+            tmp_path,
+            context_files=(Path("one.txt"), Path("./one.txt")),
+            prompt_file=None,
+            output=None,
+            overwrite_output=False,
+        )
+
+
+def test_multiple_context_files_have_aggregate_size_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(file_context_module, "MAX_LLM_CONTEXT_TOTAL_BYTES", 6)
+    (tmp_path / "one.txt").write_text("1234", encoding="utf-8")
+    (tmp_path / "two.txt").write_text("5678", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="zusammen das Sicherheitslimit"):
+        prepare_file_options(
+            tmp_path,
+            context_files=(Path("one.txt"), Path("two.txt")),
+            prompt_file=None,
+            output=None,
+            overwrite_output=False,
+        )
 
 
 def test_context_file_accepts_absolute_path_inside_workspace(tmp_path: Path) -> None:
@@ -164,13 +214,13 @@ def test_prompt_file_rejects_empty_file(tmp_path: Path) -> None:
 def test_output_does_not_require_os_write(tmp_path: Path) -> None:
     context, prompt, output = prepare_file_options(
         tmp_path,
-        context_file=None,
+        context_files=(),
         prompt_file=None,
         output=Path("review.md"),
         overwrite_output=False,
     )
 
-    assert context is None
+    assert context == ()
     assert prompt is None
     assert output is not None
     output.write_text("review")
@@ -241,7 +291,7 @@ def test_context_and_output_must_not_be_same_file(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="dieselbe Datei"):
         prepare_file_options(
             tmp_path,
-            context_file=Path("repository.txt"),
+            context_files=(Path("repository.txt"),),
             prompt_file=None,
             output=Path("repository.txt"),
             overwrite_output=True,
@@ -269,7 +319,7 @@ def test_context_and_prompt_must_not_be_same_file(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="dieselbe Datei"):
         prepare_file_options(
             tmp_path,
-            context_file=Path("input.txt"),
+            context_files=(Path("input.txt"),),
             prompt_file=Path("input.txt"),
             output=None,
             overwrite_output=False,
