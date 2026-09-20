@@ -16,6 +16,7 @@ from .execution import (
     ApprovalCallback,
     ExecutionDependencies,
     OneShotRunOptions,
+    build_preapproval_callback,
     run_once,
 )
 from .file_context import prepare_prompt_file
@@ -47,6 +48,7 @@ class FlowStep:
     output: str | None
     overwrite_output: bool
     workspace_access: str
+    approve_tools: tuple[str, ...]
     variables: dict[str, str]
     foreach: str | None
 
@@ -179,6 +181,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "output",
         "overwrite_output",
         "workspace_access",
+        "approve_tools",
         "vars",
         "foreach",
     }
@@ -260,6 +263,30 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         workspace_access = str(workspace_access_value)
 
+        raw_approve_tools = raw.get("approve_tools", [])
+        if (
+            not isinstance(raw_approve_tools, list)
+            or not all(
+                isinstance(value, str) and value.strip()
+                for value in raw_approve_tools
+            )
+        ):
+            raise ValueError(
+                f"steps[{index}].approve_tools muss eine Liste "
+                "nichtleerer Toolnamen sein."
+            )
+        approve_tools = tuple(value.strip() for value in raw_approve_tools)
+        if len(approve_tools) != len(set(approve_tools)):
+            raise ValueError(
+                f"steps[{index}].approve_tools darf keine "
+                "doppelten Toolnamen enthalten."
+            )
+        if any(_ITEM_EXPR.search(value) for value in approve_tools):
+            raise ValueError(
+                f"steps[{index}].approve_tools darf nicht aus "
+                "foreach-Daten parametrisiert werden."
+            )
+
         raw_vars = raw.get("vars", {})
         if not isinstance(raw_vars, dict):
             raise ValueError(
@@ -318,6 +345,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 output=output,
                 overwrite_output=overwrite_output,
                 workspace_access=workspace_access,
+                approve_tools=approve_tools,
                 variables=variables,
                 foreach=foreach,
             )
@@ -694,7 +722,10 @@ async def run_flow(
                     context_file=context,
                     output=output,
                     overwrite_output=step.overwrite_output,
-                    approval_callback=approval_callback,
+                    approval_callback=build_preapproval_callback(
+                        step.approve_tools,
+                        fallback=approval_callback,
+                    ),
                 ),
                 dependencies=dependencies,
             )
