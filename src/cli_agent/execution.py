@@ -197,6 +197,7 @@ async def run_once(
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
     if not options.prompt or options.prompt.isspace():
         raise ValueError("One-Shot-Prompt darf nicht leer sein.")
+    response_format = _validate_response_format(options.response_format)
 
     config = deps.load_config(options.config_file)
     admin_config = deps.load_admin_config()
@@ -235,7 +236,6 @@ async def run_once(
             model_client,
             options.retry_policy,
         )
-    response_format = _validate_response_format(options.response_format)
     agent = deps.agent_type(
         workspace,
         model_client,
