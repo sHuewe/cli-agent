@@ -398,6 +398,33 @@ def test_list_files_hides_internal_symlink(tmp_path) -> None:
     assert "alias.txt" not in listing
 
 
+def test_list_files_hides_lstat_metadata_error(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "visible.txt").write_text("visible", encoding="utf-8")
+    blocked = tmp_path / "blocked.txt"
+    blocked.write_text("blocked", encoding="utf-8")
+
+    original_probe = os_operations.path_entry_is_symlink_or_reparse
+
+    def fail_for_blocked(path: Path) -> bool:
+        if path == blocked:
+            raise PermissionError("metadata denied")
+        return original_probe(path)
+
+    monkeypatch.setattr(
+        os_operations,
+        "path_entry_is_symlink_or_reparse",
+        fail_for_blocked,
+    )
+
+    listing = _workspace(tmp_path).list_files(".")
+
+    assert "visible.txt" in listing
+    assert "blocked.txt" not in listing
+
+
 def test_list_files_rejects_sensitive_directory(tmp_path) -> None:
     (tmp_path / ".git").mkdir()
 
