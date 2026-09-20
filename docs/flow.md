@@ -133,6 +133,14 @@ description = "${item.description}"
 
 Listen und Objekte werden für Prompt-Variablen kompakt als JSON serialisiert.
 
+## Kleines Beispiel
+
+Ein vollständiges, bewusst einfach gehaltenes Beispiel liegt unter
+[`examples/flow-basic/`](../examples/flow-basic/README.md). Es verwendet die
+normale Default-User-Config und demonstriert Datei-Context, strukturierten
+JSON-Output, `foreach`, `${item...}`-Variablen und dynamische Output-Dateien
+in drei kurzen Schritten.
+
 ## Sicherheitsmodell
 
 Die Flow-Datei ist benutzerkontrollierte Orchestrierungskonfiguration. LLM-Output
