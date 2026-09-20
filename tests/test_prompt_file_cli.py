@@ -16,7 +16,7 @@ def _base_args(tmp_path: Path, **overrides):
         config=None,
         model=None,
         os_access=None,
-        context_file=None,
+        context_files=[],
         prompt_file=None,
         var=[],
         output=None,
@@ -174,7 +174,7 @@ def test_prompt_file_can_be_combined_with_context_and_output(
         cli_module.run(
             _base_args(
                 tmp_path,
-                context_file=Path("repository.txt"),
+                context_files=[Path("repository.txt")],
                 prompt_file=Path("review-prompt.md"),
                 output=Path("review.md"),
             )
