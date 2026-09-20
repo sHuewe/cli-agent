@@ -1476,3 +1476,60 @@ response_format = "json"
     asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls[0].response_format == "json"
+
+
+def test_flow_assigns_dump_prefix_per_step_and_foreach_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text(
+        "process {{var:name}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "extract"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.extract.output.items"
+
+[steps.vars]
+name = "${item.name}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"name":"one"},{"name":"two"}]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(
+            answer="done",
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.dump_file_prefix for call in calls] == [
+        "extract",
+        "process_1",
+        "process_2",
+    ]
