@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import logging
 from pathlib import Path
 from typing import Any
+import json
 
 from .admin_config import AdminConfig, load_admin_config
 from .config import (
@@ -25,6 +26,7 @@ from .model import ModelRetryPolicy, RetryingModelClient
 from .model_factory import create_model_client
 
 OS_MCP_SERVER_NAME = "os"
+MAX_RESPONSE_FORMAT_REPAIRS = 2
 logger = logging.getLogger("cli_agent.execution")
 ApprovalCallback = Callable[
     [str, dict[str, object]],
@@ -73,6 +75,7 @@ class OneShotRunOptions:
     model: str | None = None
     workspace_access: str | None = None
     retry_policy: ModelRetryPolicy | None = None
+    response_format: str = "text"
     context_files: tuple[Path, ...] = ()
     output: Path | None = None
     overwrite_output: bool = False
@@ -157,6 +160,22 @@ def apply_workspace_access_override(
     return replace(config, mcp_servers=servers)
 
 
+def _validate_response_format(value: str) -> str:
+    if value not in {"text", "json"}:
+        raise ValueError("response_format muss 'text' oder 'json' sein.")
+    return value
+
+
+def _validate_json_answer(answer: str) -> None:
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"nicht standardkonstante JSON-Zahl {value!r}")
+
+    try:
+        json.loads(answer, parse_constant=reject_constant)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"Antwort ist kein gültiges JSON: {exc}") from exc
+
+
 def apply_model_override(
     config: AppConfig,
     *,
@@ -216,6 +235,7 @@ async def run_once(
             model_client,
             options.retry_policy,
         )
+    response_format = _validate_response_format(options.response_format)
     agent = deps.agent_type(
         workspace,
         model_client,
@@ -229,6 +249,7 @@ async def run_once(
         approval_callback=options.approval_callback,
         okf=config.okf,
         file_contexts=file_contexts,
+        response_format=response_format,
     )
 
     web_statuses: list[str] = []
@@ -238,6 +259,33 @@ async def run_once(
                 await agent.ask(f"add_web_context {url}")
             )
         answer = await agent.ask(options.prompt)
+        if response_format == "json":
+            last_error: ValueError | None = None
+            for repair_attempt in range(MAX_RESPONSE_FORMAT_REPAIRS + 1):
+                try:
+                    _validate_json_answer(answer)
+                    last_error = None
+                    break
+                except ValueError as exc:
+                    last_error = exc
+                    if repair_attempt >= MAX_RESPONSE_FORMAT_REPAIRS:
+                        break
+                    answer = await agent.ask(
+                        "Deine letzte finale Antwort entspricht nicht dem verlangten "
+                        "JSON-Format. Korrigiere die Antwort jetzt so, dass sie "
+                        "ausschließlich aus syntaktisch gültigem JSON besteht. "
+                        "Behalte die inhaltliche Aufgabe und die verlangte Struktur "
+                        "bei. Du darfst die verfügbaren Tools verwenden, falls das "
+                        "für eine korrekte Antwort erforderlich ist. Verwende keine "
+                        "Markdown-Codeblöcke und keinen Text außerhalb des JSON-Werts. "
+                        f"Validierungsfehler: {exc}"
+                    )
+            if last_error is not None:
+                raise ValueError(
+                    "Das Modell hat auch nach "
+                    f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
+                    f"gültiges JSON geliefert: {last_error}"
+                )
         usage = await agent.ask("tokens")
 
     if (
