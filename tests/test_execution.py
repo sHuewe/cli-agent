@@ -381,3 +381,43 @@ def test_run_once_wraps_model_with_retry_policy(
     )
 
     assert isinstance(captured["model_client"], RetryingModelClient)
+
+
+def test_retrying_model_client_caps_initial_delay_at_maximum(
+    monkeypatch,
+) -> None:
+    class FakeModel:
+        model = "m"
+        base_url = "http://localhost"
+        last_usage = None
+        usage_history = []
+
+        def __init__(self):
+            self.calls = 0
+
+        async def chat(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                raise ModelRequestError("temporary", retryable=True)
+            return {"content": "ok"}
+
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("cli_agent.model.asyncio.sleep", fake_sleep)
+
+    retrying = RetryingModelClient(
+        FakeModel(),
+        ModelRetryPolicy(
+            max_attempts=2,
+            initial_delay_seconds=60,
+            max_delay_seconds=0,
+        ),
+    )
+
+    result = asyncio.run(retrying.chat([], []))
+
+    assert result == {"content": "ok"}
+    assert sleeps == []
