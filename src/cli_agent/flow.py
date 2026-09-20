@@ -11,10 +11,14 @@ from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
 from .config import default_config_file
+from .file_context import prepare_prompt_file
 from .filesystem_security import path_entry_is_symlink_or_reparse
+from .prompt_template import PromptTemplate
 
 MAX_FLOW_STEPS = 100
 MAX_FOREACH_ITEMS = 1000
+MAX_FLOW_FILE_BYTES = 1_000_000
+MAX_STRUCTURED_OUTPUT_BYTES = 10_000_000
 _STEP_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
 _ITEM_EXPR = re.compile(r"\$\{item(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}")
 _FOREACH = re.compile(
@@ -101,9 +105,18 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
     source = _flow_source(workspace, path)
     try:
         with source.open("rb") as handle:
-            values = tomllib.load(handle)
+            raw_flow = handle.read(MAX_FLOW_FILE_BYTES + 1)
+        if len(raw_flow) > MAX_FLOW_FILE_BYTES:
+            raise ValueError(
+                f"Flow-Datei überschreitet das Limit von {MAX_FLOW_FILE_BYTES} Bytes."
+            )
+        values = tomllib.loads(raw_flow.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ValueError("Flow-Datei ist nicht als UTF-8 lesbar.") from exc
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"Flow-Datei enthält ungültiges TOML: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"Flow-Datei konnte nicht gelesen werden: {exc}") from exc
 
     allowed_root = {"version", "steps"}
     unknown_root = set(values) - allowed_root
@@ -219,6 +232,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     f"steps[{index}].foreach darf nur auf einen vorherigen Schritt verweisen: "
                     f"{source_id!r}."
                 )
+        else:
+            dynamic_values = list(variables.values())
+            if output is not None:
+                dynamic_values.append(output)
+            if any(_ITEM_EXPR.search(value) for value in dynamic_values):
+                raise ValueError(
+                    f"steps[{index}] verwendet ${item...} ohne foreach."
+                )
 
         steps.append(
             FlowStep(
@@ -264,7 +285,18 @@ def _render_item_text(template: str, item: Any) -> str:
 
 def _parse_step_output(path: Path, *, step_id: str) -> Any:
     try:
-        raw = path.read_text(encoding="utf-8")
+        with path.open("rb") as handle:
+            raw_bytes = handle.read(MAX_STRUCTURED_OUTPUT_BYTES + 1)
+        if len(raw_bytes) > MAX_STRUCTURED_OUTPUT_BYTES:
+            raise ValueError(
+                f"Output von Schritt {step_id!r} überschreitet das JSON-Limit von "
+                f"{MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
+            )
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"Output von Schritt {step_id!r} ist nicht als UTF-8 lesbar."
+        ) from exc
     except OSError as exc:
         raise ValueError(
             f"Output von Schritt {step_id!r} konnte nicht gelesen werden: {exc}"
@@ -382,7 +414,7 @@ def validate_flow(flow: FlowDefinition, *, workspace: Path) -> None:
     produced: set[str] = set()
 
     for step in flow.steps:
-        _workspace_path(
+        prompt_path = _workspace_path(
             workspace,
             flow_dir / step.prompt_file
             if not step.prompt_file.is_absolute()
@@ -390,6 +422,22 @@ def validate_flow(flow: FlowDefinition, *, workspace: Path) -> None:
             purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
             must_exist=True,
         )
+        prompt = prepare_prompt_file(workspace, prompt_path)
+        template = PromptTemplate.parse(prompt.content)
+        supplied = set(step.variables)
+        required = set(template.variables)
+        unknown = sorted(supplied - required)
+        missing = [name for name in template.variables if name not in supplied]
+        if unknown:
+            raise ValueError(
+                f"Schritt {step.step_id!r} setzt unbekannte Prompt-Variable(n): "
+                + ", ".join(unknown)
+            )
+        if missing:
+            raise ValueError(
+                f"Schritt {step.step_id!r} setzt nicht alle Prompt-Variablen: "
+                + ", ".join(missing)
+            )
         if step.context_file is not None:
             _workspace_path(
                 workspace,
