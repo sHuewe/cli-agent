@@ -105,6 +105,103 @@ def test_flow_has_no_subprocess_execution_dependency() -> None:
     assert not hasattr(flow_module, "subprocess")
 
 
+
+def test_flow_parses_per_step_approve_tools(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+workspace_access = "write"
+approve_tools = ["os__write_file", "os__make_directory"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+    assert definition.steps[0].approve_tools == (
+        "os__write_file",
+        "os__make_directory",
+    )
+
+
+def test_flow_rejects_dynamic_or_duplicate_approve_tools(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+
+    for value, message in (
+        ('["os__write_file", "os__write_file"]', "doppelten"),
+        ('["${item.tool}"]', "parametrisiert"),
+    ):
+        (tmp_path / "flow.toml").write_text(
+            f"""
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+approve_tools = {value}
+""".strip(),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=message):
+            load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_flow_step_preapproval_is_exact_and_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+workspace_access = "write"
+approve_tools = ["os__write_file"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    captured = {}
+    fallback_calls = []
+
+    async def fallback(tool_name, arguments):
+        fallback_calls.append((tool_name, arguments))
+        return False
+
+    async def fake_run_once(options, *, dependencies=None):
+        captured["callback"] = options.approval_callback
+        return SimpleNamespace(answer="done")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(
+        run_flow(
+            definition,
+            workspace=tmp_path,
+            approval_callback=fallback,
+        )
+    )
+
+    callback = captured["callback"]
+    assert asyncio.run(callback("os__write_file", {"path": "a.txt"})) is True
+    assert asyncio.run(callback("os__delete_file", {"path": "a.txt"})) is False
+    assert fallback_calls == [("os__delete_file", {"path": "a.txt"})]
+
 def test_flow_rejects_workspace_override_in_step(tmp_path: Path) -> None:
     (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
     _write_config(tmp_path / "config.toml")
