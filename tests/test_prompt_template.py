@@ -78,8 +78,9 @@ def test_large_plain_template_is_kept_as_one_literal_span() -> None:
 
     template = PromptTemplate.parse(content)
 
-    assert template.parts == (content,)
+    assert template.source == content
     assert template.variables == ()
+    assert template.render({}) == content
 
 
 def test_many_placeholders_parse_without_suffix_rescans() -> None:
@@ -88,5 +89,31 @@ def test_many_placeholders_parse_without_suffix_rescans() -> None:
     template = PromptTemplate.parse(content)
 
     assert template.variables == ("x",)
-    assert len(template.parts) == 100_000
     assert template.render({"x": "v"}) == "v" * 100_000
+
+
+def test_placeholder_count_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cli_agent.prompt_template as prompt_template_module
+
+    monkeypatch.setattr(
+        prompt_template_module,
+        "MAX_PROMPT_TEMPLATE_PLACEHOLDERS",
+        3,
+    )
+
+    with pytest.raises(ValueError, match="Sicherheitslimit.*3 Platzhaltern"):
+        PromptTemplate.parse("{{var:x}}" * 4)
+
+
+def test_rendered_prompt_size_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cli_agent.prompt_template as prompt_template_module
+
+    monkeypatch.setattr(
+        prompt_template_module,
+        "MAX_RENDERED_PROMPT_BYTES",
+        8,
+    )
+    template = PromptTemplate.parse("{{var:x}}{{var:x}}")
+
+    with pytest.raises(ValueError, match="Gerenderter Prompt.*Sicherheitslimit"):
+        template.render({"x": "12345"})
