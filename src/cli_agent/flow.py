@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -174,6 +175,45 @@ def _filesystem_path_key(path: Path) -> str:
     ):
         return value.casefold()
     return value
+
+
+def _case_colliding_step_ids(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> frozenset[str]:
+    if not _filesystem_is_case_insensitive(workspace):
+        return frozenset()
+
+    groups: dict[str, list[str]] = {}
+    for step in flow.steps:
+        groups.setdefault(step.step_id.casefold(), []).append(step.step_id)
+    return frozenset(
+        step_id
+        for group in groups.values()
+        if len(group) > 1
+        for step_id in group
+    )
+
+
+def _dump_prefix_for_iteration(
+    step: FlowStep,
+    *,
+    index: int,
+    case_colliding_step_ids: frozenset[str],
+) -> str:
+    prefix = (
+        f"{step.step_id}.foreach-{index}"
+        if step.foreach is not None
+        else step.step_id
+    )
+    if step.step_id not in case_colliding_step_ids:
+        return prefix
+
+    digest = hashlib.sha256(
+        step.step_id.encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{prefix}.case-{digest}"
 
 
 def _workspace_local_config_path(
@@ -971,6 +1011,10 @@ async def run_flow(
         workspace=workspace,
     )
     mutation_protected_paths = tuple(reserved_inputs.values())
+    case_colliding_step_ids = _case_colliding_step_ids(
+        flow,
+        workspace=workspace,
+    )
 
     for step in flow.steps:
         items = _foreach_items(
@@ -1089,10 +1133,10 @@ async def run_flow(
                         fallback=approval_callback,
                     ),
                     mutation_protected_paths=mutation_protected_paths,
-                    dump_file_prefix=(
-                        f"{step.step_id}.foreach-{index}"
-                        if step.foreach is not None
-                        else step.step_id
+                    dump_file_prefix=_dump_prefix_for_iteration(
+                        step,
+                        index=index,
+                        case_colliding_step_ids=case_colliding_step_ids,
                     ),
                 ),
                 dependencies=deps,
