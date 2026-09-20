@@ -107,6 +107,121 @@ def test_flow_has_no_subprocess_execution_dependency() -> None:
 
 
 
+
+def test_flow_parses_step_file_and_web_contexts(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "context.txt").write_text("reference", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+add_file_context = "context.txt"
+add_web_context = [
+    "https://docs.example/a",
+    "https://docs.example/b",
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    step = definition.steps[0]
+
+    assert step.context_file == Path("context.txt")
+    assert step.add_web_context == (
+        "https://docs.example/a",
+        "https://docs.example/b",
+    )
+
+
+def test_flow_passes_step_contexts_to_execution_core(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "context.txt").write_text("reference", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+add_file_context = "context.txt"
+add_web_context = ["https://docs.example/reference"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="done")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(calls) == 1
+    assert calls[0].context_file == (tmp_path / "context.txt").resolve()
+    assert calls[0].add_web_context == ("https://docs.example/reference",)
+
+
+def test_flow_rejects_dynamic_context_configuration(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+
+    cases = (
+        ("add_file_context", "\"${item.path}\"", "add_file_context"),
+        ("add_web_context", "[\"https://docs.example/${item.id}\"]", "add_web_context"),
+    )
+    for key, value, message in cases:
+        (tmp_path / "flow.toml").write_text(
+            f"""
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+{key} = {value}
+""".strip(),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=message):
+            load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_flow_rejects_context_file_alias_conflict(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "context.txt").write_text("reference", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+context_file = "context.txt"
+add_file_context = "context.txt"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="nicht gleichzeitig"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
 def test_flow_parses_model_and_retry_policy(tmp_path: Path) -> None:
     (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
     _write_config(tmp_path / "config.toml")
