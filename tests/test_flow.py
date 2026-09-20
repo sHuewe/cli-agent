@@ -20,6 +20,175 @@ def _write_config(path: Path) -> None:
     )
 
 
+
+def test_flow_cli_validate_command(tmp_path: Path, monkeypatch, capsys) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        flow_module.sys,
+        "argv",
+        [
+            "cli-agent-flow",
+            "validate",
+            "flow.toml",
+            "--workspace",
+            str(tmp_path),
+        ],
+    )
+
+    flow_module.main()
+
+    output = capsys.readouterr().out
+    assert "Flow gültig:" in output
+    assert "1 Schritte" in output
+
+
+def test_flow_cli_run_command_invokes_runner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    async def fake_run_flow(flow, *, workspace, approval_callback):
+        captured["flow"] = flow
+        captured["workspace"] = workspace
+        captured["approval_callback"] = approval_callback
+
+    monkeypatch.setattr(flow_module, "run_flow", fake_run_flow)
+    monkeypatch.setattr(
+        flow_module.sys,
+        "argv",
+        [
+            "cli-agent-flow",
+            "run",
+            "flow.toml",
+            "--workspace",
+            str(tmp_path),
+        ],
+    )
+
+    flow_module.main()
+
+    assert captured["flow"].steps[0].step_id == "one"
+    assert captured["workspace"] == tmp_path.resolve()
+    assert captured["approval_callback"] is flow_module.approve_tool_call
+
+
+def test_flow_cli_reports_validation_error(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        flow_module.sys,
+        "argv",
+        [
+            "cli-agent-flow",
+            "validate",
+            "missing.toml",
+            "--workspace",
+            str(tmp_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        flow_module.main()
+
+    assert exc_info.value.code == 1
+    assert "Fehler: ValueError:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("flow_text", "message"),
+    [
+        ("version = 1\\nunknown = true", "Unbekannte Flow-Schlüssel"),
+        ("version = 2\\nsteps = []", "version = 1"),
+        ("version = 1\\nsteps = []", "mindestens einen"),
+        (
+            """
+version = 1
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+""".strip(),
+            "Doppelte Step-ID",
+        ),
+        (
+            """
+version = 1
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+add_file_context = []
+""".strip(),
+            "nichtleerer String",
+        ),
+        (
+            """
+version = 1
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+add_web_context = ["https://docs.example/a", "https://docs.example/a"]
+""".strip(),
+            "doppelten URLs",
+        ),
+        (
+            """
+version = 1
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+retry = "invalid"
+""".strip(),
+            "retry muss eine Tabelle",
+        ),
+        (
+            """
+version = 1
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+overwrite_output = "yes"
+""".strip(),
+            "overwrite_output",
+        ),
+    ],
+)
+def test_flow_rejects_invalid_definition_shapes(
+    tmp_path: Path,
+    flow_text: str,
+    message: str,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(flow_text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
 def test_flow_uses_execution_core_fixed_workspace_configs_and_access(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
