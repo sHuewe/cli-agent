@@ -95,6 +95,18 @@ def test_model_cli_argument_is_parsed() -> None:
     assert build_parser().parse_args(["--model", "gwen100"]).model == "gwen100"
 
 
+
+def test_add_file_context_is_alias_for_context_file() -> None:
+    direct = build_parser().parse_args(
+        ["--context-file", "reference.txt", "prompt"]
+    )
+    alias = build_parser().parse_args(
+        ["--add-file-context", "reference.txt", "prompt"]
+    )
+
+    assert direct.context_file == alias.context_file
+    assert alias.context_file.name == "reference.txt"
+
 def test_cli_automation_options_are_repeatable() -> None:
     args = build_parser().parse_args(
         [
