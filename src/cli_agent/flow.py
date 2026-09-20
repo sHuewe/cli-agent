@@ -21,6 +21,7 @@ from .execution import (
 )
 from .file_context import prepare_prompt_file
 from .filesystem_security import path_entry_is_symlink_or_reparse
+from .model import ModelRetryPolicy
 from .prompt_template import PromptTemplate
 from .terminal_output import sanitize_terminal_text
 
@@ -43,11 +44,13 @@ _FOREACH = re.compile(
 class FlowStep:
     step_id: str
     config: Path | None
+    model: str | None
     prompt_file: Path
     context_file: Path | None
     output: str | None
     overwrite_output: bool
     workspace_access: str
+    retry_policy: ModelRetryPolicy | None
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
     foreach: str | None
@@ -176,11 +179,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
     allowed_step = {
         "id",
         "config",
+        "model",
         "prompt_file",
         "context_file",
         "output",
         "overwrite_output",
         "workspace_access",
+        "retry",
         "approve_tools",
         "vars",
         "foreach",
@@ -239,6 +244,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if config_value is not None
             else None
         )
+        model_value = raw.get("model")
+        model = (
+            _string(
+                model_value,
+                field=f"steps[{index}].model",
+            )
+            if model_value is not None
+            else None
+        )
 
         output_value = raw.get("output")
         output = (
@@ -262,6 +276,41 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "'none', 'read' oder 'write' sein."
             )
         workspace_access = str(workspace_access_value)
+
+        raw_retry = raw.get("retry")
+        retry_policy: ModelRetryPolicy | None = None
+        if raw_retry is not None:
+            if not isinstance(raw_retry, dict):
+                raise ValueError(
+                    f"steps[{index}].retry muss eine Tabelle sein."
+                )
+            allowed_retry = {
+                "max_attempts",
+                "initial_delay_seconds",
+                "backoff_multiplier",
+                "max_delay_seconds",
+            }
+            unknown_retry = set(raw_retry) - allowed_retry
+            if unknown_retry:
+                raise ValueError(
+                    f"steps[{index}].retry enthält unbekannte Schlüssel: "
+                    + ", ".join(sorted(unknown_retry))
+                )
+            retry_policy = ModelRetryPolicy(
+                max_attempts=raw_retry.get("max_attempts", 1),
+                initial_delay_seconds=raw_retry.get(
+                    "initial_delay_seconds",
+                    1.0,
+                ),
+                backoff_multiplier=raw_retry.get(
+                    "backoff_multiplier",
+                    2.0,
+                ),
+                max_delay_seconds=raw_retry.get(
+                    "max_delay_seconds",
+                    10.0,
+                ),
+            )
 
         raw_approve_tools = raw.get("approve_tools", [])
         if (
@@ -340,11 +389,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             FlowStep(
                 step_id=step_id,
                 config=config,
+                model=model,
                 prompt_file=prompt_file,
                 context_file=context_file,
                 output=output,
                 overwrite_output=overwrite_output,
                 workspace_access=workspace_access,
+                retry_policy=retry_policy,
                 approve_tools=approve_tools,
                 variables=variables,
                 foreach=foreach,
@@ -718,7 +769,9 @@ async def run_flow(
                         if step.config is not None
                         else None
                     ),
+                    model=step.model,
                     workspace_access=step.workspace_access,
+                    retry_policy=step.retry_policy,
                     context_file=context,
                     output=output,
                     overwrite_output=step.overwrite_output,
