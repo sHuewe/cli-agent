@@ -448,10 +448,15 @@ def validate_flow(flow: FlowDefinition, *, workspace: Path) -> None:
                 must_exist=True,
             )
         config = _resolve_config(step, flow_dir=flow_dir).expanduser()
-        if not config.exists():
-            raise ValueError(
-                f"Konfiguration von Schritt {step.step_id!r} existiert nicht: {config}"
-            )
+        if step.config is not None:
+            if not config.exists():
+                raise ValueError(
+                    f"Konfiguration von Schritt {step.step_id!r} existiert nicht: {config}"
+                )
+            if not config.is_file():
+                raise ValueError(
+                    f"Konfiguration von Schritt {step.step_id!r} ist keine Datei: {config}"
+                )
         if step.foreach is not None:
             source_id = _FOREACH.fullmatch(step.foreach).group(1)  # type: ignore[union-attr]
             if source_id not in produced:
