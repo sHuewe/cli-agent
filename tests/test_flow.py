@@ -1041,7 +1041,7 @@ prompt_file = "prompt.md"
 @pytest.mark.parametrize(
     ("target_name", "later_field"),
     [
-        ("later.md", "prompt_file = \"later.md\""),
+        ("later.md", ""),
         ("context.txt", "add_file_context = \"context.txt\""),
         ("later.toml", "config = \"later.toml\""),
     ],
