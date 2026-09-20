@@ -438,7 +438,8 @@ def test_workspace_write_passes_mutation_protected_paths_to_os_server(
     server = config.mcp_servers[0]
     assert server.name == "os"
     assert server.allow_write_files() is True
-    assert server.args[-4:] == (
+    assert server.args[-2:] == ("--access", "write")
+    assert server.literal_args == (
         "--mutation-protected-path",
         str(prompt),
         "--mutation-protected-path",
