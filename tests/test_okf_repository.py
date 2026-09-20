@@ -107,6 +107,29 @@ def test_synthesized_subdirectory_index_classifies_entries_and_respects_limit(
     assert result["warnings"] == ["Index wurde nach 2 Einträgen abgeschnitten."]
 
 
+def test_synthesized_index_bounds_invalid_markdown_inspection(tmp_path: Path) -> None:
+    area = tmp_path / "area"
+    area.mkdir()
+    for number in range(5):
+        (area / f"{number:02d}-invalid.md").write_text(
+            "plain markdown",
+            encoding="utf-8",
+        )
+    (area / "99-valid.md").write_text(
+        _concept(title="Late Valid"),
+        encoding="utf-8",
+    )
+    (tmp_path / "index.md").write_text("[Area](area)\n", encoding="utf-8")
+
+    repository = OkfRepository.from_directory(tmp_path, max_index_entries=3)
+    result = repository.knowledge_index("area")
+
+    assert result["entries"] == []
+    assert result["warnings"] == [
+        "Index-Prüfung wurde nach 3 Kandidaten abgeschnitten."
+    ]
+
+
 def test_repository_requires_index_md_directly_in_configured_root(tmp_path: Path) -> None:
     nested = tmp_path / "nested"
     nested.mkdir()
