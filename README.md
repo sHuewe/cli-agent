@@ -398,9 +398,11 @@ strikt als JSON geparsten Output eines vorherigen Schritts über `foreach`
 auffächern. Aus den Elementen dürfen nur Variablen und workspace-lokale
 Output-Pfade parametrisiert werden; Workspace, Config, Prompt-Datei,
 Context-Datei und Tool-Capabilities werden ausschließlich durch die statische
-Flow-Datei festgelegt. Die einzelnen Schritte starten keinen separaten
-`cli-agent`-Prozess, sondern verwenden direkt denselben internen One-Shot-
-Execution-Core wie der normale CLI-One-Shot-Modus.
+Flow-Datei festgelegt. Mit `approve_tools = ["server__tool", ...]` können pro
+Schritt dieselben exakten Tool-Vorabfreigaben gesetzt werden wie mit wiederholtem
+`--approve-tool` beim normalen CLI. Die einzelnen Schritte starten keinen
+separaten `cli-agent`-Prozess, sondern verwenden direkt denselben internen
+One-Shot-Execution-Core wie der normale CLI-One-Shot-Modus.
 
 Beispiel:
 
@@ -424,6 +426,7 @@ foreach = "steps.discover.output.items"
 output = "result/${item.id}.md"
 overwrite_output = true
 workspace_access = "write"
+approve_tools = ["os__write_file"]
 
 [steps.vars]
 id = "${item.id}"
