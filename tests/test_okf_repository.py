@@ -104,7 +104,9 @@ def test_synthesized_subdirectory_index_classifies_entries_and_respects_limit(
     assert [entry["path"] for entry in result["entries"]] == ["area/a-dir", "area/b.md"]
     assert result["entries"][0]["next_tool"] == "knowledge_index"
     assert result["entries"][1]["title"] == "B"
-    assert result["warnings"] == ["Index wurde nach 2 Einträgen abgeschnitten."]
+    assert result["warnings"] == [
+        "Index-Prüfung wurde nach 2 Kandidaten abgeschnitten."
+    ]
 
 
 def test_synthesized_index_bounds_invalid_markdown_inspection(tmp_path: Path) -> None:
