@@ -86,61 +86,83 @@ def test_index_md_is_used_and_only_internal_safe_links_are_exposed(tmp_path: Pat
     assert links["Missing"]["exists"] is False
 
 
-def test_synthesized_index_classifies_entries_and_respects_limit(tmp_path: Path) -> None:
-    (tmp_path / "a-dir").mkdir()
-    (tmp_path / "a-dir" / "nested.md").write_text(
-        _concept(title="Nested"),
-        encoding="utf-8",
-    )
-    (tmp_path / "b.md").write_text(_concept(title="B"), encoding="utf-8")
-    (tmp_path / "c.md").write_text("no frontmatter", encoding="utf-8")
-    (tmp_path / "ignored.txt").write_text("ignored", encoding="utf-8")
+def test_synthesized_subdirectory_index_classifies_entries_and_respects_limit(
+    tmp_path: Path,
+) -> None:
+    area = tmp_path / "area"
+    area.mkdir()
+    (area / "a-dir").mkdir()
+    (area / "b.md").write_text(_concept(title="B"), encoding="utf-8")
+    (area / "c.md").write_text("no frontmatter", encoding="utf-8")
+    (area / "ignored.txt").write_text("ignored", encoding="utf-8")
+    (tmp_path / "index.md").write_text("[Area](area)\n", encoding="utf-8")
 
-    result = OkfRepository.from_directory(tmp_path, max_index_entries=2).knowledge_index()
+    repository = OkfRepository.from_directory(tmp_path, max_index_entries=2)
+    result = repository.knowledge_index("area")
 
     assert result["source"] == "synthesized"
-    assert [entry["path"] for entry in result["entries"]] == ["a-dir", "b.md"]
+    assert [entry["path"] for entry in result["entries"]] == ["area/a-dir", "area/b.md"]
     assert result["entries"][0]["next_tool"] == "knowledge_index"
     assert result["entries"][1]["title"] == "B"
     assert result["warnings"] == ["Index wurde nach 2 Einträgen abgeschnitten."]
 
 
-def test_non_okf_directory_is_rejected_without_exposing_markdown(tmp_path: Path) -> None:
+def test_repository_requires_index_md_directly_in_configured_root(tmp_path: Path) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "index.md").write_text("[Deep](deep.md)\n", encoding="utf-8")
+    (nested / "deep.md").write_text(_concept(title="Deep"), encoding="utf-8")
+
+    with pytest.raises(OkfRepositoryError, match="Repository-Root.*index.md"):
+        OkfRepository.from_directory(tmp_path)
+
+
+def test_root_index_does_not_expose_non_okf_markdown(tmp_path: Path) -> None:
     (tmp_path / "notes.md").write_text("confidential notes", encoding="utf-8")
     (tmp_path / "index.md").write_text("[Notes](notes.md)\n", encoding="utf-8")
 
-    with pytest.raises(OkfRepositoryError, match="kein gültiges OKF-Repository"):
-        OkfRepository.from_directory(tmp_path)
+    repository = OkfRepository.from_directory(tmp_path)
+    index = repository.knowledge_index()
+
+    assert index["source"] == "index.md"
+    assert index["internal_links"] == []
+    with pytest.raises(OkfRepositoryError, match="nicht konformes Markdown"):
+        repository.knowledge_read("notes.md")
 
 
 def test_non_conforming_markdown_is_hidden_inside_valid_okf_root(tmp_path: Path) -> None:
     (tmp_path / "valid.md").write_text(_concept(title="Valid"), encoding="utf-8")
     (tmp_path / "private-notes.md").write_text("confidential notes", encoding="utf-8")
+    (tmp_path / "index.md").write_text(
+        "[Valid](valid.md)\n[Private](private-notes.md)\n",
+        encoding="utf-8",
+    )
     repository = OkfRepository.from_directory(tmp_path)
 
     index = repository.knowledge_index()
-    assert [entry["path"] for entry in index["entries"]] == ["valid.md"]
+    assert [link["path"] for link in index["internal_links"]] == ["valid.md"]
 
     with pytest.raises(OkfRepositoryError, match="nicht konformes Markdown"):
         repository.knowledge_read("private-notes.md")
 
 
-def test_unrelated_directory_is_not_exposed_from_valid_okf_root(tmp_path: Path) -> None:
+def test_unlinked_unrelated_directory_is_not_discovered_from_root_index(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "valid.md").write_text(_concept(title="Valid"), encoding="utf-8")
     unrelated = tmp_path / "unrelated"
     unrelated.mkdir()
     (unrelated / "notes.md").write_text("confidential notes", encoding="utf-8")
+    (tmp_path / "index.md").write_text("[Valid](valid.md)\n", encoding="utf-8")
     repository = OkfRepository.from_directory(tmp_path)
 
     index = repository.knowledge_index()
-    assert [entry["path"] for entry in index["entries"]] == ["valid.md"]
-
-    with pytest.raises(OkfRepositoryError, match="keine gültigen OKF-Concepts"):
-        repository.knowledge_index("unrelated")
+    assert [link["path"] for link in index["internal_links"]] == ["valid.md"]
 
 
 def test_read_rejects_non_markdown_and_oversized_file(tmp_path: Path) -> None:
     (tmp_path / "valid.md").write_text(_concept(title="V"), encoding="utf-8")
+    (tmp_path / "index.md").write_text("[Valid](valid.md)\n", encoding="utf-8")
     (tmp_path / "data.txt").write_text("text", encoding="utf-8")
     (tmp_path / "large.md").write_text("x" * 101, encoding="utf-8")
     repository = OkfRepository.from_directory(tmp_path, max_read_bytes=100)
@@ -153,6 +175,7 @@ def test_read_rejects_non_markdown_and_oversized_file(tmp_path: Path) -> None:
 
 def test_read_rejects_invalid_utf8(tmp_path: Path) -> None:
     (tmp_path / "valid.md").write_text(_concept(title="Valid"), encoding="utf-8")
+    (tmp_path / "index.md").write_text("[Valid](valid.md)\n", encoding="utf-8")
     (tmp_path / "invalid.md").write_bytes(b"\xff\xfe")
     repository = OkfRepository.from_directory(tmp_path)
 
