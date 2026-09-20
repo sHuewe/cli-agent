@@ -343,6 +343,8 @@ required = true
 
 `repository` kann bewusst auch außerhalb des Projekt-Workspaces liegen. Der konfigurierte Pfad ist eine **separate lokale read-only Trust Boundary**: Innerhalb dieses Roots begrenzt der OKF-Server seine Dateizugriffe deterministisch, aber die Wahl des Roots selbst stammt aus der normalen Benutzerkonfiguration und wird derzeit nicht durch eine `okf_allowed_roots`-Admin-Policy eingeschränkt. Ein Benutzer oder eine bereitgestellte Projektkonfiguration sollte deshalb nur Knowledge-Repositories auswählen, deren Inhalt an das konfigurierte LLM übermittelt werden darf.
 
+Der konfigurierte Ordner wird dabei **nicht als generischer Markdown-Root behandelt**. Beim Start muss darin mindestens ein gültiges OKF-Concept mit begrenztem YAML-Frontmatter und einem nicht-leeren Feld `type` gefunden werden. Andernfalls wird der OKF-Server fail-closed nicht gestartet. Auch innerhalb eines gültigen Roots werden normale bzw. nicht OKF-konforme Markdown-Dateien und Verzeichnisse ohne gültige OKF-Concepts nicht über `knowledge_index` angeboten und nicht über `knowledge_read` gelesen. Bei `required = false` läuft die Main-Phase in diesem Fall ohne OKF-Kontext weiter; bei `required = true` wird der Lauf abgebrochen.
+
 Für einen Unternehmens-Rollout sollte OKF entweder weggelassen werden, wenn es nicht benötigt wird, oder die zulässigen Knowledge-Repositories sollten im Deployment-/Konfigurationsprozess zentral festgelegt und überprüft werden.
 
 Details: [OKF MCP](docs/mcp-okf.md).
