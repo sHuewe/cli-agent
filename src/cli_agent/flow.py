@@ -9,10 +9,10 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
-from typing import Any
+from typing import Any, Callable
 
 from .cli import approve_tool_call
-from .config import default_config_file
+from .config import AppConfig, default_config_file, load_config
 from .execution import (
     ApprovalCallback,
     ExecutionDependencies,
@@ -20,7 +20,7 @@ from .execution import (
     build_preapproval_callback,
     run_once,
 )
-from .file_context import prepare_prompt_file
+from .file_context import prepare_output_target, prepare_prompt_file
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .model import ModelRetryPolicy
 from .prompt_template import PromptTemplate
@@ -638,9 +638,17 @@ def _parse_structured_output(
             f"Output von Schritt {step_id!r} überschreitet das "
             f"JSON-Limit von {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
         )
+    def reject_constant(value: str) -> None:
+        raise ValueError(
+            f"nicht standardkonstante JSON-Zahl {value!r}"
+        )
+
     try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
+        return json.loads(
+            text,
+            parse_constant=reject_constant,
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(
             f"Output von Schritt {step_id!r} muss für foreach "
             f"gültiges JSON sein: {exc}"
@@ -788,6 +796,7 @@ def validate_flow(
     flow: FlowDefinition,
     *,
     workspace: Path,
+    config_loader: Callable[[Path | None], AppConfig] = load_config,
 ) -> None:
     workspace = workspace.expanduser().resolve()
     flow_dir = flow.source.parent
@@ -848,6 +857,27 @@ def validate_flow(
                     f"Konfiguration von Schritt {step.step_id!r} "
                     f"ist keine Datei: {config}"
                 )
+            try:
+                config_loader(config)
+            except Exception as exc:
+                raise ValueError(
+                    f"Konfiguration von Schritt {step.step_id!r} "
+                    f"ist ungültig: {exc}"
+                ) from exc
+
+        if step.foreach is None and step.output is not None:
+            static_output = _output_for_iteration(
+                step,
+                workspace=workspace,
+                flow_dir=flow_dir,
+                item=None,
+            )
+            assert static_output is not None
+            prepare_output_target(
+                workspace,
+                static_output,
+                overwrite=step.overwrite_output,
+            )
 
         if step.foreach is not None:
             match = _FOREACH.fullmatch(step.foreach)
@@ -862,6 +892,30 @@ def validate_flow(
         if step.foreach is None:
             produced.add(step.step_id)
 
+    reserved_inputs = _reserved_flow_input_paths(
+        flow,
+        workspace=workspace,
+    )
+    for step in flow.steps:
+        if step.foreach is not None or step.output is None:
+            continue
+        static_output = _output_for_iteration(
+            step,
+            workspace=workspace,
+            flow_dir=flow_dir,
+            item=None,
+        )
+        assert static_output is not None
+        reserved_input = reserved_inputs.get(
+            _filesystem_path_key(static_output)
+        )
+        if reserved_input is not None:
+            raise ValueError(
+                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                "mit einer reservierten Flow-Eingabe: "
+                f"{reserved_input}"
+            )
+
 
 async def run_flow(
     flow: FlowDefinition,
@@ -871,7 +925,12 @@ async def run_flow(
     approval_callback: ApprovalCallback | None = None,
 ) -> None:
     workspace = workspace.expanduser().resolve()
-    validate_flow(flow, workspace=workspace)
+    deps = dependencies or ExecutionDependencies()
+    validate_flow(
+        flow,
+        workspace=workspace,
+        config_loader=deps.load_config,
+    )
     flow_dir = flow.source.parent
     outputs: dict[str, str] = {}
     reserved_inputs = _reserved_flow_input_paths(
@@ -978,7 +1037,7 @@ async def run_flow(
                         fallback=approval_callback,
                     ),
                 ),
-                dependencies=dependencies,
+                dependencies=deps,
             )
             iteration_answers.append(result.answer)
             for status in getattr(result, "web_context_statuses", ()):
