@@ -348,3 +348,51 @@ def test_var_without_prompt_file_is_rejected_before_agent_start(
         )
 
     assert "constructed" not in captured
+
+
+def test_prompt_template_rejects_blank_rendered_prompt_from_cli_value(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    prompt_file = tmp_path / "review-prompt.md"
+    prompt_file.write_text("{{var:task}}", encoding="utf-8")
+    captured = {}
+    _patch_run_dependencies(monkeypatch, captured)
+
+    with pytest.raises(ValueError, match="Gerenderter Prompt darf nicht leer"):
+        asyncio.run(
+            cli_module.run(
+                _base_args(
+                    tmp_path,
+                    prompt_file=Path("review-prompt.md"),
+                    var=["task="],
+                )
+            )
+        )
+
+    assert "constructed" not in captured
+
+
+def test_prompt_template_rejects_blank_rendered_prompt_from_interactive_value(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    prompt_file = tmp_path / "review-prompt.md"
+    prompt_file.write_text(" {{var:task}}\t", encoding="utf-8")
+    captured = {}
+    _patch_run_dependencies(monkeypatch, captured)
+    monkeypatch.setattr(
+        cli_module.sys,
+        "stdin",
+        SimpleNamespace(isatty=lambda: True),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "   ")
+
+    with pytest.raises(ValueError, match="Gerenderter Prompt darf nicht leer"):
+        asyncio.run(
+            cli_module.run(
+                _base_args(tmp_path, prompt_file=Path("review-prompt.md"))
+            )
+        )
+
+    assert "constructed" not in captured
