@@ -1,0 +1,31 @@
+version = 1
+
+[[steps]]
+id = "extract"
+prompt_file = "prompts/extract-products.md"
+add_file_context = "context/products.md"
+output = "products.json"
+overwrite_output = true
+
+[[steps]]
+id = "cards"
+prompt_file = "prompts/create-card.md"
+foreach = "steps.extract.output.products"
+output = "card-${item.id}.md"
+overwrite_output = true
+
+[steps.vars]
+name = "${item.name}"
+color = "${item.color}"
+feature = "${item.feature}"
+
+[[steps]]
+id = "questions"
+prompt_file = "prompts/create-question.md"
+foreach = "steps.extract.output.products"
+output = "question-${item.id}.md"
+overwrite_output = true
+
+[steps.vars]
+name = "${item.name}"
+feature = "${item.feature}"
