@@ -53,6 +53,8 @@ def test_okf_create_server_registers_read_only_tools_and_delegates(monkeypatch) 
         "path": "concepts/a.md",
     }
     assert calls == [("index", "."), ("read", "concepts/a.md")]
+    assert "non-conforming" in server.tools["knowledge_read"].__doc__.lower()
+    assert "rejected" in server.tools["knowledge_read"].__doc__.lower()
 
 
 def test_okf_parse_args_reads_all_supported_options(tmp_path, monkeypatch) -> None:
