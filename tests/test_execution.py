@@ -13,6 +13,11 @@ from cli_agent.execution import (
     build_preapproval_callback,
     run_once,
 )
+from cli_agent.model import (
+    ModelRequestError,
+    ModelRetryPolicy,
+    RetryingModelClient,
+)
 
 
 def _config() -> AppConfig:
@@ -175,3 +180,134 @@ def test_build_preapproval_callback_matches_exact_tool_name() -> None:
     assert asyncio.run(callback("os__write_file", {"path": "a.txt"})) is True
     assert asyncio.run(callback("os__write_file_extra", {})) is False
     assert fallback_calls == [("os__write_file_extra", {})]
+
+
+
+def test_retrying_model_client_retries_only_retryable_errors(
+    monkeypatch,
+) -> None:
+    class FakeModel:
+        model = "m"
+        base_url = "http://localhost"
+        last_usage = None
+        usage_history = []
+
+        def __init__(self):
+            self.calls = 0
+
+        async def chat(self, messages, tools):
+            self.calls += 1
+            if self.calls < 3:
+                raise ModelRequestError("temporary", retryable=True)
+            return {"content": "ok"}
+
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("cli_agent.model.asyncio.sleep", fake_sleep)
+
+    model = FakeModel()
+    retrying = RetryingModelClient(
+        model,
+        ModelRetryPolicy(
+            max_attempts=3,
+            initial_delay_seconds=1,
+            backoff_multiplier=2,
+            max_delay_seconds=10,
+        ),
+    )
+
+    result = asyncio.run(retrying.chat([], []))
+
+    assert result == {"content": "ok"}
+    assert model.calls == 3
+    assert sleeps == [1, 2]
+
+
+def test_retrying_model_client_does_not_retry_permanent_error(
+    monkeypatch,
+) -> None:
+    class FakeModel:
+        model = "m"
+        base_url = "http://localhost"
+        last_usage = None
+        usage_history = []
+
+        def __init__(self):
+            self.calls = 0
+
+        async def chat(self, messages, tools):
+            self.calls += 1
+            raise ModelRequestError("permanent", retryable=False)
+
+    async def fail_sleep(_delay):
+        raise AssertionError("sleep must not be called")
+
+    monkeypatch.setattr("cli_agent.model.asyncio.sleep", fail_sleep)
+
+    model = FakeModel()
+    retrying = RetryingModelClient(
+        model,
+        ModelRetryPolicy(max_attempts=5),
+    )
+
+    try:
+        asyncio.run(retrying.chat([], []))
+    except ModelRequestError as exc:
+        assert exc.retryable is False
+    else:
+        raise AssertionError("expected ModelRequestError")
+
+    assert model.calls == 1
+
+
+def test_run_once_wraps_model_with_retry_policy(
+    tmp_path: Path,
+) -> None:
+    captured = {}
+
+    class BaseModel:
+        model = "configured-model"
+        base_url = "http://localhost"
+        last_usage = None
+        usage_history = []
+
+        async def chat(self, *_args, **_kwargs):
+            return {"content": "unused"}
+
+    class FakeAgent:
+        def __init__(self, _workspace, model_client, _servers, **_kwargs):
+            captured["model_client"] = model_client
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            return "usage" if prompt == "tokens" else "answer"
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: BaseModel(),
+        agent_type=FakeAgent,
+    )
+
+    policy = ModelRetryPolicy(max_attempts=3)
+    asyncio.run(
+        run_once(
+            OneShotRunOptions(
+                workspace=tmp_path,
+                prompt="work",
+                retry_policy=policy,
+            ),
+            dependencies=dependencies,
+        )
+    )
+
+    assert isinstance(captured["model_client"], RetryingModelClient)
