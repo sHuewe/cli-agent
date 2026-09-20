@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import re
 from dataclasses import dataclass
 from typing import Iterable
@@ -24,39 +25,36 @@ class PromptTemplate:
 
     @classmethod
     def parse(cls, content: str) -> PromptTemplate:
+        first_marker = content.find(_VARIABLE_PREFIX)
+        if first_marker < 0:
+            return cls(
+                parts=(content,) if content else (),
+                variables=(),
+            )
+
         parts: list[str | _VariablePart] = []
         variables: list[str] = []
         seen_variables: set[str] = set()
+        literal = io.StringIO()
         position = 0
+        marker_position = first_marker
 
-        def append_literal(value: str) -> None:
-            if not value:
-                return
-            if parts and isinstance(parts[-1], str):
-                parts[-1] += value
-            else:
+        def flush_literal() -> None:
+            value = literal.getvalue()
+            if value:
                 parts.append(value)
+            literal.seek(0)
+            literal.truncate(0)
 
-        while position < len(content):
-            escaped_position = content.find(_ESCAPED_VARIABLE_PREFIX, position)
-            variable_position = content.find(_VARIABLE_PREFIX, position)
-
-            if escaped_position < 0 and variable_position < 0:
-                append_literal(content[position:])
-                break
-
-            is_escaped = escaped_position >= 0 and (
-                variable_position < 0 or escaped_position < variable_position
+        while marker_position >= 0:
+            is_escaped = (
+                marker_position > position
+                and content[marker_position - 1] == "\\"
             )
-            marker_position = (
-                escaped_position if is_escaped else variable_position
-            )
-            append_literal(content[position:marker_position])
+            literal_end = marker_position - 1 if is_escaped else marker_position
+            literal.write(content[position:literal_end])
 
-            prefix = (
-                _ESCAPED_VARIABLE_PREFIX if is_escaped else _VARIABLE_PREFIX
-            )
-            name_start = marker_position + len(prefix)
+            name_start = marker_position + len(_VARIABLE_PREFIX)
             name_end = content.find(_VARIABLE_SUFFIX, name_start)
             if name_end < 0:
                 kind = "escaped " if is_escaped else ""
@@ -68,15 +66,21 @@ class PromptTemplate:
             _validate_variable_name(name)
 
             if is_escaped:
-                append_literal(f"{{{{var:{name}}}}}")
+                # Consume exactly one escape backslash. Any preceding
+                # backslashes remain ordinary literal content.
+                literal.write(f"{{{{var:{name}}}}}")
             else:
+                flush_literal()
                 parts.append(_VariablePart(name))
                 if name not in seen_variables:
                     seen_variables.add(name)
                     variables.append(name)
 
             position = name_end + len(_VARIABLE_SUFFIX)
+            marker_position = content.find(_VARIABLE_PREFIX, position)
 
+        literal.write(content[position:])
+        flush_literal()
         return cls(parts=tuple(parts), variables=tuple(variables))
 
     def render(self, values: dict[str, str]) -> str:
