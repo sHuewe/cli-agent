@@ -79,6 +79,7 @@ def test_okf_rejects_markdown_hardlink(tmp_path: Path) -> None:
     outside.write_text("---\ntype: concept\n---\nsecret", encoding="utf-8")
     alias = tmp_path / "concept.md"
     _make_hardlink(outside, alias)
+    (tmp_path / "index.md").write_text("[Concept](concept.md)\n", encoding="utf-8")
 
     with pytest.raises(OkfRepositoryError, match="Hardlinks"):
         OkfRepository.from_directory(tmp_path).knowledge_read("concept.md")

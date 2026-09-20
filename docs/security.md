@@ -33,10 +33,15 @@ akzeptiert nur zuvor vom Repository angebotene Folgepfade.
 
 Die **Wahl des Roots selbst** ist jedoch eine bewusste lokale
 Datenfreigabeentscheidung des Benutzers. Ein außerhalb des Workspace liegender
-Root kann zusätzliche Markdown-/Knowledge-Inhalte in den Retrieval-Pfad
-einbeziehen und ausgewählte Inhalte an das konfigurierte LLM weitergeben. Diese
-Boundary wird daher nicht als Teil der maschinenweiten Workspace- oder
-Netzwerkpolicy dargestellt.
+Root kann zusätzliche OKF-Knowledge-Inhalte in den Retrieval-Pfad
+einbeziehen und ausgewählte Inhalte an das konfigurierte LLM weitergeben. Ein
+beliebiger Ordner wird dabei nicht als generischer Markdown-Root akzeptiert:
+Direkt im konfigurierten Root muss eine lesbare `index.md` liegen. Diese Datei
+ist der explizite Repository-Marker; der Server sucht beim Start nicht rekursiv
+in tieferen Unterverzeichnissen nach einem OKF. Fehlt die Root-`index.md`, wird
+kein Knowledge-Repository aktiviert. Nicht-konformes Concept-Markdown wird
+außerdem nicht als Knowledge angeboten. Diese Boundary wird weiterhin nicht als
+Teil der maschinenweiten Workspace- oder Netzwerkpolicy dargestellt.
 
 Für einen gemanagten Unternehmenseinsatz gilt:
 

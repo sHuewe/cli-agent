@@ -70,7 +70,9 @@ timeout = 120
 # be outside the project workspace and is currently not restricted by an
 # admin-side OKF root allowlist. In managed deployments, use only centrally
 # reviewed/configured knowledge repositories whose contents may be sent to the
-# configured LLM.
+# configured LLM. A normal folder is not exposed as generic Markdown: a
+# readable index.md must exist directly in the configured root. No recursive
+# OKF discovery is performed below that root.
 # [okf]
 # repository = "C:/dev/knowledge/okf/bundle"
 # max_tool_calls = 200

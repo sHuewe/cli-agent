@@ -31,11 +31,28 @@ class OkfRepository(RepositoryMetadataMixin):
             workspace = WorkspaceRoot.from_directory(directory)
         except WorkspacePathError as exc:
             raise OkfRepositoryError(str(exc)) from exc
-        return cls(
+
+        repository = cls(
             workspace=workspace,
             max_read_bytes=max_read_bytes,
             max_index_entries=max_index_entries,
         )
+        try:
+            root_index = workspace.resolve("index.md")
+        except WorkspacePathError as exc:
+            raise OkfRepositoryError(
+                "Der konfigurierte Pfad ist kein gültiges OKF-Repository: "
+                "Im Repository-Root muss eine index.md vorhanden sein."
+            ) from exc
+        if not root_index.is_file():
+            raise OkfRepositoryError(
+                "Der konfigurierte Pfad ist kein gültiges OKF-Repository: "
+                "Im Repository-Root muss eine index.md vorhanden sein."
+            )
+        # Validate only the explicit root marker. Do not walk the configured
+        # directory tree merely to decide whether this is an OKF repository.
+        repository._read_text(root_index)
+        return repository
 
     def knowledge_index(self, path: str = ".") -> dict[str, Any]:
         """Read or synthesize the progressive index for one OKF directory."""
@@ -54,40 +71,57 @@ class OkfRepository(RepositoryMetadataMixin):
 
         if index_path.is_file():
             content = self._read_text(index_path)
-            links = self._extract_internal_links(content, index_path)
+            links, links_truncated = self._safe_internal_links(content, index_path)
+            if links_truncated:
+                warnings.append(
+                    "Index enthält mehr als "
+                    f"{self.max_index_entries} interne Links. "
+                    "Der freie Index-Inhalt wird ausgeblendet, damit nur "
+                    "tatsächlich angebotene Folgepfade sichtbar sind."
+                )
             return {
                 "directory": relative_directory,
                 "source": self.workspace.relative(index_path),
-                "content": content,
+                "content": None if links_truncated else content,
                 "entries": [],
                 "internal_links": links,
                 "warnings": warnings,
             }
 
         entries: list[dict[str, Any]] = []
+        inspected_candidates = 0
         visible_entries = sorted(
             (entry for entry in directory.iterdir() if not entry.name.startswith(".")),
             key=lambda entry: (not entry.is_dir(), entry.name.casefold()),
         )
         for entry in visible_entries:
-            if len(entries) >= self.max_index_entries:
-                warnings.append(
-                    "Index wurde nach "
-                    f"{self.max_index_entries} Einträgen abgeschnitten."
-                )
-                break
-
             relative_path = self.workspace.relative(entry)
             try:
                 safe_entry = self.workspace.resolve(relative_path)
             except WorkspacePathError:
                 warnings.append(
-                    f"Unsicherer oder nach außen führender Link wurde ausgelassen: "
-                    f"{relative_path}"
+                    "Unsicherer oder nach außen führender Link wurde ausgelassen."
                 )
                 continue
 
-            if safe_entry.is_dir():
+            is_directory = safe_entry.is_dir()
+            is_markdown = (
+                safe_entry.is_file()
+                and safe_entry.suffix.casefold() == ".md"
+                and safe_entry.name != "index.md"
+            )
+            if not is_directory and not is_markdown:
+                continue
+
+            if inspected_candidates >= self.max_index_entries:
+                warnings.append(
+                    "Index-Prüfung wurde nach "
+                    f"{self.max_index_entries} Kandidaten abgeschnitten."
+                )
+                break
+            inspected_candidates += 1
+
+            if is_directory:
                 entries.append(
                     {
                         "kind": "directory",
@@ -97,10 +131,6 @@ class OkfRepository(RepositoryMetadataMixin):
                 )
                 continue
 
-            if not safe_entry.is_file() or safe_entry.suffix.casefold() != ".md":
-                continue
-            if safe_entry.name == "index.md":
-                continue
             if safe_entry.name == "log.md":
                 entries.append(
                     {
@@ -111,19 +141,13 @@ class OkfRepository(RepositoryMetadataMixin):
                 )
                 continue
 
-            try:
-                metadata = self._parse_frontmatter(self._read_text(safe_entry))
-                entries.append(self._concept_summary(relative_path, metadata))
-            except OkfRepositoryError as exc:
-                entries.append(
-                    {
-                        "kind": "concept",
-                        "path": relative_path,
-                        "title": safe_entry.stem,
-                        "next_tool": "knowledge_read",
-                        "warning": str(exc),
-                    }
-                )
+            metadata = self._concept_metadata(safe_entry)
+            if metadata is None:
+                # Non-OKF Markdown is intentionally invisible to the knowledge
+                # tools. Count it toward the inspection budget so an untrusted
+                # directory cannot trigger unbounded full-file parsing.
+                continue
+            entries.append(self._concept_summary(relative_path, metadata))
 
         return {
             "directory": relative_directory,
@@ -135,7 +159,7 @@ class OkfRepository(RepositoryMetadataMixin):
         }
 
     def knowledge_read(self, path: str) -> dict[str, Any]:
-        """Read one OKF concept, index, or log document."""
+        """Read one validated OKF concept, index, or log document."""
         file_path = self._resolve(path)
         if not file_path.is_file():
             raise OkfRepositoryError(f"Pfad ist keine Datei: {path!r}")
@@ -144,36 +168,95 @@ class OkfRepository(RepositoryMetadataMixin):
                 "knowledge_read liest ausschließlich OKF-Markdown-Dateien (.md)."
             )
 
-        content = self._read_text(file_path)
         relative_path = self.workspace.relative(file_path)
-        warning: str | None = None
-        if file_path.name == "index.md":
-            kind = "index"
+        if file_path.name in {"index.md", "log.md"}:
+            content = self._read_text(file_path)
+            kind = "index" if file_path.name == "index.md" else "log"
             summary: dict[str, Any] | None = None
-        elif file_path.name == "log.md":
-            kind = "log"
-            summary = None
         else:
-            kind = "concept"
+            content = self._read_text(file_path)
             try:
                 metadata = self._parse_frontmatter(content)
-                summary = self._concept_summary(relative_path, metadata)
             except OkfRepositoryError as exc:
-                summary = {
-                    "kind": "concept",
-                    "path": relative_path,
-                    "title": file_path.stem,
-                }
-                warning = str(exc)
+                raise OkfRepositoryError(
+                    "knowledge_read verweigert nicht konformes Markdown; "
+                    "OKF-Concepts benötigen gültiges YAML-Frontmatter mit "
+                    "nicht-leerem Feld 'type'."
+                ) from exc
+            kind = "concept"
+            summary = self._concept_summary(relative_path, metadata)
 
+        links, links_truncated = self._safe_internal_links(content, file_path)
         return {
             "path": relative_path,
             "kind": kind,
             "summary": self._json_safe(summary),
-            "warning": warning,
+            "warning": (
+                "Interne Links wurden auf "
+                f"{self.max_index_entries} Einträge begrenzt."
+                if links_truncated
+                else None
+            ),
             "content": content,
-            "internal_links": self._extract_internal_links(content, file_path),
+            "internal_links": links,
         }
+
+    def _safe_internal_links(
+        self,
+        content: str,
+        source_path: Path,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        links = self._extract_internal_links(content, source_path)
+        links_truncated = len(links) > self.max_index_entries
+        safe_links: list[dict[str, Any]] = []
+        validation_cache: dict[Path, bool] = {}
+
+        # Explicit indexes and concepts are bounded just like synthesized
+        # indexes. This prevents a small Markdown file with many links from
+        # triggering an unbounded number of full-file validation reads.
+        for link in links[: self.max_index_entries]:
+            if link.get("exists") is False:
+                safe_links.append(link)
+                continue
+
+            path = link.get("path")
+            if not isinstance(path, str):
+                continue
+            try:
+                target = self.workspace.resolve(path)
+            except WorkspacePathError:
+                continue
+
+            if target.is_dir():
+                safe_links.append(link)
+                continue
+
+            is_okf = validation_cache.get(target)
+            if is_okf is None:
+                is_okf = self._is_okf_document(target)
+                validation_cache[target] = is_okf
+            if is_okf:
+                safe_links.append(link)
+        return safe_links, links_truncated
+
+    def _is_okf_document(self, file_path: Path) -> bool:
+        if not file_path.is_file() or file_path.suffix.casefold() != ".md":
+            return False
+        if file_path.name in {"index.md", "log.md"}:
+            return True
+        return self._concept_metadata(file_path) is not None
+
+    def _concept_metadata(self, file_path: Path) -> dict[str, Any] | None:
+        if (
+            not file_path.is_file()
+            or file_path.suffix.casefold() != ".md"
+            or file_path.name in {"index.md", "log.md"}
+        ):
+            return None
+        try:
+            return self._parse_frontmatter(self._read_text(file_path))
+        except OkfRepositoryError:
+            return None
 
     def _resolve(self, path: str) -> Path:
         try:
@@ -194,7 +277,7 @@ class OkfRepository(RepositoryMetadataMixin):
             raise
         except OSError as exc:
             raise OkfRepositoryError(
-                f"Dateigröße konnte nicht sicher gelesen werden: "
+                "Dateigröße konnte nicht sicher gelesen werden: "
                 f"{self.workspace.relative(file_path)}"
             ) from exc
         if size > self.max_read_bytes:
@@ -207,11 +290,11 @@ class OkfRepository(RepositoryMetadataMixin):
             return file_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise OkfRepositoryError(
-                f"OKF-Datei ist kein gültiger UTF-8-Text: "
+                "OKF-Datei ist kein gültiger UTF-8-Text: "
                 f"{self.workspace.relative(file_path)}"
             ) from exc
         except OSError as exc:
             raise OkfRepositoryError(
-                f"OKF-Datei konnte nicht gelesen werden: "
+                "OKF-Datei konnte nicht gelesen werden: "
                 f"{self.workspace.relative(file_path)}"
             ) from exc
