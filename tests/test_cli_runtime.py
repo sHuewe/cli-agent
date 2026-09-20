@@ -19,7 +19,7 @@ def _args(tmp_path: Path, **overrides):
         config=None,
         model=None,
         os_access=None,
-        context_file=None,
+        context_files=[],
         prompt_file=None,
         output=None,
         overwrite_output=False,
