@@ -25,51 +25,58 @@ class PromptTemplate:
     @classmethod
     def parse(cls, content: str) -> PromptTemplate:
         parts: list[str | _VariablePart] = []
-        literal: list[str] = []
         variables: list[str] = []
         seen_variables: set[str] = set()
         position = 0
 
-        def flush_literal() -> None:
-            if literal:
-                parts.append("".join(literal))
-                literal.clear()
+        def append_literal(value: str) -> None:
+            if not value:
+                return
+            if parts and isinstance(parts[-1], str):
+                parts[-1] += value
+            else:
+                parts.append(value)
 
         while position < len(content):
-            if content.startswith(_ESCAPED_VARIABLE_PREFIX, position):
-                name_start = position + len(_ESCAPED_VARIABLE_PREFIX)
-                name_end = content.find(_VARIABLE_SUFFIX, name_start)
-                if name_end < 0:
-                    raise ValueError(
-                        "Unvollständiger escaped Prompt-Template-Platzhalter."
-                    )
-                name = content[name_start:name_end]
-                _validate_variable_name(name)
-                literal.append(f"{{{{var:{name}}}}}")
-                position = name_end + len(_VARIABLE_SUFFIX)
-                continue
+            escaped_position = content.find(_ESCAPED_VARIABLE_PREFIX, position)
+            variable_position = content.find(_VARIABLE_PREFIX, position)
 
-            if content.startswith(_VARIABLE_PREFIX, position):
-                name_start = position + len(_VARIABLE_PREFIX)
-                name_end = content.find(_VARIABLE_SUFFIX, name_start)
-                if name_end < 0:
-                    raise ValueError(
-                        "Unvollständiger Prompt-Template-Platzhalter."
-                    )
-                name = content[name_start:name_end]
-                _validate_variable_name(name)
-                flush_literal()
+            if escaped_position < 0 and variable_position < 0:
+                append_literal(content[position:])
+                break
+
+            is_escaped = escaped_position >= 0 and (
+                variable_position < 0 or escaped_position < variable_position
+            )
+            marker_position = (
+                escaped_position if is_escaped else variable_position
+            )
+            append_literal(content[position:marker_position])
+
+            prefix = (
+                _ESCAPED_VARIABLE_PREFIX if is_escaped else _VARIABLE_PREFIX
+            )
+            name_start = marker_position + len(prefix)
+            name_end = content.find(_VARIABLE_SUFFIX, name_start)
+            if name_end < 0:
+                kind = "escaped " if is_escaped else ""
+                raise ValueError(
+                    f"Unvollständiger {kind}Prompt-Template-Platzhalter."
+                )
+
+            name = content[name_start:name_end]
+            _validate_variable_name(name)
+
+            if is_escaped:
+                append_literal(f"{{{{var:{name}}}}}")
+            else:
                 parts.append(_VariablePart(name))
                 if name not in seen_variables:
                     seen_variables.add(name)
                     variables.append(name)
-                position = name_end + len(_VARIABLE_SUFFIX)
-                continue
 
-            literal.append(content[position])
-            position += 1
+            position = name_end + len(_VARIABLE_SUFFIX)
 
-        flush_literal()
         return cls(parts=tuple(parts), variables=tuple(variables))
 
     def render(self, values: dict[str, str]) -> str:
