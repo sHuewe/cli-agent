@@ -434,9 +434,9 @@ def test_aggregate_context_limit_stops_before_loading_later_files(
     original = file_context_module.prepare_context_file
     loaded = []
 
-    def recording_prepare(workspace: Path, path: Path):
+    def recording_prepare(workspace: Path, path: Path, **kwargs):
         loaded.append(path)
-        return original(workspace, path)
+        return original(workspace, path, **kwargs)
 
     monkeypatch.setattr(
         file_context_module,
