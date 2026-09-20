@@ -53,6 +53,24 @@ class LoopTokenUsage:
             last_input_tokens=usages[-1].input_tokens if usages[-1] is not None else None,
         )
 
+    def merged_with(self, other: LoopTokenUsage) -> LoopTokenUsage:
+        return LoopTokenUsage(
+            requests=self.requests + other.requests,
+            usage_requests=self.usage_requests + other.usage_requests,
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+            max_input_tokens=max(
+                (
+                    value
+                    for value in (self.max_input_tokens, other.max_input_tokens)
+                    if value is not None
+                ),
+                default=None,
+            ),
+            last_input_tokens=other.last_input_tokens,
+        )
+
 
 class WebContextCliAgent(CliAgent):
     """CliAgent with explicit, session-scoped web reference contexts."""
@@ -72,25 +90,6 @@ class WebContextCliAgent(CliAgent):
     @staticmethod
     def _format_token_count(value: int) -> str:
         return f"{value:,}".replace(",", ".")
-
-    def merged_with(self, other: LoopTokenUsage) -> LoopTokenUsage:
-        return LoopTokenUsage(
-            requests=self.requests + other.requests,
-            usage_requests=self.usage_requests + other.usage_requests,
-            input_tokens=self.input_tokens + other.input_tokens,
-            output_tokens=self.output_tokens + other.output_tokens,
-            total_tokens=self.total_tokens + other.total_tokens,
-            max_input_tokens=max(
-                (
-                    value
-                    for value in (self.max_input_tokens, other.max_input_tokens)
-                    if value is not None
-                ),
-                default=None,
-            ),
-            last_input_tokens=other.last_input_tokens,
-        )
-
 
     @classmethod
     def _format_loop_usage(cls, name: str, *, ran: bool, usage: LoopTokenUsage | None) -> str:
