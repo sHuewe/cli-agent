@@ -41,7 +41,10 @@ id = "discover"
 config = "config-discover.toml"
 model = "qwen3.5:9b"
 prompt_file = "prompts/discover.md"
-context_file = "manual.txt"
+add_file_context = "manual.txt"
+add_web_context = [
+  "https://docs.example/reference",
+]
 output = "work/items.json"
 overwrite_output = true
 workspace_access = "read"
@@ -74,6 +77,18 @@ Timeouts und weitere Modellparameter bleiben aus der gewählten Config erhalten.
 Schritt explizit auf `none`, `read` oder `write` gesetzt. Ohne Angabe gilt
 `none`; damit kann eine Config nicht implizit Schreibzugriff auf den eingebauten
 Workspace-OS-MCP in einen Flow-Schritt hineintragen.
+
+`add_file_context` entspricht dem CLI-Dateikontext (`--add-file-context`,
+Alias von `--context-file`) und lädt genau eine explizit gewählte UTF-8-Datei
+aus dem festen Workspace als nicht vertrauenswürdigen Referenzkontext. Der Pfad
+wird vor dem Agentenlauf durch dieselben Workspace-, Sensitive-File-, Symlink-
+und Hardlink-Prüfungen wie beim normalen CLI validiert.
+
+`add_web_context` entspricht dem wiederholbaren CLI-Schalter
+`--add-web-context`. Im Flow wird dafür eine Liste von URLs angegeben; sie
+werden vor dem eigentlichen Step-Prompt in derselben frischen Agent-Instanz
+geladen. Netzwerk-Allowlist, Provider-Routing und URL-Sicherheitsregeln bleiben
+die des normalen CLI.
 
 Die optionale Tabelle `[steps.retry]` steuert ausschließlich Wiederholungen
 transient fehlgeschlagener **Modellanfragen** innerhalb dieses Schritts. Sie
@@ -123,8 +138,9 @@ wird dagegen als nicht vertrauenswürdige Daten behandelt.
 Insbesondere gilt:
 
 - Ein Step kann den Workspace nicht überschreiben.
-- `config`, `model`, `prompt_file`, `context_file`, `workspace_access`,
-  `retry` und `approve_tools` werden niemals aus `foreach`-Daten interpoliert.
+- `config`, `model`, `prompt_file`, `add_file_context`, `add_web_context`,
+  `workspace_access`, `retry` und `approve_tools` werden niemals aus
+  `foreach`-Daten interpoliert.
 - LLM-generierte Werte dürfen Prompt-Variablen und Output-Dateinamen
   parametrisieren. Resultierende Output-Pfade werden erneut gegen den festen
   Workspace geprüft; `..`, absolute Escapes und Symlink-/Reparse-Ausbrüche
