@@ -694,6 +694,10 @@ def test_json_response_repair_keeps_tools_and_tool_history(tmp_path: Path) -> No
     )
     agent, session = connected_agent(tmp_path, model)
     agent.response_format = "json"
+    agent._server_tools["documents"][0]["function"]["parameters"] = {
+        "type": "object",
+        "properties": {},
+    }
 
     answer = asyncio.run(agent.ask("Lies das Dokument und antworte als JSON."))
 
