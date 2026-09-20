@@ -98,7 +98,10 @@ class RetryingModelClient:
         *,
         think: bool | None = None,
     ) -> dict[str, Any]:
-        delay = self._policy.initial_delay_seconds
+        delay = min(
+            self._policy.initial_delay_seconds,
+            self._policy.max_delay_seconds,
+        )
         for attempt in range(1, self._policy.max_attempts + 1):
             try:
                 if think is None:
