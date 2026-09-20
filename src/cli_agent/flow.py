@@ -57,10 +57,10 @@ class FlowStep:
     overwrite_output: bool
     workspace_access: str
     retry_policy: ModelRetryPolicy | None
-    response_format: str
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
     foreach: str | None
+    response_format: str = "text"
 
 
 @dataclass(frozen=True)
