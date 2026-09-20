@@ -910,3 +910,156 @@ def test_dump_file_prefix_rejects_unsafe_values(
             (),
             dump_file_prefix=prefix,
         )
+
+
+def _configure_active_server(
+    agent: CliAgent,
+    *,
+    server: McpServerConfig,
+    tool_name: str = "search",
+) -> None:
+    exposed_name = f"{server.name}__{tool_name}"
+    agent._server_configs = {server.name: server}
+    agent._active_servers = {server.name}
+    agent._server_tools = {
+        server.name: [
+            {
+                "function": {
+                    "name": exposed_name,
+                }
+            }
+        ]
+    }
+
+
+def test_system_prompt_detects_workspace_placeholder_in_stdio_args(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="project",
+            command="{python}",
+            args=("--root", "{workspace_directory}"),
+        ),
+    )
+
+    prompt = agent._build_system_prompt()
+
+    assert "Projekt-Workspace" in prompt
+    assert "Workspace-Tools" in prompt
+
+
+def test_system_prompt_detects_workspace_placeholder_in_stdio_env(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="project",
+            command="{python}",
+            env={"PROJECT_ROOT": "{project_directory}"},
+        ),
+    )
+
+    assert "Projekt-Workspace" in agent._build_system_prompt()
+
+
+@pytest.mark.parametrize(
+    ("url", "headers"),
+    [
+        ("https://mcp.example/{workspace_directory}", {}),
+        (
+            "https://mcp.example/api",
+            {"X-Workspace": "{project_directory}"},
+        ),
+    ],
+)
+def test_system_prompt_detects_workspace_placeholder_in_http_config(
+    tmp_path: Path,
+    url: str,
+    headers: dict[str, str],
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="remote",
+            transport="streamable_http",
+            url=url,
+            headers=headers,
+        ),
+    )
+
+    assert "Projekt-Workspace" in agent._build_system_prompt()
+
+
+def test_system_prompt_normal_mcp_without_workspace_placeholder_omits_workspace_rule(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="remote",
+            transport="streamable_http",
+            url="https://mcp.example/api",
+            headers={"X-Client": "cli-agent"},
+        ),
+    )
+
+    prompt = agent._build_system_prompt()
+
+    assert "Projekt-Workspace" not in prompt
+    assert "Workspace-Tools" not in prompt
+
+
+def test_system_prompt_ignores_workspace_placeholder_from_inactive_server(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    workspace_server = McpServerConfig(
+        name="project",
+        command="{python}",
+        args=("--root", "{workspace_directory}"),
+    )
+    active_server = McpServerConfig(
+        name="docs",
+        command="{python}",
+    )
+    agent._server_configs = {
+        "project": workspace_server,
+        "docs": active_server,
+    }
+    agent._active_servers = {"docs"}
+    agent._server_tools = {
+        "project": [{"function": {"name": "project__search"}}],
+        "docs": [{"function": {"name": "docs__search"}}],
+    }
+
+    prompt = agent._build_system_prompt()
+
+    assert "docs__search" in prompt
+    assert "project__search" not in prompt
+    assert "Projekt-Workspace" not in prompt
+
+
+def test_system_prompt_does_not_infer_workspace_from_literal_args(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    _configure_active_server(
+        agent,
+        server=McpServerConfig(
+            name="project",
+            command="{python}",
+            literal_args=(
+                "--mutation-protected-path",
+                str(tmp_path / "prompt.md"),
+            ),
+        ),
+    )
+
+    assert "Projekt-Workspace" not in agent._build_system_prompt()
