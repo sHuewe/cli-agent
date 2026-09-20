@@ -237,7 +237,9 @@ class McpLifecycleMixin:
                 args=[
                     self._resolve_stdio_value(value)
                     for value in server_config.args
-                ],
+                ] + list(
+                    getattr(server_config, "literal_args", ())
+                ),
                 env=environment,
             )
             read_stream, write_stream = await stack.enter_async_context(stdio_client(parameters))
