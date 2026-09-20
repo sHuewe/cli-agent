@@ -797,10 +797,12 @@ def validate_flow(
     *,
     workspace: Path,
     config_loader: Callable[[Path | None], AppConfig] = load_config,
-) -> None:
+) -> dict[str, AppConfig]:
     workspace = workspace.expanduser().resolve()
     flow_dir = flow.source.parent
     produced: set[str] = set()
+    config_snapshots: dict[str, AppConfig] = {}
+    planned_static_outputs: dict[str, str] = {}
 
     for step in flow.steps:
         prompt_path = _workspace_path(
@@ -846,6 +848,7 @@ def validate_flow(
             step,
             flow_dir=flow_dir,
         ).expanduser()
+        config_argument: Path | None = None
         if step.config is not None:
             if not config.exists():
                 raise ValueError(
@@ -857,13 +860,14 @@ def validate_flow(
                     f"Konfiguration von Schritt {step.step_id!r} "
                     f"ist keine Datei: {config}"
                 )
-            try:
-                config_loader(config)
-            except Exception as exc:
-                raise ValueError(
-                    f"Konfiguration von Schritt {step.step_id!r} "
-                    f"ist ungültig: {exc}"
-                ) from exc
+            config_argument = config
+        try:
+            config_snapshots[step.step_id] = config_loader(config_argument)
+        except Exception as exc:
+            raise ValueError(
+                f"Konfiguration von Schritt {step.step_id!r} "
+                f"ist ungültig: {exc}"
+            ) from exc
 
         if step.foreach is None and step.output is not None:
             static_output = _output_for_iteration(
@@ -878,6 +882,15 @@ def validate_flow(
                 static_output,
                 overwrite=step.overwrite_output,
             )
+            static_output_key = _filesystem_path_key(static_output)
+            previous_writer = planned_static_outputs.get(static_output_key)
+            if previous_writer is not None and not step.overwrite_output:
+                raise ValueError(
+                    f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                    f"mit dem geplanten Output von Schritt {previous_writer!r}; "
+                    "der spätere Schritt erlaubt kein Überschreiben."
+                )
+            planned_static_outputs[static_output_key] = step.step_id
 
         if step.foreach is not None:
             match = _FOREACH.fullmatch(step.foreach)
@@ -916,6 +929,8 @@ def validate_flow(
                 f"{reserved_input}"
             )
 
+    return config_snapshots
+
 
 async def run_flow(
     flow: FlowDefinition,
@@ -926,7 +941,7 @@ async def run_flow(
 ) -> None:
     workspace = workspace.expanduser().resolve()
     deps = dependencies or ExecutionDependencies()
-    validate_flow(
+    config_snapshots = validate_flow(
         flow,
         workspace=workspace,
         config_loader=deps.load_config,
@@ -1036,6 +1051,7 @@ async def run_flow(
                         step.approve_tools,
                         fallback=approval_callback,
                     ),
+                    prepared_config=config_snapshots[step.step_id],
                 ),
                 dependencies=deps,
             )
