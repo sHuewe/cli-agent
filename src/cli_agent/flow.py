@@ -124,6 +124,112 @@ def _flow_source(workspace: Path, path: Path) -> Path:
     return resolved
 
 
+def _alternate_case_component(value: str) -> str | None:
+    for index, char in enumerate(value):
+        swapped = char.swapcase()
+        if swapped != char:
+            return value[:index] + swapped + value[index + 1 :]
+    return None
+
+
+def _filesystem_is_case_insensitive(path: Path) -> bool:
+    """Detect case-insensitive identity using an existing path on that filesystem."""
+
+    current = path
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    try:
+        resolved = current.resolve(strict=True)
+    except OSError:
+        return False
+
+    parts = list(resolved.parts)
+    for index in range(len(parts) - 1, 0, -1):
+        alternate = _alternate_case_component(parts[index])
+        if alternate is None:
+            continue
+        candidate = Path(
+            *parts[:index],
+            alternate,
+            *parts[index + 1 :],
+        )
+        try:
+            if candidate.exists() and os.path.samefile(resolved, candidate):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _filesystem_path_key(path: Path) -> str:
+    resolved = path.resolve(strict=False)
+    value = str(resolved)
+    if _filesystem_is_case_insensitive(
+        resolved if resolved.exists() else resolved.parent
+    ):
+        return value.casefold()
+    return value
+
+
+def _workspace_local_config_path(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow_dir: Path,
+) -> Path | None:
+    if step.config is None:
+        return None
+    config = _resolve_config(step, flow_dir=flow_dir).expanduser()
+    try:
+        resolved = config.resolve(strict=True)
+    except OSError:
+        return None
+    try:
+        resolved.relative_to(workspace)
+    except ValueError:
+        return None
+    return resolved
+
+
+def _reserved_flow_input_paths(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> dict[str, Path]:
+    flow_dir = flow.source.parent
+    reserved: dict[str, Path] = {
+        _filesystem_path_key(flow.source): flow.source,
+    }
+    for step in flow.steps:
+        prompt_path = _workspace_path(
+            workspace,
+            (
+                flow_dir / step.prompt_file
+                if not step.prompt_file.is_absolute()
+                else step.prompt_file
+            ),
+            purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
+            must_exist=True,
+        )
+        reserved[_filesystem_path_key(prompt_path)] = prompt_path
+
+        for context_path in _contexts_for_step(
+            step,
+            workspace=workspace,
+            flow_dir=flow_dir,
+        ):
+            reserved[_filesystem_path_key(context_path)] = context_path
+
+        config_path = _workspace_local_config_path(
+            step,
+            workspace=workspace,
+            flow_dir=flow_dir,
+        )
+        if config_path is not None:
+            reserved[_filesystem_path_key(config_path)] = config_path
+    return reserved
+
+
 def _string(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} muss ein nichtleerer String sein.")
@@ -768,6 +874,10 @@ async def run_flow(
     validate_flow(flow, workspace=workspace)
     flow_dir = flow.source.parent
     outputs: dict[str, str] = {}
+    reserved_inputs = _reserved_flow_input_paths(
+        flow,
+        workspace=workspace,
+    )
 
     for step in flow.steps:
         items = _foreach_items(
@@ -790,7 +900,7 @@ async def run_flow(
                 for item in items
             ]
             output_keys = [
-                os.path.normcase(str(path))
+                _filesystem_path_key(path)
                 for path in resolved_outputs
                 if path is not None
             ]
@@ -833,6 +943,16 @@ async def run_flow(
                 flow_dir=flow_dir,
                 item=item,
             )
+            if output is not None:
+                reserved_input = reserved_inputs.get(
+                    _filesystem_path_key(output)
+                )
+                if reserved_input is not None:
+                    raise ValueError(
+                        f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                        "mit einer reservierten Flow-Eingabe: "
+                        f"{reserved_input}"
+                    )
 
             result = await run_once(
                 OneShotRunOptions(
