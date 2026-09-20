@@ -264,3 +264,45 @@ def test_same_server_and_tool_name_with_different_http_url_is_not_auto_approved(
     assert asyncio.run(agent.ask("search")) == "done"
     assert approvals == [("continuous__search", {"query": "x"})]
     assert session.calls == [("search", {"query": "x"})]
+
+
+def test_auto_approved_tool_still_rejects_schema_invalid_arguments(
+    tmp_path: Path,
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "integer"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    contract = tool_contract_fingerprint("search", schema, SEARCH_DESCRIPTION)
+
+    async def must_not_be_called(_name, _arguments):
+        raise AssertionError(
+            "schema-invalid arguments must be rejected before approval"
+        )
+
+    policy = McpPolicy(
+        trusted_servers=(
+            TrustedMcpServer(
+                name="continuous",
+                transport="stdio",
+                command="unused",
+                auto_approve_tools=(
+                    TrustedMcpToolApproval(
+                        name="search",
+                        contract_sha256=contract,
+                    ),
+                ),
+            ),
+        )
+    )
+    agent, session = _connected_external_agent(
+        tmp_path,
+        policy=policy,
+        approval_callback=must_not_be_called,
+        schema=schema,
+    )
+
+    assert asyncio.run(agent.ask("search")) == "done"
+    assert session.calls == []
