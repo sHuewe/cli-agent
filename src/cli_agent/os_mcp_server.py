@@ -203,6 +203,16 @@ def parse_args() -> argparse.Namespace:
             "configuration from the config file."
         ),
     )
+    parser.add_argument(
+        "--mutation-protected-path",
+        action="append",
+        type=Path,
+        default=[],
+        help=(
+            "Workspace path that may be read but must not be changed by "
+            "write-capable OS tools. May be repeated."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -258,6 +268,7 @@ def main() -> None:
             args.project_directory,
             mcp_config,
             protected_paths=(effective_config_file,),
+            mutation_protected_paths=tuple(args.mutation_protected_path),
         )
     except WorkspaceError as exc:
         logger.exception("MCP server initialization failed")
