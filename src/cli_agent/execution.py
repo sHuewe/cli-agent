@@ -80,7 +80,7 @@ class OneShotRunOptions:
     approval_callback: ApprovalCallback | None = None
     prepared_file_contexts: tuple[FileContext, ...] = ()
     prepared_output_target: OutputTarget | None = None
-    prepared_config: AppConfig | None = None
+    mutation_protected_paths: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -93,7 +93,11 @@ class OneShotRunResult:
     output_target: OutputTarget | None
 
 
-def os_mcp_server_config(access: str) -> McpServerConfig:
+def os_mcp_server_config(
+    access: str,
+    *,
+    mutation_protected_paths: tuple[Path, ...] = (),
+) -> McpServerConfig:
     if access not in {"read", "write"}:
         raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
     return McpServerConfig(
@@ -109,6 +113,13 @@ def os_mcp_server_config(access: str) -> McpServerConfig:
             "{config_file}",
             "--access",
             access,
+        ) + tuple(
+            argument
+            for path in mutation_protected_paths
+            for argument in (
+                "--mutation-protected-path",
+                str(path),
+            )
         ),
         config={"allow_write_files": access == "write"},
         built_in=True,
@@ -119,6 +130,7 @@ def apply_workspace_access_override(
     config: AppConfig,
     *,
     workspace_access: str | None,
+    mutation_protected_paths: tuple[Path, ...] = (),
 ) -> AppConfig:
     if workspace_access is None:
         return config
@@ -135,7 +147,12 @@ def apply_workspace_access_override(
     servers = tuple(
         server for server in config.mcp_servers
         if server.name != OS_MCP_SERVER_NAME
-    ) + (os_mcp_server_config(workspace_access),)
+    ) + (
+        os_mcp_server_config(
+            workspace_access,
+            mutation_protected_paths=mutation_protected_paths,
+        ),
+    )
     return replace(config, mcp_servers=servers)
 
 
@@ -161,16 +178,13 @@ async def run_once(
     if not options.prompt or options.prompt.isspace():
         raise ValueError("One-Shot-Prompt darf nicht leer sein.")
 
-    config = (
-        options.prepared_config
-        if options.prepared_config is not None
-        else deps.load_config(options.config_file)
-    )
+    config = deps.load_config(options.config_file)
     admin_config = deps.load_admin_config()
     config = apply_model_override(config, model=options.model)
     config = apply_workspace_access_override(
         config,
         workspace_access=options.workspace_access,
+        mutation_protected_paths=options.mutation_protected_paths,
     )
 
     if options.prepared_file_contexts or options.prepared_output_target is not None:
