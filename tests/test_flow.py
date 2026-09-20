@@ -1036,3 +1036,76 @@ prompt_file = "prompt.md"
     output = capsys.readouterr().out
     assert "context loaded" in output
     assert "visible answer" in output
+
+
+@pytest.mark.parametrize(
+    ("target_name", "later_field"),
+    [
+        ("later.md", "prompt_file = \"later.md\""),
+        ("context.txt", "add_file_context = \"context.txt\""),
+        ("later.toml", "config = \"later.toml\""),
+    ],
+)
+def test_flow_rejects_output_collision_with_later_reserved_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_name: str,
+    later_field: str,
+) -> None:
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    (tmp_path / "later.md").write_text("later", encoding="utf-8")
+    (tmp_path / "context.txt").write_text("context", encoding="utf-8")
+    _write_config(tmp_path / "first.toml")
+    _write_config(tmp_path / "later.toml")
+    (tmp_path / "flow.toml").write_text(
+        f"""
+version = 1
+
+[[steps]]
+id = "first"
+config = "first.toml"
+prompt_file = "first.md"
+output = "{target_name}"
+overwrite_output = true
+
+[[steps]]
+id = "later"
+prompt_file = "later.md"
+{later_field}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(
+            answer="model output",
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="reservierten Flow-Eingabe"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []
+
+
+def test_filesystem_path_key_collapses_case_when_filesystem_is_case_insensitive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        flow_module,
+        "_filesystem_is_case_insensitive",
+        lambda _path: True,
+    )
+
+    upper = flow_module._filesystem_path_key(tmp_path / "Result" / "A.txt")
+    lower = flow_module._filesystem_path_key(tmp_path / "result" / "a.TXT")
+
+    assert upper == lower
