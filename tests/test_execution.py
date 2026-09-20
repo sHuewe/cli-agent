@@ -595,3 +595,47 @@ def test_run_once_rejects_unknown_response_format(tmp_path: Path) -> None:
                 dependencies=dependencies,
             )
         )
+
+
+@pytest.mark.parametrize("invalid_json", ["NaN", "Infinity", "-Infinity"])
+def test_json_response_format_rejects_non_standard_constants(
+    tmp_path: Path,
+    invalid_json: str,
+) -> None:
+    answers = [invalid_json, '{"ok":true}']
+
+    class FakeAgent:
+        def __init__(self, *_args, **kwargs):
+            assert kwargs["response_format"] == "json"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            if prompt == "tokens":
+                return "usage"
+            return answers.pop(0)
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+
+    result = asyncio.run(
+        run_once(
+            OneShotRunOptions(
+                workspace=tmp_path,
+                prompt="work",
+                response_format="json",
+            ),
+            dependencies=dependencies,
+        )
+    )
+
+    assert result.answer == '{"ok":true}'
