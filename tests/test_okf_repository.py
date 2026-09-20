@@ -323,7 +323,7 @@ def test_knowledge_read_rejects_missing_file(tmp_path: Path) -> None:
     (tmp_path / "index.md").write_text("Root", encoding="utf-8")
     repository = OkfRepository.from_directory(tmp_path)
 
-    with pytest.raises(OkfRepositoryError, match="keine Datei"):
+    with pytest.raises(OkfRepositoryError, match="Pfad konnte nicht aufgelöst werden"):
         repository.knowledge_read("missing.md")
 
 
