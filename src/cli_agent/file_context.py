@@ -151,7 +151,14 @@ def prepare_file_options(
     source_paths: set[Path] = set()
     total_context_bytes = 0
     for path in requested_contexts:
-        prepared_context = prepare_context_file(workspace, path)
+        remaining_context_bytes = (
+            MAX_LLM_CONTEXT_TOTAL_BYTES - total_context_bytes
+        )
+        prepared_context = prepare_context_file(
+            workspace,
+            path,
+            max_input_bytes=remaining_context_bytes,
+        )
         if prepared_context.source_path in source_paths:
             raise ValueError(
                 "Dieselbe Context-Datei darf nicht mehrfach angegeben werden."
@@ -206,11 +213,17 @@ def prepare_file_options(
     return prepared_contexts, prepared_prompt, prepared_output
 
 
-def prepare_context_file(workspace: Path, path: Path) -> FileContext:
+def prepare_context_file(
+    workspace: Path,
+    path: Path,
+    *,
+    max_input_bytes: int | None = None,
+) -> FileContext:
     relative, resolved, content, input_bytes = _prepare_llm_input_file(
         workspace,
         path,
         purpose="Context-Datei",
+        max_input_bytes=max_input_bytes,
     )
     return FileContext(
         relative_path=relative,
@@ -240,6 +253,7 @@ def _prepare_llm_input_file(
     path: Path,
     *,
     purpose: str,
+    max_input_bytes: int | None = None,
 ) -> tuple[str, Path, str, int]:
     resolved = _resolve_workspace_path(
         workspace,
@@ -256,10 +270,22 @@ def _prepare_llm_input_file(
             f"Workspace-Pfad geschützt: {resolved}"
         )
 
+    read_limit = MAX_LLM_INPUT_FILE_BYTES
+    if max_input_bytes is not None:
+        read_limit = min(read_limit, max_input_bytes)
+
     try:
         with resolved.open("rb") as handle:
-            raw = handle.read(MAX_LLM_INPUT_FILE_BYTES + 1)
-        if len(raw) > MAX_LLM_INPUT_FILE_BYTES:
+            raw = handle.read(read_limit + 1)
+        if len(raw) > read_limit:
+            if (
+                max_input_bytes is not None
+                and read_limit < MAX_LLM_INPUT_FILE_BYTES
+            ):
+                raise ValueError(
+                    "Die ausgewählten Context-Dateien überschreiten zusammen das "
+                    f"Sicherheitslimit von {MAX_LLM_CONTEXT_TOTAL_BYTES} Bytes."
+                )
             raise ValueError(
                 f"{purpose} überschreitet das großzügige Sicherheitslimit von "
                 f"{MAX_LLM_INPUT_FILE_BYTES} Bytes: {resolved}"
