@@ -919,7 +919,6 @@ def validate_flow(
         flow,
         workspace=workspace,
     )
-    mutation_protected_paths = tuple(reserved_inputs.values())
     for step in flow.steps:
         if step.foreach is not None or step.output is None:
             continue
@@ -961,6 +960,7 @@ async def run_flow(
         flow,
         workspace=workspace,
     )
+    mutation_protected_paths = tuple(reserved_inputs.values())
 
     for step in flow.steps:
         items = _foreach_items(
