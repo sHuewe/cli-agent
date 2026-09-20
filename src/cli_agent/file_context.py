@@ -147,24 +147,24 @@ def prepare_file_options(
             )
         requested_contexts = (context_file,)
 
-    prepared_contexts = tuple(
-        prepare_context_file(workspace, path)
-        for path in requested_contexts
-    )
-    source_paths = [context.source_path for context in prepared_contexts]
-    if len(source_paths) != len(set(source_paths)):
-        raise ValueError(
-            "Dieselbe Context-Datei darf nicht mehrfach angegeben werden."
-        )
-    total_context_bytes = sum(
-        context.input_bytes
-        for context in prepared_contexts
-    )
-    if total_context_bytes > MAX_LLM_CONTEXT_TOTAL_BYTES:
-        raise ValueError(
-            "Die ausgewählten Context-Dateien überschreiten zusammen das "
-            f"Sicherheitslimit von {MAX_LLM_CONTEXT_TOTAL_BYTES} Bytes."
-        )
+    prepared_contexts_list: list[FileContext] = []
+    source_paths: set[Path] = set()
+    total_context_bytes = 0
+    for path in requested_contexts:
+        prepared_context = prepare_context_file(workspace, path)
+        if prepared_context.source_path in source_paths:
+            raise ValueError(
+                "Dieselbe Context-Datei darf nicht mehrfach angegeben werden."
+            )
+        source_paths.add(prepared_context.source_path)
+        total_context_bytes += prepared_context.input_bytes
+        if total_context_bytes > MAX_LLM_CONTEXT_TOTAL_BYTES:
+            raise ValueError(
+                "Die ausgewählten Context-Dateien überschreiten zusammen das "
+                f"Sicherheitslimit von {MAX_LLM_CONTEXT_TOTAL_BYTES} Bytes."
+            )
+        prepared_contexts_list.append(prepared_context)
+    prepared_contexts = tuple(prepared_contexts_list)
 
     prepared_prompt = (
         prepare_prompt_file(workspace, prompt_file)
