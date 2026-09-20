@@ -53,6 +53,7 @@ foreach = "steps.discover.output.items"
 output = "result/${item.id}.md"
 overwrite_output = true
 workspace_access = "write"
+approve_tools = ["os__write_file", "os__make_directory"]
 
 [steps.vars]
 id = "${item.id}"
@@ -64,6 +65,13 @@ die auch `cli-agent` nutzt. `workspace_access` ist davon getrennt und wird pro
 Schritt explizit auf `none`, `read` oder `write` gesetzt. Ohne Angabe gilt
 `none`; damit kann eine Config nicht implizit Schreibzugriff auf den eingebauten
 Workspace-OS-MCP in einen Flow-Schritt hineintragen.
+
+`approve_tools` entspricht semantisch dem wiederholbaren CLI-Schalter
+`--approve-tool`: Die Liste enthält exakte exponierte Toolnamen, z. B.
+`os__write_file`. Diese Tools sind für alle Iterationen genau dieses Schritts
+vorab freigegeben. Andere Tools verwenden weiterhin die normale interaktive
+Freigabe bzw. werden ohne TTY abgelehnt. Die Liste aktiviert keine Tools oder
+MCP-Server und kann weder Admin-Policy noch Workspace-/Netzwerkgrenzen umgehen.
 
 `foreach` muss auf `steps.<id>.output` oder ein darunterliegendes Feld
 verweisen, zum Beispiel:
@@ -96,8 +104,8 @@ wird dagegen als nicht vertrauenswürdige Daten behandelt.
 Insbesondere gilt:
 
 - Ein Step kann den Workspace nicht überschreiben.
-- `config`, `prompt_file`, `context_file` und `workspace_access` werden niemals
-  aus `foreach`-Daten interpoliert.
+- `config`, `prompt_file`, `context_file`, `workspace_access` und
+  `approve_tools` werden niemals aus `foreach`-Daten interpoliert.
 - LLM-generierte Werte dürfen Prompt-Variablen und Output-Dateinamen
   parametrisieren. Resultierende Output-Pfade werden erneut gegen den festen
   Workspace geprüft; `..`, absolute Escapes und Symlink-/Reparse-Ausbrüche
