@@ -176,6 +176,44 @@ def _validate_json_answer(answer: str) -> None:
         raise ValueError(f"Antwort ist kein gültiges JSON: {exc}") from exc
 
 
+async def ensure_response_format(
+    agent: Any,
+    answer: str,
+    *,
+    response_format: str,
+) -> str:
+    response_format = _validate_response_format(response_format)
+    if response_format == "text":
+        return answer
+
+    last_error: ValueError | None = None
+    for repair_attempt in range(MAX_RESPONSE_FORMAT_REPAIRS + 1):
+        try:
+            _validate_json_answer(answer)
+            return answer
+        except ValueError as exc:
+            last_error = exc
+            if repair_attempt >= MAX_RESPONSE_FORMAT_REPAIRS:
+                break
+            answer = await agent.ask(
+                "Deine letzte finale Antwort entspricht nicht dem verlangten "
+                "JSON-Format. Korrigiere die Antwort jetzt so, dass sie "
+                "ausschließlich aus syntaktisch gültigem JSON besteht. "
+                "Behalte die inhaltliche Aufgabe und die verlangte Struktur "
+                "bei. Du darfst die verfügbaren Tools verwenden, falls das "
+                "für eine korrekte Antwort erforderlich ist. Verwende keine "
+                "Markdown-Codeblöcke und keinen Text außerhalb des JSON-Werts. "
+                f"Validierungsfehler: {exc}"
+            )
+
+    assert last_error is not None
+    raise ValueError(
+        "Das Modell hat auch nach "
+        f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
+        f"gültiges JSON geliefert: {last_error}"
+    )
+
+
 def apply_model_override(
     config: AppConfig,
     *,
@@ -259,33 +297,11 @@ async def run_once(
                 await agent.ask(f"add_web_context {url}")
             )
         answer = await agent.ask(options.prompt)
-        if response_format == "json":
-            last_error: ValueError | None = None
-            for repair_attempt in range(MAX_RESPONSE_FORMAT_REPAIRS + 1):
-                try:
-                    _validate_json_answer(answer)
-                    last_error = None
-                    break
-                except ValueError as exc:
-                    last_error = exc
-                    if repair_attempt >= MAX_RESPONSE_FORMAT_REPAIRS:
-                        break
-                    answer = await agent.ask(
-                        "Deine letzte finale Antwort entspricht nicht dem verlangten "
-                        "JSON-Format. Korrigiere die Antwort jetzt so, dass sie "
-                        "ausschließlich aus syntaktisch gültigem JSON besteht. "
-                        "Behalte die inhaltliche Aufgabe und die verlangte Struktur "
-                        "bei. Du darfst die verfügbaren Tools verwenden, falls das "
-                        "für eine korrekte Antwort erforderlich ist. Verwende keine "
-                        "Markdown-Codeblöcke und keinen Text außerhalb des JSON-Werts. "
-                        f"Validierungsfehler: {exc}"
-                    )
-            if last_error is not None:
-                raise ValueError(
-                    "Das Modell hat auch nach "
-                    f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
-                    f"gültiges JSON geliefert: {last_error}"
-                )
+        answer = await ensure_response_format(
+            agent,
+            answer,
+            response_format=response_format,
+        )
         usage = await agent.ask("tokens")
 
     if (
