@@ -1367,7 +1367,7 @@ id = "process"
 config = "config.toml"
 prompt_file = "process.md"
 foreach = "steps.discover.output.items"
-output = "\${item.path}"
+output = "${item.path}"
 """.strip(),
         encoding="utf-8",
     )
