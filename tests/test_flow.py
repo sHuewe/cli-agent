@@ -1244,12 +1244,13 @@ prompt_file = "prompt.md"
     assert loaded == [(tmp_path / "config.toml").resolve()]
 
 
-def test_flow_uses_preflight_config_snapshot_after_workspace_mutation(
+def test_flow_passes_all_reserved_inputs_as_mutation_protection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (tmp_path / "first.md").write_text("first", encoding="utf-8")
     (tmp_path / "second.md").write_text("second", encoding="utf-8")
+    (tmp_path / "context.txt").write_text("context", encoding="utf-8")
     _write_config(tmp_path / "first.toml")
     _write_config(tmp_path / "second.toml")
     (tmp_path / "flow.toml").write_text(
@@ -1266,36 +1267,33 @@ workspace_access = "write"
 id = "second"
 config = "second.toml"
 prompt_file = "second.md"
+add_file_context = "context.txt"
 """.strip(),
         encoding="utf-8",
     )
 
-    seen_configs = []
+    seen = []
 
     async def fake_run_once(options, *, dependencies=None):
-        seen_configs.append(options.prepared_config)
-        if options.prompt == "first":
-            (tmp_path / "second.toml").write_text(
-                "[model]\n"
-                'provider = "ollama"\n'
-                'model = "tampered"\n'
-                'base_url = "http://localhost:11434"\n',
-                encoding="utf-8",
-            )
-        return SimpleNamespace(
-            answer="ok",
-            web_context_statuses=(),
-        )
+        seen.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
 
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
     asyncio.run(run_flow(definition, workspace=tmp_path))
 
-    assert len(seen_configs) == 2
-    assert seen_configs[1] is not None
-    assert seen_configs[1].model.model == "test"
-
+    expected = {
+        (tmp_path / "flow.toml").resolve(),
+        (tmp_path / "first.md").resolve(),
+        (tmp_path / "second.md").resolve(),
+        (tmp_path / "context.txt").resolve(),
+        (tmp_path / "first.toml").resolve(),
+        (tmp_path / "second.toml").resolve(),
+    }
+    assert len(seen) == 2
+    assert set(seen[0].mutation_protected_paths) == expected
+    assert set(seen[1].mutation_protected_paths) == expected
 
 def test_validate_flow_rejects_duplicate_static_output_without_overwrite(
     tmp_path: Path,
