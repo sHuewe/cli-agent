@@ -195,7 +195,12 @@ class OkfRepository(RepositoryMetadataMixin):
     ) -> list[dict[str, Any]]:
         links = self._extract_internal_links(content, source_path)
         safe_links: list[dict[str, Any]] = []
-        for link in links:
+        validation_cache: dict[Path, bool] = {}
+
+        # Explicit indexes and concepts are bounded just like synthesized
+        # indexes. This prevents a small Markdown file with many links from
+        # triggering an unbounded number of full-file validation reads.
+        for link in links[: self.max_index_entries]:
             if link.get("exists") is False:
                 safe_links.append(link)
                 continue
@@ -212,7 +217,11 @@ class OkfRepository(RepositoryMetadataMixin):
                 safe_links.append(link)
                 continue
 
-            if self._is_okf_document(target):
+            is_okf = validation_cache.get(target)
+            if is_okf is None:
+                is_okf = self._is_okf_document(target)
+                validation_cache[target] = is_okf
+            if is_okf:
                 safe_links.append(link)
         return safe_links
 
