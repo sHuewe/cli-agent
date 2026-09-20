@@ -21,6 +21,7 @@ from .file_context import (
     prepare_file_options,
 )
 from .logging_setup import configure_logging
+from .model import ModelRetryPolicy, RetryingModelClient
 from .model_factory import create_model_client
 
 OS_MCP_SERVER_NAME = "os"
@@ -71,6 +72,7 @@ class OneShotRunOptions:
     config_file: Path | None = None
     model: str | None = None
     workspace_access: str | None = None
+    retry_policy: ModelRetryPolicy | None = None
     context_file: Path | None = None
     output: Path | None = None
     overwrite_output: bool = False
@@ -192,6 +194,11 @@ async def run_once(
         network=admin_config.network,
         credential_rules=admin_config.model_credentials,
     )
+    if options.retry_policy is not None:
+        model_client = RetryingModelClient(
+            model_client,
+            options.retry_policy,
+        )
     agent = deps.agent_type(
         workspace,
         model_client,
