@@ -1530,8 +1530,8 @@ name = "${item.name}"
 
     assert [call.dump_file_prefix for call in calls] == [
         "extract",
-        "process_1",
-        "process_2",
+        "process.foreach-1",
+        "process.foreach-2",
     ]
 
 
