@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 import tomllib
@@ -613,7 +614,7 @@ def _prompt_for_iteration(
     values = {
         name: (
             _render_item_text(value, item)
-            if item is not None
+            if step.foreach is not None
             else value
         )
         for name, value in step.variables.items()
@@ -660,7 +661,7 @@ def _output_for_iteration(
 
     rendered = (
         _render_item_text(step.output, item)
-        if item is not None
+        if step.foreach is not None
         else step.output
     )
     path = Path(rendered)
@@ -779,11 +780,21 @@ async def run_flow(
             and step.output is not None
             and len(items) > 1
         ):
-            rendered_paths = {
-                _render_item_text(step.output, item)
+            resolved_outputs = [
+                _output_for_iteration(
+                    step,
+                    workspace=workspace,
+                    flow_dir=flow_dir,
+                    item=item,
+                )
                 for item in items
-            }
-            if len(rendered_paths) != len(items):
+            ]
+            output_keys = [
+                os.path.normcase(str(path))
+                for path in resolved_outputs
+                if path is not None
+            ]
+            if len(output_keys) != len(set(output_keys)):
                 raise ValueError(
                     f"Schritt {step.step_id!r} erzeugt für mehrere "
                     "foreach-Elemente nicht eindeutige Output-Pfade."
@@ -850,6 +861,20 @@ async def run_flow(
                 dependencies=dependencies,
             )
             iteration_answers.append(result.answer)
+            for status in getattr(result, "web_context_statuses", ()):
+                print(
+                    sanitize_terminal_text(
+                        status,
+                        multiline=True,
+                    )
+                )
+            if output is None:
+                print(
+                    sanitize_terminal_text(
+                        result.answer,
+                        multiline=True,
+                    )
+                )
 
         if step.foreach is None:
             assert len(iteration_answers) == 1
