@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -17,6 +18,10 @@ from .web_context_agent import WebContextCliAgent
 # quota. The configured model remains authoritative and may reject a smaller
 # effective context at request time.
 MAX_LLM_INPUT_FILE_BYTES = 256 * 1024 * 1024
+# Preserve the previous single-file worst-case memory bound when several
+# explicit context files are selected. The number of files itself is not
+# limited; only their aggregate input size is bounded.
+MAX_LLM_CONTEXT_TOTAL_BYTES = MAX_LLM_INPUT_FILE_BYTES
 
 
 FILE_CONTEXT_SYSTEM_RULE = """\
@@ -68,56 +73,98 @@ class OutputTarget:
 
 
 class ContextFileCliAgent(WebContextCliAgent):
-    """WebContextCliAgent with one explicit, session-scoped local file context."""
+    """WebContextCliAgent with explicit, session-scoped local file contexts."""
 
     def __init__(
         self,
         *args: Any,
         file_context: FileContext | None = None,
+        file_contexts: tuple[FileContext, ...] = (),
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._file_context = file_context
+        if file_context is not None and file_contexts:
+            raise ValueError(
+                "file_context und file_contexts dürfen nicht gleichzeitig gesetzt werden."
+            )
+        self._file_contexts = (
+            file_contexts
+            if file_contexts
+            else ((file_context,) if file_context is not None else ())
+        )
 
     def _build_system_prompt(self) -> str:
         prompt = super()._build_system_prompt()
-        if self._file_context is None:
+        if not self._file_contexts:
             return prompt
         return prompt + "\n\n" + FILE_CONTEXT_SYSTEM_RULE.strip()
 
     def _reference_context_payload(self, *, knowledge: str | None) -> dict[str, Any]:
         payload = super()._reference_context_payload(knowledge=knowledge)
-        context = self._file_context
-        if context is not None:
+        contexts = self._file_contexts
+        if len(contexts) == 1:
+            # Keep the established payload shape for the common single-file case.
+            context = contexts[0]
             payload["local_reference_file"] = {
                 "workspace_path": context.relative_path,
                 "content": context.content,
             }
+        elif contexts:
+            payload["local_reference_files"] = [
+                {
+                    "workspace_path": context.relative_path,
+                    "content": context.content,
+                }
+                for context in contexts
+            ]
         return payload
 
     async def close(self) -> None:
-        self._file_context = None
+        self._file_contexts = ()
         await super().close()
 
 
 def prepare_file_options(
     workspace: Path,
     *,
-    context_file: Path | None,
+    context_files: Iterable[Path] = (),
+    context_file: Path | None = None,
     prompt_file: Path | None,
     output: Path | None,
     overwrite_output: bool,
-) -> tuple[FileContext | None, PromptFile | None, OutputTarget | None]:
+) -> tuple[tuple[FileContext, ...], PromptFile | None, OutputTarget | None]:
     """Validate all local file CLI options before any agent/model loop starts."""
 
     if overwrite_output and output is None:
         raise ValueError("--overwrite-output ist nur zusammen mit --output erlaubt.")
 
-    prepared_context = (
-        prepare_context_file(workspace, context_file)
-        if context_file is not None
-        else None
+    requested_contexts = tuple(context_files)
+    if context_file is not None:
+        if requested_contexts:
+            raise ValueError(
+                "context_file und context_files dürfen nicht gleichzeitig gesetzt werden."
+            )
+        requested_contexts = (context_file,)
+
+    prepared_contexts = tuple(
+        prepare_context_file(workspace, path)
+        for path in requested_contexts
     )
+    source_paths = [context.source_path for context in prepared_contexts]
+    if len(source_paths) != len(set(source_paths)):
+        raise ValueError(
+            "Dieselbe Context-Datei darf nicht mehrfach angegeben werden."
+        )
+    total_context_bytes = sum(
+        context.source_path.stat().st_size
+        for context in prepared_contexts
+    )
+    if total_context_bytes > MAX_LLM_CONTEXT_TOTAL_BYTES:
+        raise ValueError(
+            "Die ausgewählten Context-Dateien überschreiten zusammen das "
+            f"Sicherheitslimit von {MAX_LLM_CONTEXT_TOTAL_BYTES} Bytes."
+        )
+
     prepared_prompt = (
         prepare_prompt_file(workspace, prompt_file)
         if prompt_file is not None
@@ -129,22 +176,23 @@ def prepare_file_options(
         else None
     )
 
-    if (
-        prepared_context is not None
-        and prepared_prompt is not None
-        and prepared_context.source_path == prepared_prompt.source_path
+    if prepared_prompt is not None and any(
+        context.source_path == prepared_prompt.source_path
+        for context in prepared_contexts
     ):
         raise ValueError(
-            "--context-file und --prompt-file dürfen nicht auf dieselbe Datei verweisen."
+            "--context-file/--add-file-context und --prompt-file dürfen "
+            "nicht auf dieselbe Datei verweisen."
         )
 
     if prepared_output is not None:
-        if (
-            prepared_context is not None
-            and prepared_context.source_path == prepared_output.path
+        if any(
+            context.source_path == prepared_output.path
+            for context in prepared_contexts
         ):
             raise ValueError(
-                "--context-file und --output dürfen nicht auf dieselbe Datei verweisen."
+                "--context-file/--add-file-context und --output dürfen "
+                "nicht auf dieselbe Datei verweisen."
             )
         if (
             prepared_prompt is not None
@@ -154,7 +202,7 @@ def prepare_file_options(
                 "--prompt-file und --output dürfen nicht auf dieselbe Datei verweisen."
             )
 
-    return prepared_context, prepared_prompt, prepared_output
+    return prepared_contexts, prepared_prompt, prepared_output
 
 
 def prepare_context_file(workspace: Path, path: Path) -> FileContext:
