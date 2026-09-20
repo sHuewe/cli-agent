@@ -304,16 +304,17 @@ class Workspace:
     def _is_protected_path(self, path: Path) -> bool:
         if self._is_sensitive_file(path):
             return True
-        # Detect filesystem indirection explicitly instead of relying on
-        # Path.resolve(strict=False) to raise for cyclic symlinks. Python 3.13
-        # changed that pathlib behaviour, while lstat/reparse-point detection
-        # remains the security property we actually need here.
-        if path_entry_is_symlink_or_reparse(path):
-            return True
         try:
+            # Detect filesystem indirection explicitly instead of relying on
+            # Path.resolve(strict=False) to raise for cyclic symlinks. Python
+            # 3.13 changed that pathlib behaviour, while lstat/reparse-point
+            # detection remains the security property we actually need here.
+            if path_entry_is_symlink_or_reparse(path):
+                return True
             resolved = path.resolve(strict=False)
         except (OSError, RuntimeError):
-            # Other filesystem errors still fail closed.
+            # Metadata/resolve failures cannot be classified safely. Keep the
+            # historical fail-closed behaviour and hide/reject the entry.
             return True
         return any(
             resolved == protected or protected in resolved.parents
