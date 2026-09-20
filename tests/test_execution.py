@@ -13,6 +13,7 @@ from cli_agent.execution import (
     build_preapproval_callback,
     run_once,
 )
+from cli_agent.file_context import FileContext
 from cli_agent.model import (
     ModelRequestError,
     ModelRetryPolicy,
@@ -116,6 +117,73 @@ def test_run_once_uses_core_modules_without_cli_process(
     assert captured["prompts"] == ["do work", "tokens"]
     assert FakeAgent.instances == 1
 
+
+
+def test_run_once_rejects_missing_workspace(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Arbeitsordner existiert nicht"):
+        asyncio.run(
+            run_once(
+                OneShotRunOptions(
+                    workspace=tmp_path / "missing",
+                    prompt="work",
+                )
+            )
+        )
+
+
+def test_run_once_rejects_blank_prompt_before_loading_dependencies(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="darf nicht leer sein"):
+        asyncio.run(
+            run_once(
+                OneShotRunOptions(
+                    workspace=tmp_path,
+                    prompt="   ",
+                )
+            )
+        )
+
+
+def test_run_once_rejects_mixed_prepared_and_raw_file_options(
+    tmp_path: Path,
+) -> None:
+    context_path = tmp_path / "context.txt"
+    context_path.write_text("context", encoding="utf-8")
+    prepared = FileContext(
+        "context.txt",
+        "context",
+        context_path,
+        len(b"context"),
+    )
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=object,
+    )
+
+    with pytest.raises(ValueError, match="nicht zusammen"):
+        asyncio.run(
+            run_once(
+                OneShotRunOptions(
+                    workspace=tmp_path,
+                    prompt="work",
+                    context_files=(Path("context.txt"),),
+                    prepared_file_contexts=(prepared,),
+                ),
+                dependencies=dependencies,
+            )
+        )
+
+
+def test_workspace_access_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="workspace_access"):
+        apply_workspace_access_override(
+            _config(),
+            workspace_access="admin",
+        )
 
 def test_each_run_once_creates_fresh_agent_instance(
     tmp_path: Path,
