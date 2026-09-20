@@ -52,7 +52,8 @@ absolute paths and '..' are forbidden.
         The result contains the exact UTF-8 document, a compact metadata
         summary, and normalized internal Markdown links. Read only documents
         that are plausibly relevant to the user's task; use knowledge_index
-        first. A non-conforming document remains readable and carries a warning.
+        first. Non-conforming Concept Markdown is rejected instead of being
+        exposed as generic repository content.
 
         Args:
             path: Markdown file relative to the OKF repository, preferably an
