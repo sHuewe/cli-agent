@@ -58,6 +58,7 @@ def test_repository_validates_limits_and_directory(tmp_path: Path) -> None:
 def test_index_md_is_used_and_only_internal_safe_links_are_exposed(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
+    (docs / "nested.md").write_text(_concept(title="Nested"), encoding="utf-8")
     (tmp_path / "concept.md").write_text(_concept(), encoding="utf-8")
     (tmp_path / "index.md").write_text(
         "[Concept](concept.md)\n"
@@ -100,20 +101,38 @@ def test_synthesized_index_classifies_entries_and_respects_limit(tmp_path: Path)
     assert result["warnings"] == ["Index wurde nach 2 Einträgen abgeschnitten."]
 
 
-def test_invalid_concept_remains_readable_with_warning(tmp_path: Path) -> None:
-    (tmp_path / "broken.md").write_text("plain markdown", encoding="utf-8")
+def test_non_okf_directory_is_rejected_without_exposing_markdown(tmp_path: Path) -> None:
+    (tmp_path / "notes.md").write_text("confidential notes", encoding="utf-8")
+    (tmp_path / "index.md").write_text("[Notes](notes.md)\n", encoding="utf-8")
+
+    with pytest.raises(OkfRepositoryError, match="kein gültiges OKF-Repository"):
+        OkfRepository.from_directory(tmp_path)
+
+
+def test_non_conforming_markdown_is_hidden_inside_valid_okf_root(tmp_path: Path) -> None:
+    (tmp_path / "valid.md").write_text(_concept(title="Valid"), encoding="utf-8")
+    (tmp_path / "private-notes.md").write_text("confidential notes", encoding="utf-8")
     repository = OkfRepository.from_directory(tmp_path)
 
     index = repository.knowledge_index()
-    entry = index["entries"][0]
-    assert entry["path"] == "broken.md"
-    assert "warning" in entry
+    assert [entry["path"] for entry in index["entries"]] == ["valid.md"]
 
-    result = repository.knowledge_read("broken.md")
-    assert result["kind"] == "concept"
-    assert result["summary"]["title"] == "broken"
-    assert result["warning"] is not None
-    assert result["content"] == "plain markdown"
+    with pytest.raises(OkfRepositoryError, match="nicht konformes Markdown"):
+        repository.knowledge_read("private-notes.md")
+
+
+def test_unrelated_directory_is_not_exposed_from_valid_okf_root(tmp_path: Path) -> None:
+    (tmp_path / "valid.md").write_text(_concept(title="Valid"), encoding="utf-8")
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    (unrelated / "notes.md").write_text("confidential notes", encoding="utf-8")
+    repository = OkfRepository.from_directory(tmp_path)
+
+    index = repository.knowledge_index()
+    assert [entry["path"] for entry in index["entries"]] == ["valid.md"]
+
+    with pytest.raises(OkfRepositoryError, match="keine gültigen OKF-Concepts"):
+        repository.knowledge_index("unrelated")
 
 
 def test_read_rejects_non_markdown_and_oversized_file(tmp_path: Path) -> None:
