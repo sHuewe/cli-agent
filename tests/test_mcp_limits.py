@@ -117,6 +117,15 @@ def test_tool_name_length_limit_is_enforced() -> None:
         )
 
 
+def test_tool_name_with_lone_surrogate_is_rejected() -> None:
+    with pytest.raises(RuntimeError, match="Unicode-Surrogate"):
+        limits.validate_mcp_server_metadata(
+            server_name="broken",
+            instructions=None,
+            tools=[tool(name="search\ud800tool")],
+        )
+
+
 def test_duplicate_tool_names_are_rejected() -> None:
     with pytest.raises(RuntimeError, match="mehrfach"):
         limits.validate_mcp_server_metadata(

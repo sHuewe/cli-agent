@@ -19,6 +19,7 @@ from cli_agent.config import AppConfig, McpServerConfig, ModelConfig
 from cli_agent.mcp_contracts import tool_contract_fingerprint
 from cli_agent.network_policy import NetworkConfig
 from cli_agent.os_mcp_server import resolve_mcp_config
+from cli_agent.terminal_output import sanitize_terminal_text
 
 
 def test_approval_summary_shows_payload_even_for_sensitive_looking_argument_names() -> None:
@@ -259,3 +260,254 @@ def test_model_cli_override_replaces_only_model_name() -> None:
 def test_without_model_cli_argument_keeps_config_unchanged() -> None:
     original = AppConfig(model=ModelConfig(model="configured-model"))
     assert apply_model_cli_override(original, model=None) is original
+
+
+def test_terminal_sanitizer_preserves_normal_unicode_and_emoji() -> None:
+    value = "Grüße ✅ 🚀 👨‍💻 ❤️"
+
+    assert sanitize_terminal_text(value) == value
+
+
+def test_terminal_sanitizer_strict_mode_escapes_invisible_formatting() -> None:
+    value = "a\u200bb\u200cc\u200dd\u2060e 👨‍💻 ❤️"
+
+    sanitized = sanitize_terminal_text(
+        value,
+        escape_invisible_formatting=True,
+    )
+
+    assert sanitized == (
+        "a\\u200bb\\u200cc\\u200dd\\u2060e "
+        "👨\\u200d💻 ❤️"
+    )
+    assert "\u200b" not in sanitized
+    assert "\u200c" not in sanitized
+    assert "\u200d" not in sanitized
+    assert "\u2060" not in sanitized
+
+
+def test_terminal_sanitizer_escapes_terminal_and_bidi_controls() -> None:
+    value = "safe\x1b[2Jhidden\u202eexe.txt\x07"
+
+    sanitized = sanitize_terminal_text(value)
+
+    assert "\x1b" not in sanitized
+    assert "\u202e" not in sanitized
+    assert "\x07" not in sanitized
+    assert "\\u001b[2J" in sanitized
+    assert "\\u202e" in sanitized
+    assert "\\u0007" in sanitized
+
+
+def test_terminal_sanitizer_single_line_escapes_line_controls() -> None:
+    value = "tool\nforged\tname\roverwrite"
+
+    assert sanitize_terminal_text(value, multiline=False) == (
+        "tool\\nforged\\tname\\roverwrite"
+    )
+
+
+def test_approval_summary_escapes_bidi_but_preserves_emoji() -> None:
+    summary = _approval_arguments(
+        {
+            "message": "Deploy ✅ \u202edanger",
+        }
+    )
+
+    assert "Deploy ✅" in summary
+    assert "\u202e" not in summary
+    assert "\\u202e" in summary
+
+
+def test_approval_tool_name_cannot_inject_terminal_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli_module.sys,
+        "stdin",
+        SimpleNamespace(isatty=lambda: True),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+
+    approved = asyncio.run(
+        cli_module.approve_tool_call(
+            "evil\x1b[2J\u202etool\nforged",
+            {"message": "ok ✅"},
+        )
+    )
+
+    assert approved is False
+    output = capsys.readouterr().out
+    assert "\x1b" not in output
+    assert "\u202e" not in output
+    assert "evil\\u001b[2J\\u202etool\\nforged" in output
+    assert "ok ✅" in output
+
+
+def test_debug_error_sanitizes_traceback_terminal_controls(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    try:
+        raise RuntimeError("boom\x1b[2J\u202edanger")
+    except RuntimeError as exc:
+        cli_module.print_error(exc, debug=True)
+
+    captured = capsys.readouterr()
+    assert "\x1b" not in captured.err
+    assert "\u202e" not in captured.err
+    assert "\\u001b[2J" in captured.err
+    assert "\\u202e" in captured.err
+    assert "RuntimeError: boom" in captured.err
+
+
+def test_rendered_tool_fragment_with_c1_control_remains_valid_toml() -> None:
+    inspection = cli_module.McpToolInspection(
+        server_name="docs",
+        transport="stdio",
+        tool_name="search\u009btool",
+        description="",
+        input_schema={"type": "object"},
+        contract_sha256="sha256:" + "0" * 64,
+        trusted_server_found=False,
+        existing_contract_sha256=None,
+    )
+
+    rendered = sanitize_terminal_text(
+        cli_module._render_tool_approval_fragment(inspection),
+        multiline=True,
+    )
+    parsed = tomllib.loads(rendered)
+
+    approval = parsed["mcp"]["trusted_servers"]["auto_approve_tools"][0]
+    assert approval["name"] == "search\u009btool"
+
+
+def test_preloaded_web_context_status_is_sanitized(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = AppConfig(
+        model=ModelConfig(
+            provider="openai",
+            model="internal-model",
+            base_url="https://llm.internal/v1",
+        )
+    )
+    admin_config = AdminConfig(
+        network=NetworkConfig(
+            model_allowed_hosts=("llm.internal",),
+            web_allowed_hosts=("docs.internal",),
+        )
+    )
+
+    class FakeAgent:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            if prompt.startswith("add_web_context "):
+                return "Web-Kontext hinzugefügt: https://docs.internal/a\x1b[2J\u202eevil"
+            return "ok"
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "load_admin_config", lambda: admin_config)
+    monkeypatch.setattr(cli_module, "configure_logging", lambda _config: None)
+    monkeypatch.setattr(cli_module, "WebContextCliAgent", FakeAgent)
+
+    args = SimpleNamespace(
+        config=None,
+        model=None,
+        os_access=None,
+        approve_tool=[],
+        add_web_context=["https://docs.internal/reference"],
+        debug=False,
+        workspace=tmp_path,
+        prompt=[],
+    )
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: (_ for _ in ()).throw(EOFError()))
+    asyncio.run(cli_module.run(args))
+
+    output = capsys.readouterr().out
+    assert "\x1b" not in output
+    assert "\u202e" not in output
+    assert "\\u001b[2J" in output
+    assert "\\u202e" in output
+
+
+def test_terminal_sanitizer_escapes_lone_unicode_surrogates() -> None:
+    value = "before\ud800middle\udfffafter ✅"
+
+    sanitized = sanitize_terminal_text(value)
+
+    assert sanitized == "before\\ud800middle\\udfffafter ✅"
+    sanitized.encode("utf-8")
+
+
+def test_strict_identifier_rendering_distinguishes_literal_escape_from_control() -> None:
+    actual_escape = sanitize_terminal_text(
+        "a\x1bb",
+        multiline=False,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+    literal_escape = sanitize_terminal_text(
+        "a\\u001bb",
+        multiline=False,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+
+    assert actual_escape == "a\\u001bb"
+    assert literal_escape == "a\\\\u001bb"
+    assert actual_escape != literal_escape
+
+
+def test_approval_tool_name_escapes_literal_backslashes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli_module.sys,
+        "stdin",
+        SimpleNamespace(isatty=lambda: True),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+
+    approved = asyncio.run(
+        cli_module.approve_tool_call(
+            "tool\\u001bname",
+            {},
+        )
+    )
+
+    assert approved is False
+    output = capsys.readouterr().out
+    assert "tool\\\\u001bname" in output
+
+
+def test_mcp_description_rendering_distinguishes_literal_escape_from_control() -> None:
+    actual_escape = sanitize_terminal_text(
+        "desc \x1b here",
+        multiline=True,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+    literal_escape = sanitize_terminal_text(
+        "desc \\u001b here",
+        multiline=True,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+
+    assert actual_escape == "desc \\u001b here"
+    assert literal_escape == "desc \\\\u001b here"
+    assert actual_escape != literal_escape

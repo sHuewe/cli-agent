@@ -23,6 +23,7 @@ from .file_context import (
 from .logging_setup import configure_logging
 from .mcp_contracts import tool_contract_fingerprint
 from .model_factory import create_model_client
+from .terminal_output import sanitize_terminal_text
 
 OS_MCP_SERVER_NAME = "os"
 REDACTED_CONFIG_VALUE = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"
@@ -52,7 +53,16 @@ class _InspectionModel:
 async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> bool | str:
     if not sys.stdin.isatty():
         return False
-    print("\nExplizite Freigabe erforderlich: " f"{tool_name}({_approval_arguments(arguments)})")
+    safe_tool_name = sanitize_terminal_text(
+        tool_name,
+        multiline=False,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+    print(
+        "\nExplizite Freigabe erforderlich: "
+        f"{safe_tool_name}({_approval_arguments(arguments)})"
+    )
     answer = await asyncio.to_thread(input, "Aktion ausführen? [j]a / [s] dieses Tool für die Session / [N]ein ")
     normalized = answer.strip().casefold()
     if normalized in {"s", "session"}:
@@ -146,9 +156,13 @@ def exception_details(exc: BaseException) -> str:
 
 def print_error(exc: BaseException, *, debug: bool) -> None:
     if debug:
-        traceback.print_exception(exc)
+        rendered = "".join(traceback.format_exception(exc))
+        sys.stderr.write(sanitize_terminal_text(rendered, multiline=True))
     else:
-        print(f"Fehler: {exception_details(exc)}")
+        print(
+            "Fehler: "
+            + sanitize_terminal_text(exception_details(exc), multiline=True)
+        )
 
 
 async def _inspect_mcp_tool(*, server: McpServerConfig, tool_name: str, workspace: Path, config_file: Path, admin_config: AdminConfig) -> McpToolInspection:
@@ -251,13 +265,56 @@ async def run_admin(args: argparse.Namespace) -> None:
         raise ValueError(f"MCP-Server {args.server!r} ist in der Benutzerkonfiguration nicht definiert.")
     config_file = args.config or default_config_file()
     inspection = await _inspect_mcp_tool(server=server, tool_name=args.tool, workspace=workspace, config_file=config_file, admin_config=admin_config)
-    print(f"MCP-Server: {inspection.server_name} ({inspection.transport})")
-    print(f"Tool: {inspection.tool_name}")
+    print(
+        "MCP-Server: "
+        + sanitize_terminal_text(
+            inspection.server_name,
+            multiline=False,
+            escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
+        )
+        + " ("
+        + sanitize_terminal_text(
+            inspection.transport,
+            multiline=False,
+            escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
+        )
+        + ")"
+    )
+    print(
+        "Tool: "
+        + sanitize_terminal_text(
+            inspection.tool_name,
+            multiline=False,
+            escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
+        )
+    )
     if inspection.description:
-        print(f"Beschreibung: {inspection.description}")
+        print(
+            "Beschreibung: "
+            + sanitize_terminal_text(
+                inspection.description,
+                multiline=True,
+                escape_invisible_formatting=True,
+                escape_literal_backslashes=True,
+            )
+        )
     print(f"Contract: {inspection.contract_sha256}")
     print("Input-Schema:")
-    print(json.dumps(inspection.input_schema, ensure_ascii=False, indent=2, sort_keys=True))
+    print(
+        sanitize_terminal_text(
+            json.dumps(
+                inspection.input_schema,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
+            multiline=True,
+            escape_invisible_formatting=True,
+        )
+    )
     if args.admin_command == "inspect-tool":
         return
     if args.update:
@@ -286,9 +343,21 @@ async def run_admin(args: argparse.Namespace) -> None:
     print("\nPfad zur Admin-Konfiguration:")
     print(default_admin_config_file())
     print("\nBeispiel für den Trusted-Server-Eintrag:")
-    print(_render_trusted_server_fragment(fragment_server))
+    print(
+        sanitize_terminal_text(
+            _render_trusted_server_fragment(fragment_server),
+            multiline=True,
+            escape_invisible_formatting=True,
+        )
+    )
     print("\nAuto-Approval für dieses Tool:")
-    print(_render_tool_approval_fragment(inspection))
+    print(
+        sanitize_terminal_text(
+            _render_tool_approval_fragment(inspection),
+            multiline=True,
+            escape_invisible_formatting=True,
+        )
+    )
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -351,13 +420,18 @@ async def run(args: argparse.Namespace) -> None:
         print(f"Output-Datei: {output_target.path}")
 
     def emit_answer(prompt: str, answer: str) -> None:
-        print(answer)
+        print(sanitize_terminal_text(answer, multiline=True))
         if output_target is not None and not is_local_agent_command(prompt):
             output_target.write_text(answer)
 
     async with agent:
         for url in getattr(args, "add_web_context", ()):
-            print(await agent.ask(f"add_web_context {url}"))
+            print(
+                sanitize_terminal_text(
+                    await agent.ask(f"add_web_context {url}"),
+                    multiline=True,
+                )
+            )
         if one_shot_prompt is not None:
             emit_answer(one_shot_prompt, await agent.ask(one_shot_prompt))
             print(await agent.ask("tokens"))
