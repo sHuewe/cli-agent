@@ -71,11 +71,18 @@ class OkfRepository(RepositoryMetadataMixin):
 
         if index_path.is_file():
             content = self._read_text(index_path)
-            links = self._safe_internal_links(content, index_path)
+            links, links_truncated = self._safe_internal_links(content, index_path)
+            if links_truncated:
+                warnings.append(
+                    "Index enthält mehr als "
+                    f"{self.max_index_entries} interne Links. "
+                    "Der freie Index-Inhalt wird ausgeblendet, damit nur "
+                    "tatsächlich angebotene Folgepfade sichtbar sind."
+                )
             return {
                 "directory": relative_directory,
                 "source": self.workspace.relative(index_path),
-                "content": content,
+                "content": None if links_truncated else content,
                 "entries": [],
                 "internal_links": links,
                 "warnings": warnings,
@@ -179,21 +186,28 @@ class OkfRepository(RepositoryMetadataMixin):
             kind = "concept"
             summary = self._concept_summary(relative_path, metadata)
 
+        links, links_truncated = self._safe_internal_links(content, file_path)
         return {
             "path": relative_path,
             "kind": kind,
             "summary": self._json_safe(summary),
-            "warning": None,
+            "warning": (
+                "Interne Links wurden auf "
+                f"{self.max_index_entries} Einträge begrenzt."
+                if links_truncated
+                else None
+            ),
             "content": content,
-            "internal_links": self._safe_internal_links(content, file_path),
+            "internal_links": links,
         }
 
     def _safe_internal_links(
         self,
         content: str,
         source_path: Path,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], bool]:
         links = self._extract_internal_links(content, source_path)
+        links_truncated = len(links) > self.max_index_entries
         safe_links: list[dict[str, Any]] = []
         validation_cache: dict[Path, bool] = {}
 
@@ -223,7 +237,7 @@ class OkfRepository(RepositoryMetadataMixin):
                 validation_cache[target] = is_okf
             if is_okf:
                 safe_links.append(link)
-        return safe_links
+        return safe_links, links_truncated
 
     def _is_okf_document(self, file_path: Path) -> bool:
         if not file_path.is_file() or file_path.suffix.casefold() != ".md":
