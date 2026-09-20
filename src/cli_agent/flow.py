@@ -57,6 +57,7 @@ class FlowStep:
     overwrite_output: bool
     workspace_access: str
     retry_policy: ModelRetryPolicy | None
+    response_format: str
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
     foreach: str | None
@@ -300,6 +301,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "overwrite_output",
         "workspace_access",
         "retry",
+        "response_format",
         "approve_tools",
         "vars",
         "foreach",
@@ -452,6 +454,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         workspace_access = str(workspace_access_value)
 
+        response_format_value = raw.get("response_format", "text")
+        if response_format_value not in {"text", "json"}:
+            raise ValueError(
+                f"steps[{index}].response_format muss 'text' oder 'json' sein."
+            )
+        response_format = str(response_format_value)
+
         raw_retry = raw.get("retry")
         retry_policy: ModelRetryPolicy | None = None
         if raw_retry is not None:
@@ -572,6 +581,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 overwrite_output=overwrite_output,
                 workspace_access=workspace_access,
                 retry_policy=retry_policy,
+                response_format=response_format,
                 approve_tools=approve_tools,
                 variables=variables,
                 foreach=foreach,
@@ -1069,6 +1079,7 @@ async def run_flow(
                     model=step.model,
                     workspace_access=step.workspace_access,
                     retry_policy=step.retry_policy,
+                    response_format=step.response_format,
                     context_files=contexts,
                     add_web_context=step.add_web_context,
                     output=output,
