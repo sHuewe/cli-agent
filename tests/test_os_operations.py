@@ -386,6 +386,18 @@ def test_list_files_skips_cyclic_symlink(tmp_path) -> None:
     assert "loop" not in listing
 
 
+def test_list_files_hides_internal_symlink(tmp_path) -> None:
+    target = tmp_path / "target.txt"
+    target.write_text("visible target", encoding="utf-8")
+    alias = tmp_path / "alias.txt"
+    alias.symlink_to(target.name)
+
+    listing = _workspace(tmp_path).list_files(".")
+
+    assert "target.txt" in listing
+    assert "alias.txt" not in listing
+
+
 def test_list_files_rejects_sensitive_directory(tmp_path) -> None:
     (tmp_path / ".git").mkdir()
 
