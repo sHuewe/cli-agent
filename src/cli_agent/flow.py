@@ -238,7 +238,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 dynamic_values.append(output)
             if any(_ITEM_EXPR.search(value) for value in dynamic_values):
                 raise ValueError(
-                    f"steps[{index}] verwendet ${item...} ohne foreach."
+                    f"steps[{index}] verwendet ${{item...}} ohne foreach."
                 )
 
         steps.append(
