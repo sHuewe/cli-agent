@@ -46,7 +46,7 @@ class FlowStep:
     config: Path | None
     model: str | None
     prompt_file: Path
-    context_file: Path | None
+    context_files: tuple[Path, ...]
     add_web_context: tuple[str, ...]
     output: str | None
     overwrite_output: bool
@@ -237,28 +237,38 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if add_file_context_value is not None
             else context_value
         )
-        context_file = (
-            Path(
-                _string(
-                    effective_context_value,
-                    field=(
-                        f"steps[{index}].add_file_context"
-                        if add_file_context_value is not None
-                        else f"steps[{index}].context_file"
-                    ),
-                )
-            )
-            if effective_context_value is not None
-            else None
+        context_field = (
+            f"steps[{index}].add_file_context"
+            if add_file_context_value is not None
+            else f"steps[{index}].context_file"
         )
-        if (
-            effective_context_value is not None
-            and _ITEM_EXPR.search(str(effective_context_value))
-        ):
-            raise ValueError(
-                f"steps[{index}].add_file_context darf nicht aus "
-                "foreach-Daten parametrisiert werden."
+        if effective_context_value is None:
+            context_files: tuple[Path, ...] = ()
+        else:
+            raw_contexts = (
+                effective_context_value
+                if isinstance(effective_context_value, list)
+                else [effective_context_value]
             )
+            if not raw_contexts or not all(
+                isinstance(value, str) and value.strip()
+                for value in raw_contexts
+            ):
+                raise ValueError(
+                    f"{context_field} muss ein nichtleerer String oder "
+                    "eine Liste nichtleerer Strings sein."
+                )
+            context_strings = tuple(value.strip() for value in raw_contexts)
+            if len(context_strings) != len(set(context_strings)):
+                raise ValueError(
+                    f"{context_field} darf keine doppelten Dateien enthalten."
+                )
+            if any(_ITEM_EXPR.search(value) for value in context_strings):
+                raise ValueError(
+                    f"{context_field} darf nicht aus "
+                    "foreach-Daten parametrisiert werden."
+                )
+            context_files = tuple(Path(value) for value in context_strings)
 
         raw_web_context = raw.get("add_web_context", [])
         if (
@@ -445,7 +455,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 config=config,
                 model=model,
                 prompt_file=prompt_file,
-                context_file=context_file,
+                context_files=context_files,
                 add_web_context=add_web_context,
                 output=output,
                 overwrite_output=overwrite_output,
@@ -617,23 +627,24 @@ def _prompt_for_iteration(
     return rendered
 
 
-def _context_for_step(
+def _contexts_for_step(
     step: FlowStep,
     *,
     workspace: Path,
     flow_dir: Path,
-) -> Path | None:
-    if step.context_file is None:
-        return None
-    return _workspace_path(
-        workspace,
-        (
-            flow_dir / step.context_file
-            if not step.context_file.is_absolute()
-            else step.context_file
-        ),
-        purpose=f"Context-Datei von Schritt {step.step_id!r}",
-        must_exist=True,
+) -> tuple[Path, ...]:
+    return tuple(
+        _workspace_path(
+            workspace,
+            (
+                flow_dir / context_file
+                if not context_file.is_absolute()
+                else context_file
+            ),
+            purpose=f"Context-Datei von Schritt {step.step_id!r}",
+            must_exist=True,
+        )
+        for context_file in step.context_files
     )
 
 
@@ -709,7 +720,7 @@ def validate_flow(
                 + ", ".join(missing)
             )
 
-        _context_for_step(
+        _contexts_for_step(
             step,
             workspace=workspace,
             flow_dir=flow_dir,
@@ -800,7 +811,7 @@ async def run_flow(
                 flow_dir=flow_dir,
                 item=item,
             )
-            context = _context_for_step(
+            contexts = _contexts_for_step(
                 step,
                 workspace=workspace,
                 flow_dir=flow_dir,
@@ -827,7 +838,7 @@ async def run_flow(
                     model=step.model,
                     workspace_access=step.workspace_access,
                     retry_policy=step.retry_policy,
-                    context_file=context,
+                    context_files=contexts,
                     add_web_context=step.add_web_context,
                     output=output,
                     overwrite_output=step.overwrite_output,
