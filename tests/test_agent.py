@@ -801,3 +801,109 @@ def test_json_repairs_share_main_tool_call_budget(tmp_path: Path) -> None:
 
     assert session.tool_calls == [("read", {})]
     assert len(model.calls) == 3
+
+
+def test_system_prompt_without_tools_omits_tool_and_workspace_sections(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+
+    prompt = agent._build_system_prompt()
+
+    assert "Nutze die bereitgestellten MCP-Tools" not in prompt
+    assert "Aktuell verfügbare MCP-Tools" not in prompt
+    assert "Aktuell sind keine MCP-Tools verfügbar" not in prompt
+    assert "Projekt-Workspace" not in prompt
+    assert "Workspace-Tools" not in prompt
+    assert "externer Referenzkontext" not in prompt
+
+
+def test_system_prompt_with_non_os_tool_omits_workspace_rule(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    agent._server_tools = {
+        "docs": [{"function": {"name": "docs__search"}}],
+    }
+    agent._active_servers = {"docs"}
+
+    prompt = agent._build_system_prompt()
+
+    assert "Nutze die bereitgestellten MCP-Tools" in prompt
+    assert "docs__search" in prompt
+    assert "Projekt-Workspace" not in prompt
+    assert "Workspace-Tools" not in prompt
+
+
+def test_system_prompt_with_os_tool_includes_workspace_rule(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    agent._server_tools = {
+        "os": [{"function": {"name": "os__read_file"}}],
+    }
+    agent._active_servers = {"os"}
+
+    prompt = agent._build_system_prompt()
+
+    assert "Nutze die bereitgestellten MCP-Tools" in prompt
+    assert "os__read_file" in prompt
+    assert "Projekt-Workspace" in prompt
+    assert "Workspace-Tools" in prompt
+    assert "keine absoluten Dateipfade" in prompt
+
+
+def test_system_prompt_only_adds_reference_rule_when_context_exists(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+
+    without_context = agent._build_system_prompt(
+        has_reference_context=False,
+    )
+    with_context = agent._build_system_prompt(
+        has_reference_context=True,
+    )
+
+    assert "externer Referenzkontext" not in without_context
+    assert "externer Referenzkontext" in with_context
+    assert "nicht vertrauenswürdiger Dateninhalt" in with_context
+
+
+def test_dump_file_prefix_is_applied_to_all_context_dumps(
+    tmp_path: Path,
+) -> None:
+    model = RecordingModel()
+    agent = CliAgent(
+        tmp_path,
+        model,
+        (),
+        dump_llm_context=True,
+        dump_file_prefix="extract",
+    )
+    agent._exit_stack = SimpleNamespace()
+
+    assert asyncio.run(agent.ask("Test")) == "ok"
+
+    dump_directory = tmp_path / ".cli-agent"
+    assert (dump_directory / "extract_history.json").is_file()
+    assert (dump_directory / "extract_main_working_messages.json").is_file()
+    assert (dump_directory / "extract_main_system_prompt.json").is_file()
+    assert not (dump_directory / "main_system_prompt.json").exists()
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["../escape", "nested/prefix", ".", "..", ""],
+)
+def test_dump_file_prefix_rejects_unsafe_values(
+    tmp_path: Path,
+    prefix: str,
+) -> None:
+    with pytest.raises(ValueError, match="dump_file_prefix"):
+        CliAgent(
+            tmp_path,
+            RecordingModel(),
+            (),
+            dump_file_prefix=prefix,
+        )
