@@ -268,13 +268,17 @@ def test_explicit_index_bounds_and_deduplicates_link_validation(
     repository = OkfRepository.from_directory(tmp_path, max_index_entries=3)
 
     calls: list[Path] = []
-    original = repository._is_okf_document
+    original = OkfRepository._is_okf_document
 
-    def counting_is_okf_document(path: Path) -> bool:
+    def counting_is_okf_document(self: OkfRepository, path: Path) -> bool:
         calls.append(path)
-        return original(path)
+        return original(self, path)
 
-    monkeypatch.setattr(repository, "_is_okf_document", counting_is_okf_document)
+    monkeypatch.setattr(
+        OkfRepository,
+        "_is_okf_document",
+        counting_is_okf_document,
+    )
 
     result = repository.knowledge_index()
 
