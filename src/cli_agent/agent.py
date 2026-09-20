@@ -231,6 +231,55 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             .replace("{project_directory}", str(self.workspace_directory))
         )
 
+    @staticmethod
+    def _value_uses_workspace_placeholder(value: str | None) -> bool:
+        if value is None:
+            return False
+        return (
+            "{workspace_directory}" in value
+            or "{project_directory}" in value
+        )
+
+    def _server_uses_workspace_placeholder(
+        self,
+        server_config: ServerConfig,
+    ) -> bool:
+        if server_config.transport == "stdio":
+            values = [
+                server_config.command,
+                *server_config.args,
+                *server_config.env.values(),
+            ]
+        elif server_config.transport == "streamable_http":
+            values = [
+                server_config.url,
+                *server_config.headers.values(),
+            ]
+        else:
+            return False
+        return any(
+            self._value_uses_workspace_placeholder(value)
+            for value in values
+        )
+
+    def _main_tools_need_workspace_context(
+        self,
+        available_tool_names: list[str],
+    ) -> bool:
+        if any(name.startswith("os__") for name in available_tool_names):
+            return True
+
+        servers_with_active_tools = {
+            server_name
+            for server_name, tools in self._server_tools.items()
+            if server_name in self._active_servers and tools
+        }
+        return any(
+            self._server_uses_workspace_placeholder(server_config)
+            for server_name, server_config in self._server_configs.items()
+            if server_name in servers_with_active_tools
+        )
+
     def _build_system_prompt(
         self,
         *,
@@ -247,7 +296,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
 
         if available_tool_names:
             parts.append(MCP_TOOL_SYSTEM_RULE)
-            if any(name.startswith("os__") for name in available_tool_names):
+            if self._main_tools_need_workspace_context(available_tool_names):
                 parts.append(WORKSPACE_TOOL_SYSTEM_RULE)
             parts.append(
                 "Aktuell verfügbare MCP-Tools (nur diese Namen dürfen aufgerufen werden):\n- "
