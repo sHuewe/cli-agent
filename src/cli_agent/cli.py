@@ -28,6 +28,7 @@ from .execution import (
     apply_workspace_access_override,
     os_mcp_server_config,
     run_once,
+    ensure_response_format,
 )
 from .logging_setup import configure_logging
 from .mcp_contracts import tool_contract_fingerprint
@@ -533,6 +534,12 @@ async def run(args: argparse.Namespace) -> None:
                 continue
             try:
                 answer = await agent.ask(prompt)
+                if not is_local_agent_command(prompt):
+                    answer = await ensure_response_format(
+                        agent,
+                        answer,
+                        response_format=getattr(args, "response_format", "text"),
+                    )
                 print(sanitize_terminal_text(answer, multiline=True))
                 if output_target is not None and not is_local_agent_command(prompt):
                     output_target.write_text(answer)
