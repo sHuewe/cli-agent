@@ -106,6 +106,117 @@ def test_flow_has_no_subprocess_execution_dependency() -> None:
 
 
 
+
+def test_flow_parses_model_and_retry_policy(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+model = "small-model"
+prompt_file = "prompt.md"
+
+[steps.retry]
+max_attempts = 3
+initial_delay_seconds = 0.5
+backoff_multiplier = 2
+max_delay_seconds = 4
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    step = definition.steps[0]
+
+    assert step.model == "small-model"
+    assert step.retry_policy is not None
+    assert step.retry_policy.max_attempts == 3
+    assert step.retry_policy.initial_delay_seconds == 0.5
+    assert step.retry_policy.backoff_multiplier == 2
+    assert step.retry_policy.max_delay_seconds == 4
+
+
+@pytest.mark.parametrize(
+    ("retry_toml", "message"),
+    [
+        ("max_attempts = 0", "max_attempts"),
+        ("max_attempts = 2.5", "max_attempts"),
+        ("initial_delay_seconds = -1", "initial_delay_seconds"),
+        ("backoff_multiplier = 0", "backoff_multiplier"),
+        ("max_delay_seconds = 301", "max_delay_seconds"),
+        ("unknown = 1", "unbekannte Schlüssel"),
+    ],
+)
+def test_flow_rejects_invalid_retry_policy(
+    tmp_path: Path,
+    retry_toml: str,
+    message: str,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        f"""
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+
+[steps.retry]
+{retry_toml}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_flow_passes_model_and_retry_policy_to_execution_core(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+model = "fast-model"
+prompt_file = "prompt.md"
+
+[steps.retry]
+max_attempts = 4
+initial_delay_seconds = 0
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="done")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(calls) == 1
+    assert calls[0].model == "fast-model"
+    assert calls[0].retry_policy is not None
+    assert calls[0].retry_policy.max_attempts == 4
+    assert calls[0].retry_policy.initial_delay_seconds == 0
+
 def test_flow_parses_per_step_approve_tools(tmp_path: Path) -> None:
     (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
     _write_config(tmp_path / "config.toml")
