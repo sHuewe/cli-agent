@@ -80,6 +80,7 @@ class OneShotRunOptions:
     approval_callback: ApprovalCallback | None = None
     prepared_file_contexts: tuple[FileContext, ...] = ()
     prepared_output_target: OutputTarget | None = None
+    prepared_config: AppConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -160,7 +161,11 @@ async def run_once(
     if not options.prompt or options.prompt.isspace():
         raise ValueError("One-Shot-Prompt darf nicht leer sein.")
 
-    config = deps.load_config(options.config_file)
+    config = (
+        options.prepared_config
+        if options.prepared_config is not None
+        else deps.load_config(options.config_file)
+    )
     admin_config = deps.load_admin_config()
     config = apply_model_override(config, model=options.model)
     config = apply_workspace_access_override(
