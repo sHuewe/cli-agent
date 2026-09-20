@@ -321,8 +321,20 @@ def test_os_main_uses_resolved_config_workspace_and_stdio(tmp_path, monkeypatch)
 
     class WorkspaceFactory:
         @classmethod
-        def from_directory(cls, directory, mcp_config, *, protected_paths=()):
-            captured["workspace"] = (directory, mcp_config, protected_paths)
+        def from_directory(
+            cls,
+            directory,
+            mcp_config,
+            *,
+            protected_paths=(),
+            mutation_protected_paths=(),
+        ):
+            captured["workspace"] = (
+                directory,
+                mcp_config,
+                protected_paths,
+                mutation_protected_paths,
+            )
             return workspace
 
     monkeypatch.setattr(os_mcp_server, "Workspace", WorkspaceFactory)
@@ -342,6 +354,7 @@ def test_os_main_uses_resolved_config_workspace_and_stdio(tmp_path, monkeypatch)
     assert captured["workspace"][0] == tmp_path
     assert captured["workspace"][1].allow_write_files() is True
     assert captured["workspace"][2] == (tmp_path / "config.toml",)
+    assert captured["workspace"][3] == ()
     assert runner.run_transport == "stdio"
 
 
@@ -370,8 +383,20 @@ def test_os_main_protects_effective_default_config_when_config_flag_is_omitted(t
 
     class WorkspaceFactory:
         @classmethod
-        def from_directory(cls, directory, mcp_config, *, protected_paths=()):
-            captured["workspace"] = (directory, mcp_config, protected_paths)
+        def from_directory(
+            cls,
+            directory,
+            mcp_config,
+            *,
+            protected_paths=(),
+            mutation_protected_paths=(),
+        ):
+            captured["workspace"] = (
+                directory,
+                mcp_config,
+                protected_paths,
+                mutation_protected_paths,
+            )
             return workspace
 
     monkeypatch.setattr(os_mcp_server, "Workspace", WorkspaceFactory)
@@ -381,6 +406,7 @@ def test_os_main_protects_effective_default_config_when_config_flag_is_omitted(t
 
     assert captured["workspace"][0] == tmp_path
     assert captured["workspace"][2] == (default_config,)
+    assert captured["workspace"][3] == ()
     assert runner.run_transport == "stdio"
 
 
