@@ -179,7 +179,7 @@ def test_read_rejects_invalid_utf8(tmp_path: Path) -> None:
     (tmp_path / "invalid.md").write_bytes(b"\xff\xfe")
     repository = OkfRepository.from_directory(tmp_path)
 
-    with pytest.raises(OkfRepositoryError, match="nicht konformes Markdown"):
+    with pytest.raises(OkfRepositoryError, match="UTF-8"):
         repository.knowledge_read("invalid.md")
 
 
