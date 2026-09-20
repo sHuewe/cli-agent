@@ -10,6 +10,7 @@ from cli_agent.execution import (
     ExecutionDependencies,
     OneShotRunOptions,
     apply_workspace_access_override,
+    build_preapproval_callback,
     run_once,
 )
 
@@ -157,3 +158,20 @@ def test_each_run_once_creates_fresh_agent_instance(
 
     assert len(instances) == 2
     assert instances[0] is not instances[1]
+
+
+def test_build_preapproval_callback_matches_exact_tool_name() -> None:
+    fallback_calls = []
+
+    async def fallback(tool_name, arguments):
+        fallback_calls.append((tool_name, arguments))
+        return False
+
+    callback = build_preapproval_callback(
+        ["os__write_file"],
+        fallback=fallback,
+    )
+
+    assert asyncio.run(callback("os__write_file", {"path": "a.txt"})) is True
+    assert asyncio.run(callback("os__write_file_extra", {})) is False
+    assert fallback_calls == [("os__write_file_extra", {})]
