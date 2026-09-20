@@ -139,7 +139,8 @@ Ein vollständiges, bewusst einfach gehaltenes Beispiel liegt unter
 [`examples/flow-basic/`](../examples/flow-basic/README.md). Es verwendet die
 normale Default-User-Config und demonstriert Datei-Context, strukturierten
 JSON-Output, `foreach`, `${item...}`-Variablen und dynamische Output-Dateien
-in drei kurzen Schritten.
+in drei kurzen Schritten. Als Workspace wird dabei bewusst nur
+`examples/flow-basic` verwendet, nicht der Repository-Root.
 
 ## Sicherheitsmodell
 
