@@ -445,3 +445,153 @@ def test_workspace_write_passes_mutation_protected_paths_to_os_server(
         "--mutation-protected-path",
         str(context),
     )
+
+
+def test_run_once_defaults_to_text_response_format(tmp_path: Path) -> None:
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, *_args, **kwargs):
+            captured["response_format"] = kwargs["response_format"]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            return "usage" if prompt == "tokens" else "plain text"
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+
+    result = asyncio.run(
+        run_once(
+            OneShotRunOptions(
+                workspace=tmp_path,
+                prompt="work",
+            ),
+            dependencies=dependencies,
+        )
+    )
+
+    assert result.answer == "plain text"
+    assert captured["response_format"] == "text"
+
+
+def test_run_once_repairs_invalid_json_in_same_agent(tmp_path: Path) -> None:
+    prompts = []
+    instances = []
+
+    class FakeAgent:
+        def __init__(self, *_args, **kwargs):
+            instances.append(self)
+            assert kwargs["response_format"] == "json"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            prompts.append(prompt)
+            if prompt == "tokens":
+                return "usage"
+            non_token_prompts = [value for value in prompts if value != "tokens"]
+            if len(non_token_prompts) == 1:
+                return "not json"
+            return '{"value":1}'
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+
+    result = asyncio.run(
+        run_once(
+            OneShotRunOptions(
+                workspace=tmp_path,
+                prompt="work",
+                response_format="json",
+            ),
+            dependencies=dependencies,
+        )
+    )
+
+    assert result.answer == '{"value":1}'
+    assert len(instances) == 1
+    assert len(prompts) == 3
+    assert "Korrigiere die Antwort jetzt" in prompts[1]
+    assert "verfügbaren Tools verwenden" in prompts[1]
+
+
+def test_run_once_fails_after_two_json_format_repairs(tmp_path: Path) -> None:
+    prompts = []
+
+    class FakeAgent:
+        def __init__(self, *_args, **kwargs):
+            assert kwargs["response_format"] == "json"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            prompts.append(prompt)
+            return "still not json"
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+
+    with pytest.raises(ValueError, match="nach 2 Korrekturversuchen"):
+        asyncio.run(
+            run_once(
+                OneShotRunOptions(
+                    workspace=tmp_path,
+                    prompt="work",
+                    response_format="json",
+                ),
+                dependencies=dependencies,
+            )
+        )
+
+    assert len(prompts) == 3
+
+
+def test_run_once_rejects_unknown_response_format(tmp_path: Path) -> None:
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=object,
+    )
+
+    with pytest.raises(ValueError, match="response_format"):
+        asyncio.run(
+            run_once(
+                OneShotRunOptions(
+                    workspace=tmp_path,
+                    prompt="work",
+                    response_format="yaml",
+                ),
+                dependencies=dependencies,
+            )
+        )
