@@ -412,7 +412,10 @@ def _foreach_items(
             f"foreach-Quelle {source_id!r} besitzt keinen "
             "verfügbaren Output."
         )
-    parsed = outputs[source_id]
+    parsed = _parse_structured_output(
+        outputs[source_id],
+        step_id=source_id,
+    )
     items = _lookup(
         parsed,
         path,
@@ -618,7 +621,7 @@ async def run_flow(
     workspace = workspace.expanduser().resolve()
     validate_flow(flow, workspace=workspace)
     flow_dir = flow.source.parent
-    outputs: dict[str, Any] = {}
+    outputs: dict[str, str] = {}
 
     for step in flow.steps:
         items = _foreach_items(
@@ -695,10 +698,7 @@ async def run_flow(
 
         if step.foreach is None:
             assert len(iteration_answers) == 1
-            outputs[step.step_id] = _parse_structured_output(
-                iteration_answers[0],
-                step_id=step.step_id,
-            )
+            outputs[step.step_id] = iteration_answers[0]
 
 
 def build_parser() -> argparse.ArgumentParser:
