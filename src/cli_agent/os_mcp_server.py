@@ -268,7 +268,9 @@ def main() -> None:
             args.project_directory,
             mcp_config,
             protected_paths=(effective_config_file,),
-            mutation_protected_paths=tuple(args.mutation_protected_path),
+            mutation_protected_paths=tuple(
+                getattr(args, "mutation_protected_path", ())
+            ),
         )
     except WorkspaceError as exc:
         logger.exception("MCP server initialization failed")
