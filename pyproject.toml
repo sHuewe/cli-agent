@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 cli-agent = "cli_agent.cli:main"
+cli-agent-flow = "cli_agent.flow:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cli_agent"]
