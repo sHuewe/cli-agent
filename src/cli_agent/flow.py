@@ -766,10 +766,13 @@ def _render_iteration_text(
     item: Any,
     iteration_id: str | None,
 ) -> str:
-    rendered = _render_item_text(template, item)
+    # Substitute flow-owned placeholders before inserting untrusted item values.
+    # Item content that happens to contain '${iteration.id}' must stay literal
+    # instead of being interpreted recursively as flow syntax.
+    rendered = template
     if iteration_id is not None:
         rendered = _ITERATION_ID_EXPR.sub(iteration_id, rendered)
-    return rendered
+    return _render_item_text(rendered, item)
 
 
 def _iteration_ids(
