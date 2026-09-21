@@ -192,7 +192,7 @@ SENSITIVE_DIRECTORY_NAMES = frozenset(
 SENSITIVE_SUFFIXES = frozenset({".key", ".pem", ".p12", ".pfx"})
 MAX_READ_FILE_BYTES = 1_000_000
 MAX_READ_RANGE_SCAN_BYTES = 64_000_000
-READ_RANGE_CHUNK_CHARS = 64_000
+READ_RANGE_CHUNK_BYTES = 64_000
 MAX_SEARCH_RESULTS = 200
 MAX_SEARCH_TEXT_LENGTH = 4_096
 MAX_SEARCH_LINE_CHARS = 4_000
@@ -540,7 +540,7 @@ class Workspace:
                 done = False
                 while not done:
                     remaining = MAX_READ_RANGE_SCAN_BYTES - scanned_bytes
-                    raw = handle.read(min(READ_RANGE_CHUNK_CHARS, remaining + 1))
+                    raw = handle.read(min(READ_RANGE_CHUNK_BYTES, remaining + 1))
                     if raw == b"":
                         break
                     saw_content = True
