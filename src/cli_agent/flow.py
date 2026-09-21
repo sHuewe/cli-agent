@@ -876,6 +876,13 @@ def _checkpoint_fingerprint(text: str) -> bytes:
     return hashlib.sha256(text.encode("utf-8")).digest()
 
 
+def _checkpoint_snapshot_key(
+    step: FlowStep,
+    output: Path,
+) -> tuple[str, str]:
+    return step.step_id, _filesystem_path_key(output)
+
+
 def _verified_preflight_checkpoint(
     step: FlowStep,
     *,
@@ -950,7 +957,7 @@ def _snapshot_initial_checkpoints(
     flow: FlowDefinition,
     *,
     workspace: Path,
-) -> tuple[dict[str, bytes], tuple[Path, ...]]:
+) -> tuple[dict[tuple[str, str], bytes], tuple[Path, ...]]:
     """Snapshot resumable checkpoints before the first model call.
 
     Static JSON checkpoints are known directly. Foreach checkpoints are only
@@ -967,13 +974,15 @@ def _snapshot_initial_checkpoints(
         assert match is not None
         foreach_consumers.setdefault(match.group(1), []).append(candidate)
 
-    fingerprints: dict[str, bytes] = {}
+    fingerprints: dict[tuple[str, str], bytes] = {}
     paths: dict[str, Path] = {}
 
     def remember(step: FlowStep, output: Path, checkpoint: str) -> None:
-        key = _filesystem_path_key(output)
-        fingerprints[key] = _checkpoint_fingerprint(checkpoint)
-        paths[key] = output
+        path_key = _filesystem_path_key(output)
+        fingerprints[_checkpoint_snapshot_key(step, output)] = (
+            _checkpoint_fingerprint(checkpoint)
+        )
+        paths[path_key] = output
 
     for step in flow.steps:
         if (
@@ -1440,7 +1449,7 @@ async def run_flow(
             for output in preflight_outputs:
                 assert output is not None
                 expected_fingerprint = initial_checkpoint_fingerprints.get(
-                    _filesystem_path_key(output)
+                    _checkpoint_snapshot_key(step, output)
                 )
                 if expected_fingerprint is not None:
                     _verified_preflight_checkpoint(
@@ -1514,7 +1523,7 @@ async def run_flow(
             else:
                 expected_fingerprint = (
                     initial_checkpoint_fingerprints.get(
-                        _filesystem_path_key(output)
+                        _checkpoint_snapshot_key(step, output)
                     )
                     if output is not None
                     else None
