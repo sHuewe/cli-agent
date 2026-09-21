@@ -249,6 +249,19 @@ def _reserved_flow_input_paths(
         _filesystem_path_key(flow.source): flow.source,
     }
     for step in flow.steps:
+        if step.workspace_access in {"read", "write"}:
+            resolve_excluded_paths(
+                workspace,
+                tuple(
+                    dict.fromkeys(
+                        (
+                            *flow.excluded_paths,
+                            *step.excluded_paths,
+                        )
+                    )
+                ),
+            )
+
         prompt_path = _workspace_path(
             workspace,
             step.prompt_file,
