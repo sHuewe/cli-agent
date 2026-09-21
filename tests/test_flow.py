@@ -2989,3 +2989,555 @@ overwrite_output = true
 
     assert [call.prompt for call in calls] == ["replace"]
     assert (tmp_path / "result.json").read_text(encoding="utf-8") == '{"new":true}'
+
+
+def test_foreach_publishes_aggregated_json_output_for_later_foreach(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "analyze.md").write_text("analyze {{var:id}}", encoding="utf-8")
+    (tmp_path / "again.md").write_text(
+        "again {{var:id}}={{var:value}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "analyze"
+config = "config.toml"
+prompt_file = "analyze.md"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+
+[steps.vars]
+id = "${item.id}"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.analyze.output.iterations"
+iteration_id = "${item.id}"
+
+[steps.vars]
+id = "${item.id}"
+value = "${item.output.value}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"},{"id":"two"}]}',
+                web_context_statuses=(),
+            )
+        if options.prompt == "analyze one":
+            return SimpleNamespace(
+                answer='{"value":1}',
+                web_context_statuses=(),
+            )
+        if options.prompt == "analyze two":
+            return SimpleNamespace(
+                answer='{"value":2}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    validate_flow(definition, workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == [
+        "discover",
+        "analyze one",
+        "analyze two",
+        "again one=1",
+        "again two=2",
+    ]
+
+
+def test_foreach_publishes_text_outputs_as_strings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "analyze.md").write_text("analyze {{var:id}}", encoding="utf-8")
+    (tmp_path / "again.md").write_text("again {{var:value}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "analyze"
+config = "config.toml"
+prompt_file = "analyze.md"
+foreach = "steps.discover.output.items"
+
+[steps.vars]
+id = "${item.id}"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.analyze.output.iterations"
+
+[steps.vars]
+value = "${item.output}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"}]}',
+                web_context_statuses=(),
+            )
+        if options.prompt == "analyze one":
+            return SimpleNamespace(
+                answer="plain text",
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == [
+        "discover",
+        "analyze one",
+        "again plain text",
+    ]
+
+
+def test_foreach_aggregation_uses_positional_ids_without_explicit_iteration_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    (tmp_path / "again.md").write_text("id={{var:id}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.process.output.iterations"
+
+[steps.vars]
+id = "${item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":["a","b"]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == [
+        "discover",
+        "process",
+        "process",
+        "id=1",
+        "id=2",
+    ]
+
+
+def test_foreach_aggregation_includes_resumed_checkpoint_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process {{var:id}}", encoding="utf-8")
+    (tmp_path / "again.md").write_text("again {{var:status}}", encoding="utf-8")
+    (tmp_path / "status").mkdir()
+    (tmp_path / "plan.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "status" / "one.json").write_text(
+        '{"status":"existing"}',
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "plan"
+config = "config.toml"
+prompt_file = "plan.md"
+response_format = "json"
+output = "plan.json"
+overwrite_output = false
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.plan.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "status/${iteration.id}.json"
+overwrite_output = false
+
+[steps.vars]
+id = "${item.id}"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.process.output.iterations"
+
+[steps.vars]
+status = "${item.output.status}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "process two":
+            return SimpleNamespace(
+                answer='{"status":"new"}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == [
+        "process two",
+        "again existing",
+        "again new",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("number", "expected"),
+    [
+        ("1e400", "1e400"),
+        ("1e-400", "1e-400"),
+        ("1.2300e+5", "1.2300e+5"),
+    ],
+)
+def test_foreach_aggregation_preserves_json_number_lexemes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    number: str,
+    expected: str,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "analyze.md").write_text("analyze", encoding="utf-8")
+    (tmp_path / "again.md").write_text("value={{var:value}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "analyze"
+config = "config.toml"
+prompt_file = "analyze.md"
+foreach = "steps.discover.output.items"
+response_format = "json"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.analyze.output.iterations"
+
+[steps.vars]
+value = "${item.output.value}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[1]}',
+                web_context_statuses=(),
+            )
+        if options.prompt == "analyze":
+            return SimpleNamespace(
+                answer=f'{{"value":{number}}}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[-1].prompt == f"value={expected}"
+
+
+def test_parse_structured_output_rejects_nonstandard_constants_with_lossless_numbers() -> None:
+    with pytest.raises(ValueError, match="nicht standardkonstante JSON-Zahl"):
+        flow_module._parse_structured_output(
+            '{"x":Infinity}',
+            step_id="test",
+        )
+
+
+def test_foreach_aggregation_escapes_lone_surrogate_string_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "analyze.md").write_text("analyze", encoding="utf-8")
+    (tmp_path / "again.md").write_text("value={{var:value}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "analyze"
+config = "config.toml"
+prompt_file = "analyze.md"
+foreach = "steps.discover.output.items"
+response_format = "json"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.analyze.output.iterations"
+
+[steps.vars]
+value = "${item.output.value}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(answer='{"items":[1]}', web_context_statuses=())
+        if options.prompt == "analyze":
+            return SimpleNamespace(answer='{"value":"\\ud800"}', web_context_statuses=())
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[-1].prompt == "value=\ud800"
+
+
+def test_json_dump_string_escapes_surrogates_but_keeps_normal_unicode() -> None:
+    value = "ä🙂" + chr(0xD800)
+
+    dumped = flow_module._json_dump_string(value)
+
+    assert "ä" in dumped
+    assert "🙂" in dumped
+    assert "\\ud800" in dumped
+    dumped.encode("utf-8")
+
+
+def test_json_dump_string_escapes_surrogate_object_keys() -> None:
+    value = {"key" + chr(0xDFFF): "ok"}
+
+    dumped = flow_module._json_dumps_preserving_numbers(value)
+
+    assert "\\udfff" in dumped
+    dumped.encode("utf-8")
+
+
+def test_foreach_aggregate_limit_is_enforced_while_collecting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process {{var:id}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+
+[steps.vars]
+id = "${item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_module, "MAX_STRUCTURED_OUTPUT_BYTES", 90)
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"},{"id":"two"},{"id":"three"}]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(
+            answer="x" * 40,
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="Aggregierter Output.*JSON-Limit"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == [
+        "discover",
+        "process one",
+        "process two",
+    ]
+
+
+def test_foreach_aggregate_limit_counts_resumed_checkpoint_immediately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process {{var:id}}", encoding="utf-8")
+    (tmp_path / "status").mkdir()
+    (tmp_path / "plan.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "status" / "one.json").write_text(
+        '{"value":"' + ("x" * 50) + '"}',
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "plan"
+config = "config.toml"
+prompt_file = "plan.md"
+response_format = "json"
+output = "plan.json"
+overwrite_output = false
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.plan.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "status/${iteration.id}.json"
+overwrite_output = false
+
+[steps.vars]
+id = "${item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_module, "MAX_STRUCTURED_OUTPUT_BYTES", 80)
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer='{"value":"new"}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="Aggregierter Output.*JSON-Limit"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []

@@ -713,6 +713,54 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
     )
 
 
+class _JsonNumber(str):
+    """Lossless representation of a validated JSON non-integer number."""
+
+
+def _json_dump_string(value: str) -> str:
+    dumped = json.dumps(value, ensure_ascii=False)
+    return "".join(
+        f"\\u{ord(char):04x}"
+        if 0xD800 <= ord(char) <= 0xDFFF
+        else char
+        for char in dumped
+    )
+
+
+def _json_dumps_preserving_numbers(value: Any) -> str:
+    if isinstance(value, _JsonNumber):
+        return str(value)
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, str):
+        return _json_dump_string(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ",".join(
+            _json_dumps_preserving_numbers(item)
+            for item in value
+        ) + "]"
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("JSON-Objektschlüssel müssen Strings sein.")
+            parts.append(
+                _json_dump_string(key)
+                + ":"
+                + _json_dumps_preserving_numbers(item)
+            )
+        return "{" + ",".join(parts) + "}"
+    raise TypeError(
+        f"Nicht unterstützter JSON-Wert: {type(value).__name__}"
+    )
+
+
 def _lookup(
     value: Any,
     path: str | None,
@@ -746,11 +794,7 @@ def _render_item_text(
             else item
         )
         if isinstance(value, (dict, list)):
-            return json.dumps(
-                value,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
+            return _json_dumps_preserving_numbers(value)
         if value is None:
             return ""
         if isinstance(value, bool):
@@ -836,6 +880,7 @@ def _parse_structured_output(
     try:
         return json.loads(
             text,
+            parse_float=_JsonNumber,
             parse_constant=reject_constant,
         )
     except (json.JSONDecodeError, ValueError) as exc:
@@ -1059,6 +1104,72 @@ def _snapshot_initial_checkpoints(
                     )
 
     return fingerprints, tuple(paths.values())
+
+
+_FOREACH_AGGREGATE_PREFIX = '{"iterations":['
+_FOREACH_AGGREGATE_SUFFIX = "]}"
+
+
+def _serialize_foreach_iteration(
+    step: FlowStep,
+    *,
+    iteration_id: str,
+    answer: str,
+) -> str:
+    value: Any = answer
+    if step.response_format == "json":
+        value = _parse_structured_output(
+            answer,
+            step_id=step.step_id,
+        )
+    return _json_dumps_preserving_numbers(
+        {
+            "id": iteration_id,
+            "output": value,
+        }
+    )
+
+
+def _append_foreach_iteration(
+    step: FlowStep,
+    *,
+    parts: list[str],
+    payload_bytes: int,
+    iteration_id: str,
+    answer: str,
+) -> int:
+    fragment = _serialize_foreach_iteration(
+        step,
+        iteration_id=iteration_id,
+        answer=answer,
+    )
+    fragment_bytes = len(fragment.encode("utf-8"))
+    separator_bytes = 1 if parts else 0
+    next_payload_bytes = (
+        payload_bytes
+        + separator_bytes
+        + fragment_bytes
+    )
+    total_bytes = (
+        len(_FOREACH_AGGREGATE_PREFIX.encode("utf-8"))
+        + next_payload_bytes
+        + len(_FOREACH_AGGREGATE_SUFFIX.encode("utf-8"))
+    )
+    if total_bytes > MAX_STRUCTURED_OUTPUT_BYTES:
+        raise ValueError(
+            f"Aggregierter Output von Schritt {step.step_id!r} überschreitet "
+            f"das JSON-Limit von {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
+        )
+    parts.append(fragment)
+    return next_payload_bytes
+
+
+def _finish_foreach_output(parts: list[str]) -> str:
+    return (
+        _FOREACH_AGGREGATE_PREFIX
+        + ",".join(parts)
+        + _FOREACH_AGGREGATE_SUFFIX
+    )
 
 
 def _foreach_items(
@@ -1303,8 +1414,7 @@ def validate_flow(
                     f"Schritt {step.step_id!r} verfügbar."
                 )
 
-        if step.foreach is None:
-            produced.add(step.step_id)
+        produced.add(step.step_id)
 
     reserved_inputs = _reserved_flow_input_paths(
         flow,
@@ -1469,6 +1579,26 @@ async def run_flow(
                 )
 
         iteration_answers: list[str] = []
+        foreach_parts: list[str] = []
+        foreach_payload_bytes = 0
+
+        def record_iteration_answer(
+            answer: str,
+            iteration_id: str | None,
+        ) -> None:
+            nonlocal foreach_payload_bytes
+            if step.foreach is None:
+                iteration_answers.append(answer)
+                return
+            assert iteration_id is not None
+            foreach_payload_bytes = _append_foreach_iteration(
+                step,
+                parts=foreach_parts,
+                payload_bytes=foreach_payload_bytes,
+                iteration_id=iteration_id,
+                answer=answer,
+            )
+
         for index, (item, iteration_id) in enumerate(
             zip(items, iteration_ids),
             start=1,
@@ -1555,7 +1685,10 @@ async def run_flow(
                         escape_literal_backslashes=True,
                     )
                 )
-                iteration_answers.append(checkpoint)
+                record_iteration_answer(
+                    checkpoint,
+                    iteration_id,
+                )
                 continue
 
             prompt = _prompt_for_iteration(
@@ -1619,7 +1752,10 @@ async def run_flow(
                 ),
                 dependencies=deps,
             )
-            iteration_answers.append(result.answer)
+            record_iteration_answer(
+                result.answer,
+                iteration_id,
+            )
             for status in getattr(result, "web_context_statuses", ()):
                 print(
                     sanitize_terminal_text(
@@ -1638,6 +1774,10 @@ async def run_flow(
         if step.foreach is None:
             assert len(iteration_answers) == 1
             outputs[step.step_id] = iteration_answers[0]
+        else:
+            outputs[step.step_id] = _finish_foreach_output(
+                foreach_parts
+            )
 
 
 def build_parser() -> argparse.ArgumentParser:

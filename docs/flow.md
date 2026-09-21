@@ -259,9 +259,59 @@ Positionsnummer als ID; das bisherige Dump-Namensschema
 effektive ID auch im Dump-Präfix verwendet, z. B.
 `concepts.authentication_main_system_prompt.json`.
 
-Ein `foreach`-Step veröffentlicht seine gesammelten Iterationsergebnisse
-derzeit weiterhin nicht als neue `steps.<id>.output`-Quelle. Das Resume-Feature
-ändert diese bestehende Einschränkung nicht.
+Ein `foreach`-Step veröffentlicht seine gesammelten
+Iterationsergebnisse selbst als strukturierten `steps.<id>.output`. Die Form
+ist immer:
+
+```json
+{
+  "iterations": [
+    {
+      "id": "authentication",
+      "output": {
+        "status": "success"
+      }
+    }
+  ]
+}
+```
+
+`id` ist die effektive Iterations-ID. Mit expliziter `iteration_id` ist das
+deren stabiler Wert inklusive eventueller Kollisionssuffixe. Ohne explizite ID
+werden die Positionswerte `"1"`, `"2"`, ... verwendet.
+
+Bei `response_format = "json"` wird die Antwort jeder Iteration geparst und
+als echter JSON-Wert unter `output` eingebettet. Bei
+`response_format = "text"` bleibt `output` ein String. Auch per Resume
+geladene Checkpoints werden in derselben Form aggregiert. Der gesamte
+aggregierte Output unterliegt dem strukturierten JSON-Limit von 10 MB.
+
+Damit kann ein weiterer `foreach` direkt auf dem Ergebnis eines vorherigen
+`foreach` laufen:
+
+```toml
+[[steps]]
+id = "analyze"
+prompt_file = "prompts/analyze.md"
+foreach = "steps.plan.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+
+[steps.vars]
+id = "${item.id}"
+
+[[steps]]
+id = "second_pass"
+prompt_file = "prompts/second-pass.md"
+foreach = "steps.analyze.output.iterations"
+iteration_id = "${item.id}"
+
+[steps.vars]
+id = "${item.id}"
+status = "${item.output.status}"
+```
+
+Ein separater Sammel-/Collect-Step ist dafür nicht erforderlich.
 
 `foreach` muss auf `steps.<id>.output` oder ein darunterliegendes Feld
 verweisen, zum Beispiel:
@@ -270,10 +320,11 @@ verweisen, zum Beispiel:
 foreach = "steps.discover.output.items"
 ```
 
-Die Quelle muss ein vorheriger, nicht aufgefächerter Schritt sein. Mit `output`
-ist hier der Modell-Output dieses Schritts gemeint; eine persistierte Output-Datei
-ist dafür nicht erforderlich. Sobald ein späteres `foreach` darauf zugreift, muss
-der Modell-Output gültiges JSON sein und der ausgewählte Wert eine Liste sein.
+Die Quelle muss ein vorheriger Schritt sein. Bei einem normalen Schritt ist
+`output` dessen Modellantwort. Bei einem `foreach`-Schritt ist es der oben
+beschriebene aggregierte JSON-Output. Eine persistierte Output-Datei ist dafür
+nicht erforderlich. Sobald ein späteres `foreach` darauf zugreift, muss der
+ausgewählte Wert eine Liste sein.
 
 Während einer Iteration können Werte aus dem aktuellen Element mit
 `${item.<feld>}` verwendet werden. Verschachtelte Objektfelder sind möglich:
@@ -342,7 +393,6 @@ Die erste Version ist bewusst klein:
 - nur sequenzielle Ausführung
 - keine Parallelisierung
 - keine Conditions
-- keine verschachtelten `foreach`-Outputs als neue Quelle
 - keine JSON-Schema-Validierung; `foreach` verlangt derzeit nur syntaktisch
   gültiges JSON und den erwarteten Listenpfad
 - keine Flow-weiten Tool-Approvals
