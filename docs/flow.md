@@ -187,11 +187,18 @@ MCP-Server und kann weder Admin-Policy noch Workspace-/Netzwerkgrenzen umgehen.
 ### JSON-Checkpoints und Resume
 
 Ein Step mit `response_format = "json"`, einem `output` und
-`overwrite_output = false` verwendet eine bereits vorhandene Output-Datei als
-Checkpoint. Die Datei wird vor dem Modellaufruf mit denselben Workspace- und
-Dateisicherheitsprüfungen gelesen und anschließend strikt als JSON validiert.
-Ist sie gültig, wird der Agent für diesen Step bzw. diese `foreach`-Iteration
-nicht gestartet und der geladene JSON-Text als Ergebnis verwendet.
+`overwrite_output = false` kann eine bereits vorhandene Output-Datei als
+Checkpoint verwenden. Resume-fähig sind ausschließlich Checkpoints, die beim
+Start des Flow-Laufs bereits vorhanden waren und vor dem ersten Modellaufruf
+erkannt und validiert wurden. Eine Datei, die erst während desselben Runs durch
+einen früheren Agentenlauf, ein Tool oder einen anderen Prozess entsteht, wird
+niemals nachträglich als Checkpoint akzeptiert.
+
+Die Datei wird mit denselben Workspace- und Dateisicherheitsprüfungen gelesen
+und anschließend strikt als JSON validiert. Ist sie gültig und gehört sie zum
+Run-Start-Snapshot, wird der Agent für diesen Step bzw. diese
+`foreach`-Iteration nicht gestartet und der geladene JSON-Text als Ergebnis
+verwendet.
 
 Dadurch kann ein abgebrochener Flow fortgesetzt werden. Ein statischer
 Planungs-Step kann beispielsweise manuell ergänzt werden; ein neuer Lauf lädt
@@ -204,9 +211,17 @@ erhalten: eine vorhandene Datei bei `overwrite_output = false` ist ein Fehler.
 Ein vorhandener, aber ungültiger JSON-Checkpoint führt ebenfalls zu einem Fehler
 und wird niemals still überschrieben.
 
-Bei `foreach` werden alle bereits bestimmbaren Checkpoints eines Steps vor der
-ersten Iteration geprüft. Ein kaputter späterer Checkpoint kann damit nicht dazu
-führen, dass vorherige Iterationen dieses Steps bereits erneut ausgeführt wurden.
+Bei `foreach` können konkrete Checkpoints bereits beim Run-Start gesichert
+werden, wenn die `foreach`-Quelle selbst aus einem vorhandenen statischen
+JSON-Checkpoint stammt. Das ist beispielsweise bei einem vorhandenen
+Planungs-JSON der Fall: Aus dessen Items werden die konkreten Iterations-IDs und
+Output-Pfade bestimmt, vorhandene Status-Checkpoints werden vor dem ersten
+Modellaufruf validiert und gegen spätere Änderungen abgesichert.
+
+Wird die `foreach`-Quelle dagegen erst im aktuellen Run vom Modell erzeugt,
+gelten Dateien an den daraus berechneten Output-Pfaden nicht als Resume-
+Checkpoints. Existieren sie zu diesem Zeitpunkt bereits, wird der normale
+Output-Kollisionsfehler ausgelöst.
 
 ### Stabile IDs für foreach-Iterationen
 
@@ -325,7 +340,6 @@ pro `foreach`.
 Die erste Version ist bewusst klein:
 
 - nur sequenzielle Ausführung
-- kein Resume
 - keine Parallelisierung
 - keine Conditions
 - keine verschachtelten `foreach`-Outputs als neue Quelle
