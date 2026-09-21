@@ -190,6 +190,8 @@ SENSITIVE_DIRECTORY_NAMES = frozenset(
 )
 SENSITIVE_SUFFIXES = frozenset({".key", ".pem", ".p12", ".pfx"})
 MAX_READ_FILE_BYTES = 1_000_000
+MAX_READ_RANGE_SCAN_BYTES = 64_000_000
+READ_RANGE_CHUNK_CHARS = 64_000
 MAX_SEARCH_RESULTS = 200
 MAX_SEARCH_TEXT_LENGTH = 4_096
 MAX_SEARCH_LINE_CHARS = 4_000
@@ -473,13 +475,116 @@ class Workspace:
             lines.append(f"{kind}\t{relative}")
         return "\n".join(lines) if lines else "(Ordner ist leer)"
 
-    def read_file(self, path: str) -> str:
+    @staticmethod
+    def _validate_line_number(value: int | None, *, name: str) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise WorkspaceError(f"{name} muss eine positive ganze Zahl sein.")
+        return value
+
+    def _read_text_line_range(
+        self,
+        file_path: Path,
+        *,
+        path: str,
+        start_line: int | None,
+        end_line: int | None,
+    ) -> str:
+        start = 1 if start_line is None else start_line
+        selected_parts: list[str] = []
+        selected_bytes = 0
+        scanned_bytes = 0
+        line_number = 1
+        saw_content = False
+
+        try:
+            # newline=None matches Path.read_text(): all supported line endings
+            # are normalized to "\n". readline(size) bounds memory even for a
+            # single exceptionally long line.
+            with file_path.open(
+                "r",
+                encoding="utf-8",
+                newline=None,
+            ) as handle:
+                while True:
+                    fragment = handle.readline(READ_RANGE_CHUNK_CHARS)
+                    if fragment == "":
+                        break
+                    saw_content = True
+                    fragment_bytes = len(fragment.encode("utf-8"))
+                    scanned_bytes += fragment_bytes
+                    if scanned_bytes > MAX_READ_RANGE_SCAN_BYTES:
+                        raise WorkspaceError(
+                            "Datei-Ausschnitt überschreitet das Scan-Limit von "
+                            f"{MAX_READ_RANGE_SCAN_BYTES} Bytes: {path!r}"
+                        )
+
+                    if line_number >= start:
+                        selected_bytes += fragment_bytes
+                        if selected_bytes > MAX_READ_FILE_BYTES:
+                            raise WorkspaceError(
+                                "Angeforderter Datei-Ausschnitt überschreitet "
+                                f"das Leselimit von {MAX_READ_FILE_BYTES} Bytes: "
+                                f"{path!r}"
+                            )
+                        selected_parts.append(fragment)
+
+                    if fragment.endswith("\n"):
+                        if end_line is not None and line_number >= end_line:
+                            break
+                        line_number += 1
+
+            result = "".join(selected_parts)
+            if result:
+                return result
+            if not saw_content:
+                return "(Empty file)"
+            return "(No lines in requested range)"
+        except UnicodeDecodeError as exc:
+            raise WorkspaceError(
+                f"Datei ist nicht als UTF-8-Text lesbar: {path!r}"
+            ) from exc
+        except OSError as exc:
+            raise WorkspaceError(
+                f"Datei konnte nicht gelesen werden: {path!r}: {exc}"
+            ) from exc
+
+    def read_file(
+        self,
+        path: str,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> str:
+        start_line = self._validate_line_number(
+            start_line,
+            name="start_line",
+        )
+        end_line = self._validate_line_number(
+            end_line,
+            name="end_line",
+        )
+        if (
+            start_line is not None
+            and end_line is not None
+            and start_line > end_line
+        ):
+            raise WorkspaceError(
+                "start_line darf nicht größer als end_line sein."
+            )
+
         file_path = self.resolve_path(path)
         if not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
         self._reject_hardlinked_file(file_path)
         self._reject_protected_read(file_path)
+
+        ranged_read = start_line is not None or end_line is not None
         if file_path.suffix.lower() == ".pdf":
+            if ranged_read:
+                raise WorkspaceError(
+                    "start_line/end_line werden für PDF-Dateien nicht unterstützt."
+                )
             try:
                 return read_pdf_text(file_path)
             except PdfTextError as exc:
@@ -487,6 +592,14 @@ class Workspace:
         if not self._is_text_file(file_path):
             raise WorkspaceError(
                 f"Dateityp darf nicht als Text gelesen werden: {path!r}"
+            )
+
+        if ranged_read:
+            return self._read_text_line_range(
+                file_path,
+                path=path,
+                start_line=start_line,
+                end_line=end_line,
             )
 
         try:
