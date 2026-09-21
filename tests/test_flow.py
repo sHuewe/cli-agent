@@ -3425,3 +3425,119 @@ def test_json_dump_string_escapes_surrogate_object_keys() -> None:
 
     assert "\\udfff" in dumped
     dumped.encode("utf-8")
+
+
+def test_foreach_aggregate_limit_is_enforced_while_collecting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process {{var:id}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+
+[steps.vars]
+id = "${item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_module, "MAX_STRUCTURED_OUTPUT_BYTES", 90)
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"},{"id":"two"},{"id":"three"}]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(
+            answer="x" * 40,
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="Aggregierter Output.*JSON-Limit"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == [
+        "discover",
+        "process one",
+        "process two",
+    ]
+
+
+def test_foreach_aggregate_limit_counts_resumed_checkpoint_immediately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process {{var:id}}", encoding="utf-8")
+    (tmp_path / "status").mkdir()
+    (tmp_path / "plan.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "status" / "one.json").write_text(
+        '{"value":"' + ("x" * 50) + '"}',
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "plan"
+config = "config.toml"
+prompt_file = "plan.md"
+response_format = "json"
+output = "plan.json"
+overwrite_output = false
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.plan.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "status/${iteration.id}.json"
+overwrite_output = false
+
+[steps.vars]
+id = "${item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_module, "MAX_STRUCTURED_OUTPUT_BYTES", 80)
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer='{"value":"new"}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="Aggregierter Output.*JSON-Limit"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []
