@@ -717,6 +717,16 @@ class _JsonNumber(str):
     """Lossless representation of a validated JSON non-integer number."""
 
 
+def _json_dump_string(value: str) -> str:
+    dumped = json.dumps(value, ensure_ascii=False)
+    return "".join(
+        f"\\u{ord(char):04x}"
+        if 0xD800 <= ord(char) <= 0xDFFF
+        else char
+        for char in dumped
+    )
+
+
 def _json_dumps_preserving_numbers(value: Any) -> str:
     if isinstance(value, _JsonNumber):
         return str(value)
@@ -727,7 +737,7 @@ def _json_dumps_preserving_numbers(value: Any) -> str:
     if value is False:
         return "false"
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        return _json_dump_string(value)
     if isinstance(value, int):
         return str(value)
     if isinstance(value, list):
@@ -741,7 +751,7 @@ def _json_dumps_preserving_numbers(value: Any) -> str:
             if not isinstance(key, str):
                 raise TypeError("JSON-Objektschlüssel müssen Strings sein.")
             parts.append(
-                json.dumps(key, ensure_ascii=False)
+                _json_dump_string(key)
                 + ":"
                 + _json_dumps_preserving_numbers(item)
             )
