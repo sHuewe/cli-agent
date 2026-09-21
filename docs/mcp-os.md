@@ -72,7 +72,7 @@ Immer verfügbar:
 | Tool | Funktion |
 | --- | --- |
 | `list_files(path)` | Listet Dateien und Verzeichnisse direkt unter einem relativen Workspace-Pfad. |
-| `read_file(path)` | Liest eine unterstützte UTF-8-Textdatei oder extrahiert PDF-Text mit Seitenmarkierungen. Rückgabe bleibt `str`. |
+| `read_file(path, start_line=None, end_line=None)` | Liest eine unterstützte UTF-8-Textdatei oder extrahiert PDF-Text mit Seitenmarkierungen. Für Textdateien können optional 1-basierte inklusive Zeilengrenzen angegeben werden. Rückgabe bleibt `str`. |
 | `search_text(path, text, max_results=50)` | Sucht literalen Text rekursiv in freigegebenen Textdateien und liefert höchstens 200 Treffer. |
 
 Nur bei Schreibzugriff:
@@ -97,6 +97,32 @@ Suchtext wächst sie höchstens auf dessen Länge von maximal 4.096 Zeichen.
 Das separate Feld `truncated` der Gesamtausgabe zeigt an, ob weitere Treffer
 wegen `max_results` ausgelassen wurden. Die bestehenden Dateityp-, Größen- und
 Workspace-Prüfungen gelten auch für diese Suche.
+
+## Zeilenbereiche bei Textdateien
+
+Für große Textdateien kann `read_file` einen Ausschnitt anhand von Zeilennummern
+lesen:
+
+```text
+read_file("src/large-file.txt", start_line=120, end_line=180)
+```
+
+`start_line` und `end_line` sind 1-basiert und inklusiv. Beide Parameter sind
+optional: nur `start_line` liest ab dieser Zeile weiter, nur `end_line` liest
+ab Zeile 1 bis einschließlich dieser Zeile.
+
+Ohne Zeilenparameter bleibt das bisherige Verhalten unverändert: Textdateien
+dürfen für einen vollständigen Read maximal 1 MB groß sein. Bei einem
+Zeilenbereich darf die Quelldatei größer sein; der Server liest sie streaming-
+basiert und begrenzt sowohl den Scan-Aufwand als auch die Rückgabe. Pro Aufruf
+dürfen höchstens 64 MB bis zum beziehungsweise innerhalb des angeforderten
+Bereichs gescannt und höchstens 1 MB Text zurückgegeben werden. Überschreitungen
+liefern einen Fehler und werden nicht still gekürzt.
+
+Liegt der gewünschte Bereich vollständig hinter dem Dateiende, wird
+`(No lines in requested range)` zurückgegeben. Für PDF-Dateien sind
+`start_line` und `end_line` bewusst nicht verfügbar, da extrahierter PDF-Text
+keine stabile Quellzeilenstruktur besitzt.
 
 ## PDF-Dateien
 
@@ -142,7 +168,7 @@ Zusätzlich gelten unter anderem:
   von Lesen, Suche/Find, Kopieren und Mutationen ausgeschlossen,
 - `list_files` blendet sensible beziehungsweise geschützte Einträge aus und
   verweigert das direkte Listing geschützter Verzeichnisse,
-- `read_file` begrenzt Textdateien auf 1 MB; für PDFs gelten die oben genannten Limits,
+- vollständige `read_file`-Reads begrenzen Textdateien auf 1 MB; Range-Reads begrenzen den Scan auf 64 MB und die Rückgabe auf 1 MB; für PDFs gelten die oben genannten Limits,
 - mutierende Operationen verweigern bekannte Secret-/Credential-, `.git`-,
   `.cli-agent`-, Log- und dynamisch geschützte Ziele,
 - der Parent-Ordner einer zu schreibenden Datei muss bereits existieren.
