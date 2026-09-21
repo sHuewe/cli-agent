@@ -3351,3 +3351,77 @@ def test_parse_structured_output_rejects_nonstandard_constants_with_lossless_num
             '{"x":Infinity}',
             step_id="test",
         )
+
+
+def test_foreach_aggregation_escapes_lone_surrogate_string_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "analyze.md").write_text("analyze", encoding="utf-8")
+    (tmp_path / "again.md").write_text("value={{var:value}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "analyze"
+config = "config.toml"
+prompt_file = "analyze.md"
+foreach = "steps.discover.output.items"
+response_format = "json"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.analyze.output.iterations"
+
+[steps.vars]
+value = "${item.output.value}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(answer='{"items":[1]}', web_context_statuses=())
+        if options.prompt == "analyze":
+            return SimpleNamespace(answer='{"value":"\\ud800"}', web_context_statuses=())
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[-1].prompt == "value=\ud800"
+
+
+def test_json_dump_string_escapes_surrogates_but_keeps_normal_unicode() -> None:
+    value = "ä🙂" + chr(0xD800)
+
+    dumped = flow_module._json_dump_string(value)
+
+    assert "ä" in dumped
+    assert "🙂" in dumped
+    assert "\\ud800" in dumped
+    dumped.encode("utf-8")
+
+
+def test_json_dump_string_escapes_surrogate_object_keys() -> None:
+    value = {"key" + chr(0xDFFF): "ok"}
+
+    dumped = flow_module._json_dumps_preserving_numbers(value)
+
+    assert "\\udfff" in dumped
+    dumped.encode("utf-8")
