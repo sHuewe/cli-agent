@@ -26,6 +26,7 @@ from .file_context import (
     prepare_file_options,
     prepare_output_target,
     prepare_prompt_file,
+    read_existing_output_text,
 )
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .model import ModelRetryPolicy
@@ -41,6 +42,8 @@ _STEP_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
 _ITEM_EXPR = re.compile(
     r"\$\{item(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
+_ITERATION_ID_EXPR = re.compile(r"\$\{iteration\.id\}")
+_ITERATION_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 _FOREACH = re.compile(
     r"steps\.([A-Za-z_][A-Za-z0-9_-]*)\.output"
     r"(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\Z"
@@ -62,6 +65,7 @@ class FlowStep:
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
     foreach: str | None
+    iteration_id: str | None = None
     excluded_paths: tuple[Path, ...] = ()
     response_format: str = "text"
 
@@ -204,11 +208,16 @@ def _dump_prefix_for_iteration(
     *,
     index: int,
     case_colliding_step_ids: frozenset[str],
+    iteration_id: str | None = None,
 ) -> str:
     prefix = (
-        f"{step.step_id}.foreach-{index}"
-        if step.foreach is not None
-        else step.step_id
+        f"{step.step_id}.{iteration_id}"
+        if step.foreach is not None and iteration_id is not None
+        else (
+            f"{step.step_id}.foreach-{index}"
+            if step.foreach is not None
+            else step.step_id
+        )
     )
     if step.step_id not in case_colliding_step_ids:
         return prefix
@@ -384,6 +393,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "approve_tools",
         "vars",
         "foreach",
+        "iteration_id",
     }
 
     for index, raw in enumerate(raw_steps, start=1):
@@ -631,6 +641,24 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if foreach_value is not None
             else None
         )
+        iteration_id_value = raw.get("iteration_id")
+        iteration_id = (
+            _string(
+                iteration_id_value,
+                field=f"steps[{index}].iteration_id",
+            )
+            if iteration_id_value is not None
+            else None
+        )
+        if iteration_id is not None and foreach is None:
+            raise ValueError(
+                f"steps[{index}].iteration_id ist nur zusammen mit foreach erlaubt."
+            )
+        if iteration_id is not None and _ITERATION_ID_EXPR.search(iteration_id):
+            raise ValueError(
+                f"steps[{index}].iteration_id darf nicht "
+                "'${iteration.id}' verwenden."
+            )
         if foreach is not None:
             match = _FOREACH.fullmatch(foreach)
             if match is None:
@@ -649,7 +677,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if output is not None:
                 dynamic_values.append(output)
             if any(
-                _ITEM_EXPR.search(value)
+                _ITEM_EXPR.search(value) or _ITERATION_ID_EXPR.search(value)
                 for value in dynamic_values
             ):
                 raise ValueError(
@@ -673,6 +701,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 approve_tools=approve_tools,
                 variables=variables,
                 foreach=foreach,
+                iteration_id=iteration_id,
                 excluded_paths=step_excluded_paths,
             )
         )
@@ -731,6 +760,63 @@ def _render_item_text(
     return _ITEM_EXPR.sub(replace, template)
 
 
+def _render_iteration_text(
+    template: str,
+    *,
+    item: Any,
+    iteration_id: str | None,
+) -> str:
+    # Substitute flow-owned placeholders before inserting untrusted item values.
+    # Item content that happens to contain '${iteration.id}' must stay literal
+    # instead of being interpreted recursively as flow syntax.
+    rendered = template
+    if iteration_id is not None:
+        rendered = _ITERATION_ID_EXPR.sub(iteration_id, rendered)
+    return _render_item_text(rendered, item)
+
+
+def _iteration_ids(
+    step: FlowStep,
+    *,
+    items: list[Any],
+) -> list[str | None]:
+    if step.foreach is None:
+        return [None]
+    if step.iteration_id is None:
+        return [str(index) for index in range(1, len(items) + 1)]
+
+    bases: list[str] = []
+    for item in items:
+        base = _render_item_text(step.iteration_id, item).strip()
+        if not base or _ITERATION_ID.fullmatch(base) is None:
+            raise ValueError(
+                f"Schritt {step.step_id!r} erzeugt eine ungültige iteration_id "
+                f"{base!r}; erlaubt sind ASCII-Buchstaben, Ziffern, '_' und '-'."
+            )
+        bases.append(base)
+
+    # Reserve all natural IDs before assigning suffixes. Otherwise a duplicate
+    # such as "card" could consume "card-2" before the item whose actual base
+    # ID is "card-2" is processed, making resume checkpoints unstable.
+    reserved_bases = {base.casefold() for base in bases}
+    used: set[str] = set()
+    result: list[str] = []
+    for base in bases:
+        candidate = base
+        if candidate.casefold() in used:
+            suffix = 2
+            candidate = f"{base}-{suffix}"
+            while (
+                candidate.casefold() in used
+                or candidate.casefold() in reserved_bases
+            ):
+                suffix += 1
+                candidate = f"{base}-{suffix}"
+        used.add(candidate.casefold())
+        result.append(candidate)
+    return result
+
+
 def _parse_structured_output(
     text: str,
     *,
@@ -754,9 +840,225 @@ def _parse_structured_output(
         )
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(
-            f"Output von Schritt {step_id!r} muss für foreach "
-            f"gültiges JSON sein: {exc}"
+            f"Output von Schritt {step_id!r} muss gültiges JSON sein: {exc}"
         ) from exc
+
+
+def _output_owner(
+    step: FlowStep,
+    *,
+    iteration_id: str | None,
+) -> str:
+    if step.foreach is None:
+        return f"Schritt {step.step_id!r}"
+    return f"Schritt {step.step_id!r}, Iteration {iteration_id!r}"
+
+
+def _claim_output(
+    claimed_outputs: dict[str, str],
+    *,
+    path: Path,
+    owner: str,
+    allow_replace: bool = False,
+) -> None:
+    key = _filesystem_path_key(path)
+    previous_owner = claimed_outputs.get(key)
+    if previous_owner is not None and not allow_replace:
+        raise ValueError(
+            f"Output-Datei {path} wird in diesem Flow-Lauf bereits von "
+            f"{previous_owner} beansprucht; {owner} darf denselben Output "
+            "nicht erneut verwenden."
+        )
+    claimed_outputs[key] = owner
+
+
+def _checkpoint_fingerprint(text: str) -> bytes:
+    return hashlib.sha256(text.encode("utf-8")).digest()
+
+
+def _checkpoint_snapshot_key(
+    step: FlowStep,
+    output: Path,
+) -> tuple[str, str]:
+    return step.step_id, _filesystem_path_key(output)
+
+
+def _verified_preflight_checkpoint(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+    expected_fingerprint: bytes,
+) -> str:
+    checkpoint = _existing_json_checkpoint(
+        step,
+        workspace=workspace,
+        output=output,
+    )
+    if checkpoint is None:
+        raise ValueError(
+            f"JSON-Checkpoint von Schritt {step.step_id!r} wurde nach dem "
+            f"Preflight entfernt: {output}"
+        )
+    if _checkpoint_fingerprint(checkpoint) != expected_fingerprint:
+        raise ValueError(
+            f"JSON-Checkpoint von Schritt {step.step_id!r} wurde nach dem "
+            f"Preflight verändert: {output}"
+        )
+    return checkpoint
+
+
+def _existing_json_checkpoint(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+) -> str | None:
+    if (
+        output is None
+        or step.overwrite_output
+        or step.response_format != "json"
+        or not output.exists()
+    ):
+        return None
+
+    text = read_existing_output_text(
+        workspace,
+        output,
+        max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+    )
+    _parse_structured_output(text, step_id=step.step_id)
+    return text
+
+
+def _prepare_flow_output(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path,
+) -> str | None:
+    checkpoint = _existing_json_checkpoint(
+        step,
+        workspace=workspace,
+        output=output,
+    )
+    if checkpoint is not None:
+        return checkpoint
+
+    prepare_output_target(
+        workspace,
+        output,
+        overwrite=step.overwrite_output,
+    )
+    return None
+
+
+def _snapshot_initial_checkpoints(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> tuple[dict[tuple[str, str], bytes], tuple[Path, ...]]:
+    """Snapshot resumable checkpoints before the first model call.
+
+    Static JSON checkpoints are known directly. Foreach checkpoints are only
+    eligible when their source step is itself resumed from a pre-existing
+    static JSON checkpoint, so the concrete iteration outputs can also be
+    derived before any model/tool execution.
+    """
+
+    foreach_consumers: dict[str, list[FlowStep]] = {}
+    for candidate in flow.steps:
+        if candidate.foreach is None:
+            continue
+        match = _FOREACH.fullmatch(candidate.foreach)
+        assert match is not None
+        foreach_consumers.setdefault(match.group(1), []).append(candidate)
+
+    fingerprints: dict[tuple[str, str], bytes] = {}
+    paths: dict[str, Path] = {}
+
+    def remember(step: FlowStep, output: Path, checkpoint: str) -> None:
+        path_key = _filesystem_path_key(output)
+        fingerprints[_checkpoint_snapshot_key(step, output)] = (
+            _checkpoint_fingerprint(checkpoint)
+        )
+        paths[path_key] = output
+
+    for step in flow.steps:
+        if (
+            step.foreach is not None
+            or step.output is None
+            or step.overwrite_output
+            or step.response_format != "json"
+        ):
+            continue
+
+        output = _output_for_iteration(
+            step,
+            workspace=workspace,
+            item=None,
+        )
+        assert output is not None
+        checkpoint = _existing_json_checkpoint(
+            step,
+            workspace=workspace,
+            output=output,
+        )
+        if checkpoint is None:
+            continue
+
+        remember(step, output, checkpoint)
+
+        for consumer in foreach_consumers.get(step.step_id, ()):
+            if (
+                consumer.output is None
+                or consumer.overwrite_output
+                or consumer.response_format != "json"
+            ):
+                continue
+            items = _foreach_items(
+                consumer,
+                outputs={step.step_id: checkpoint},
+            )
+            iteration_ids = _iteration_ids(
+                consumer,
+                items=items,
+            )
+            consumer_outputs = [
+                _output_for_iteration(
+                    consumer,
+                    workspace=workspace,
+                    item=item,
+                    iteration_id=iteration_id,
+                )
+                for item, iteration_id in zip(items, iteration_ids)
+            ]
+            output_keys = [
+                _filesystem_path_key(candidate)
+                for candidate in consumer_outputs
+                if candidate is not None
+            ]
+            if len(output_keys) != len(set(output_keys)):
+                raise ValueError(
+                    f"Schritt {consumer.step_id!r} erzeugt für mehrere "
+                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                )
+
+            for candidate in consumer_outputs:
+                assert candidate is not None
+                consumer_checkpoint = _existing_json_checkpoint(
+                    consumer,
+                    workspace=workspace,
+                    output=candidate,
+                )
+                if consumer_checkpoint is not None:
+                    remember(
+                        consumer,
+                        candidate,
+                        consumer_checkpoint,
+                    )
+
+    return fingerprints, tuple(paths.values())
 
 
 def _foreach_items(
@@ -814,6 +1116,7 @@ def _prompt_for_iteration(
     *,
     workspace: Path,
     item: Any,
+    iteration_id: str | None = None,
 ) -> str:
     prompt_path = _workspace_path(
         workspace,
@@ -826,7 +1129,11 @@ def _prompt_for_iteration(
 
     values = {
         name: (
-            _render_item_text(value, item)
+            _render_iteration_text(
+                value,
+                item=item,
+                iteration_id=iteration_id,
+            )
             if step.foreach is not None
             else value
         )
@@ -862,12 +1169,17 @@ def _output_for_iteration(
     *,
     workspace: Path,
     item: Any,
+    iteration_id: str | None = None,
 ) -> Path | None:
     if step.output is None:
         return None
 
     rendered = (
-        _render_item_text(step.output, item)
+        _render_iteration_text(
+            step.output,
+            item=item,
+            iteration_id=iteration_id,
+        )
         if step.foreach is not None
         else step.output
     )
@@ -966,10 +1278,10 @@ def validate_flow(
                 item=None,
             )
             assert static_output is not None
-            prepare_output_target(
-                workspace,
-                static_output,
-                overwrite=step.overwrite_output,
+            _prepare_flow_output(
+                step,
+                workspace=workspace,
+                output=static_output,
             )
             static_output_key = _filesystem_path_key(static_output)
             previous_writer = planned_static_outputs.get(static_output_key)
@@ -1034,11 +1346,26 @@ async def run_flow(
     )
     flow_dir = flow.source.parent
     outputs: dict[str, str] = {}
+    claimed_outputs: dict[str, str] = {}
     reserved_inputs = _reserved_flow_input_paths(
         flow,
         workspace=workspace,
     )
-    mutation_protected_paths = tuple(reserved_inputs.values())
+    (
+        initial_checkpoint_fingerprints,
+        initial_checkpoint_paths,
+    ) = _snapshot_initial_checkpoints(
+        flow,
+        workspace=workspace,
+    )
+    mutation_protected_paths = tuple(
+        dict.fromkeys(
+            (
+                *reserved_inputs.values(),
+                *initial_checkpoint_paths,
+            )
+        )
+    )
     case_colliding_step_ids = _case_colliding_step_ids(
         flow,
         workspace=workspace,
@@ -1049,16 +1376,22 @@ async def run_flow(
             step,
             outputs=outputs,
         )
+        iteration_ids = _iteration_ids(
+            step,
+            items=items,
+        )
 
         preflight_outputs: list[Path | None] | None = None
+        preflight_checkpoint_fingerprints: list[bytes | None] | None = None
         if step.foreach is not None and step.output is not None:
             preflight_outputs = [
                 _output_for_iteration(
                     step,
                     workspace=workspace,
                     item=item,
+                    iteration_id=iteration_id,
                 )
-                for item in items
+                for item, iteration_id in zip(items, iteration_ids)
             ]
             output_keys = [
                 _filesystem_path_key(path)
@@ -1070,7 +1403,10 @@ async def run_flow(
                     f"Schritt {step.step_id!r} erzeugt für mehrere "
                     "foreach-Elemente nicht eindeutige Output-Pfade."
                 )
-            for output in preflight_outputs:
+            for output, iteration_id in zip(
+                preflight_outputs,
+                iteration_ids,
+            ):
                 assert output is not None
                 reserved_input = reserved_inputs.get(
                     _filesystem_path_key(output)
@@ -1081,16 +1417,64 @@ async def run_flow(
                         "mit einer reservierten Flow-Eingabe: "
                         f"{reserved_input}"
                     )
-                prepare_output_target(
-                    workspace,
-                    output,
-                    overwrite=step.overwrite_output,
+                key = _filesystem_path_key(output)
+                previous_owner = claimed_outputs.get(key)
+                if previous_owner is not None and not step.overwrite_output:
+                    owner = _output_owner(
+                        step,
+                        iteration_id=iteration_id,
+                    )
+                    raise ValueError(
+                        f"Output-Datei {output} wird in diesem Flow-Lauf bereits "
+                        f"von {previous_owner} beansprucht; {owner} darf denselben "
+                        "Output nicht erneut verwenden."
+                    )
+
+            for output, iteration_id in zip(
+                preflight_outputs,
+                iteration_ids,
+            ):
+                assert output is not None
+                _claim_output(
+                    claimed_outputs,
+                    path=output,
+                    owner=_output_owner(
+                        step,
+                        iteration_id=iteration_id,
+                    ),
+                    allow_replace=step.overwrite_output,
+                )
+
+            preflight_checkpoint_fingerprints = []
+            for output in preflight_outputs:
+                assert output is not None
+                expected_fingerprint = initial_checkpoint_fingerprints.get(
+                    _checkpoint_snapshot_key(step, output)
+                )
+                if expected_fingerprint is not None:
+                    _verified_preflight_checkpoint(
+                        step,
+                        workspace=workspace,
+                        output=output,
+                        expected_fingerprint=expected_fingerprint,
+                    )
+                else:
+                    prepare_output_target(
+                        workspace,
+                        output,
+                        overwrite=step.overwrite_output,
+                    )
+                preflight_checkpoint_fingerprints.append(
+                    expected_fingerprint
                 )
 
         iteration_answers: list[str] = []
-        for index, item in enumerate(items, start=1):
+        for index, (item, iteration_id) in enumerate(
+            zip(items, iteration_ids),
+            start=1,
+        ):
             suffix = (
-                f" [{index}/{len(items)}]"
+                f" [{index}/{len(items)}; id={iteration_id}]"
                 if step.foreach is not None
                 else ""
             )
@@ -1103,15 +1487,6 @@ async def run_flow(
                 )
             )
 
-            prompt = _prompt_for_iteration(
-                step,
-                workspace=workspace,
-                item=item,
-            )
-            contexts = _contexts_for_step(
-                step,
-                workspace=workspace,
-            )
             output = (
                 preflight_outputs[index - 1]
                 if preflight_outputs is not None
@@ -1119,6 +1494,7 @@ async def run_flow(
                     step,
                     workspace=workspace,
                     item=item,
+                    iteration_id=iteration_id,
                 )
             )
             if output is not None:
@@ -1131,6 +1507,67 @@ async def run_flow(
                         "mit einer reservierten Flow-Eingabe: "
                         f"{reserved_input}"
                     )
+                if preflight_outputs is None:
+                    _claim_output(
+                        claimed_outputs,
+                        path=output,
+                        owner=_output_owner(
+                            step,
+                            iteration_id=iteration_id,
+                        ),
+                        allow_replace=step.overwrite_output,
+                    )
+
+            if preflight_checkpoint_fingerprints is not None:
+                expected_fingerprint = preflight_checkpoint_fingerprints[index - 1]
+            else:
+                expected_fingerprint = (
+                    initial_checkpoint_fingerprints.get(
+                        _checkpoint_snapshot_key(step, output)
+                    )
+                    if output is not None
+                    else None
+                )
+
+            if expected_fingerprint is not None:
+                checkpoint = _verified_preflight_checkpoint(
+                    step,
+                    workspace=workspace,
+                    output=output,
+                    expected_fingerprint=expected_fingerprint,
+                )
+            else:
+                checkpoint = None
+                if output is not None and preflight_outputs is None:
+                    prepare_output_target(
+                        workspace,
+                        output,
+                        overwrite=step.overwrite_output,
+                    )
+
+            if checkpoint is not None:
+                print(
+                    sanitize_terminal_text(
+                        f"Flow-Schritt {step.step_id}{suffix}: "
+                        f"vorhandenen JSON-Checkpoint verwendet: {output}",
+                        multiline=False,
+                        escape_invisible_formatting=True,
+                        escape_literal_backslashes=True,
+                    )
+                )
+                iteration_answers.append(checkpoint)
+                continue
+
+            prompt = _prompt_for_iteration(
+                step,
+                workspace=workspace,
+                item=item,
+                iteration_id=iteration_id,
+            )
+            contexts = _contexts_for_step(
+                step,
+                workspace=workspace,
+            )
 
             result = await run_once(
                 OneShotRunOptions(
@@ -1173,6 +1610,11 @@ async def run_flow(
                         step,
                         index=index,
                         case_colliding_step_ids=case_colliding_step_ids,
+                        iteration_id=(
+                            iteration_id
+                            if step.iteration_id is not None
+                            else None
+                        ),
                     ),
                 ),
                 dependencies=deps,

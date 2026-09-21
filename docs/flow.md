@@ -184,6 +184,85 @@ vorab freigegeben. Andere Tools verwenden weiterhin die normale interaktive
 Freigabe bzw. werden ohne TTY abgelehnt. Die Liste aktiviert keine Tools oder
 MCP-Server und kann weder Admin-Policy noch Workspace-/Netzwerkgrenzen umgehen.
 
+### JSON-Checkpoints und Resume
+
+Ein Step mit `response_format = "json"`, einem `output` und
+`overwrite_output = false` kann eine bereits vorhandene Output-Datei als
+Checkpoint verwenden. Resume-fähig sind ausschließlich Checkpoints, die beim
+Start des Flow-Laufs bereits vorhanden waren und vor dem ersten Modellaufruf
+erkannt und validiert wurden. Eine Datei, die erst während desselben Runs durch
+einen früheren Agentenlauf, ein Tool oder einen anderen Prozess entsteht, wird
+niemals nachträglich als Checkpoint akzeptiert.
+
+Die Datei wird mit denselben Workspace- und Dateisicherheitsprüfungen gelesen
+und anschließend strikt als JSON validiert. Ist sie gültig und gehört sie zum
+Run-Start-Snapshot, wird der Agent für diesen Step bzw. diese
+`foreach`-Iteration nicht gestartet und der geladene JSON-Text als Ergebnis
+verwendet.
+
+Dadurch kann ein abgebrochener Flow fortgesetzt werden. Ein statischer
+Planungs-Step kann beispielsweise manuell ergänzt werden; ein neuer Lauf lädt
+den geänderten JSON-Plan und verwendet ihn unmittelbar als
+`steps.<id>.output`.
+
+`overwrite_output = true` deaktiviert Resume für diesen Output und führt den
+Step immer aus. Für `response_format = "text"` bleibt das bisherige Verhalten
+erhalten: eine vorhandene Datei bei `overwrite_output = false` ist ein Fehler.
+Ein vorhandener, aber ungültiger JSON-Checkpoint führt ebenfalls zu einem Fehler
+und wird niemals still überschrieben.
+
+Bei `foreach` können konkrete Checkpoints bereits beim Run-Start gesichert
+werden, wenn die `foreach`-Quelle selbst aus einem vorhandenen statischen
+JSON-Checkpoint stammt. Das ist beispielsweise bei einem vorhandenen
+Planungs-JSON der Fall: Aus dessen Items werden die konkreten Iterations-IDs und
+Output-Pfade bestimmt, vorhandene Status-Checkpoints werden vor dem ersten
+Modellaufruf validiert und gegen spätere Änderungen abgesichert.
+
+Wird die `foreach`-Quelle dagegen erst im aktuellen Run vom Modell erzeugt,
+gelten Dateien an den daraus berechneten Output-Pfaden nicht als Resume-
+Checkpoints. Existieren sie zu diesem Zeitpunkt bereits, wird der normale
+Output-Kollisionsfehler ausgelöst.
+
+### Stabile IDs für foreach-Iterationen
+
+Ein `foreach`-Step kann optional eine `iteration_id` definieren:
+
+```toml
+[[steps]]
+id = "concepts"
+foreach = "steps.plan.output.concepts"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "flow/status/${iteration.id}.json"
+overwrite_output = false
+```
+
+`iteration_id` darf Werte aus dem aktuellen `${item...}` verwenden. Die
+gerenderte Basis-ID muss aus ASCII-Buchstaben, Ziffern, `_` und `-`
+bestehen. Die Eingabe von `foreach` bleibt ausdrücklich eine Liste und darf
+Duplikate enthalten. Kollisionen der Basis-ID werden deterministisch mit
+Suffixen aufgelöst:
+
+```text
+card
+card-2
+card-3
+```
+
+Die Kollisionsprüfung ist case-insensitiv, damit die IDs auch für Checkpoints
+und Dumps plattformübergreifend eindeutig bleiben. Die effektive ID steht in
+Variablen und Output-Pfaden als `${iteration.id}` zur Verfügung.
+
+Ohne explizite `iteration_id` erhält jede Iteration intern weiterhin ihre
+Positionsnummer als ID; das bisherige Dump-Namensschema
+`<step>.foreach-<n>_...` bleibt dabei erhalten. Mit `iteration_id` wird die
+effektive ID auch im Dump-Präfix verwendet, z. B.
+`concepts.authentication_main_system_prompt.json`.
+
+Ein `foreach`-Step veröffentlicht seine gesammelten Iterationsergebnisse
+derzeit weiterhin nicht als neue `steps.<id>.output`-Quelle. Das Resume-Feature
+ändert diese bestehende Einschränkung nicht.
+
 `foreach` muss auf `steps.<id>.output` oder ein darunterliegendes Feld
 verweisen, zum Beispiel:
 
@@ -261,7 +340,6 @@ pro `foreach`.
 Die erste Version ist bewusst klein:
 
 - nur sequenzielle Ausführung
-- kein Resume
 - keine Parallelisierung
 - keine Conditions
 - keine verschachtelten `foreach`-Outputs als neue Quelle
