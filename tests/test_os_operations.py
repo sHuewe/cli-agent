@@ -580,3 +580,150 @@ def test_protected_directory_is_hidden_and_blocked_recursively(tmp_path) -> None
         workspace.write_file("flow/new.md", "new")
     with pytest.raises(WorkspaceError, match="geschützten"):
         workspace.delete_file("flow/prompt.md")
+
+
+def test_read_file_supports_inclusive_line_range(tmp_path) -> None:
+    (tmp_path / "large.txt").write_text(
+        "one\ntwo\nthree\nfour\n",
+        encoding="utf-8",
+    )
+
+    result = _workspace(tmp_path).read_file(
+        "large.txt",
+        start_line=2,
+        end_line=3,
+    )
+
+    assert result == "two\nthree\n"
+
+
+def test_read_file_supports_open_line_ranges(tmp_path) -> None:
+    (tmp_path / "lines.txt").write_text(
+        "one\ntwo\nthree\nfour",
+        encoding="utf-8",
+    )
+    workspace = _workspace(tmp_path)
+
+    assert workspace.read_file("lines.txt", end_line=2) == "one\ntwo\n"
+    assert workspace.read_file("lines.txt", start_line=3) == "three\nfour"
+
+
+def test_read_file_range_can_read_large_text_file(tmp_path) -> None:
+    prefix = "x" * 600_000 + "\n"
+    middle = "wanted\n"
+    suffix = "y" * 600_000 + "\n"
+    (tmp_path / "large.txt").write_text(
+        prefix + middle + suffix,
+        encoding="utf-8",
+    )
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(WorkspaceError, match="Leselimit"):
+        workspace.read_file("large.txt")
+
+    assert workspace.read_file("large.txt", start_line=2, end_line=2) == middle
+
+
+@pytest.mark.parametrize(
+    ("start_line", "end_line", "message"),
+    [
+        (0, None, "start_line"),
+        (-1, None, "start_line"),
+        (True, None, "start_line"),
+        (None, 0, "end_line"),
+        (None, False, "end_line"),
+        (4, 3, "größer"),
+    ],
+)
+def test_read_file_rejects_invalid_line_ranges(
+    tmp_path,
+    start_line,
+    end_line,
+    message,
+) -> None:
+    (tmp_path / "lines.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match=message):
+        _workspace(tmp_path).read_file(
+            "lines.txt",
+            start_line=start_line,
+            end_line=end_line,
+        )
+
+
+def test_read_file_range_beyond_eof_is_explicit(tmp_path) -> None:
+    (tmp_path / "lines.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    assert (
+        _workspace(tmp_path).read_file("lines.txt", start_line=5, end_line=8)
+        == "(No lines in requested range)"
+    )
+
+
+def test_read_file_range_preserves_empty_file_marker(tmp_path) -> None:
+    (tmp_path / "empty.txt").write_text("", encoding="utf-8")
+
+    assert (
+        _workspace(tmp_path).read_file("empty.txt", start_line=1, end_line=2)
+        == "(Empty file)"
+    )
+
+
+def test_read_file_range_normalizes_crlf_like_full_read(tmp_path) -> None:
+    (tmp_path / "lines.txt").write_bytes(b"one\r\ntwo\r\nthree\r\n")
+
+    assert (
+        _workspace(tmp_path).read_file("lines.txt", start_line=2, end_line=3)
+        == "two\nthree\n"
+    )
+
+
+def test_read_file_rejects_line_range_for_pdf(tmp_path, monkeypatch) -> None:
+    (tmp_path / "document.pdf").write_bytes(b"%PDF-placeholder")
+
+    def should_not_run(_path):
+        raise AssertionError("PDF extraction must not run for line ranges")
+
+    monkeypatch.setattr(os_operations, "read_pdf_text", should_not_run)
+
+    with pytest.raises(WorkspaceError, match="PDF-Dateien nicht unterstützt"):
+        _workspace(tmp_path).read_file(
+            "document.pdf",
+            start_line=1,
+            end_line=10,
+        )
+
+
+def test_read_file_range_rejects_oversized_selected_text(tmp_path) -> None:
+    (tmp_path / "large.txt").write_text(
+        ("x" * 600_000 + "\n") * 2,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkspaceError, match="Ausschnitt.*Leselimit"):
+        _workspace(tmp_path).read_file("large.txt", start_line=1, end_line=2)
+
+
+def test_read_file_range_scan_limit_counts_raw_crlf_bytes(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "lines.txt").write_bytes(b"a\r\nb\r\nc\r\n")
+    monkeypatch.setattr(os_operations, "MAX_READ_RANGE_SCAN_BYTES", 6)
+    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 4)
+
+    with pytest.raises(WorkspaceError, match="Scan-Limit"):
+        _workspace(tmp_path).read_file("lines.txt", start_line=3, end_line=3)
+
+
+def test_read_file_range_handles_utf8_character_across_binary_chunks(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "utf8.txt").write_text("a\näöü\nz\n", encoding="utf-8")
+    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 3)
+
+    assert (
+        _workspace(tmp_path).read_file("utf8.txt", start_line=2, end_line=2)
+        == "äöü\n"
+    )
