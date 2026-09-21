@@ -2482,3 +2482,62 @@ overwrite_output = true
 
     assert [call.prompt for call in calls] == ["discover", "first", "second"]
     assert (tmp_path / "out" / "foo.json").read_text(encoding="utf-8") == '{"step":"second"}'
+
+
+def test_iteration_id_suffix_does_not_steal_natural_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process {{var:iteration}}", encoding="utf-8")
+    (tmp_path / "status").mkdir()
+    (tmp_path / "status" / "card.json").write_text('{"status":"success"}', encoding="utf-8")
+    (tmp_path / "status" / "card-2.json").write_text('{"status":"success"}', encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "status/${iteration.id}.json"
+overwrite_output = false
+
+[steps.vars]
+iteration = "${iteration.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"card"},{"id":"card"},{"id":"card-2"}]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(
+            answer='{"status":"success"}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["discover", "process card-3"]
+    assert calls[1].output == (tmp_path / "status" / "card-3.json").resolve()
+    assert calls[1].dump_file_prefix == "process.card-3"
