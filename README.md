@@ -185,6 +185,23 @@ name = "compose"
 
 Ein identischer `[[mcp.trusted_servers]]`-Eintrag mit `transport = "stdio"` muss in der Admin-Policy existieren. Benutzerseitige Angaben für `transport`, `command`, `args`, `env` oder andere Launch-Details eines stdio-MCPs werden nicht akzeptiert.
 
+## Workspace-Pfade für den OS-MCP ausschließen
+
+Mit aktiviertem eingebautem OS-MCP können einzelne Dateien oder ganze
+Verzeichnisse vollständig vor den OS-Tools verborgen werden:
+
+```powershell
+cli-agent --with-os-write --exclude-path flow --exclude-path private "..."
+```
+
+`--exclude-path` ist wiederholbar und wird relativ zum Workspace interpretiert.
+Ein ausgeschlossener Pfad kann über den eingebauten OS-MCP weder gelesen,
+aufgelistet, durchsucht noch verändert werden; Verzeichnisse werden rekursiv
+ausgeschlossen. Die Option benötigt deshalb `--with-os-read` oder
+`--with-os-write`. Sie betrifft ausschließlich den OS-MCP: eine explizit per
+`--add-file-context` geladene Datei bleibt weiterhin Benutzer-Input des
+Agenten.
+
 ## MCP-Tool-Freigaben
 
 Read-only Built-in-Tools werden ohne interaktive Nachfrage ausgeführt. Schreibende Tools des eingebauten Workspace-OS-MCPs und externe MCP-Tools benötigen standardmäßig eine explizite Benutzerfreigabe.

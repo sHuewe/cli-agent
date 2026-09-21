@@ -19,6 +19,7 @@ from .execution import (
     ExecutionDependencies,
     OneShotRunOptions,
     build_preapproval_callback,
+    resolve_excluded_paths,
     run_once,
 )
 from .file_context import (
@@ -61,6 +62,7 @@ class FlowStep:
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
     foreach: str | None
+    excluded_paths: tuple[Path, ...] = ()
     response_format: str = "text"
 
 
@@ -68,6 +70,7 @@ class FlowStep:
 class FlowDefinition:
     source: Path
     steps: tuple[FlowStep, ...]
+    excluded_paths: tuple[Path, ...] = ()
 
 
 def _reject_parent_reference(path: Path, *, purpose: str) -> None:
@@ -246,13 +249,22 @@ def _reserved_flow_input_paths(
         _filesystem_path_key(flow.source): flow.source,
     }
     for step in flow.steps:
+        if step.workspace_access in {"read", "write"}:
+            resolve_excluded_paths(
+                workspace,
+                tuple(
+                    dict.fromkeys(
+                        (
+                            *flow.excluded_paths,
+                            *step.excluded_paths,
+                        )
+                    )
+                ),
+            )
+
         prompt_path = _workspace_path(
             workspace,
-            (
-                flow_dir / step.prompt_file
-                if not step.prompt_file.is_absolute()
-                else step.prompt_file
-            ),
+            step.prompt_file,
             purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
             must_exist=True,
         )
@@ -261,7 +273,6 @@ def _reserved_flow_input_paths(
         for context_path in _contexts_for_step(
             step,
             workspace=workspace,
-            flow_dir=flow_dir,
         ):
             reserved[_filesystem_path_key(context_path)] = context_path
 
@@ -279,6 +290,28 @@ def _string(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} muss ein nichtleerer String sein.")
     return value
+
+
+def _path_list(value: Any, *, field: str) -> tuple[Path, ...]:
+    if value is None:
+        return ()
+    raw_values = value if isinstance(value, list) else [value]
+    if not raw_values or not all(
+        isinstance(item, str) and item.strip()
+        for item in raw_values
+    ):
+        raise ValueError(
+            f"{field} muss ein nichtleerer String oder eine Liste "
+            "nichtleerer Strings sein."
+        )
+    values = tuple(item.strip() for item in raw_values)
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field} darf keine doppelten Pfade enthalten.")
+    if any(_ITEM_EXPR.search(item) for item in values):
+        raise ValueError(
+            f"{field} darf nicht aus foreach-Daten parametrisiert werden."
+        )
+    return tuple(Path(item) for item in values)
 
 
 def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
@@ -307,7 +340,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             f"Flow-Datei konnte nicht gelesen werden: {exc}"
         ) from exc
 
-    allowed_root = {"version", "steps"}
+    allowed_root = {"version", "steps", "exclude_paths"}
     unknown_root = set(values) - allowed_root
     if unknown_root:
         raise ValueError(
@@ -316,6 +349,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
     if values.get("version") != 1:
         raise ValueError("Flow-Datei benötigt version = 1.")
+
+    excluded_paths = _path_list(
+        values.get("exclude_paths"),
+        field="exclude_paths",
+    )
 
     raw_steps = values.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
@@ -340,6 +378,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "output",
         "overwrite_output",
         "workspace_access",
+        "exclude_paths",
         "retry",
         "response_format",
         "approve_tools",
@@ -493,6 +532,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "'none', 'read' oder 'write' sein."
             )
         workspace_access = str(workspace_access_value)
+        step_excluded_paths = _path_list(
+            raw.get("exclude_paths"),
+            field=f"steps[{index}].exclude_paths",
+        )
+        if step_excluded_paths and workspace_access == "none":
+            raise ValueError(
+                f"steps[{index}].exclude_paths benötigen workspace_access='read' "
+                "oder 'write'."
+            )
 
         response_format_value = raw.get("response_format", "text")
         if response_format_value not in {"text", "json"}:
@@ -625,12 +673,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 approve_tools=approve_tools,
                 variables=variables,
                 foreach=foreach,
+                excluded_paths=step_excluded_paths,
             )
         )
 
     return FlowDefinition(
         source=source,
         steps=tuple(steps),
+        excluded_paths=excluded_paths,
     )
 
 
@@ -763,16 +813,11 @@ def _prompt_for_iteration(
     step: FlowStep,
     *,
     workspace: Path,
-    flow_dir: Path,
     item: Any,
 ) -> str:
     prompt_path = _workspace_path(
         workspace,
-        (
-            flow_dir / step.prompt_file
-            if not step.prompt_file.is_absolute()
-            else step.prompt_file
-        ),
+        step.prompt_file,
         purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
         must_exist=True,
     )
@@ -800,16 +845,11 @@ def _contexts_for_step(
     step: FlowStep,
     *,
     workspace: Path,
-    flow_dir: Path,
 ) -> tuple[Path, ...]:
     return tuple(
         _workspace_path(
             workspace,
-            (
-                flow_dir / context_file
-                if not context_file.is_absolute()
-                else context_file
-            ),
+            context_file,
             purpose=f"Context-Datei von Schritt {step.step_id!r}",
             must_exist=True,
         )
@@ -821,7 +861,6 @@ def _output_for_iteration(
     step: FlowStep,
     *,
     workspace: Path,
-    flow_dir: Path,
     item: Any,
 ) -> Path | None:
     if step.output is None:
@@ -833,14 +872,9 @@ def _output_for_iteration(
         else step.output
     )
     path = Path(rendered)
-    candidate = (
-        flow_dir / path
-        if not path.is_absolute()
-        else path
-    )
     return _workspace_path(
         workspace,
-        candidate,
+        path,
         purpose=f"Output-Datei von Schritt {step.step_id!r}",
         must_exist=False,
     )
@@ -854,17 +888,14 @@ def validate_flow(
 ) -> None:
     workspace = workspace.expanduser().resolve()
     flow_dir = flow.source.parent
+    resolve_excluded_paths(workspace, flow.excluded_paths)
     produced: set[str] = set()
     planned_static_outputs: dict[str, str] = {}
 
     for step in flow.steps:
         prompt_path = _workspace_path(
             workspace,
-            (
-                flow_dir / step.prompt_file
-                if not step.prompt_file.is_absolute()
-                else step.prompt_file
-            ),
+            step.prompt_file,
             purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
             must_exist=True,
         )
@@ -894,7 +925,6 @@ def validate_flow(
         context_paths = _contexts_for_step(
             step,
             workspace=workspace,
-            flow_dir=flow_dir,
         )
         prepare_file_options(
             workspace,
@@ -933,7 +963,6 @@ def validate_flow(
             static_output = _output_for_iteration(
                 step,
                 workspace=workspace,
-                flow_dir=flow_dir,
                 item=None,
             )
             assert static_output is not None
@@ -975,7 +1004,6 @@ def validate_flow(
         static_output = _output_for_iteration(
             step,
             workspace=workspace,
-            flow_dir=flow_dir,
             item=None,
         )
         assert static_output is not None
@@ -1028,7 +1056,6 @@ async def run_flow(
                 _output_for_iteration(
                     step,
                     workspace=workspace,
-                    flow_dir=flow_dir,
                     item=item,
                 )
                 for item in items
@@ -1079,13 +1106,11 @@ async def run_flow(
             prompt = _prompt_for_iteration(
                 step,
                 workspace=workspace,
-                flow_dir=flow_dir,
                 item=item,
             )
             contexts = _contexts_for_step(
                 step,
                 workspace=workspace,
-                flow_dir=flow_dir,
             )
             output = (
                 preflight_outputs[index - 1]
@@ -1093,7 +1118,6 @@ async def run_flow(
                 else _output_for_iteration(
                     step,
                     workspace=workspace,
-                    flow_dir=flow_dir,
                     item=item,
                 )
             )
@@ -1133,6 +1157,18 @@ async def run_flow(
                         fallback=approval_callback,
                     ),
                     mutation_protected_paths=mutation_protected_paths,
+                    excluded_paths=(
+                        tuple(
+                            dict.fromkeys(
+                                (
+                                    *flow.excluded_paths,
+                                    *step.excluded_paths,
+                                )
+                            )
+                        )
+                        if step.workspace_access in {"read", "write"}
+                        else ()
+                    ),
                     dump_file_prefix=_dump_prefix_for_iteration(
                         step,
                         index=index,

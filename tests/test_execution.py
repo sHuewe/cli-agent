@@ -505,3 +505,66 @@ def test_run_once_rejects_unknown_response_format(tmp_path: Path) -> None:
                 dependencies=dependencies,
             )
         )
+
+
+def test_resolve_excluded_paths_is_workspace_relative_and_deduplicated(
+    tmp_path: Path,
+) -> None:
+    from cli_agent.execution import resolve_excluded_paths
+
+    resolved = resolve_excluded_paths(
+        tmp_path,
+        (Path("flow"), Path("flow"), Path("docs/manual.txt")),
+    )
+
+    assert resolved == (
+        (tmp_path / "flow").resolve(),
+        (tmp_path / "docs" / "manual.txt").resolve(),
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [Path("../outside"), Path(r"C:\outside")],
+)
+def test_resolve_excluded_paths_rejects_workspace_escape(
+    tmp_path: Path,
+    path: Path,
+) -> None:
+    from cli_agent.execution import resolve_excluded_paths
+
+    with pytest.raises(ValueError, match="Ausgeschlossene"):
+        resolve_excluded_paths(tmp_path, (path,))
+
+
+def test_workspace_access_passes_excluded_paths_as_protected_literal_args(
+    tmp_path: Path,
+) -> None:
+    excluded = ((tmp_path / "flow").resolve(),)
+
+    config = apply_workspace_access_override(
+        _config(),
+        workspace_access="write",
+        excluded_paths=excluded,
+    )
+
+    server = config.mcp_servers[0]
+    assert server.literal_args[:2] == (
+        "--protected-path",
+        str(excluded[0]),
+    )
+
+
+def test_run_once_rejects_excluded_paths_without_os_access(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="excluded_paths"):
+        asyncio.run(
+            run_once(
+                OneShotRunOptions(
+                    workspace=tmp_path,
+                    prompt="work",
+                    excluded_paths=(Path("flow"),),
+                )
+            )
+        )

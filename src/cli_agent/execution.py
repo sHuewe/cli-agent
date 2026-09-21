@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
 import logging
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
 from .admin_config import AdminConfig, load_admin_config
@@ -82,6 +82,7 @@ class OneShotRunOptions:
     prepared_file_contexts: tuple[FileContext, ...] = ()
     prepared_output_target: OutputTarget | None = None
     mutation_protected_paths: tuple[Path, ...] = ()
+    excluded_paths: tuple[Path, ...] = ()
     dump_file_prefix: str | None = None
 
 
@@ -95,10 +96,47 @@ class OneShotRunResult:
     output_target: OutputTarget | None
 
 
+def resolve_excluded_paths(
+    workspace: Path,
+    paths: Iterable[Path],
+) -> tuple[Path, ...]:
+    resolved_workspace = workspace.expanduser().resolve()
+    resolved_paths: list[Path] = []
+    seen: set[Path] = set()
+    for value in paths:
+        raw = Path(value).expanduser()
+        text = str(raw)
+        windows = PureWindowsPath(text)
+        if ".." in PurePath(text).parts or ".." in windows.parts:
+            raise ValueError("Ausgeschlossene Pfade dürfen '..' nicht enthalten.")
+        if windows.drive and not raw.is_absolute():
+            raise ValueError(
+                "Ausgeschlossene Pfade dürfen kein relatives Windows-Laufwerk verwenden."
+            )
+        candidate = raw if raw.is_absolute() else resolved_workspace / raw
+        try:
+            resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(
+                f"Ausgeschlossener Pfad konnte nicht aufgelöst werden: {value}"
+            ) from exc
+        try:
+            resolved.relative_to(resolved_workspace)
+        except ValueError as exc:
+            raise ValueError(
+                f"Ausgeschlossener Pfad muss innerhalb des Workspace liegen: {value}"
+            ) from exc
+        if resolved not in seen:
+            seen.add(resolved)
+            resolved_paths.append(resolved)
+    return tuple(resolved_paths)
+
+
 def os_mcp_server_config(
     access: str,
     *,
     mutation_protected_paths: tuple[Path, ...] = (),
+    excluded_paths: tuple[Path, ...] = (),
 ) -> McpServerConfig:
     if access not in {"read", "write"}:
         raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
@@ -116,12 +154,22 @@ def os_mcp_server_config(
             "--access",
             access,
         ),
-        literal_args=tuple(
-            argument
-            for path in mutation_protected_paths
-            for argument in (
-                "--mutation-protected-path",
-                str(path),
+        literal_args=(
+            tuple(
+                argument
+                for path in excluded_paths
+                for argument in (
+                    "--protected-path",
+                    str(path),
+                )
+            )
+            + tuple(
+                argument
+                for path in mutation_protected_paths
+                for argument in (
+                    "--mutation-protected-path",
+                    str(path),
+                )
             )
         ),
         config={"allow_write_files": access == "write"},
@@ -134,6 +182,7 @@ def apply_workspace_access_override(
     *,
     workspace_access: str | None,
     mutation_protected_paths: tuple[Path, ...] = (),
+    excluded_paths: tuple[Path, ...] = (),
 ) -> AppConfig:
     if workspace_access is None:
         return config
@@ -154,6 +203,7 @@ def apply_workspace_access_override(
         os_mcp_server_config(
             workspace_access,
             mutation_protected_paths=mutation_protected_paths,
+            excluded_paths=excluded_paths,
         ),
     )
     return replace(config, mcp_servers=servers)
@@ -187,6 +237,14 @@ async def run_once(
     if not options.prompt or options.prompt.isspace():
         raise ValueError("One-Shot-Prompt darf nicht leer sein.")
     response_format = _validate_response_format(options.response_format)
+    excluded_paths = resolve_excluded_paths(
+        workspace,
+        options.excluded_paths,
+    )
+    if excluded_paths and options.workspace_access not in {"read", "write"}:
+        raise ValueError(
+            "excluded_paths benötigen workspace_access='read' oder 'write'."
+        )
 
     config = deps.load_config(options.config_file)
     admin_config = deps.load_admin_config()
@@ -195,6 +253,7 @@ async def run_once(
         config,
         workspace_access=options.workspace_access,
         mutation_protected_paths=options.mutation_protected_paths,
+        excluded_paths=excluded_paths,
     )
 
     if options.prepared_file_contexts or options.prepared_output_target is not None:

@@ -28,6 +28,7 @@ from .execution import (
     apply_workspace_access_override,
     os_mcp_server_config,
     run_once,
+    resolve_excluded_paths,
 )
 from .logging_setup import configure_logging
 from .mcp_contracts import tool_contract_fingerprint
@@ -106,6 +107,18 @@ def build_parser() -> argparse.ArgumentParser:
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
+    parser.add_argument(
+        "--exclude-path",
+        action="append",
+        type=Path,
+        default=[],
+        metavar="PATH",
+        help=(
+            "Hide one workspace-relative file or directory from the built-in "
+            "OS MCP server. The path cannot be read, listed, searched or "
+            "modified. Repeat for multiple paths."
+        ),
+    )
     parser.add_argument(
         "--context-file",
         "--add-file-context",
@@ -389,11 +402,19 @@ async def run(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     admin_config: AdminConfig = load_admin_config()
     config = apply_model_cli_override(config, model=args.model)
-    config = apply_mcp_cli_overrides(config, os_access=args.os_access)
 
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
+
+    excluded_paths = tuple(getattr(args, "exclude_path", ()) or ())
+    if excluded_paths and args.os_access not in {"read", "write"}:
+        raise ValueError("--exclude-path benötigt --with-os-read oder --with-os-write.")
+    config = apply_workspace_access_override(
+        config,
+        workspace_access=args.os_access,
+        excluded_paths=resolve_excluded_paths(workspace, excluded_paths),
+    )
 
     prompt_file_arg = getattr(args, "prompt_file", None)
     if prompt_file_arg is not None and args.prompt:
@@ -475,6 +496,7 @@ async def run(args: argparse.Namespace) -> None:
                 approval_callback=approval_callback,
                 prepared_file_contexts=file_contexts,
                 prepared_output_target=output_target,
+                excluded_paths=tuple(getattr(args, "exclude_path", ()) or ()),
             ),
             dependencies=ExecutionDependencies(
                 load_config=load_config,

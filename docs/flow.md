@@ -27,9 +27,47 @@ cli-agent-flow run flow.toml --workspace C:\dev\project
 ```
 
 Die Flow-Datei selbst, Prompt-Dateien, Context-Dateien und Outputs müssen
-innerhalb dieses Workspace liegen. Konfigurationsdateien werden dagegen wie bei
-`cli-agent --config` explizit durch den Benutzer ausgewählt; sie sind kein
-LLM-gesteuerter Wert.
+innerhalb dieses Workspace liegen. Relative Pfade für `prompt_file`,
+`add_file_context`/`context_file` und `output` werden immer relativ zum
+Workspace-Root interpretiert, unabhängig davon, in welchem Unterordner die
+`flow.toml` liegt. Konfigurationsdateien sind davon bewusst ausgenommen:
+relative `config`-Pfade werden weiterhin relativ zum Ordner der
+`flow.toml` aufgelöst und dürfen wie bei `cli-agent --config` auch außerhalb
+des Workspace liegen.
+
+## Pfadsemantik
+
+Bei folgender Workspace-Struktur:
+
+```text
+workspace/
+├── handbuch.txt
+├── anweisungen.txt
+├── flow/
+│   ├── flow.toml
+│   ├── config.toml
+│   └── prompts/
+│       └── create-okf.md
+└── okf/
+```
+
+kann `flow/flow.toml` beispielsweise so referenzieren:
+
+```toml
+[[steps]]
+id = "create_okf"
+config = "config.toml"
+prompt_file = "flow/prompts/create-okf.md"
+add_file_context = ["handbuch.txt", "anweisungen.txt"]
+output = "okf/Index.md"
+```
+
+Dabei beziehen sich `prompt_file`, `add_file_context` und `output` auf
+`workspace/`. Nur `config = "config.toml"` bezieht sich auf den Ordner der
+Flow-Datei und bezeichnet hier daher `workspace/flow/config.toml`.
+
+`..` bleibt auch bei workspace-relativen Datenpfaden verboten; absolute Pfade
+müssen weiterhin innerhalb des festen Workspace liegen.
 
 ## Format
 
@@ -89,6 +127,30 @@ Timeouts und weitere Modellparameter bleiben aus der gewählten Config erhalten.
 Schritt explizit auf `none`, `read` oder `write` gesetzt. Ohne Angabe gilt
 `none`; damit kann eine Config nicht implizit Schreibzugriff auf den eingebauten
 Workspace-OS-MCP in einen Flow-Schritt hineintragen.
+
+`exclude_paths` kann sowohl global auf Flow-Ebene als auch pro Step gesetzt
+werden. Die Pfade werden relativ zum Workspace interpretiert. Globale und
+step-spezifische Einträge werden für OS-aktivierte Steps zusammengeführt:
+
+```toml
+version = 1
+exclude_paths = ["flow"]
+
+[[steps]]
+id = "create_okf"
+prompt_file = "flow/prompts/create-okf.md"
+workspace_access = "write"
+exclude_paths = ["private"]
+```
+
+In diesem Beispiel kann der Flow-Orchestrator den Prompt unter
+`flow/prompts/create-okf.md` weiterhin laden, der eingebaute OS-MCP des LLM
+kann dagegen weder `flow/` noch `private/` lesen, auflisten, durchsuchen oder
+verändern. Die Sperre gilt rekursiv. Globale Ausschlüsse werden bei Steps ohne
+OS-Zugriff ignoriert; step-spezifische `exclude_paths` benötigen explizit
+`workspace_access = "read"` oder `"write"`. Die Ausschlüsse gelten nur für
+den eingebauten Workspace-OS-MCP und verändern nicht die explizit vom
+Orchestrator geladenen Prompt-/File-Contexts.
 
 `add_file_context` entspricht dem CLI-Dateikontext (`--add-file-context`,
 Alias von `--context-file`) und akzeptiert entweder einen einzelnen Pfad oder

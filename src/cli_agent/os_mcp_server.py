@@ -204,6 +204,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--protected-path",
+        action="append",
+        type=Path,
+        default=[],
+        help=(
+            "Workspace path that must be invisible and immutable to OS tools. "
+            "May be repeated."
+        ),
+    )
+    parser.add_argument(
         "--mutation-protected-path",
         action="append",
         type=Path,
@@ -264,10 +274,20 @@ def main() -> None:
             config.mcp_servers,
             access=args.access,
         )
+        project_directory = args.project_directory.expanduser().resolve()
+        user_protected_paths = tuple(
+            path.expanduser()
+            if path.is_absolute()
+            else project_directory / path
+            for path in getattr(args, "protected_path", ())
+        )
         workspace = Workspace.from_directory(
-            args.project_directory,
+            project_directory,
             mcp_config,
-            protected_paths=(effective_config_file,),
+            protected_paths=(
+                effective_config_file,
+                *user_protected_paths,
+            ),
             mutation_protected_paths=tuple(
                 getattr(args, "mutation_protected_path", ())
             ),
