@@ -26,6 +26,7 @@ from .file_context import (
     prepare_file_options,
     prepare_output_target,
     prepare_prompt_file,
+    read_existing_output_text,
 )
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .model import ModelRetryPolicy
@@ -655,7 +656,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         if iteration_id is not None and _ITERATION_ID_EXPR.search(iteration_id):
             raise ValueError(
-                f"steps[{index}].iteration_id darf nicht {iteration.id{'}'} verwenden."
+                f"steps[{index}].iteration_id darf nicht "
+                "'${iteration.id}' verwenden."
             )
         if foreach is not None:
             match = _FOREACH.fullmatch(foreach)
@@ -822,9 +824,53 @@ def _parse_structured_output(
         )
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(
-            f"Output von Schritt {step_id!r} muss für foreach "
-            f"gültiges JSON sein: {exc}"
+            f"Output von Schritt {step_id!r} muss gültiges JSON sein: {exc}"
         ) from exc
+
+
+def _existing_json_checkpoint(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+) -> str | None:
+    if (
+        output is None
+        or step.overwrite_output
+        or step.response_format != "json"
+        or not output.exists()
+    ):
+        return None
+
+    text = read_existing_output_text(
+        workspace,
+        output,
+        max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+    )
+    _parse_structured_output(text, step_id=step.step_id)
+    return text
+
+
+def _prepare_flow_output(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path,
+) -> str | None:
+    checkpoint = _existing_json_checkpoint(
+        step,
+        workspace=workspace,
+        output=output,
+    )
+    if checkpoint is not None:
+        return checkpoint
+
+    prepare_output_target(
+        workspace,
+        output,
+        overwrite=step.overwrite_output,
+    )
+    return None
 
 
 def _foreach_items(
@@ -1044,10 +1090,10 @@ def validate_flow(
                 item=None,
             )
             assert static_output is not None
-            prepare_output_target(
-                workspace,
-                static_output,
-                overwrite=step.overwrite_output,
+            _prepare_flow_output(
+                step,
+                workspace=workspace,
+                output=static_output,
             )
             static_output_key = _filesystem_path_key(static_output)
             previous_writer = planned_static_outputs.get(static_output_key)
