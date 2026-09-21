@@ -2372,3 +2372,113 @@ overwrite_output = false
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
+
+
+def test_later_overwrite_step_may_replace_output_claimed_in_same_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    (tmp_path / "second.md").write_text("second", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "first"
+config = "config.toml"
+prompt_file = "first.md"
+response_format = "json"
+output = "result.json"
+overwrite_output = true
+
+[[steps]]
+id = "second"
+config = "config.toml"
+prompt_file = "second.md"
+response_format = "json"
+output = "result.json"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        answer = '{"step":"' + options.prompt + '"}'
+        if options.output is not None:
+            options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["first", "second"]
+    assert (tmp_path / "result.json").read_text(encoding="utf-8") == '{"step":"second"}'
+
+
+def test_later_foreach_with_overwrite_may_replace_claimed_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    (tmp_path / "second.md").write_text("second", encoding="utf-8")
+    (tmp_path / "out").mkdir()
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "first"
+config = "config.toml"
+prompt_file = "first.md"
+foreach = "steps.discover.output.items"
+response_format = "json"
+output = "out/${item.id}.json"
+overwrite_output = true
+
+[[steps]]
+id = "second"
+config = "config.toml"
+prompt_file = "second.md"
+foreach = "steps.discover.output.items"
+response_format = "json"
+output = "out/${item.id}.json"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"foo"}]}',
+                web_context_statuses=(),
+            )
+        answer = '{"step":"' + options.prompt + '"}'
+        if options.output is not None:
+            options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["discover", "first", "second"]
+    assert (tmp_path / "out" / "foo.json").read_text(encoding="utf-8") == '{"step":"second"}'
