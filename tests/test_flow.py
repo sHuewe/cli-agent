@@ -1389,7 +1389,8 @@ output = "${item.path}"
     with pytest.raises(ValueError, match=expected_message):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
-    assert calls == []
+    assert len(calls) == 1
+    assert calls[0].prompt == "discover"
 
 
 def test_flow_response_format_defaults_to_text(tmp_path: Path) -> None:
@@ -2167,8 +2168,7 @@ overwrite_output = false
     with pytest.raises(ValueError, match="gültiges JSON"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
-    assert len(calls) == 1
-    assert calls[0].prompt == "discover"
+    assert calls == []
 
 
 def test_existing_text_output_still_requires_overwrite(
@@ -2619,6 +2619,10 @@ def test_foreach_detects_checkpoint_modified_after_preflight(
     (tmp_path / "status").mkdir()
     (tmp_path / "status" / "one.json").write_text('{"status":"one"}', encoding="utf-8")
     (tmp_path / "status" / "two.json").write_text('{"status":"two"}', encoding="utf-8")
+    (tmp_path / "plan-integrity.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}',
+        encoding="utf-8",
+    )
     _write_config(tmp_path / "config.toml")
     (tmp_path / "flow.toml").write_text(
         """
@@ -2628,6 +2632,9 @@ version = 1
 id = "discover"
 config = "config.toml"
 prompt_file = "discover.md"
+response_format = "json"
+output = "plan-integrity.json"
+overwrite_output = false
 
 [[steps]]
 id = "process"
@@ -2649,11 +2656,6 @@ id = "${item.id}"
 
     async def fake_run_once(options, *, dependencies=None):
         calls.append(options)
-        if options.prompt == "discover":
-            return SimpleNamespace(
-                answer='{"items":[{"id":"one"},{"id":"two"}]}',
-                web_context_statuses=(),
-            )
         raise AssertionError("checkpointed iteration must not execute")
 
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
@@ -2686,7 +2688,7 @@ id = "${item.id}"
     with pytest.raises(ValueError, match="nach dem Preflight verändert"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
-    assert [call.prompt for call in calls] == ["discover"]
+    assert calls == []
 
 
 def test_foreach_checkpoint_paths_are_mutation_protected(
