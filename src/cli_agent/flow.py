@@ -1224,7 +1224,7 @@ async def run_flow(
         )
 
         preflight_outputs: list[Path | None] | None = None
-        preflight_checkpoints: list[str | None] | None = None
+        preflight_checkpoint_flags: list[bool] | None = None
         if step.foreach is not None and step.output is not None:
             preflight_outputs = [
                 _output_for_iteration(
@@ -1287,16 +1287,15 @@ async def run_flow(
                     allow_replace=step.overwrite_output,
                 )
 
-            preflight_checkpoints = []
+            preflight_checkpoint_flags = []
             for output in preflight_outputs:
                 assert output is not None
-                preflight_checkpoints.append(
-                    _prepare_flow_output(
-                        step,
-                        workspace=workspace,
-                        output=output,
-                    )
+                checkpoint = _prepare_flow_output(
+                    step,
+                    workspace=workspace,
+                    output=output,
                 )
+                preflight_checkpoint_flags.append(checkpoint is not None)
 
         iteration_answers: list[str] = []
         for index, (item, iteration_id) in enumerate(
@@ -1348,15 +1347,22 @@ async def run_flow(
                         allow_replace=step.overwrite_output,
                     )
 
-            checkpoint = (
-                preflight_checkpoints[index - 1]
-                if preflight_checkpoints is not None
-                else _existing_json_checkpoint(
+            if preflight_checkpoint_flags is not None:
+                checkpoint = (
+                    _existing_json_checkpoint(
+                        step,
+                        workspace=workspace,
+                        output=output,
+                    )
+                    if preflight_checkpoint_flags[index - 1]
+                    else None
+                )
+            else:
+                checkpoint = _existing_json_checkpoint(
                     step,
                     workspace=workspace,
                     output=output,
                 )
-            )
 
             if checkpoint is not None:
                 print(
