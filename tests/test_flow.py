@@ -3273,3 +3273,81 @@ status = "${item.output.status}"
         "again existing",
         "again new",
     ]
+
+
+@pytest.mark.parametrize(
+    ("number", "expected"),
+    [
+        ("1e400", "1e400"),
+        ("1e-400", "1e-400"),
+        ("1.2300e+5", "1.2300e+5"),
+    ],
+)
+def test_foreach_aggregation_preserves_json_number_lexemes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    number: str,
+    expected: str,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "analyze.md").write_text("analyze", encoding="utf-8")
+    (tmp_path / "again.md").write_text("value={{var:value}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "analyze"
+config = "config.toml"
+prompt_file = "analyze.md"
+foreach = "steps.discover.output.items"
+response_format = "json"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.analyze.output.iterations"
+
+[steps.vars]
+value = "${item.output.value}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[1]}',
+                web_context_statuses=(),
+            )
+        if options.prompt == "analyze":
+            return SimpleNamespace(
+                answer=f'{{"value":{number}}}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[-1].prompt == f"value={expected}"
+
+
+def test_parse_structured_output_rejects_nonstandard_constants_with_lossless_numbers() -> None:
+    with pytest.raises(ValueError, match="nicht standardkonstante JSON-Zahl"):
+        flow_module._parse_structured_output(
+            '{"x":Infinity}',
+            step_id="test",
+        )
