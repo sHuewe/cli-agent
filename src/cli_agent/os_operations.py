@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import datetime
 import fnmatch
 import io
@@ -497,43 +498,68 @@ class Workspace:
         scanned_bytes = 0
         line_number = 1
         saw_content = False
+        pending_cr = False
+        decoder = codecs.getincrementaldecoder("utf-8")()
+
+        def consume_text(text: str) -> bool:
+            nonlocal line_number, selected_bytes
+            for fragment in text.splitlines(keepends=True):
+                in_range = (
+                    line_number >= start
+                    and (end_line is None or line_number <= end_line)
+                )
+                if in_range:
+                    fragment_bytes = len(fragment.encode("utf-8"))
+                    selected_bytes += fragment_bytes
+                    if selected_bytes > MAX_READ_FILE_BYTES:
+                        raise WorkspaceError(
+                            "Angeforderter Datei-Ausschnitt überschreitet "
+                            f"das Leselimit von {MAX_READ_FILE_BYTES} Bytes: "
+                            f"{path!r}"
+                        )
+                    selected_parts.append(fragment)
+
+                if fragment.endswith("\n"):
+                    if end_line is not None and line_number >= end_line:
+                        return True
+                    line_number += 1
+            return False
+
+        def normalize_chunk(text: str, *, final: bool = False) -> str:
+            nonlocal pending_cr
+            if pending_cr:
+                text = "\r" + text
+                pending_cr = False
+            if not final and text.endswith("\r"):
+                text = text[:-1]
+                pending_cr = True
+            return text.replace("\r\n", "\n").replace("\r", "\n")
 
         try:
-            # newline=None matches Path.read_text(): all supported line endings
-            # are normalized to "\n". readline(size) bounds memory even for a
-            # single exceptionally long line.
-            with file_path.open(
-                "r",
-                encoding="utf-8",
-                newline=None,
-            ) as handle:
-                while True:
-                    fragment = handle.readline(READ_RANGE_CHUNK_CHARS)
-                    if fragment == "":
+            with file_path.open("rb") as handle:
+                done = False
+                while not done:
+                    remaining = MAX_READ_RANGE_SCAN_BYTES - scanned_bytes
+                    raw = handle.read(min(READ_RANGE_CHUNK_CHARS, remaining + 1))
+                    if raw == b"":
                         break
                     saw_content = True
-                    fragment_bytes = len(fragment.encode("utf-8"))
-                    scanned_bytes += fragment_bytes
+                    scanned_bytes += len(raw)
                     if scanned_bytes > MAX_READ_RANGE_SCAN_BYTES:
                         raise WorkspaceError(
                             "Datei-Ausschnitt überschreitet das Scan-Limit von "
                             f"{MAX_READ_RANGE_SCAN_BYTES} Bytes: {path!r}"
                         )
+                    decoded = decoder.decode(raw, final=False)
+                    done = consume_text(normalize_chunk(decoded))
 
-                    if line_number >= start:
-                        selected_bytes += fragment_bytes
-                        if selected_bytes > MAX_READ_FILE_BYTES:
-                            raise WorkspaceError(
-                                "Angeforderter Datei-Ausschnitt überschreitet "
-                                f"das Leselimit von {MAX_READ_FILE_BYTES} Bytes: "
-                                f"{path!r}"
-                            )
-                        selected_parts.append(fragment)
-
-                    if fragment.endswith("\n"):
-                        if end_line is not None and line_number >= end_line:
-                            break
-                        line_number += 1
+                if not done:
+                    decoded = decoder.decode(b"", final=True)
+                    normalized = normalize_chunk(decoded, final=True)
+                    if pending_cr:
+                        normalized += "\n"
+                        pending_cr = False
+                    consume_text(normalized)
 
             result = "".join(selected_parts)
             if result:
