@@ -1061,6 +1061,47 @@ def _snapshot_initial_checkpoints(
     return fingerprints, tuple(paths.values())
 
 
+def _aggregate_foreach_output(
+    step: FlowStep,
+    *,
+    iteration_ids: list[str | None],
+    iteration_answers: list[str],
+) -> str:
+    if len(iteration_ids) != len(iteration_answers):
+        raise ValueError(
+            f"Interner Flow-Fehler bei Schritt {step.step_id!r}: "
+            "Iterations-IDs und Antworten sind nicht synchron."
+        )
+
+    iterations: list[dict[str, Any]] = []
+    for iteration_id, answer in zip(iteration_ids, iteration_answers):
+        assert iteration_id is not None
+        value: Any = answer
+        if step.response_format == "json":
+            value = _parse_structured_output(
+                answer,
+                step_id=step.step_id,
+            )
+        iterations.append(
+            {
+                "id": iteration_id,
+                "output": value,
+            }
+        )
+
+    aggregated = json.dumps(
+        {"iterations": iterations},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    if len(aggregated.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+        raise ValueError(
+            f"Aggregierter Output von Schritt {step.step_id!r} überschreitet "
+            f"das JSON-Limit von {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
+        )
+    return aggregated
+
+
 def _foreach_items(
     step: FlowStep,
     *,
@@ -1303,8 +1344,7 @@ def validate_flow(
                     f"Schritt {step.step_id!r} verfügbar."
                 )
 
-        if step.foreach is None:
-            produced.add(step.step_id)
+        produced.add(step.step_id)
 
     reserved_inputs = _reserved_flow_input_paths(
         flow,
@@ -1638,6 +1678,12 @@ async def run_flow(
         if step.foreach is None:
             assert len(iteration_answers) == 1
             outputs[step.step_id] = iteration_answers[0]
+        else:
+            outputs[step.step_id] = _aggregate_foreach_output(
+                step,
+                iteration_ids=iteration_ids,
+                iteration_answers=iteration_answers,
+            )
 
 
 def build_parser() -> argparse.ArgumentParser:
