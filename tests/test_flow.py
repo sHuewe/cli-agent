@@ -1708,3 +1708,85 @@ prompt_file = "prompt.md"
     asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert [call.dump_file_prefix for call in calls] == ["Build", "build"]
+
+
+def test_flow_data_paths_are_relative_to_workspace_not_flow_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "flow").mkdir()
+    (tmp_path / "okf").mkdir()
+    (tmp_path / "handbuch.txt").write_text("Handbuch", encoding="utf-8")
+    (tmp_path / "anweisungen.txt").write_text("Anweisungen", encoding="utf-8")
+    (tmp_path / "flow" / "prompt.md").write_text(
+        "Erstelle das OKF.",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "flow" / "config.toml")
+    (tmp_path / "flow" / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "create_okf"
+config = "config.toml"
+prompt_file = "flow/prompt.md"
+add_file_context = ["handbuch.txt", "anweisungen.txt"]
+output = "okf/result.md"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(
+            answer="done",
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(
+        tmp_path / "flow" / "flow.toml",
+        workspace=tmp_path,
+    )
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(calls) == 1
+    options = calls[0]
+    assert options.prompt == "Erstelle das OKF."
+    assert options.context_files == (
+        (tmp_path / "handbuch.txt").resolve(),
+        (tmp_path / "anweisungen.txt").resolve(),
+    )
+    assert options.output == (tmp_path / "okf" / "result.md").resolve()
+    # Config bleibt bewusst relativ zur flow.toml.
+    assert options.config_file == (tmp_path / "flow" / "config.toml")
+
+
+def test_flow_relative_prompt_path_is_no_longer_resolved_from_flow_directory(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "flow").mkdir()
+    (tmp_path / "flow" / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow" / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(
+        tmp_path / "flow" / "flow.toml",
+        workspace=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="Prompt-Datei"):
+        validate_flow(definition, workspace=tmp_path)
