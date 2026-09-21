@@ -2264,3 +2264,111 @@ iteration = "${iteration.id}"
     assert calls[1].output == (
         tmp_path / "status" / "keep-${iteration.id}.json"
     ).resolve()
+
+
+def test_later_step_cannot_resume_output_claimed_by_earlier_foreach_in_same_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "create.md").write_text("create", encoding="utf-8")
+    (tmp_path / "verify.md").write_text("verify", encoding="utf-8")
+    (tmp_path / "shared").mkdir()
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "create"
+config = "config.toml"
+prompt_file = "create.md"
+foreach = "steps.discover.output.items"
+response_format = "json"
+output = "shared/${item.id}.json"
+overwrite_output = false
+
+[[steps]]
+id = "verify"
+config = "config.toml"
+prompt_file = "verify.md"
+response_format = "json"
+output = "shared/foo.json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"foo"}]}',
+                web_context_statuses=(),
+            )
+        answer = '{"status":"success"}'
+        if options.output is not None:
+            options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="bereits von.*create"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["discover", "create"]
+    assert (tmp_path / "shared" / "foo.json").exists()
+
+
+def test_two_steps_cannot_claim_same_preexisting_json_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "one.md").write_text("one", encoding="utf-8")
+    (tmp_path / "two.md").write_text("two", encoding="utf-8")
+    (tmp_path / "checkpoint.json").write_text('{"ok":true}', encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "one.md"
+response_format = "json"
+output = "checkpoint.json"
+overwrite_output = false
+
+[[steps]]
+id = "two"
+config = "config.toml"
+prompt_file = "two.md"
+response_format = "json"
+output = "checkpoint.json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer='{"unexpected":true}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="geplanten Output|bereits von"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []
