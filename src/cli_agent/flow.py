@@ -1173,16 +1173,22 @@ async def run_flow(
             step,
             outputs=outputs,
         )
+        iteration_ids = _iteration_ids(
+            step,
+            items=items,
+        )
 
         preflight_outputs: list[Path | None] | None = None
+        preflight_checkpoints: list[str | None] | None = None
         if step.foreach is not None and step.output is not None:
             preflight_outputs = [
                 _output_for_iteration(
                     step,
                     workspace=workspace,
                     item=item,
+                    iteration_id=iteration_id,
                 )
-                for item in items
+                for item, iteration_id in zip(items, iteration_ids)
             ]
             output_keys = [
                 _filesystem_path_key(path)
@@ -1194,6 +1200,7 @@ async def run_flow(
                     f"Schritt {step.step_id!r} erzeugt für mehrere "
                     "foreach-Elemente nicht eindeutige Output-Pfade."
                 )
+            preflight_checkpoints = []
             for output in preflight_outputs:
                 assert output is not None
                 reserved_input = reserved_inputs.get(
@@ -1205,16 +1212,21 @@ async def run_flow(
                         "mit einer reservierten Flow-Eingabe: "
                         f"{reserved_input}"
                     )
-                prepare_output_target(
-                    workspace,
-                    output,
-                    overwrite=step.overwrite_output,
+                preflight_checkpoints.append(
+                    _prepare_flow_output(
+                        step,
+                        workspace=workspace,
+                        output=output,
+                    )
                 )
 
         iteration_answers: list[str] = []
-        for index, item in enumerate(items, start=1):
+        for index, (item, iteration_id) in enumerate(
+            zip(items, iteration_ids),
+            start=1,
+        ):
             suffix = (
-                f" [{index}/{len(items)}]"
+                f" [{index}/{len(items)}; id={iteration_id}]"
                 if step.foreach is not None
                 else ""
             )
@@ -1227,15 +1239,6 @@ async def run_flow(
                 )
             )
 
-            prompt = _prompt_for_iteration(
-                step,
-                workspace=workspace,
-                item=item,
-            )
-            contexts = _contexts_for_step(
-                step,
-                workspace=workspace,
-            )
             output = (
                 preflight_outputs[index - 1]
                 if preflight_outputs is not None
@@ -1243,6 +1246,16 @@ async def run_flow(
                     step,
                     workspace=workspace,
                     item=item,
+                    iteration_id=iteration_id,
+                )
+            )
+            checkpoint = (
+                preflight_checkpoints[index - 1]
+                if preflight_checkpoints is not None
+                else _existing_json_checkpoint(
+                    step,
+                    workspace=workspace,
+                    output=output,
                 )
             )
             if output is not None:
@@ -1255,6 +1268,30 @@ async def run_flow(
                         "mit einer reservierten Flow-Eingabe: "
                         f"{reserved_input}"
                     )
+
+            if checkpoint is not None:
+                print(
+                    sanitize_terminal_text(
+                        f"Flow-Schritt {step.step_id}{suffix}: "
+                        f"vorhandenen JSON-Checkpoint verwendet: {output}",
+                        multiline=False,
+                        escape_invisible_formatting=True,
+                        escape_literal_backslashes=True,
+                    )
+                )
+                iteration_answers.append(checkpoint)
+                continue
+
+            prompt = _prompt_for_iteration(
+                step,
+                workspace=workspace,
+                item=item,
+                iteration_id=iteration_id,
+            )
+            contexts = _contexts_for_step(
+                step,
+                workspace=workspace,
+            )
 
             result = await run_once(
                 OneShotRunOptions(
@@ -1297,6 +1334,11 @@ async def run_flow(
                         step,
                         index=index,
                         case_colliding_step_ids=case_colliding_step_ids,
+                        iteration_id=(
+                            iteration_id
+                            if step.iteration_id is not None
+                            else None
+                        ),
                     ),
                 ),
                 dependencies=deps,
