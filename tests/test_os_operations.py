@@ -702,3 +702,28 @@ def test_read_file_range_rejects_oversized_selected_text(tmp_path) -> None:
 
     with pytest.raises(WorkspaceError, match="Ausschnitt.*Leselimit"):
         _workspace(tmp_path).read_file("large.txt", start_line=1, end_line=2)
+
+
+def test_read_file_range_scan_limit_counts_raw_crlf_bytes(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "lines.txt").write_bytes(b"a\r\nb\r\nc\r\n")
+    monkeypatch.setattr(os_operations, "MAX_READ_RANGE_SCAN_BYTES", 6)
+    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 4)
+
+    with pytest.raises(WorkspaceError, match="Scan-Limit"):
+        _workspace(tmp_path).read_file("lines.txt", start_line=3, end_line=3)
+
+
+def test_read_file_range_handles_utf8_character_across_binary_chunks(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "utf8.txt").write_text("a\näöü\nz\n", encoding="utf-8")
+    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 3)
+
+    assert (
+        _workspace(tmp_path).read_file("utf8.txt", start_line=2, end_line=2)
+        == "äöü\n"
+    )
