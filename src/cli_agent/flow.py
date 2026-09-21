@@ -785,8 +785,7 @@ def _iteration_ids(
     if step.iteration_id is None:
         return [str(index) for index in range(1, len(items) + 1)]
 
-    used: set[str] = set()
-    result: list[str] = []
+    bases: list[str] = []
     for item in items:
         base = _render_item_text(step.iteration_id, item).strip()
         if not base or _ITERATION_ID.fullmatch(base) is None:
@@ -794,11 +793,25 @@ def _iteration_ids(
                 f"Schritt {step.step_id!r} erzeugt eine ungültige iteration_id "
                 f"{base!r}; erlaubt sind ASCII-Buchstaben, Ziffern, '_' und '-'."
             )
+        bases.append(base)
+
+    # Reserve all natural IDs before assigning suffixes. Otherwise a duplicate
+    # such as "card" could consume "card-2" before the item whose actual base
+    # ID is "card-2" is processed, making resume checkpoints unstable.
+    reserved_bases = {base.casefold() for base in bases}
+    used: set[str] = set()
+    result: list[str] = []
+    for base in bases:
         candidate = base
-        suffix = 2
-        while candidate.casefold() in used:
+        if candidate.casefold() in used:
+            suffix = 2
             candidate = f"{base}-{suffix}"
-            suffix += 1
+            while (
+                candidate.casefold() in used
+                or candidate.casefold() in reserved_bases
+            ):
+                suffix += 1
+                candidate = f"{base}-{suffix}"
         used.add(candidate.casefold())
         result.append(candidate)
     return result
