@@ -872,6 +872,35 @@ def _claim_output(
     claimed_outputs[key] = owner
 
 
+def _checkpoint_fingerprint(text: str) -> bytes:
+    return hashlib.sha256(text.encode("utf-8")).digest()
+
+
+def _verified_preflight_checkpoint(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+    expected_fingerprint: bytes,
+) -> str:
+    checkpoint = _existing_json_checkpoint(
+        step,
+        workspace=workspace,
+        output=output,
+    )
+    if checkpoint is None:
+        raise ValueError(
+            f"JSON-Checkpoint von Schritt {step.step_id!r} wurde nach dem "
+            f"Preflight entfernt: {output}"
+        )
+    if _checkpoint_fingerprint(checkpoint) != expected_fingerprint:
+        raise ValueError(
+            f"JSON-Checkpoint von Schritt {step.step_id!r} wurde nach dem "
+            f"Preflight verändert: {output}"
+        )
+    return checkpoint
+
+
 def _existing_json_checkpoint(
     step: FlowStep,
     *,
@@ -1224,7 +1253,7 @@ async def run_flow(
         )
 
         preflight_outputs: list[Path | None] | None = None
-        preflight_checkpoint_flags: list[bool] | None = None
+        preflight_checkpoint_fingerprints: list[bytes | None] | None = None
         if step.foreach is not None and step.output is not None:
             preflight_outputs = [
                 _output_for_iteration(
@@ -1287,7 +1316,7 @@ async def run_flow(
                     allow_replace=step.overwrite_output,
                 )
 
-            preflight_checkpoint_flags = []
+            preflight_checkpoint_fingerprints = []
             for output in preflight_outputs:
                 assert output is not None
                 checkpoint = _prepare_flow_output(
@@ -1295,7 +1324,11 @@ async def run_flow(
                     workspace=workspace,
                     output=output,
                 )
-                preflight_checkpoint_flags.append(checkpoint is not None)
+                preflight_checkpoint_fingerprints.append(
+                    _checkpoint_fingerprint(checkpoint)
+                    if checkpoint is not None
+                    else None
+                )
 
         iteration_answers: list[str] = []
         for index, (item, iteration_id) in enumerate(
@@ -1347,14 +1380,16 @@ async def run_flow(
                         allow_replace=step.overwrite_output,
                     )
 
-            if preflight_checkpoint_flags is not None:
+            if preflight_checkpoint_fingerprints is not None:
+                expected_fingerprint = preflight_checkpoint_fingerprints[index - 1]
                 checkpoint = (
-                    _existing_json_checkpoint(
+                    _verified_preflight_checkpoint(
                         step,
                         workspace=workspace,
                         output=output,
+                        expected_fingerprint=expected_fingerprint,
                     )
-                    if preflight_checkpoint_flags[index - 1]
+                    if expected_fingerprint is not None
                     else None
                 )
             else:
@@ -1412,7 +1447,22 @@ async def run_flow(
                         step.approve_tools,
                         fallback=approval_callback,
                     ),
-                    mutation_protected_paths=mutation_protected_paths,
+                    mutation_protected_paths=tuple(
+                        dict.fromkeys(
+                            (
+                                *mutation_protected_paths,
+                                *(
+                                    output_path
+                                    for output_path, fingerprint in zip(
+                                        preflight_outputs or (),
+                                        preflight_checkpoint_fingerprints or (),
+                                    )
+                                    if output_path is not None
+                                    and fingerprint is not None
+                                ),
+                            )
+                        )
+                    ),
                     excluded_paths=(
                         tuple(
                             dict.fromkeys(
