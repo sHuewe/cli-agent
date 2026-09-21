@@ -542,3 +542,41 @@ def test_mutation_protected_path_is_readable_but_not_mutable(tmp_path) -> None:
         workspace.move_file("source.md", "prompt.md")
 
     assert protected.read_text(encoding="utf-8") == "trusted prompt"
+
+
+def test_protected_directory_is_hidden_and_blocked_recursively(tmp_path) -> None:
+    protected_dir = tmp_path / "flow"
+    protected_dir.mkdir()
+    (protected_dir / "flow.toml").write_text("secret", encoding="utf-8")
+    (protected_dir / "prompt.md").write_text("prompt", encoding="utf-8")
+    (tmp_path / "visible.txt").write_text("visible", encoding="utf-8")
+
+    workspace = Workspace.from_directory(
+        tmp_path,
+        McpServerConfig(
+            name="os",
+            config={"allow_write_files": True},
+        ),
+        protected_paths=(protected_dir,),
+    )
+
+    listing = workspace.list_files(".")
+    assert "visible.txt" in listing
+    assert "flow" not in listing
+
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.list_files("flow")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.read_file("flow/flow.toml")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.file_info("flow/prompt.md")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.search_text("flow", "prompt")
+
+    found = workspace.find_files(".", "*.md")
+    assert "flow/prompt.md" not in found
+
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.write_file("flow/new.md", "new")
+    with pytest.raises(WorkspaceError, match="geschützten"):
+        workspace.delete_file("flow/prompt.md")
