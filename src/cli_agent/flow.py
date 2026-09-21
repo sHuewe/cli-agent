@@ -248,11 +248,7 @@ def _reserved_flow_input_paths(
     for step in flow.steps:
         prompt_path = _workspace_path(
             workspace,
-            (
-                flow_dir / step.prompt_file
-                if not step.prompt_file.is_absolute()
-                else step.prompt_file
-            ),
+            step.prompt_file,
             purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
             must_exist=True,
         )
@@ -261,7 +257,6 @@ def _reserved_flow_input_paths(
         for context_path in _contexts_for_step(
             step,
             workspace=workspace,
-            flow_dir=flow_dir,
         ):
             reserved[_filesystem_path_key(context_path)] = context_path
 
@@ -763,16 +758,11 @@ def _prompt_for_iteration(
     step: FlowStep,
     *,
     workspace: Path,
-    flow_dir: Path,
     item: Any,
 ) -> str:
     prompt_path = _workspace_path(
         workspace,
-        (
-            flow_dir / step.prompt_file
-            if not step.prompt_file.is_absolute()
-            else step.prompt_file
-        ),
+        step.prompt_file,
         purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
         must_exist=True,
     )
@@ -800,16 +790,11 @@ def _contexts_for_step(
     step: FlowStep,
     *,
     workspace: Path,
-    flow_dir: Path,
 ) -> tuple[Path, ...]:
     return tuple(
         _workspace_path(
             workspace,
-            (
-                flow_dir / context_file
-                if not context_file.is_absolute()
-                else context_file
-            ),
+            context_file,
             purpose=f"Context-Datei von Schritt {step.step_id!r}",
             must_exist=True,
         )
@@ -821,7 +806,6 @@ def _output_for_iteration(
     step: FlowStep,
     *,
     workspace: Path,
-    flow_dir: Path,
     item: Any,
 ) -> Path | None:
     if step.output is None:
@@ -833,14 +817,9 @@ def _output_for_iteration(
         else step.output
     )
     path = Path(rendered)
-    candidate = (
-        flow_dir / path
-        if not path.is_absolute()
-        else path
-    )
     return _workspace_path(
         workspace,
-        candidate,
+        path,
         purpose=f"Output-Datei von Schritt {step.step_id!r}",
         must_exist=False,
     )
@@ -860,11 +839,7 @@ def validate_flow(
     for step in flow.steps:
         prompt_path = _workspace_path(
             workspace,
-            (
-                flow_dir / step.prompt_file
-                if not step.prompt_file.is_absolute()
-                else step.prompt_file
-            ),
+            step.prompt_file,
             purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
             must_exist=True,
         )
@@ -894,7 +869,6 @@ def validate_flow(
         context_paths = _contexts_for_step(
             step,
             workspace=workspace,
-            flow_dir=flow_dir,
         )
         prepare_file_options(
             workspace,
@@ -975,7 +949,6 @@ def validate_flow(
         static_output = _output_for_iteration(
             step,
             workspace=workspace,
-            flow_dir=flow_dir,
             item=None,
         )
         assert static_output is not None
@@ -1028,7 +1001,6 @@ async def run_flow(
                 _output_for_iteration(
                     step,
                     workspace=workspace,
-                    flow_dir=flow_dir,
                     item=item,
                 )
                 for item in items
@@ -1079,7 +1051,6 @@ async def run_flow(
             prompt = _prompt_for_iteration(
                 step,
                 workspace=workspace,
-                flow_dir=flow_dir,
                 item=item,
             )
             contexts = _contexts_for_step(
@@ -1093,7 +1064,6 @@ async def run_flow(
                 else _output_for_iteration(
                     step,
                     workspace=workspace,
-                    flow_dir=flow_dir,
                     item=item,
                 )
             )
