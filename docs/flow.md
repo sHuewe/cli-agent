@@ -128,6 +128,30 @@ Schritt explizit auf `none`, `read` oder `write` gesetzt. Ohne Angabe gilt
 `none`; damit kann eine Config nicht implizit Schreibzugriff auf den eingebauten
 Workspace-OS-MCP in einen Flow-Schritt hineintragen.
 
+`exclude_paths` kann sowohl global auf Flow-Ebene als auch pro Step gesetzt
+werden. Die Pfade werden relativ zum Workspace interpretiert. Globale und
+step-spezifische Einträge werden für OS-aktivierte Steps zusammengeführt:
+
+```toml
+version = 1
+exclude_paths = ["flow"]
+
+[[steps]]
+id = "create_okf"
+prompt_file = "flow/prompts/create-okf.md"
+workspace_access = "write"
+exclude_paths = ["private"]
+```
+
+In diesem Beispiel kann der Flow-Orchestrator den Prompt unter
+`flow/prompts/create-okf.md` weiterhin laden, der eingebaute OS-MCP des LLM
+kann dagegen weder `flow/` noch `private/` lesen, auflisten, durchsuchen oder
+verändern. Die Sperre gilt rekursiv. Globale Ausschlüsse werden bei Steps ohne
+OS-Zugriff ignoriert; step-spezifische `exclude_paths` benötigen explizit
+`workspace_access = "read"` oder `"write"`. Die Ausschlüsse gelten nur für
+den eingebauten Workspace-OS-MCP und verändern nicht die explizit vom
+Orchestrator geladenen Prompt-/File-Contexts.
+
 `add_file_context` entspricht dem CLI-Dateikontext (`--add-file-context`,
 Alias von `--context-file`) und akzeptiert entweder einen einzelnen Pfad oder
 eine Liste von Pfaden. Im normalen CLI sind beide Schalter wiederholbar. Alle
