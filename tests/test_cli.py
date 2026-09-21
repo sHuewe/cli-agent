@@ -540,3 +540,39 @@ def test_mcp_description_rendering_distinguishes_literal_escape_from_control() -
     assert actual_escape == "desc \\u001b here"
     assert literal_escape == "desc \\\\u001b here"
     assert actual_escape != literal_escape
+
+
+def test_exclude_path_cli_option_is_repeatable() -> None:
+    args = build_parser().parse_args(
+        [
+            "--with-os-write",
+            "--exclude-path",
+            "flow",
+            "--exclude-path",
+            "private",
+            "prompt",
+        ]
+    )
+
+    assert args.exclude_path == [Path("flow"), Path("private")]
+
+
+def test_run_rejects_exclude_path_without_os_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: AppConfig())
+    monkeypatch.setattr(cli_module, "load_admin_config", lambda: AdminConfig())
+
+    args = SimpleNamespace(
+        config=None,
+        model=None,
+        os_access=None,
+        exclude_path=[Path("flow")],
+        workspace=tmp_path,
+        prompt=["hello"],
+        debug=False,
+    )
+
+    with pytest.raises(ValueError, match="--exclude-path benötigt"):
+        asyncio.run(cli_module.run(args))
