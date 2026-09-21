@@ -523,7 +523,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             raw.get("exclude_paths"),
             field=f"steps[{index}].exclude_paths",
         )
-        if (excluded_paths or step_excluded_paths) and workspace_access == "none":
+        if step_excluded_paths and workspace_access == "none":
             raise ValueError(
                 f"steps[{index}].exclude_paths benötigen workspace_access='read' "
                 "oder 'write'."
@@ -1144,13 +1144,17 @@ async def run_flow(
                         fallback=approval_callback,
                     ),
                     mutation_protected_paths=mutation_protected_paths,
-                    excluded_paths=tuple(
-                        dict.fromkeys(
-                            (
-                                *flow.excluded_paths,
-                                *step.excluded_paths,
+                    excluded_paths=(
+                        tuple(
+                            dict.fromkeys(
+                                (
+                                    *flow.excluded_paths,
+                                    *step.excluded_paths,
+                                )
                             )
                         )
+                        if step.workspace_access in {"read", "write"}
+                        else ()
                     ),
                     dump_file_prefix=_dump_prefix_for_iteration(
                         step,
