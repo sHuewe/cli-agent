@@ -846,10 +846,11 @@ def _claim_output(
     *,
     path: Path,
     owner: str,
+    allow_replace: bool = False,
 ) -> None:
     key = _filesystem_path_key(path)
     previous_owner = claimed_outputs.get(key)
-    if previous_owner is not None:
+    if previous_owner is not None and not allow_replace:
         raise ValueError(
             f"Output-Datei {path} wird in diesem Flow-Lauf bereits von "
             f"{previous_owner} beansprucht; {owner} darf denselben Output "
@@ -1247,7 +1248,7 @@ async def run_flow(
                     )
                 key = _filesystem_path_key(output)
                 previous_owner = claimed_outputs.get(key)
-                if previous_owner is not None:
+                if previous_owner is not None and not step.overwrite_output:
                     owner = _output_owner(
                         step,
                         iteration_id=iteration_id,
@@ -1270,6 +1271,7 @@ async def run_flow(
                         step,
                         iteration_id=iteration_id,
                     ),
+                    allow_replace=step.overwrite_output,
                 )
 
             preflight_checkpoints = []
@@ -1330,6 +1332,7 @@ async def run_flow(
                             step,
                             iteration_id=iteration_id,
                         ),
+                        allow_replace=step.overwrite_output,
                     )
 
             checkpoint = (
