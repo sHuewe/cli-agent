@@ -41,23 +41,37 @@ Only write, move or delete a file when the user requested a file change.
         return workspace.list_files(path)
 
     @mcp.tool()
-    def read_file(path: str) -> str:
+    def read_file(
+        path: str,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> str:
         """
         Read one UTF-8 text file or extract text from a PDF in the project workspace.
 
-        Supports common source, configuration, script, markup and text file
-        types (up to 1 MB), plus PDFs (up to 10 MB, 100 pages, 1,000,000 output
-        characters and 20 seconds of extraction time). PDF output includes page
-        markers and notices for pages without extractable text. No OCR is used;
-        images and diagrams are not interpreted, and table/column layout may be
-        lost. Encrypted PDFs, secret/credential files and other binary formats
-        are rejected. Limits fail explicitly rather than silently truncating.
+        Full text-file reads are limited to 1 MB. For larger text files,
+        start_line/end_line can select a 1-based inclusive line range; ranged
+        reads may scan up to 64 MB and return at most 1 MB of text. Either bound
+        may be omitted. Line ranges are not supported for PDFs.
+
+        PDFs support up to 10 MB, 100 pages, 1,000,000 output characters and
+        20 seconds of extraction time. PDF output includes page markers and
+        notices for pages without extractable text. No OCR is used; images and
+        diagrams are not interpreted, and table/column layout may be lost.
+        Encrypted PDFs, secret/credential files and other binary formats are
+        rejected. Limits fail explicitly rather than silently truncating.
 
         Args:
             path: File relative to the project workspace. Absolute paths and
                 ".." are forbidden.
+            start_line: Optional first text line to return, 1-based and inclusive.
+            end_line: Optional last text line to return, 1-based and inclusive.
         """
-        return workspace.read_file(path)
+        return workspace.read_file(
+            path,
+            start_line=start_line,
+            end_line=end_line,
+        )
 
     @mcp.tool()
     def search_text(path: str, text: str, max_results: int = 50) -> str:
