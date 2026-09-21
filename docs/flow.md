@@ -393,7 +393,6 @@ Die erste Version ist bewusst klein:
 - nur sequenzielle Ausführung
 - keine Parallelisierung
 - keine Conditions
-- keine verschachtelten `foreach`-Outputs als neue Quelle
 - keine JSON-Schema-Validierung; `foreach` verlangt derzeit nur syntaktisch
   gültiges JSON und den erwarteten Listenpfad
 - keine Flow-weiten Tool-Approvals
