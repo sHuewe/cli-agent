@@ -907,7 +907,6 @@ def validate_flow(
             static_output = _output_for_iteration(
                 step,
                 workspace=workspace,
-                flow_dir=flow_dir,
                 item=None,
             )
             assert static_output is not None
@@ -1056,7 +1055,6 @@ async def run_flow(
             contexts = _contexts_for_step(
                 step,
                 workspace=workspace,
-                flow_dir=flow_dir,
             )
             output = (
                 preflight_outputs[index - 1]
