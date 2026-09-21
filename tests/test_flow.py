@@ -2541,3 +2541,65 @@ iteration = "${iteration.id}"
     assert [call.prompt for call in calls] == ["discover", "process card-3"]
     assert calls[1].output == (tmp_path / "status" / "card-3.json").resolve()
     assert calls[1].dump_file_prefix == "process.card-3"
+
+
+def test_foreach_preflight_does_not_retain_all_checkpoint_contents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    (tmp_path / "status").mkdir()
+    (tmp_path / "status" / "one.json").write_text('{"status":"one"}', encoding="utf-8")
+    (tmp_path / "status" / "two.json").write_text('{"status":"two"}', encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "status/${iteration.id}.json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    reads = []
+    real_reader = flow_module.read_existing_output_text
+
+    def tracking_reader(workspace, path, *, max_bytes):
+        reads.append(path.name)
+        return real_reader(workspace, path, max_bytes=max_bytes)
+
+    monkeypatch.setattr(flow_module, "read_existing_output_text", tracking_reader)
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"},{"id":"two"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("checkpointed foreach iteration must not execute")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["discover"]
+    assert reads.count("one.json") == 2
+    assert reads.count("two.json") == 2
