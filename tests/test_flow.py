@@ -2195,3 +2195,72 @@ overwrite_output = false
 
     with pytest.raises(ValueError, match="existiert bereits"):
         validate_flow(definition, workspace=tmp_path)
+
+
+def test_item_values_do_not_expand_iteration_id_placeholder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text(
+        "value={{var:value}} iteration={{var:iteration}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "status").mkdir()
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "status/${item.filename}"
+overwrite_output = true
+
+[steps.vars]
+value = "${item.text}"
+iteration = "${iteration.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer=(
+                    '{"items":[{"id":"card","text":'
+                    '"Keep ${iteration.id} literal",'
+                    '"filename":"keep-${iteration.id}.json"}]}'
+                ),
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(
+            answer='{"status":"success"}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(calls) == 2
+    assert calls[1].prompt == (
+        "value=Keep ${iteration.id} literal iteration=card"
+    )
+    assert calls[1].output == (
+        tmp_path / "status" / "keep-${iteration.id}.json"
+    ).resolve()
