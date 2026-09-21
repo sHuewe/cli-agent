@@ -831,6 +831,33 @@ def _parse_structured_output(
         ) from exc
 
 
+def _output_owner(
+    step: FlowStep,
+    *,
+    iteration_id: str | None,
+) -> str:
+    if step.foreach is None:
+        return f"Schritt {step.step_id!r}"
+    return f"Schritt {step.step_id!r}, Iteration {iteration_id!r}"
+
+
+def _claim_output(
+    claimed_outputs: dict[str, str],
+    *,
+    path: Path,
+    owner: str,
+) -> None:
+    key = _filesystem_path_key(path)
+    previous_owner = claimed_outputs.get(key)
+    if previous_owner is not None:
+        raise ValueError(
+            f"Output-Datei {path} wird in diesem Flow-Lauf bereits von "
+            f"{previous_owner} beansprucht; {owner} darf denselben Output "
+            "nicht erneut verwenden."
+        )
+    claimed_outputs[key] = owner
+
+
 def _existing_json_checkpoint(
     step: FlowStep,
     *,
@@ -1161,6 +1188,7 @@ async def run_flow(
     )
     flow_dir = flow.source.parent
     outputs: dict[str, str] = {}
+    claimed_outputs: dict[str, str] = {}
     reserved_inputs = _reserved_flow_input_paths(
         flow,
         workspace=workspace,
@@ -1203,8 +1231,10 @@ async def run_flow(
                     f"Schritt {step.step_id!r} erzeugt für mehrere "
                     "foreach-Elemente nicht eindeutige Output-Pfade."
                 )
-            preflight_checkpoints = []
-            for output in preflight_outputs:
+            for output, iteration_id in zip(
+                preflight_outputs,
+                iteration_ids,
+            ):
                 assert output is not None
                 reserved_input = reserved_inputs.get(
                     _filesystem_path_key(output)
@@ -1215,6 +1245,36 @@ async def run_flow(
                         "mit einer reservierten Flow-Eingabe: "
                         f"{reserved_input}"
                     )
+                key = _filesystem_path_key(output)
+                previous_owner = claimed_outputs.get(key)
+                if previous_owner is not None:
+                    owner = _output_owner(
+                        step,
+                        iteration_id=iteration_id,
+                    )
+                    raise ValueError(
+                        f"Output-Datei {output} wird in diesem Flow-Lauf bereits "
+                        f"von {previous_owner} beansprucht; {owner} darf denselben "
+                        "Output nicht erneut verwenden."
+                    )
+
+            for output, iteration_id in zip(
+                preflight_outputs,
+                iteration_ids,
+            ):
+                assert output is not None
+                _claim_output(
+                    claimed_outputs,
+                    path=output,
+                    owner=_output_owner(
+                        step,
+                        iteration_id=iteration_id,
+                    ),
+                )
+
+            preflight_checkpoints = []
+            for output in preflight_outputs:
+                assert output is not None
                 preflight_checkpoints.append(
                     _prepare_flow_output(
                         step,
@@ -1252,15 +1312,6 @@ async def run_flow(
                     iteration_id=iteration_id,
                 )
             )
-            checkpoint = (
-                preflight_checkpoints[index - 1]
-                if preflight_checkpoints is not None
-                else _existing_json_checkpoint(
-                    step,
-                    workspace=workspace,
-                    output=output,
-                )
-            )
             if output is not None:
                 reserved_input = reserved_inputs.get(
                     _filesystem_path_key(output)
@@ -1271,6 +1322,25 @@ async def run_flow(
                         "mit einer reservierten Flow-Eingabe: "
                         f"{reserved_input}"
                     )
+                if preflight_outputs is None:
+                    _claim_output(
+                        claimed_outputs,
+                        path=output,
+                        owner=_output_owner(
+                            step,
+                            iteration_id=iteration_id,
+                        ),
+                    )
+
+            checkpoint = (
+                preflight_checkpoints[index - 1]
+                if preflight_checkpoints is not None
+                else _existing_json_checkpoint(
+                    step,
+                    workspace=workspace,
+                    output=output,
+                )
+            )
 
             if checkpoint is not None:
                 print(
