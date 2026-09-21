@@ -1389,8 +1389,7 @@ output = "${item.path}"
     with pytest.raises(ValueError, match=expected_message):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
-    assert len(calls) == 1
-    assert calls[0].prompt == "discover"
+    assert calls == []
 
 
 def test_flow_response_format_defaults_to_text(tmp_path: Path) -> None:
@@ -2048,6 +2047,10 @@ def test_foreach_iteration_ids_suffix_collisions_and_resume_individually(
         '{"status":"success","files_changed":["existing.md"]}',
         encoding="utf-8",
     )
+    (tmp_path / "plan.json").write_text(
+        '{"items":[{"name":"card"},{"name":"card"},{"name":"Card"}]}',
+        encoding="utf-8",
+    )
     _write_config(tmp_path / "config.toml")
     (tmp_path / "flow.toml").write_text(
         """
@@ -2058,6 +2061,8 @@ id = "discover"
 config = "config.toml"
 prompt_file = "discover.md"
 response_format = "json"
+output = "plan.json"
+overwrite_output = false
 
 [[steps]]
 id = "cards"
@@ -2079,11 +2084,6 @@ iteration = "${iteration.id}"
 
     async def fake_run_once(options, *, dependencies=None):
         calls.append(options)
-        if options.prompt == "discover":
-            return SimpleNamespace(
-                answer='{"items":[{"name":"card"},{"name":"card"},{"name":"Card"}]}',
-                web_context_statuses=(),
-            )
         return SimpleNamespace(
             answer='{"status":"success","files_changed":[]}',
             web_context_statuses=(),
@@ -2095,15 +2095,14 @@ iteration = "${iteration.id}"
     asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert [call.prompt for call in calls] == [
-        "discover",
         "process card-2",
         "process Card-3",
     ]
-    assert [call.output.name for call in calls[1:]] == [
+    assert [call.output.name for call in calls] == [
         "card-2.json",
         "Card-3.json",
     ]
-    assert [call.dump_file_prefix for call in calls[1:]] == [
+    assert [call.dump_file_prefix for call in calls] == [
         "cards.card-2",
         "cards.Card-3",
     ]
@@ -2124,6 +2123,10 @@ def test_foreach_invalid_later_checkpoint_blocks_all_iterations(
         "invalid",
         encoding="utf-8",
     )
+    (tmp_path / "plan-invalid.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"},{"id":"three"}]}',
+        encoding="utf-8",
+    )
     _write_config(tmp_path / "config.toml")
     (tmp_path / "flow.toml").write_text(
         """
@@ -2133,6 +2136,9 @@ version = 1
 id = "discover"
 config = "config.toml"
 prompt_file = "discover.md"
+response_format = "json"
+output = "plan-invalid.json"
+overwrite_output = false
 
 [[steps]]
 id = "process"
@@ -2150,11 +2156,6 @@ overwrite_output = false
 
     async def fake_run_once(options, *, dependencies=None):
         calls.append(options)
-        if options.prompt == "discover":
-            return SimpleNamespace(
-                answer='{"items":[{"id":"one"},{"id":"two"},{"id":"three"}]}',
-                web_context_statuses=(),
-            )
         return SimpleNamespace(
             answer='{"status":"success"}',
             web_context_statuses=(),
@@ -2493,6 +2494,10 @@ def test_iteration_id_suffix_does_not_steal_natural_id(
     (tmp_path / "status").mkdir()
     (tmp_path / "status" / "card.json").write_text('{"status":"success"}', encoding="utf-8")
     (tmp_path / "status" / "card-2.json").write_text('{"status":"success"}', encoding="utf-8")
+    (tmp_path / "plan-natural.json").write_text(
+        '{"items":[{"id":"card"},{"id":"card"},{"id":"card-2"}]}',
+        encoding="utf-8",
+    )
     _write_config(tmp_path / "config.toml")
     (tmp_path / "flow.toml").write_text(
         """
@@ -2502,6 +2507,9 @@ version = 1
 id = "discover"
 config = "config.toml"
 prompt_file = "discover.md"
+response_format = "json"
+output = "plan-natural.json"
+overwrite_output = false
 
 [[steps]]
 id = "process"
@@ -2523,11 +2531,6 @@ iteration = "${iteration.id}"
 
     async def fake_run_once(options, *, dependencies=None):
         calls.append(options)
-        if options.prompt == "discover":
-            return SimpleNamespace(
-                answer='{"items":[{"id":"card"},{"id":"card"},{"id":"card-2"}]}',
-                web_context_statuses=(),
-            )
         return SimpleNamespace(
             answer='{"status":"success"}',
             web_context_statuses=(),
@@ -2538,9 +2541,9 @@ iteration = "${iteration.id}"
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
     asyncio.run(run_flow(definition, workspace=tmp_path))
 
-    assert [call.prompt for call in calls] == ["discover", "process card-3"]
-    assert calls[1].output == (tmp_path / "status" / "card-3.json").resolve()
-    assert calls[1].dump_file_prefix == "process.card-3"
+    assert [call.prompt for call in calls] == ["process card-3"]
+    assert calls[0].output == (tmp_path / "status" / "card-3.json").resolve()
+    assert calls[0].dump_file_prefix == "process.card-3"
 
 
 def test_foreach_preflight_does_not_retain_all_checkpoint_contents(
@@ -2552,6 +2555,10 @@ def test_foreach_preflight_does_not_retain_all_checkpoint_contents(
     (tmp_path / "status").mkdir()
     (tmp_path / "status" / "one.json").write_text('{"status":"one"}', encoding="utf-8")
     (tmp_path / "status" / "two.json").write_text('{"status":"two"}', encoding="utf-8")
+    (tmp_path / "plan-memory.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}',
+        encoding="utf-8",
+    )
     _write_config(tmp_path / "config.toml")
     (tmp_path / "flow.toml").write_text(
         """
@@ -2561,6 +2568,9 @@ version = 1
 id = "discover"
 config = "config.toml"
 prompt_file = "discover.md"
+response_format = "json"
+output = "plan-memory.json"
+overwrite_output = false
 
 [[steps]]
 id = "process"
@@ -2588,11 +2598,6 @@ overwrite_output = false
 
     async def fake_run_once(options, *, dependencies=None):
         calls.append(options)
-        if options.prompt == "discover":
-            return SimpleNamespace(
-                answer='{"items":[{"id":"one"},{"id":"two"}]}',
-                web_context_statuses=(),
-            )
         raise AssertionError("checkpointed foreach iteration must not execute")
 
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
@@ -2600,9 +2605,9 @@ overwrite_output = false
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
     asyncio.run(run_flow(definition, workspace=tmp_path))
 
-    assert [call.prompt for call in calls] == ["discover"]
-    assert reads.count("one.json") == 2
-    assert reads.count("two.json") == 2
+    assert calls == []
+    assert reads.count("one.json") == 3
+    assert reads.count("two.json") == 3
 
 
 def test_foreach_detects_checkpoint_modified_after_preflight(
@@ -2692,6 +2697,10 @@ def test_foreach_checkpoint_paths_are_mutation_protected(
     (tmp_path / "process.md").write_text("process {{var:id}}", encoding="utf-8")
     (tmp_path / "status").mkdir()
     (tmp_path / "status" / "one.json").write_text('{"status":"one"}', encoding="utf-8")
+    (tmp_path / "plan-protect.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}',
+        encoding="utf-8",
+    )
     _write_config(tmp_path / "config.toml")
     (tmp_path / "flow.toml").write_text(
         """
@@ -2701,6 +2710,9 @@ version = 1
 id = "discover"
 config = "config.toml"
 prompt_file = "discover.md"
+response_format = "json"
+output = "plan-protect.json"
+overwrite_output = false
 
 [[steps]]
 id = "process"
@@ -2723,11 +2735,6 @@ id = "${item.id}"
 
     async def fake_run_once(options, *, dependencies=None):
         calls.append(options)
-        if options.prompt == "discover":
-            return SimpleNamespace(
-                answer='{"items":[{"id":"one"},{"id":"two"}]}',
-                web_context_statuses=(),
-            )
         return SimpleNamespace(
             answer='{"status":"success"}',
             web_context_statuses=(),
