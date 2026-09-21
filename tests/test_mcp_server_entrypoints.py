@@ -168,7 +168,9 @@ def test_okf_main_converts_repository_error_to_system_exit(tmp_path, monkeypatch
 def _workspace_stub(calls):
     return SimpleNamespace(
         list_files=lambda path: calls.append(("list", path)) or "listed",
-        read_file=lambda path: calls.append(("read", path)) or "contents",
+        read_file=lambda path, start_line=None, end_line=None: (
+            calls.append(("read", path, start_line, end_line)) or "contents"
+        ),
         search_text=lambda path, text, max_results=50: calls.append(("search", path, text, max_results)) or "matches",
         find_files=lambda path, pattern, max_results=100: calls.append(("find", path, pattern, max_results)) or "files",
         file_info=lambda path: calls.append(("info", path)) or "metadata",
@@ -196,7 +198,7 @@ def test_os_create_server_read_only_registers_only_read_tools(monkeypatch) -> No
     assert server.tools["file_info"]("README.md") == "metadata"
     assert calls == [
         ("list", "."),
-        ("read", "README.md"),
+        ("read", "README.md", None, None),
         ("search", "src", "needle", 12),
         ("find", ".", "*.py", 15),
         ("info", "README.md"),
@@ -211,12 +213,27 @@ def test_os_read_file_contract_and_pdf_description(monkeypatch) -> None:
     monkeypatch.setattr(os_mcp_server, "FastMCP", FakeFastMCP)
     server = os_mcp_server.create_server(_workspace_stub(calls), McpServerConfig(name="os"))
     read_file = server.tools["read_file"]
-    assert list(inspect.signature(read_file).parameters) == ["path"]
-    assert get_type_hints(read_file) == {"path": str, "return": str}
+    assert list(inspect.signature(read_file).parameters) == [
+        "path",
+        "start_line",
+        "end_line",
+    ]
+    assert get_type_hints(read_file) == {
+        "path": str,
+        "start_line": int | None,
+        "end_line": int | None,
+        "return": str,
+    }
     assert "PDF" in read_file.__doc__
     assert "No OCR" in read_file.__doc__
+    assert "1-based" in read_file.__doc__
+    assert "inclusive" in read_file.__doc__
     assert read_file("document.pdf") == "contents"
-    assert calls == [("read", "document.pdf")]
+    assert read_file("README.md", start_line=10, end_line=20) == "contents"
+    assert calls == [
+        ("read", "document.pdf", None, None),
+        ("read", "README.md", 10, 20),
+    ]
 
 
 def test_os_create_server_write_mode_registers_and_delegates_write_tools(monkeypatch) -> None:
