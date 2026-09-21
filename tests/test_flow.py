@@ -1790,3 +1790,93 @@ prompt_file = "prompt.md"
 
     with pytest.raises(ValueError, match="Prompt-Datei"):
         validate_flow(definition, workspace=tmp_path)
+
+
+def test_flow_merges_global_and_step_excluded_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+exclude_paths = ["flow", "shared"]
+
+[[steps]]
+id = "read"
+prompt_file = "prompt.md"
+workspace_access = "read"
+exclude_paths = ["private", "shared"]
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    assert definition.excluded_paths == (Path("flow"), Path("shared"))
+    assert definition.steps[0].excluded_paths == (
+        Path("private"),
+        Path("shared"),
+    )
+
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[0].excluded_paths == (
+        Path("flow"),
+        Path("shared"),
+        Path("private"),
+    )
+
+
+def test_flow_global_exclusions_are_ignored_for_step_without_os_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+exclude_paths = ["flow"]
+
+[[steps]]
+id = "plain"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[0].excluded_paths == ()
+
+
+def test_flow_rejects_step_exclusions_without_os_access(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "plain"
+prompt_file = "prompt.md"
+exclude_paths = ["flow"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exclude_paths benötigen workspace_access"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
