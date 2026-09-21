@@ -350,6 +350,43 @@ def prepare_output_target(
     return OutputTarget(path=resolved, allow_initial_overwrite=overwrite and exists)
 
 
+def read_existing_output_text(
+    workspace: Path,
+    path: Path,
+    *,
+    max_bytes: int,
+) -> str:
+    resolved = _resolve_workspace_path(
+        workspace,
+        path,
+        must_exist=True,
+        purpose="Output-Datei",
+    )
+    if Workspace._is_sensitive_file(resolved):
+        raise ValueError(
+            "Output-Datei ist als Secret-/Credential- oder interner "
+            f"Workspace-Pfad geschützt: {resolved}"
+        )
+    _validate_existing_output_file(resolved)
+    try:
+        with resolved.open("rb") as handle:
+            raw = handle.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise ValueError(
+                f"Output-Datei überschreitet das Leselimit von {max_bytes} Bytes: "
+                f"{resolved}"
+            )
+        return raw.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"Output-Datei ist nicht als UTF-8-Text lesbar: {resolved}"
+        ) from exc
+    except OSError as exc:
+        raise ValueError(
+            f"Output-Datei konnte nicht gelesen werden: {resolved}: {exc}"
+        ) from exc
+
+
 def is_local_agent_command(prompt: str) -> bool:
     return classify_local_command(prompt).is_local
 
