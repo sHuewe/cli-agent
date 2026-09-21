@@ -2742,3 +2742,191 @@ id = "${item.id}"
     assert (tmp_path / "status" / "one.json").resolve() in (
         process_call.mutation_protected_paths
     )
+
+
+def test_file_created_by_earlier_step_is_not_a_resume_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "create.md").write_text("create", encoding="utf-8")
+    (tmp_path / "later.md").write_text("later", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "create"
+config = "config.toml"
+prompt_file = "create.md"
+workspace_access = "write"
+
+[[steps]]
+id = "later"
+config = "config.toml"
+prompt_file = "later.md"
+response_format = "json"
+output = "later.json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "create":
+            (tmp_path / "later.json").write_text(
+                '{"created":"during-run"}',
+                encoding="utf-8",
+            )
+            return SimpleNamespace(answer="created", web_context_statuses=())
+        raise AssertionError("later step must not resume or execute")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["create"]
+
+
+def test_preexisting_static_json_checkpoint_still_resumes_from_run_start_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "checkpoint.json").write_text('{"ok":true}', encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+response_format = "json"
+output = "checkpoint.json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        raise AssertionError("pre-existing checkpoint must skip the model")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []
+
+
+def test_foreach_checkpoint_is_only_resumable_when_known_at_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    (tmp_path / "status").mkdir()
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "status/${iteration.id}.json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            (tmp_path / "status" / "one.json").write_text(
+                '{"created":"during-run"}',
+                encoding="utf-8",
+            )
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("process iteration must not resume or execute")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["discover"]
+
+
+def test_iteration_id_allows_leading_hyphen(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process {{var:id}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.vars]
+id = "${iteration.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"-card"}]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["discover", "process -card"]
+    assert calls[1].dump_file_prefix == "process.-card"
