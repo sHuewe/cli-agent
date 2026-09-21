@@ -27,9 +27,47 @@ cli-agent-flow run flow.toml --workspace C:\dev\project
 ```
 
 Die Flow-Datei selbst, Prompt-Dateien, Context-Dateien und Outputs müssen
-innerhalb dieses Workspace liegen. Konfigurationsdateien werden dagegen wie bei
-`cli-agent --config` explizit durch den Benutzer ausgewählt; sie sind kein
-LLM-gesteuerter Wert.
+innerhalb dieses Workspace liegen. Relative Pfade für `prompt_file`,
+`add_file_context`/`context_file` und `output` werden immer relativ zum
+Workspace-Root interpretiert, unabhängig davon, in welchem Unterordner die
+`flow.toml` liegt. Konfigurationsdateien sind davon bewusst ausgenommen:
+relative `config`-Pfade werden weiterhin relativ zum Ordner der
+`flow.toml` aufgelöst und dürfen wie bei `cli-agent --config` auch außerhalb
+des Workspace liegen.
+
+## Pfadsemantik
+
+Bei folgender Workspace-Struktur:
+
+```text
+workspace/
+├── handbuch.txt
+├── anweisungen.txt
+├── flow/
+│   ├── flow.toml
+│   ├── config.toml
+│   └── prompts/
+│       └── create-okf.md
+└── okf/
+```
+
+kann `flow/flow.toml` beispielsweise so referenzieren:
+
+```toml
+[[steps]]
+id = "create_okf"
+config = "config.toml"
+prompt_file = "flow/prompts/create-okf.md"
+add_file_context = ["handbuch.txt", "anweisungen.txt"]
+output = "okf/Index.md"
+```
+
+Dabei beziehen sich `prompt_file`, `add_file_context` und `output` auf
+`workspace/`. Nur `config = "config.toml"` bezieht sich auf den Ordner der
+Flow-Datei und bezeichnet hier daher `workspace/flow/config.toml`.
+
+`..` bleibt auch bei workspace-relativen Datenpfaden verboten; absolute Pfade
+müssen weiterhin innerhalb des festen Workspace liegen.
 
 ## Format
 
