@@ -43,7 +43,7 @@ _ITEM_EXPR = re.compile(
     r"\$\{item(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
 _ITERATION_ID_EXPR = re.compile(r"\$\{iteration\.id\}")
-_ITERATION_ID = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*\Z")
+_ITERATION_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 _FOREACH = re.compile(
     r"steps\.([A-Za-z_][A-Za-z0-9_-]*)\.output"
     r"(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\Z"
@@ -946,6 +946,112 @@ def _prepare_flow_output(
     return None
 
 
+def _snapshot_initial_checkpoints(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> tuple[dict[str, bytes], tuple[Path, ...]]:
+    """Snapshot resumable checkpoints before the first model call.
+
+    Static JSON checkpoints are known directly. Foreach checkpoints are only
+    eligible when their source step is itself resumed from a pre-existing
+    static JSON checkpoint, so the concrete iteration outputs can also be
+    derived before any model/tool execution.
+    """
+
+    foreach_consumers: dict[str, list[FlowStep]] = {}
+    for candidate in flow.steps:
+        if candidate.foreach is None:
+            continue
+        match = _FOREACH.fullmatch(candidate.foreach)
+        assert match is not None
+        foreach_consumers.setdefault(match.group(1), []).append(candidate)
+
+    fingerprints: dict[str, bytes] = {}
+    paths: dict[str, Path] = {}
+
+    def remember(step: FlowStep, output: Path, checkpoint: str) -> None:
+        key = _filesystem_path_key(output)
+        fingerprints[key] = _checkpoint_fingerprint(checkpoint)
+        paths[key] = output
+
+    for step in flow.steps:
+        if (
+            step.foreach is not None
+            or step.output is None
+            or step.overwrite_output
+            or step.response_format != "json"
+        ):
+            continue
+
+        output = _output_for_iteration(
+            step,
+            workspace=workspace,
+            item=None,
+        )
+        assert output is not None
+        checkpoint = _existing_json_checkpoint(
+            step,
+            workspace=workspace,
+            output=output,
+        )
+        if checkpoint is None:
+            continue
+
+        remember(step, output, checkpoint)
+
+        for consumer in foreach_consumers.get(step.step_id, ()):
+            if (
+                consumer.output is None
+                or consumer.overwrite_output
+                or consumer.response_format != "json"
+            ):
+                continue
+            items = _foreach_items(
+                consumer,
+                outputs={step.step_id: checkpoint},
+            )
+            iteration_ids = _iteration_ids(
+                consumer,
+                items=items,
+            )
+            consumer_outputs = [
+                _output_for_iteration(
+                    consumer,
+                    workspace=workspace,
+                    item=item,
+                    iteration_id=iteration_id,
+                )
+                for item, iteration_id in zip(items, iteration_ids)
+            ]
+            output_keys = [
+                _filesystem_path_key(candidate)
+                for candidate in consumer_outputs
+                if candidate is not None
+            ]
+            if len(output_keys) != len(set(output_keys)):
+                raise ValueError(
+                    f"Schritt {consumer.step_id!r} erzeugt für mehrere "
+                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                )
+
+            for candidate in consumer_outputs:
+                assert candidate is not None
+                consumer_checkpoint = _existing_json_checkpoint(
+                    consumer,
+                    workspace=workspace,
+                    output=candidate,
+                )
+                if consumer_checkpoint is not None:
+                    remember(
+                        consumer,
+                        candidate,
+                        consumer_checkpoint,
+                    )
+
+    return fingerprints, tuple(paths.values())
+
+
 def _foreach_items(
     step: FlowStep,
     *,
@@ -1236,7 +1342,21 @@ async def run_flow(
         flow,
         workspace=workspace,
     )
-    mutation_protected_paths = tuple(reserved_inputs.values())
+    (
+        initial_checkpoint_fingerprints,
+        initial_checkpoint_paths,
+    ) = _snapshot_initial_checkpoints(
+        flow,
+        workspace=workspace,
+    )
+    mutation_protected_paths = tuple(
+        dict.fromkeys(
+            (
+                *reserved_inputs.values(),
+                *initial_checkpoint_paths,
+            )
+        )
+    )
     case_colliding_step_ids = _case_colliding_step_ids(
         flow,
         workspace=workspace,
@@ -1319,15 +1439,24 @@ async def run_flow(
             preflight_checkpoint_fingerprints = []
             for output in preflight_outputs:
                 assert output is not None
-                checkpoint = _prepare_flow_output(
-                    step,
-                    workspace=workspace,
-                    output=output,
+                expected_fingerprint = initial_checkpoint_fingerprints.get(
+                    _filesystem_path_key(output)
                 )
+                if expected_fingerprint is not None:
+                    _verified_preflight_checkpoint(
+                        step,
+                        workspace=workspace,
+                        output=output,
+                        expected_fingerprint=expected_fingerprint,
+                    )
+                else:
+                    prepare_output_target(
+                        workspace,
+                        output,
+                        overwrite=step.overwrite_output,
+                    )
                 preflight_checkpoint_fingerprints.append(
-                    _checkpoint_fingerprint(checkpoint)
-                    if checkpoint is not None
-                    else None
+                    expected_fingerprint
                 )
 
         iteration_answers: list[str] = []
@@ -1382,22 +1511,30 @@ async def run_flow(
 
             if preflight_checkpoint_fingerprints is not None:
                 expected_fingerprint = preflight_checkpoint_fingerprints[index - 1]
-                checkpoint = (
-                    _verified_preflight_checkpoint(
-                        step,
-                        workspace=workspace,
-                        output=output,
-                        expected_fingerprint=expected_fingerprint,
+            else:
+                expected_fingerprint = (
+                    initial_checkpoint_fingerprints.get(
+                        _filesystem_path_key(output)
                     )
-                    if expected_fingerprint is not None
+                    if output is not None
                     else None
                 )
-            else:
-                checkpoint = _existing_json_checkpoint(
+
+            if expected_fingerprint is not None:
+                checkpoint = _verified_preflight_checkpoint(
                     step,
                     workspace=workspace,
                     output=output,
+                    expected_fingerprint=expected_fingerprint,
                 )
+            else:
+                checkpoint = None
+                if output is not None and preflight_outputs is None:
+                    prepare_output_target(
+                        workspace,
+                        output,
+                        overwrite=step.overwrite_output,
+                    )
 
             if checkpoint is not None:
                 print(
@@ -1447,22 +1584,7 @@ async def run_flow(
                         step.approve_tools,
                         fallback=approval_callback,
                     ),
-                    mutation_protected_paths=tuple(
-                        dict.fromkeys(
-                            (
-                                *mutation_protected_paths,
-                                *(
-                                    output_path
-                                    for output_path, fingerprint in zip(
-                                        preflight_outputs or (),
-                                        preflight_checkpoint_fingerprints or (),
-                                    )
-                                    if output_path is not None
-                                    and fingerprint is not None
-                                ),
-                            )
-                        )
-                    ),
+                    mutation_protected_paths=mutation_protected_paths,
                     excluded_paths=(
                         tuple(
                             dict.fromkeys(
