@@ -41,6 +41,8 @@ _STEP_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
 _ITEM_EXPR = re.compile(
     r"\$\{item(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
+_ITERATION_ID_EXPR = re.compile(r"\$\{iteration\.id\}")
+_ITERATION_ID = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*\Z")
 _FOREACH = re.compile(
     r"steps\.([A-Za-z_][A-Za-z0-9_-]*)\.output"
     r"(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\Z"
@@ -62,6 +64,7 @@ class FlowStep:
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
     foreach: str | None
+    iteration_id: str | None = None
     excluded_paths: tuple[Path, ...] = ()
     response_format: str = "text"
 
@@ -204,11 +207,16 @@ def _dump_prefix_for_iteration(
     *,
     index: int,
     case_colliding_step_ids: frozenset[str],
+    iteration_id: str | None = None,
 ) -> str:
     prefix = (
-        f"{step.step_id}.foreach-{index}"
-        if step.foreach is not None
-        else step.step_id
+        f"{step.step_id}.{iteration_id}"
+        if step.foreach is not None and iteration_id is not None
+        else (
+            f"{step.step_id}.foreach-{index}"
+            if step.foreach is not None
+            else step.step_id
+        )
     )
     if step.step_id not in case_colliding_step_ids:
         return prefix
@@ -384,6 +392,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "approve_tools",
         "vars",
         "foreach",
+        "iteration_id",
     }
 
     for index, raw in enumerate(raw_steps, start=1):
@@ -631,6 +640,23 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if foreach_value is not None
             else None
         )
+        iteration_id_value = raw.get("iteration_id")
+        iteration_id = (
+            _string(
+                iteration_id_value,
+                field=f"steps[{index}].iteration_id",
+            )
+            if iteration_id_value is not None
+            else None
+        )
+        if iteration_id is not None and foreach is None:
+            raise ValueError(
+                f"steps[{index}].iteration_id ist nur zusammen mit foreach erlaubt."
+            )
+        if iteration_id is not None and _ITERATION_ID_EXPR.search(iteration_id):
+            raise ValueError(
+                f"steps[{index}].iteration_id darf nicht {iteration.id{'}'} verwenden."
+            )
         if foreach is not None:
             match = _FOREACH.fullmatch(foreach)
             if match is None:
@@ -649,7 +675,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if output is not None:
                 dynamic_values.append(output)
             if any(
-                _ITEM_EXPR.search(value)
+                _ITEM_EXPR.search(value) or _ITERATION_ID_EXPR.search(value)
                 for value in dynamic_values
             ):
                 raise ValueError(
@@ -673,6 +699,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 approve_tools=approve_tools,
                 variables=variables,
                 foreach=foreach,
+                iteration_id=iteration_id,
                 excluded_paths=step_excluded_paths,
             )
         )
@@ -729,6 +756,47 @@ def _render_item_text(
         return str(value)
 
     return _ITEM_EXPR.sub(replace, template)
+
+
+def _render_iteration_text(
+    template: str,
+    *,
+    item: Any,
+    iteration_id: str | None,
+) -> str:
+    rendered = _render_item_text(template, item)
+    if iteration_id is not None:
+        rendered = _ITERATION_ID_EXPR.sub(iteration_id, rendered)
+    return rendered
+
+
+def _iteration_ids(
+    step: FlowStep,
+    *,
+    items: list[Any],
+) -> list[str | None]:
+    if step.foreach is None:
+        return [None]
+    if step.iteration_id is None:
+        return [str(index) for index in range(1, len(items) + 1)]
+
+    used: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        base = _render_item_text(step.iteration_id, item).strip()
+        if not base or _ITERATION_ID.fullmatch(base) is None:
+            raise ValueError(
+                f"Schritt {step.step_id!r} erzeugt eine ungültige iteration_id "
+                f"{base!r}; erlaubt sind ASCII-Buchstaben, Ziffern, '_' und '-'."
+            )
+        candidate = base
+        suffix = 2
+        while candidate.casefold() in used:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        used.add(candidate.casefold())
+        result.append(candidate)
+    return result
 
 
 def _parse_structured_output(
@@ -814,6 +882,7 @@ def _prompt_for_iteration(
     *,
     workspace: Path,
     item: Any,
+    iteration_id: str | None = None,
 ) -> str:
     prompt_path = _workspace_path(
         workspace,
@@ -826,7 +895,11 @@ def _prompt_for_iteration(
 
     values = {
         name: (
-            _render_item_text(value, item)
+            _render_iteration_text(
+                value,
+                item=item,
+                iteration_id=iteration_id,
+            )
             if step.foreach is not None
             else value
         )
@@ -862,12 +935,17 @@ def _output_for_iteration(
     *,
     workspace: Path,
     item: Any,
+    iteration_id: str | None = None,
 ) -> Path | None:
     if step.output is None:
         return None
 
     rendered = (
-        _render_item_text(step.output, item)
+        _render_iteration_text(
+            step.output,
+            item=item,
+            iteration_id=iteration_id,
+        )
         if step.foreach is not None
         else step.output
     )
