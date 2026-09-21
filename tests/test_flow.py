@@ -2939,3 +2939,53 @@ id = "${iteration.id}"
 
     assert [call.prompt for call in calls] == ["discover", "process -card"]
     assert calls[1].dump_file_prefix == "process.-card"
+
+
+def test_overwrite_step_does_not_inherit_previous_steps_checkpoint_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "resume.md").write_text("resume", encoding="utf-8")
+    (tmp_path / "replace.md").write_text("replace", encoding="utf-8")
+    (tmp_path / "result.json").write_text('{"old":true}', encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "resume"
+config = "config.toml"
+prompt_file = "resume.md"
+response_format = "json"
+output = "result.json"
+overwrite_output = false
+
+[[steps]]
+id = "replace"
+config = "config.toml"
+prompt_file = "replace.md"
+response_format = "json"
+output = "result.json"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        assert options.prompt == "replace"
+        answer = '{"new":true}'
+        if options.output is not None:
+            options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["replace"]
+    assert (tmp_path / "result.json").read_text(encoding="utf-8") == '{"new":true}'
