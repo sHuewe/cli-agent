@@ -1106,43 +1106,70 @@ def _snapshot_initial_checkpoints(
     return fingerprints, tuple(paths.values())
 
 
-def _aggregate_foreach_output(
+_FOREACH_AGGREGATE_PREFIX = '{"iterations":['
+_FOREACH_AGGREGATE_SUFFIX = "]}"
+
+
+def _serialize_foreach_iteration(
     step: FlowStep,
     *,
-    iteration_ids: list[str | None],
-    iteration_answers: list[str],
+    iteration_id: str,
+    answer: str,
 ) -> str:
-    if len(iteration_ids) != len(iteration_answers):
-        raise ValueError(
-            f"Interner Flow-Fehler bei Schritt {step.step_id!r}: "
-            "Iterations-IDs und Antworten sind nicht synchron."
+    value: Any = answer
+    if step.response_format == "json":
+        value = _parse_structured_output(
+            answer,
+            step_id=step.step_id,
         )
-
-    iterations: list[dict[str, Any]] = []
-    for iteration_id, answer in zip(iteration_ids, iteration_answers):
-        assert iteration_id is not None
-        value: Any = answer
-        if step.response_format == "json":
-            value = _parse_structured_output(
-                answer,
-                step_id=step.step_id,
-            )
-        iterations.append(
-            {
-                "id": iteration_id,
-                "output": value,
-            }
-        )
-
-    aggregated = _json_dumps_preserving_numbers(
-        {"iterations": iterations}
+    return _json_dumps_preserving_numbers(
+        {
+            "id": iteration_id,
+            "output": value,
+        }
     )
-    if len(aggregated.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+
+
+def _append_foreach_iteration(
+    step: FlowStep,
+    *,
+    parts: list[str],
+    payload_bytes: int,
+    iteration_id: str,
+    answer: str,
+) -> int:
+    fragment = _serialize_foreach_iteration(
+        step,
+        iteration_id=iteration_id,
+        answer=answer,
+    )
+    fragment_bytes = len(fragment.encode("utf-8"))
+    separator_bytes = 1 if parts else 0
+    next_payload_bytes = (
+        payload_bytes
+        + separator_bytes
+        + fragment_bytes
+    )
+    total_bytes = (
+        len(_FOREACH_AGGREGATE_PREFIX.encode("utf-8"))
+        + next_payload_bytes
+        + len(_FOREACH_AGGREGATE_SUFFIX.encode("utf-8"))
+    )
+    if total_bytes > MAX_STRUCTURED_OUTPUT_BYTES:
         raise ValueError(
             f"Aggregierter Output von Schritt {step.step_id!r} überschreitet "
             f"das JSON-Limit von {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
         )
-    return aggregated
+    parts.append(fragment)
+    return next_payload_bytes
+
+
+def _finish_foreach_output(parts: list[str]) -> str:
+    return (
+        _FOREACH_AGGREGATE_PREFIX
+        + ",".join(parts)
+        + _FOREACH_AGGREGATE_SUFFIX
+    )
 
 
 def _foreach_items(
@@ -1552,6 +1579,26 @@ async def run_flow(
                 )
 
         iteration_answers: list[str] = []
+        foreach_parts: list[str] = []
+        foreach_payload_bytes = 0
+
+        def record_iteration_answer(
+            answer: str,
+            iteration_id: str | None,
+        ) -> None:
+            nonlocal foreach_payload_bytes
+            if step.foreach is None:
+                iteration_answers.append(answer)
+                return
+            assert iteration_id is not None
+            foreach_payload_bytes = _append_foreach_iteration(
+                step,
+                parts=foreach_parts,
+                payload_bytes=foreach_payload_bytes,
+                iteration_id=iteration_id,
+                answer=answer,
+            )
+
         for index, (item, iteration_id) in enumerate(
             zip(items, iteration_ids),
             start=1,
@@ -1638,7 +1685,10 @@ async def run_flow(
                         escape_literal_backslashes=True,
                     )
                 )
-                iteration_answers.append(checkpoint)
+                record_iteration_answer(
+                    checkpoint,
+                    iteration_id,
+                )
                 continue
 
             prompt = _prompt_for_iteration(
@@ -1702,7 +1752,10 @@ async def run_flow(
                 ),
                 dependencies=deps,
             )
-            iteration_answers.append(result.answer)
+            record_iteration_answer(
+                result.answer,
+                iteration_id,
+            )
             for status in getattr(result, "web_context_statuses", ()):
                 print(
                     sanitize_terminal_text(
@@ -1722,10 +1775,8 @@ async def run_flow(
             assert len(iteration_answers) == 1
             outputs[step.step_id] = iteration_answers[0]
         else:
-            outputs[step.step_id] = _aggregate_foreach_output(
-                step,
-                iteration_ids=iteration_ids,
-                iteration_answers=iteration_answers,
+            outputs[step.step_id] = _finish_foreach_output(
+                foreach_parts
             )
 
 
