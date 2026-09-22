@@ -16,6 +16,23 @@ def tool(*, name="search", description="", schema=None):
     )
 
 
+def _branching_ref_schema(levels: int) -> dict:
+    defs: dict[str, dict] = {}
+    for index in range(levels):
+        defs[f"n{index}"] = {
+            "anyOf": [
+                {"$ref": f"#/$defs/n{index + 1}"},
+                {"$ref": f"#/$defs/n{index + 1}"},
+            ]
+        }
+    defs[f"n{levels}"] = {"type": "string"}
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": defs,
+        "$ref": "#/$defs/n0",
+    }
+
+
 def test_argument_validation_runs_in_worker() -> None:
     schema = {
         "type": "object",
@@ -98,6 +115,22 @@ def test_worker_uses_hard_subprocess_timeout(monkeypatch: pytest.MonkeyPatch) ->
     )
     assert observed["command"][-2:] == ["-m", "cli_agent.mcp_schema_guard"]
     assert observed["timeout"] == guard.MCP_SCHEMA_ARGUMENT_TIMEOUT_SECONDS
+
+
+def test_original_branching_ref_attack_is_wallclock_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The original F-01 PoC grows exponentially. The exact CPU speed is not a
+    # security assumption: the parent terminates the disposable worker at the
+    # configured wall-clock deadline.
+    monkeypatch.setattr(guard, "MCP_SCHEMA_METADATA_TIMEOUT_SECONDS", 0.5)
+
+    with pytest.raises(RuntimeError, match="Zeitlimit"):
+        guard.validate_mcp_server_metadata(
+            server_name="hostile",
+            instructions=None,
+            tools=[tool(schema=_branching_ref_schema(20))],
+        )
 
 
 def test_parent_structure_limits_apply_before_worker(
