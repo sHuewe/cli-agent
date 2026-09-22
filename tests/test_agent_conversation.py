@@ -422,6 +422,135 @@ def test_collect_knowledge_valid_negative_selection_returns_none() -> None:
     )
 
 
+def test_collect_knowledge_required_not_found_is_propagated() -> None:
+    agent = ConversationHarness()
+    session = KnowledgeRootSession(_knowledge_root_result())
+    _configure_knowledge(agent, session)
+    agent._okf_options = SimpleNamespace(
+        required=True,
+        max_tool_calls=3,
+        max_concept_reads=2,
+    )
+
+    async def fake_loop(**_kwargs):
+        return json.dumps(
+            {
+                "found_content": False,
+                "selected_okf_tokens": [],
+                "warnings": [],
+                "reason_code": "not_found",
+                "reason": "Kein passendes Concept gefunden.",
+            }
+        )
+
+    agent._run_model_loop = fake_loop
+
+    result = asyncio.run(agent._collect_knowledge("repository question"))
+
+    assert result is not None
+    payload = json.loads(result)
+    assert payload["reason_code"] == "not_found"
+    assert payload["reason"] == "Kein passendes Concept gefunden."
+
+
+def test_collect_knowledge_optional_not_found_stays_best_effort() -> None:
+    agent = ConversationHarness()
+    session = KnowledgeRootSession(_knowledge_root_result())
+    _configure_knowledge(agent, session)
+    agent._okf_options = SimpleNamespace(
+        required=False,
+        max_tool_calls=3,
+        max_concept_reads=2,
+    )
+
+    async def fake_loop(**_kwargs):
+        return json.dumps(
+            {
+                "found_content": False,
+                "selected_okf_tokens": [],
+                "warnings": [],
+                "reason_code": "not_found",
+                "reason": "Kein passendes Concept gefunden.",
+            }
+        )
+
+    agent._run_model_loop = fake_loop
+
+    assert asyncio.run(agent._collect_knowledge("repository question")) is None
+
+
+def test_collect_knowledge_required_retrieval_incomplete_fails_closed() -> None:
+    agent = ConversationHarness()
+    session = KnowledgeRootSession(_knowledge_root_result())
+    _configure_knowledge(agent, session)
+    agent._okf_options = SimpleNamespace(
+        required=True,
+        max_tool_calls=3,
+        max_concept_reads=2,
+    )
+
+    async def fake_loop(**_kwargs):
+        return json.dumps(
+            {
+                "found_content": False,
+                "selected_okf_tokens": [],
+                "warnings": [],
+                "reason_code": "retrieval_incomplete",
+                "reason": "Keine belastbare Auswahl möglich.",
+            }
+        )
+
+    agent._run_model_loop = fake_loop
+
+    with pytest.raises(RuntimeError, match="Wissensvorlauf fehlgeschlagen"):
+        asyncio.run(agent._collect_knowledge("repository question"))
+
+    assert "nicht zuverlässig abschließen" in agent.dumped[-1][1]["error"]
+
+
+def test_required_not_found_is_transient_context_before_original_prompt() -> None:
+    agent = ConversationHarness()
+    agent._okf_options = SimpleNamespace(
+        required=True,
+        max_tool_calls=3,
+        max_concept_reads=2,
+    )
+
+    async def fake_collect(_prompt):
+        return json.dumps(
+            {
+                "found_content": False,
+                "selected_okf_tokens": [],
+                "warnings": [],
+                "reason_code": "not_found",
+                "reason": "Kein passendes Concept gefunden.",
+            },
+            ensure_ascii=False,
+        )
+
+    agent._collect_knowledge = fake_collect
+
+    answer = asyncio.run(agent.ask("Wie ist Feature X im Repository definiert?"))
+
+    assert answer == "answer"
+    messages = agent.loop_calls[0]["messages"]
+    assert messages[-1] == {
+        "role": "user",
+        "content": "Wie ist Feature X im Repository definiert?",
+    }
+    assert messages[-2]["role"] == "user"
+    assert "keine belegenden Inhalte" in messages[-2]["content"]
+    assert "Erfinde keine repository-spezifischen Informationen" in messages[-2]["content"]
+    payload = json.loads(
+        messages[-2]["content"][messages[-2]["content"].index("{"):]
+    )
+    assert json.loads(payload["retrieved_okf_knowledge"])["reason_code"] == "not_found"
+    assert all(
+        "Kein passendes Concept gefunden." not in item["content"]
+        for item in agent.history
+    )
+
+
 def test_collect_knowledge_rejects_non_object_selection() -> None:
     agent = ConversationHarness()
     session = KnowledgeRootSession(_knowledge_root_result())
