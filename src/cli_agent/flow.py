@@ -780,7 +780,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             for value in variables.values()
         ):
             raise ValueError(
-                f"steps[{index}] verwendet ${conversation.item...} "
+                f"steps[{index}] verwendet ${{conversation.item...}} "
                 "ohne conversation_items."
             )
 
