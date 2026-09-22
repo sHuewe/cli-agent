@@ -17,9 +17,11 @@ from .config import AppConfig, default_config_file, load_config
 from .execution import (
     ApprovalCallback,
     ExecutionDependencies,
+    ConversationRunOptions,
     OneShotRunOptions,
     build_preapproval_callback,
     resolve_excluded_paths,
+    run_conversation,
     run_once,
 )
 from .file_context import (
@@ -43,6 +45,17 @@ _ITEM_EXPR = re.compile(
     r"\$\{item(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
 _ITERATION_ID_EXPR = re.compile(r"\$\{iteration\.id\}")
+_CONVERSATION_ITEM_EXPR = re.compile(
+    r"\$\{conversation\.item(?:\.([A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
+)
+_DYNAMIC_VALUE_EXPR = re.compile(
+    r"\$\{(?:(?P<iteration>iteration\.id)"
+    r"|item(?:\.(?P<item_path>[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
+    r"|conversation\.item(?:\.(?P<conversation_path>[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?)\}"
+)
 _ITERATION_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 _FOREACH = re.compile(
     r"steps\.([A-Za-z_][A-Za-z0-9_-]*)\.output"
@@ -65,6 +78,8 @@ class FlowStep:
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
     foreach: str | None
+    conversation_items: tuple[Any, ...] | str | None = None
+    conversation_final_prompt_file: Path | None = None
     iteration_id: str | None = None
     excluded_paths: tuple[Path, ...] = ()
     response_format: str = "text"
@@ -393,6 +408,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "approve_tools",
         "vars",
         "foreach",
+        "conversation_items",
+        "conversation_final_prompt_file",
         "iteration_id",
     }
 
@@ -641,6 +658,68 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if foreach_value is not None
             else None
         )
+        conversation_items_value = raw.get("conversation_items")
+        conversation_items: tuple[Any, ...] | str | None
+        if conversation_items_value is None:
+            conversation_items = None
+        elif isinstance(conversation_items_value, list):
+            conversation_items = tuple(conversation_items_value)
+        elif isinstance(conversation_items_value, str) and conversation_items_value.strip():
+            conversation_items = conversation_items_value.strip()
+        else:
+            raise ValueError(
+                f"steps[{index}].conversation_items muss eine Liste oder "
+                "ein nichtleerer String sein."
+            )
+
+        final_prompt_value = raw.get("conversation_final_prompt_file")
+        conversation_final_prompt_file = (
+            Path(
+                _string(
+                    final_prompt_value,
+                    field=f"steps[{index}].conversation_final_prompt_file",
+                )
+            )
+            if final_prompt_value is not None
+            else None
+        )
+        if conversation_final_prompt_file is not None and conversation_items is None:
+            raise ValueError(
+                f"steps[{index}].conversation_final_prompt_file benötigt "
+                "conversation_items."
+            )
+        if isinstance(conversation_items, str):
+            item_match = _ITEM_EXPR.fullmatch(conversation_items)
+            source_match = _FOREACH.fullmatch(conversation_items)
+            if item_match is not None:
+                if foreach is None:
+                    raise ValueError(
+                        f"steps[{index}].conversation_items verwendet "
+                        "${item...} ohne foreach."
+                    )
+            elif source_match is not None:
+                source_id = source_match.group(1)
+                if source_id == step_id or source_id not in known_ids:
+                    raise ValueError(
+                        f"steps[{index}].conversation_items darf nur auf einen "
+                        f"vorherigen Schritt verweisen: {source_id!r}."
+                    )
+            else:
+                raise ValueError(
+                    f"steps[{index}].conversation_items muss entweder eine "
+                    "statische Liste, ${item...} oder "
+                    "steps.<id>.output[.<pfad>] sein."
+                )
+        if (
+            isinstance(conversation_items, tuple)
+            and not conversation_items
+            and conversation_final_prompt_file is None
+        ):
+            raise ValueError(
+                f"steps[{index}].conversation_items darf ohne "
+                "conversation_final_prompt_file nicht leer sein."
+            )
+
         iteration_id_value = raw.get("iteration_id")
         iteration_id = (
             _string(
@@ -685,6 +764,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     "${item...} ohne foreach."
                 )
 
+        if conversation_items is None and any(
+            _CONVERSATION_ITEM_EXPR.search(value)
+            for value in variables.values()
+        ):
+            raise ValueError(
+                f"steps[{index}] verwendet ${conversation.item...} "
+                "ohne conversation_items."
+            )
+
         steps.append(
             FlowStep(
                 step_id=step_id,
@@ -701,6 +789,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 approve_tools=approve_tools,
                 variables=variables,
                 foreach=foreach,
+                conversation_items=conversation_items,
+                conversation_final_prompt_file=conversation_final_prompt_file,
                 iteration_id=iteration_id,
                 excluded_paths=step_excluded_paths,
             )
