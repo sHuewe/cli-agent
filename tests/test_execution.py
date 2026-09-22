@@ -624,6 +624,27 @@ def test_run_conversation_reuses_one_agent_for_all_prompts(
     assert result.usage == "usage"
 
 
+def test_run_conversation_rejects_local_agent_commands(
+    tmp_path: Path,
+) -> None:
+    for prompt in (
+        "enable sensitive_server",
+        "disable os",
+        "tokens",
+        "add_web_context https://example.com",
+        "clear_web_context",
+    ):
+        with pytest.raises(ValueError, match="lokalen Agent-Befehle"):
+            asyncio.run(
+                run_conversation(
+                    ConversationRunOptions(
+                        workspace=tmp_path,
+                        prompts=("safe", prompt),
+                    )
+                )
+            )
+
+
 def test_run_conversation_rejects_empty_or_blank_prompts(
     tmp_path: Path,
 ) -> None:
