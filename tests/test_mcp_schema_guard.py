@@ -165,3 +165,21 @@ def test_metadata_preserves_existing_size_limits(
             instructions=None,
             tools=[tool(description="123456")],
         )
+
+
+def test_oversized_validation_error_remains_schema_rejection() -> None:
+    large_value = "x" * (guard.MAX_MCP_SCHEMA_WORKER_RESPONSE_BYTES + 10_000)
+
+    error = guard.validate_mcp_tool_arguments(
+        tool_name="server__search",
+        schema={
+            "type": "object",
+            "properties": {"value": {"type": "integer"}},
+            "required": ["value"],
+        },
+        arguments={"value": large_value},
+    )
+
+    assert error is not None
+    assert "gekürzt" in error
+    assert len(error) <= guard.MAX_MCP_VALIDATION_ERROR_CHARS
