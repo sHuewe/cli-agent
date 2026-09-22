@@ -800,3 +800,49 @@ def test_argument_node_and_depth_limits_are_enforced(
             schema=schema,
             arguments={"a": {"b": {"c": 1}}},
         )
+
+
+def test_property_named_id_is_not_treated_as_nested_schema_resource() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "$id": {"type": "string"},
+        },
+    }
+
+    limits.validate_mcp_server_metadata(
+        server_name="valid",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="valid__search",
+            schema=schema,
+            arguments={"$id": "literal argument name"},
+        )
+        is None
+    )
+
+
+def test_repeated_schema_evaluation_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(limits, "MAX_MCP_VALIDATION_WORK", 100)
+    schema = {
+        "type": "array",
+        "items": {
+            "anyOf": [
+                {"type": "integer"},
+                {"type": "string"},
+                {"type": "boolean"},
+            ]
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="Validierungsbudget"):
+        limits.validate_mcp_tool_arguments(
+            tool_name="hostile__search",
+            schema=schema,
+            arguments=[1] * 20,
+        )
