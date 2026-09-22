@@ -36,6 +36,7 @@ MAX_MCP_SCHEMA_NODES = 10_000
 MAX_MCP_SCHEMA_DEPTH = 64
 MAX_MCP_SCHEMA_REF_DEPTH = 32
 MAX_MCP_SCHEMA_EXPANSION_COST = 20_000
+MAX_MCP_VALIDATION_WORK = 1_000_000
 MAX_MCP_ARGUMENT_NODES = 20_000
 MAX_MCP_ARGUMENT_DEPTH = 64
 
@@ -547,25 +548,57 @@ def _validate_schema_complexity(
     # Nested resources change the meaning of fragment-only references. Keeping
     # untrusted MCP schemas to a single resource makes the cost model exact and
     # still supports the common $defs + local $ref shape produced by tool SDKs.
+    # Traverse only schema-bearing positions. Arbitrary annotation values and
+    # property names are data, so e.g. properties["$id"] must not be mistaken
+    # for a nested resource keyword.
+    single_schema_keywords = {
+        "additionalProperties", "contains", "contentSchema", "else", "if",
+        "items", "not", "propertyNames", "then", "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+    schema_map_keywords = {
+        "$defs", "definitions", "dependentSchemas", "patternProperties",
+        "properties",
+    }
+    schema_list_keywords = {"allOf", "anyOf", "oneOf", "prefixItems"}
     stack: list[tuple[Any, bool]] = [(schema, True)]
     while stack:
         current, is_root = stack.pop()
-        if isinstance(current, dict):
-            if not is_root and "$id" in current:
-                raise RuntimeError(
-                    f"MCP-Tool {tool_name} verwendet ein verschachteltes $id. "
-                    "Verschachtelte JSON-Schema-Ressourcen sind für externe "
-                    "MCP-Tools nicht zulässig."
+        if not isinstance(current, dict):
+            continue
+        if not is_root and "$id" in current:
+            raise RuntimeError(
+                f"MCP-Tool {tool_name} verwendet ein verschachteltes $id. "
+                "Verschachtelte JSON-Schema-Ressourcen sind für externe "
+                "MCP-Tools nicht zulässig."
+            )
+        if "$dynamicRef" in current or "$recursiveRef" in current:
+            raise RuntimeError(
+                f"MCP-Tool {tool_name} verwendet dynamische/rekursive "
+                "JSON-Schema-Referenzen. Für externe MCP-Tools sind nur "
+                "statische lokale $ref-Referenzen zulässig."
+            )
+
+        for keyword in single_schema_keywords:
+            child = current.get(keyword)
+            if isinstance(child, dict):
+                stack.append((child, False))
+        for keyword in schema_map_keywords:
+            children = current.get(keyword)
+            if isinstance(children, dict):
+                stack.extend(
+                    (child, False)
+                    for child in children.values()
+                    if isinstance(child, dict)
                 )
-            if "$dynamicRef" in current or "$recursiveRef" in current:
-                raise RuntimeError(
-                    f"MCP-Tool {tool_name} verwendet dynamische/rekursive "
-                    "JSON-Schema-Referenzen. Für externe MCP-Tools sind nur "
-                    "statische lokale $ref-Referenzen zulässig."
+        for keyword in schema_list_keywords:
+            children = current.get(keyword)
+            if isinstance(children, list):
+                stack.extend(
+                    (child, False)
+                    for child in children
+                    if isinstance(child, dict)
                 )
-            stack.extend((child, False) for child in current.values())
-        elif isinstance(current, list):
-            stack.extend((child, False) for child in current)
 
     memo: dict[tuple[int, int], int] = {}
     active_nodes: set[int] = set()
@@ -629,7 +662,7 @@ def _validate_schema_complexity(
         finally:
             active_nodes.remove(node_id)
 
-    expanded_cost(schema, 0)
+    return expanded_cost(schema, 0)
 
 
 def _schema_validator(schema: dict[str, Any], *, tool_name: str):
@@ -639,11 +672,12 @@ def _schema_validator(schema: dict[str, Any], *, tool_name: str):
 
     # Complexity must be checked before jsonschema.check_schema(): the latter
     # recursively validates attacker-controlled schema structure itself.
-    _validate_schema_complexity(
+    schema_cost = _validate_schema_complexity(
         schema,
         tool_name=tool_name,
         validator=validator,
     )
+    setattr(validator, "_cli_agent_schema_cost", schema_cost)
     try:
         validator_class.check_schema(schema)
     except SchemaError as exc:
@@ -669,6 +703,23 @@ def validate_mcp_tool_arguments(
         max_depth=MAX_MCP_ARGUMENT_DEPTH,
     )
     validator = _schema_validator(schema, tool_name=tool_name)
+    schema_cost = getattr(validator, "_cli_agent_schema_cost", 1)
+    argument_nodes = 0
+    stack = [arguments]
+    while stack:
+        current = stack.pop()
+        argument_nodes += 1
+        if isinstance(current, dict):
+            stack.extend(current.values())
+        elif isinstance(current, list):
+            stack.extend(current)
+    validation_work = schema_cost * max(argument_nodes, 1)
+    if validation_work > MAX_MCP_VALIDATION_WORK:
+        raise RuntimeError(
+            f"MCP-Tool {tool_name} überschreitet das "
+            "JSON-Schema-Validierungsbudget "
+            f"({validation_work} > {MAX_MCP_VALIDATION_WORK})."
+        )
     try:
         error = next(validator.iter_errors(arguments), None)
     except _UnsupportedSafeRegex as exc:
