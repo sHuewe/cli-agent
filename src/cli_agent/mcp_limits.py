@@ -617,10 +617,10 @@ def _validate_schema_complexity(
             continue
         legacy_id = _schema_uses_legacy_id(current, inherited_legacy_id)
         resource_keyword = None
-        if "$id" in current:
-            resource_keyword = "$id"
-        elif legacy_id and "id" in current:
+        if legacy_id and "id" in current:
             resource_keyword = "id"
+        elif not legacy_id and "$id" in current:
+            resource_keyword = "$id"
         if not is_root and resource_keyword is not None:
             raise RuntimeError(
                 f"MCP-Tool {tool_name} verwendet ein verschachteltes "
