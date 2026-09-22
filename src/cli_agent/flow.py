@@ -909,6 +909,97 @@ def _render_iteration_text(
     return _render_item_text(rendered, item)
 
 
+def _render_dynamic_text(
+    template: str,
+    *,
+    item: Any,
+    iteration_id: str | None,
+    conversation_item: Any,
+) -> str:
+    def replace(match: re.Match[str]) -> str:
+        if match.group("iteration") is not None:
+            if iteration_id is None:
+                raise ValueError("${iteration.id} ist ohne foreach nicht verfügbar.")
+            value: Any = iteration_id
+        elif match.group("item_path") is not None or match.group(0).startswith("${item"):
+            if item is None:
+                raise ValueError("${item...} ist ohne foreach nicht verfügbar.")
+            value = _lookup(
+                item,
+                match.group("item_path"),
+                label="foreach-Element",
+            )
+        else:
+            value = _lookup(
+                conversation_item,
+                match.group("conversation_path"),
+                label="Conversation-Element",
+            )
+        if isinstance(value, (dict, list)):
+            return _json_dumps_preserving_numbers(value)
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    return _DYNAMIC_VALUE_EXPR.sub(replace, template)
+
+
+def _conversation_items_for_iteration(
+    step: FlowStep,
+    *,
+    outputs: dict[str, str],
+    item: Any,
+) -> list[Any] | None:
+    source = step.conversation_items
+    if source is None:
+        return None
+    if isinstance(source, tuple):
+        values = list(source)
+    else:
+        item_match = _ITEM_EXPR.fullmatch(source)
+        if item_match is not None:
+            values = _lookup(
+                item,
+                item_match.group(1),
+                label="foreach-Element",
+            )
+        else:
+            match = _FOREACH.fullmatch(source)
+            assert match is not None
+            source_id, path = match.groups()
+            if source_id not in outputs:
+                raise ValueError(
+                    f"conversation_items-Quelle {source_id!r} besitzt keinen "
+                    "verfügbaren Output."
+                )
+            parsed = _parse_structured_output(
+                outputs[source_id],
+                step_id=source_id,
+            )
+            values = _lookup(
+                parsed,
+                path,
+                label=f"Output von Schritt {source_id!r}",
+            )
+    if not isinstance(values, list):
+        raise ValueError(
+            f"conversation_items von Schritt {step.step_id!r} ist keine Liste."
+        )
+    if len(values) > MAX_FOREACH_ITEMS:
+        raise ValueError(
+            f"conversation_items enthält {len(values)} Elemente; "
+            f"erlaubt sind höchstens {MAX_FOREACH_ITEMS}."
+        )
+    if not values and step.conversation_final_prompt_file is None:
+        raise ValueError(
+            f"conversation_items von Schritt {step.step_id!r} ist leer und "
+            "es gibt keinen conversation_final_prompt_file."
+        )
+    return values
+
+
 def _iteration_ids(
     step: FlowStep,
     *,
@@ -1312,41 +1403,111 @@ def _resolve_config(
     return flow_dir / path
 
 
+def _render_prompt_file(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    prompt_file: Path,
+    item: Any,
+    iteration_id: str | None,
+    conversation_item: Any,
+    final_prompt: bool = False,
+) -> str:
+    prompt_path = _workspace_path(
+        workspace,
+        prompt_file,
+        purpose=(
+            f"Finale Conversation-Prompt-Datei von Schritt {step.step_id!r}"
+            if final_prompt
+            else f"Prompt-Datei von Schritt {step.step_id!r}"
+        ),
+        must_exist=True,
+    )
+    prompt = prepare_prompt_file(workspace, prompt_path)
+    template = PromptTemplate.parse(prompt.content)
+    values: dict[str, str] = {}
+    for name in template.variables:
+        if name not in step.variables:
+            raise ValueError(
+                f"Schritt {step.step_id!r} setzt Prompt-Variable {name!r} nicht."
+            )
+        raw = step.variables[name]
+        if final_prompt and _CONVERSATION_ITEM_EXPR.search(raw):
+            raise ValueError(
+                f"Finaler Conversation-Prompt von Schritt {step.step_id!r} "
+                f"kann Variable {name!r} mit ${{conversation.item...}} "
+                "nicht verwenden."
+            )
+        values[name] = _render_dynamic_text(
+            raw,
+            item=item,
+            iteration_id=iteration_id,
+            conversation_item=conversation_item,
+        )
+    rendered = template.render(values)
+    if not rendered or rendered.isspace():
+        raise ValueError(
+            f"Gerenderter Prompt von Schritt {step.step_id!r} darf nicht leer sein."
+        )
+    return rendered
+
+
 def _prompt_for_iteration(
     step: FlowStep,
     *,
     workspace: Path,
     item: Any,
     iteration_id: str | None = None,
+    conversation_item: Any = None,
 ) -> str:
-    prompt_path = _workspace_path(
-        workspace,
-        step.prompt_file,
-        purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
-        must_exist=True,
+    return _render_prompt_file(
+        step,
+        workspace=workspace,
+        prompt_file=step.prompt_file,
+        item=item,
+        iteration_id=iteration_id,
+        conversation_item=conversation_item,
     )
-    prompt = prepare_prompt_file(workspace, prompt_path)
-    template = PromptTemplate.parse(prompt.content)
 
-    values = {
-        name: (
-            _render_iteration_text(
-                value,
+
+def _conversation_prompts_for_iteration(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    outputs: dict[str, str],
+    item: Any,
+    iteration_id: str | None,
+) -> tuple[str, ...] | None:
+    conversation_items = _conversation_items_for_iteration(
+        step,
+        outputs=outputs,
+        item=item,
+    )
+    if conversation_items is None:
+        return None
+    prompts = [
+        _prompt_for_iteration(
+            step,
+            workspace=workspace,
+            item=item,
+            iteration_id=iteration_id,
+            conversation_item=conversation_item,
+        )
+        for conversation_item in conversation_items
+    ]
+    if step.conversation_final_prompt_file is not None:
+        prompts.append(
+            _render_prompt_file(
+                step,
+                workspace=workspace,
+                prompt_file=step.conversation_final_prompt_file,
                 item=item,
                 iteration_id=iteration_id,
+                conversation_item=None,
+                final_prompt=True,
             )
-            if step.foreach is not None
-            else value
         )
-        for name, value in step.variables.items()
-    }
-    rendered = template.render(values)
-    if not rendered or rendered.isspace():
-        raise ValueError(
-            f"Gerenderter Prompt von Schritt "
-            f"{step.step_id!r} darf nicht leer sein."
-        )
-    return rendered
+    return tuple(prompts)
 
 
 def _contexts_for_step(
