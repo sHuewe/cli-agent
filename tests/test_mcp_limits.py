@@ -846,3 +846,63 @@ def test_repeated_schema_evaluation_is_bounded(
             schema=schema,
             arguments=[1] * 20,
         )
+
+
+def test_draft7_array_items_are_scanned_for_dynamic_refs() -> None:
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "array",
+        "items": [
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$defs": {"x": {"type": "string"}},
+                "$dynamicRef": "#/$defs/x",
+            }
+        ],
+    }
+
+    with pytest.raises(RuntimeError, match="dynamische/rekursive"):
+        limits.validate_mcp_server_metadata(
+            server_name="hostile",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_unique_items_validation_budget_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        limits,
+        "MAX_MCP_UNIQUE_ITEMS_COMPARISONS",
+        10,
+    )
+    schema = {
+        "type": "array",
+        "uniqueItems": True,
+        "items": {"type": "object"},
+    }
+
+    with pytest.raises(RuntimeError, match="uniqueItems-Validierungsbudget"):
+        limits.validate_mcp_tool_arguments(
+            tool_name="hostile__search",
+            schema=schema,
+            arguments=[{"value": index} for index in range(6)],
+        )
+
+
+def test_small_unique_items_arrays_still_validate() -> None:
+    schema = {
+        "type": "array",
+        "uniqueItems": True,
+        "items": {"type": "object"},
+    }
+
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="valid__search",
+            schema=schema,
+            arguments=[{"value": 1}, {"value": 2}],
+        )
+        is None
+    )
