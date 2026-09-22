@@ -21,8 +21,8 @@ from .mcp_limits import (
     MCP_TOOL_CALL_TIMEOUT_SECONDS,
     await_mcp_operation,
     enforce_mcp_tool_result_limit,
-    validate_mcp_tool_arguments,
 )
+from .mcp_schema_guard import validate_mcp_tool_arguments
 
 logger = logging.getLogger("cli_agent.agent_tool_calls")
 
