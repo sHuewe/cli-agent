@@ -615,3 +615,188 @@ def test_metadata_rejects_non_object_and_non_serializable_schemas() -> None:
             instructions=None,
             tools=[tool(schema={"default": object()})],
         )
+
+
+def _branching_ref_schema(levels: int) -> dict:
+    defs: dict[str, dict] = {}
+    for index in range(levels):
+        defs[f"n{index}"] = {
+            "anyOf": [
+                {"$ref": f"#/$defs/n{index + 1}"},
+                {"$ref": f"#/$defs/n{index + 1}"},
+            ]
+        }
+    defs[f"n{levels}"] = {"type": "string"}
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": defs,
+        "$ref": "#/$defs/n0",
+    }
+
+
+def test_branching_local_refs_are_rejected_by_complexity_budget() -> None:
+    schema = _branching_ref_schema(16)
+
+    with pytest.raises(RuntimeError, match="JSON-Schema-Komplexitätslimit"):
+        limits.validate_mcp_server_metadata(
+            server_name="hostile",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_small_branching_local_refs_remain_supported() -> None:
+    schema = _branching_ref_schema(4)
+
+    limits.validate_mcp_server_metadata(
+        server_name="valid",
+        instructions=None,
+        tools=[tool(schema=schema)],
+    )
+    assert (
+        limits.validate_mcp_tool_arguments(
+            tool_name="valid__search",
+            schema=schema,
+            arguments="ok",
+        )
+        is None
+    )
+
+
+def test_schema_node_and_depth_limits_are_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(limits, "MAX_MCP_SCHEMA_NODES", 4)
+    with pytest.raises(RuntimeError, match="Schema-Knotenlimit"):
+        limits.validate_mcp_server_metadata(
+            server_name="hostile",
+            instructions=None,
+            tools=[
+                tool(
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "string"},
+                            "b": {"type": "string"},
+                        },
+                    }
+                )
+            ],
+        )
+
+    monkeypatch.setattr(limits, "MAX_MCP_SCHEMA_NODES", 10_000)
+    monkeypatch.setattr(limits, "MAX_MCP_SCHEMA_DEPTH", 3)
+    deep: dict = {"type": "string"}
+    for _ in range(5):
+        deep = {"not": deep}
+    with pytest.raises(RuntimeError, match="Schema-Tiefenlimit"):
+        limits.validate_mcp_server_metadata(
+            server_name="hostile",
+            instructions=None,
+            tools=[tool(schema=deep)],
+        )
+
+
+def test_schema_reference_depth_limit_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(limits, "MAX_MCP_SCHEMA_REF_DEPTH", 3)
+    schema = {
+        "$defs": {
+            "a": {"$ref": "#/$defs/b"},
+            "b": {"$ref": "#/$defs/c"},
+            "c": {"$ref": "#/$defs/d"},
+            "d": {"type": "string"},
+        },
+        "$ref": "#/$defs/a",
+    }
+
+    with pytest.raises(RuntimeError, match="Referenztiefenlimit"):
+        limits.validate_mcp_server_metadata(
+            server_name="hostile",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_recursive_local_ref_is_rejected() -> None:
+    schema = {
+        "$defs": {
+            "node": {
+                "anyOf": [
+                    {"type": "null"},
+                    {
+                        "type": "object",
+                        "properties": {
+                            "next": {"$ref": "#/$defs/node"},
+                        },
+                    },
+                ]
+            }
+        },
+        "$ref": "#/$defs/node",
+    }
+
+    with pytest.raises(RuntimeError, match="zyklische lokale"):
+        limits.validate_mcp_server_metadata(
+            server_name="hostile",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+@pytest.mark.parametrize("keyword", ["$dynamicRef", "$recursiveRef"])
+def test_dynamic_and_recursive_refs_are_rejected(keyword: str) -> None:
+    schema = {
+        "$defs": {"value": {"type": "string"}},
+        keyword: "#/$defs/value",
+    }
+
+    with pytest.raises(RuntimeError, match="dynamische/rekursive"):
+        limits.validate_mcp_server_metadata(
+            server_name="hostile",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_nested_schema_resources_are_rejected() -> None:
+    schema = {
+        "$defs": {
+            "value": {
+                "$id": "#value",
+                "type": "string",
+            }
+        },
+        "$ref": "#value",
+    }
+
+    with pytest.raises(RuntimeError, match=r"verschachteltes \$id"):
+        limits.validate_mcp_server_metadata(
+            server_name="hostile",
+            instructions=None,
+            tools=[tool(schema=schema)],
+        )
+
+
+def test_argument_node_and_depth_limits_are_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = {"type": "object"}
+
+    monkeypatch.setattr(limits, "MAX_MCP_ARGUMENT_NODES", 3)
+    with pytest.raises(RuntimeError, match="Argument-Knotenlimit"):
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"a": [1, 2, 3]},
+        )
+
+    monkeypatch.setattr(limits, "MAX_MCP_ARGUMENT_NODES", 20_000)
+    monkeypatch.setattr(limits, "MAX_MCP_ARGUMENT_DEPTH", 2)
+    with pytest.raises(RuntimeError, match="Argument-Tiefenlimit"):
+        limits.validate_mcp_tool_arguments(
+            tool_name="external__search",
+            schema=schema,
+            arguments={"a": {"b": {"c": 1}}},
+        )
