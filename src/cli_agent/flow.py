@@ -293,6 +293,17 @@ def _reserved_flow_input_paths(
             must_exist=True,
         )
         reserved[_filesystem_path_key(prompt_path)] = prompt_path
+        if step.conversation_final_prompt_file is not None:
+            final_prompt_path = _workspace_path(
+                workspace,
+                step.conversation_final_prompt_file,
+                purpose=(
+                    f"Finale Conversation-Prompt-Datei von Schritt "
+                    f"{step.step_id!r}"
+                ),
+                must_exist=True,
+            )
+            reserved[_filesystem_path_key(final_prompt_path)] = final_prompt_path
 
         for context_path in _contexts_for_step(
             step,
@@ -1575,14 +1586,37 @@ def validate_flow(
         )
         prompt = prepare_prompt_file(workspace, prompt_path)
         template = PromptTemplate.parse(prompt.content)
+        templates = [template]
+        if step.conversation_final_prompt_file is not None:
+            final_prompt_path = _workspace_path(
+                workspace,
+                step.conversation_final_prompt_file,
+                purpose=(
+                    f"Finale Conversation-Prompt-Datei von Schritt "
+                    f"{step.step_id!r}"
+                ),
+                must_exist=True,
+            )
+            final_prompt = prepare_prompt_file(workspace, final_prompt_path)
+            final_template = PromptTemplate.parse(final_prompt.content)
+            templates.append(final_template)
+            for name in final_template.variables:
+                raw = step.variables.get(name)
+                if raw is not None and _CONVERSATION_ITEM_EXPR.search(raw):
+                    raise ValueError(
+                        f"Finaler Conversation-Prompt von Schritt "
+                        f"{step.step_id!r} kann Variable {name!r} mit "
+                        "${conversation.item...} nicht verwenden."
+                    )
+
         supplied = set(step.variables)
-        required = set(template.variables)
-        unknown = sorted(supplied - required)
-        missing = [
+        required = {
             name
-            for name in template.variables
-            if name not in supplied
-        ]
+            for current_template in templates
+            for name in current_template.variables
+        }
+        unknown = sorted(supplied - required)
+        missing = sorted(required - supplied)
         if unknown:
             raise ValueError(
                 f"Schritt {step.step_id!r} setzt unbekannte "
@@ -1664,6 +1698,16 @@ def validate_flow(
                     f"foreach-Quelle {source_id!r} ist nicht vor "
                     f"Schritt {step.step_id!r} verfügbar."
                 )
+
+        if isinstance(step.conversation_items, str):
+            source_match = _FOREACH.fullmatch(step.conversation_items)
+            if source_match is not None:
+                source_id = source_match.group(1)
+                if source_id not in produced:
+                    raise ValueError(
+                        f"conversation_items-Quelle {source_id!r} ist nicht vor "
+                        f"Schritt {step.step_id!r} verfügbar."
+                    )
 
         produced.add(step.step_id)
 
