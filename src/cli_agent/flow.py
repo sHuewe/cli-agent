@@ -1236,6 +1236,47 @@ def _existing_json_checkpoint(
     )
 
 
+def _previous_output_from_snapshot(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+    fingerprints: dict[tuple[str, str], bytes | None],
+) -> Any:
+    if not _uses_previous_output(step):
+        return None
+    assert output is not None
+    key = _checkpoint_snapshot_key(step, output)
+    if key not in fingerprints:
+        raise ValueError(
+            f"previous_output von Schritt {step.step_id!r} konnte beim "
+            "Run-Start nicht eindeutig bestimmt werden."
+        )
+    expected_fingerprint = fingerprints[key]
+    if expected_fingerprint is None:
+        return None
+
+    text = _existing_json_output(
+        step,
+        workspace=workspace,
+        output=output,
+    )
+    if text is None:
+        raise ValueError(
+            f"previous_output von Schritt {step.step_id!r} wurde nach dem "
+            f"Run-Start entfernt: {output}"
+        )
+    if _checkpoint_fingerprint(text) != expected_fingerprint:
+        raise ValueError(
+            f"previous_output von Schritt {step.step_id!r} wurde nach dem "
+            f"Run-Start verändert: {output}"
+        )
+    return _parse_structured_output(
+        text,
+        step_id=step.step_id,
+    )
+
+
 def _prepare_flow_output(
     step: FlowStep,
     *,
@@ -1262,7 +1303,7 @@ def _prepare_flow_output(
 class _RunStartSnapshot:
     checkpoint_fingerprints: dict[tuple[str, str], bytes]
     checkpoint_paths: tuple[Path, ...]
-    previous_outputs: dict[tuple[str, str], str | None]
+    previous_output_fingerprints: dict[tuple[str, str], bytes | None]
 
 
 def _uses_previous_output(step: FlowStep) -> bool:
@@ -1287,7 +1328,10 @@ def _snapshot_initial_flow_state(
 
     fingerprints: dict[tuple[str, str], bytes] = {}
     paths: dict[str, Path] = {}
-    previous_outputs: dict[tuple[str, str], str | None] = {}
+    previous_output_fingerprints: dict[
+        tuple[str, str],
+        bytes | None,
+    ] = {}
     available_outputs: dict[str, str] = {}
 
     def remember_checkpoint(
@@ -1306,11 +1350,16 @@ def _snapshot_initial_flow_state(
         output: Path,
     ) -> None:
         key = _checkpoint_snapshot_key(step, output)
-        previous_outputs[key] = _existing_json_output(
+        text = _existing_json_output(
             step,
             workspace=workspace,
             output=output,
         )
+        if text is None:
+            previous_output_fingerprints[key] = None
+            return
+        previous_output_fingerprints[key] = _checkpoint_fingerprint(text)
+        paths[_filesystem_path_key(output)] = output
 
     for step in flow.steps:
         if step.foreach is None:
@@ -1417,7 +1466,7 @@ def _snapshot_initial_flow_state(
     return _RunStartSnapshot(
         checkpoint_fingerprints=fingerprints,
         checkpoint_paths=tuple(paths.values()),
-        previous_outputs=previous_outputs,
+        previous_output_fingerprints=previous_output_fingerprints,
     )
 
 
@@ -1911,7 +1960,9 @@ async def run_flow(
         run_start_snapshot.checkpoint_fingerprints
     )
     initial_checkpoint_paths = run_start_snapshot.checkpoint_paths
-    initial_previous_outputs = run_start_snapshot.previous_outputs
+    initial_previous_output_fingerprints = (
+        run_start_snapshot.previous_output_fingerprints
+    )
     mutation_protected_paths = tuple(
         dict.fromkeys(
             (
@@ -2135,23 +2186,20 @@ async def run_flow(
                 )
                 continue
 
-            previous_output: Any = None
-            if _uses_previous_output(step):
-                assert output is not None
-                previous_key = _checkpoint_snapshot_key(step, output)
-                if previous_key not in initial_previous_outputs:
+            try:
+                previous_output = _previous_output_from_snapshot(
+                    step,
+                    workspace=workspace,
+                    output=output,
+                    fingerprints=initial_previous_output_fingerprints,
+                )
+            except ValueError as exc:
+                if step.foreach is not None and _uses_previous_output(step):
                     raise ValueError(
-                        f"previous_output von Schritt {step.step_id!r}{suffix} "
-                        "konnte beim Run-Start nicht bestimmt werden. "
-                        "Bei foreach muss die Quelle vollständig aus "
+                        f"{exc} Bei foreach muss die Quelle vollständig aus "
                         "Run-Start-Checkpoints ableitbar sein."
-                    )
-                previous_text = initial_previous_outputs[previous_key]
-                if previous_text is not None:
-                    previous_output = _parse_structured_output(
-                        previous_text,
-                        step_id=step.step_id,
-                    )
+                    ) from exc
+                raise
 
             contexts = _contexts_for_step(
                 step,
