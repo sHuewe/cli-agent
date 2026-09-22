@@ -491,6 +491,11 @@ der vollständige Platzhalter `${previous_output}` gleich `null`. Bei
 Details zu Run-Start-Snapshot, Sicherheit und den Voraussetzungen für
 `foreach` stehen unter [Multi-Step-Flows](docs/flow.md#initialzustand-laden-und-weiterbearbeiten).
 
+Outputs vorheriger Flow-Schritte können direkt als Prompt-Variablen
+weitergereicht werden. Mit `${steps.<id>.output.<feld>}` lassen sich Felder
+eines JSON-Outputs lesen; `${steps.<id>.output}` übernimmt den vollständigen
+Output. Referenzen sind nur auf bereits vorher ausgeführte Steps zulässig.
+
 Ein Flow-Step kann optional mehrere Prompt-Turns in derselben
 Agent-Session ausführen. Mit `conversation_items` wird der Step-Prompt für
 jedes Element erneut gerendert; das aktuelle Element steht als
