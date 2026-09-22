@@ -120,16 +120,17 @@ def test_worker_uses_hard_subprocess_timeout(monkeypatch: pytest.MonkeyPatch) ->
 def test_original_branching_ref_attack_is_wallclock_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The original F-01 PoC grows exponentially. The exact CPU speed is not a
-    # security assumption: the parent terminates the disposable worker at the
-    # configured wall-clock deadline.
-    monkeypatch.setattr(guard, "MCP_SCHEMA_METADATA_TIMEOUT_SECONDS", 0.5)
+    # F-01 is triggered during argument validation, not while merely checking
+    # the schema. A non-matching value makes every duplicated anyOf branch fail
+    # and forces jsonschema to explore the exponentially expanding tree. The
+    # parent must terminate that disposable worker at the wall-clock deadline.
+    monkeypatch.setattr(guard, "MCP_SCHEMA_ARGUMENT_TIMEOUT_SECONDS", 0.5)
 
     with pytest.raises(RuntimeError, match="Zeitlimit"):
-        guard.validate_mcp_server_metadata(
-            server_name="hostile",
-            instructions=None,
-            tools=[tool(schema=_branching_ref_schema(20))],
+        guard.validate_mcp_tool_arguments(
+            tool_name="hostile__search",
+            schema=_branching_ref_schema(20),
+            arguments={"not": "a string"},
         )
 
 
