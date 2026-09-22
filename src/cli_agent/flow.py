@@ -1944,7 +1944,6 @@ async def run_flow(
                     workspace=workspace,
                     item=item,
                     iteration_id=iteration_id,
-                    previous_output=previous_output,
                 )
                 for item, iteration_id in zip(items, iteration_ids)
             ]
