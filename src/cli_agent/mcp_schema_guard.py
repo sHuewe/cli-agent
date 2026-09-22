@@ -18,6 +18,7 @@ MCP_SCHEMA_METADATA_TIMEOUT_SECONDS = 2.0
 MCP_SCHEMA_ARGUMENT_TIMEOUT_SECONDS = 1.0
 MAX_MCP_SCHEMA_WORKER_REQUEST_BYTES = 64_000_000
 MAX_MCP_SCHEMA_WORKER_RESPONSE_BYTES = 64_000
+MAX_MCP_VALIDATION_ERROR_CHARS = 8_000
 MAX_MCP_SCHEMA_PARENT_NODES = 25_000
 MAX_MCP_SCHEMA_PARENT_DEPTH = 128
 
@@ -66,6 +67,18 @@ def _validate_parent_structure(value: Any, *, label: str) -> None:
             stack.extend((child, depth + 1) for child in current.values())
         elif isinstance(current, list):
             stack.extend((child, depth + 1) for child in current)
+
+
+def _truncate_validation_error(message: str | None) -> str | None:
+    """Keep schema rejections useful without overflowing the worker response."""
+
+    if message is None or len(message) <= MAX_MCP_VALIDATION_ERROR_CHARS:
+        return message
+    marker = " … [Validierungsfehler gekürzt] … "
+    remaining = MAX_MCP_VALIDATION_ERROR_CHARS - len(marker)
+    head = remaining // 2
+    tail = remaining - head
+    return f"{message[:head]}{marker}{message[-tail:]}"
 
 
 def _run_worker(
@@ -286,13 +299,14 @@ def _handle_request(request: Any) -> dict[str, Any]:
             or not isinstance(arguments, dict)
         ):
             raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")
+        validation_error = mcp_limits.validate_mcp_tool_arguments(
+            tool_name=tool_name,
+            schema=schema,
+            arguments=arguments,
+        )
         return {
             "ok": True,
-            "validation_error": mcp_limits.validate_mcp_tool_arguments(
-                tool_name=tool_name,
-                schema=schema,
-                arguments=arguments,
-            ),
+            "validation_error": _truncate_validation_error(validation_error),
         }
 
     raise RuntimeError("Unbekannte JSON-Schema-Worker-Operation.")
