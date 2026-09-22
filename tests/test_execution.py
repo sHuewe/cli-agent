@@ -9,10 +9,12 @@ import pytest
 from cli_agent.admin_config import AdminConfig
 from cli_agent.config import AppConfig, ModelConfig
 from cli_agent.execution import (
+    ConversationRunOptions,
     ExecutionDependencies,
     OneShotRunOptions,
     apply_workspace_access_override,
     build_preapproval_callback,
+    run_conversation,
     run_once,
 )
 from cli_agent.file_context import FileContext
@@ -565,6 +567,82 @@ def test_run_once_rejects_excluded_paths_without_os_access(
                     workspace=tmp_path,
                     prompt="work",
                     excluded_paths=(Path("flow"),),
+                )
+            )
+        )
+
+
+
+def test_run_conversation_reuses_one_agent_for_all_prompts(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        instances = 0
+
+        def __init__(self, _workspace, _model_client, _servers, **kwargs):
+            type(self).instances += 1
+            captured["response_format"] = kwargs["response_format"]
+            captured["prompts"] = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            captured["prompts"].append(prompt)
+            if prompt == "tokens":
+                return "usage"
+            return f"answer:{prompt}"
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+
+    result = asyncio.run(
+        run_conversation(
+            ConversationRunOptions(
+                workspace=tmp_path,
+                prompts=("one", "two", "final"),
+                response_format="json",
+            ),
+            dependencies=dependencies,
+        )
+    )
+
+    assert FakeAgent.instances == 1
+    assert captured["prompts"] == ["one", "two", "final", "tokens"]
+    assert captured["response_format"] == "json"
+    assert result.answer == "answer:final"
+    assert result.usage == "usage"
+
+
+def test_run_conversation_rejects_empty_or_blank_prompts(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="mindestens einen Prompt"):
+        asyncio.run(
+            run_conversation(
+                ConversationRunOptions(
+                    workspace=tmp_path,
+                    prompts=(),
+                )
+            )
+        )
+
+    with pytest.raises(ValueError, match="dürfen nicht leer sein"):
+        asyncio.run(
+            run_conversation(
+                ConversationRunOptions(
+                    workspace=tmp_path,
+                    prompts=("ok", "   "),
                 )
             )
         )
