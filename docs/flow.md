@@ -303,17 +303,68 @@ erhalten: eine vorhandene Datei bei `overwrite_output = false` ist ein Fehler.
 Ein vorhandener, aber ungültiger JSON-Checkpoint führt ebenfalls zu einem Fehler
 und wird niemals still überschrieben.
 
-Bei `foreach` können konkrete Checkpoints bereits beim Run-Start gesichert
-werden, wenn die `foreach`-Quelle selbst aus einem vorhandenen statischen
-JSON-Checkpoint stammt. Das ist beispielsweise bei einem vorhandenen
-Planungs-JSON der Fall: Aus dessen Items werden die konkreten Iterations-IDs und
-Output-Pfade bestimmt, vorhandene Status-Checkpoints werden vor dem ersten
-Modellaufruf validiert und gegen spätere Änderungen abgesichert.
+Ein JSON-Step mit `overwrite_output = true` kann den **beim Run-Start
+vorhandenen Inhalt seines eigenen Outputs** zusätzlich über
+`${previous_output}` in Prompt-Variablen verwenden:
 
-Wird die `foreach`-Quelle dagegen erst im aktuellen Run vom Modell erzeugt,
-gelten Dateien an den daraus berechneten Output-Pfaden nicht als Resume-
-Checkpoints. Existieren sie zu diesem Zeitpunkt bereits, wird der normale
-Output-Kollisionsfehler ausgelöst.
+```toml
+[[steps]]
+id = "update_state"
+prompt_file = "prompts/update-state.md"
+response_format = "json"
+output = "state/result.json"
+overwrite_output = true
+
+[steps.vars]
+previous = "${previous_output}"
+count = "${previous_output.count}"
+```
+
+`${previous_output}` wird als JSON serialisiert. Verschachtelte Objektfelder
+können analog zu `${item...}` adressiert werden. Existierte die Output-Datei
+beim Run-Start nicht, ergibt der vollständige Platzhalter
+`${previous_output}` den JSON-Wert `null`. Ein Zugriff auf ein Unterfeld
+eines nicht vorhandenen Initialzustands ist dagegen ein Fehler.
+
+Das Feature ist absichtlich nur für `response_format = "json"`, gesetztes
+`output` und `overwrite_output = true` zulässig. Der Initialzustand wird
+durch den Run-Start-Snapshot festgelegt. Ein später im selben Run erzeugter oder
+veränderter Dateiinhalt wird niemals still als `previous_output` übernommen.
+War die Datei beim Run-Start vorhanden, wird ihre Integrität vor der Verwendung
+überprüft. Bei Conversation-Steps sehen alle Turns derselben äußeren Iteration
+denselben `previous_output`; erst die letzte Assistant-Antwort wird als neuer
+Output geschrieben.
+
+Bei `foreach` wird `previous_output` pro konkreter Iterations-Output-Datei
+bestimmt. Dafür müssen die Iterationen bereits beim Run-Start aus vorhandenen
+Checkpoints ableitbar sein. Ist die `foreach`-Quelle erst durch Modellarbeit im
+aktuellen Run bekannt, wird der Flow mit einer klaren Fehlermeldung beendet,
+statt eine später gefundene Datei als Initialzustand zu interpretieren.
+
+Auch die Resume-Auflösung für `foreach` ist rekursiv. Ist ein kompletter
+`foreach` bereits aus Run-Start-Checkpoints rekonstruierbar, wird daraus sein
+aggregierter `steps.<id>.output` einschließlich `iterations` aufgebaut.
+Dadurch können auch nachgelagerte Ketten wie
+
+```text
+statischer JSON-Checkpoint
+  -> foreach A
+  -> steps.A.output.iterations
+  -> foreach B
+  -> steps.B.output.iterations
+  -> foreach C
+```
+
+bereits vor dem ersten Modellaufruf auf vorhandene Checkpoints geprüft werden.
+Eine nachgelagerte Iteration wird nur dann als Resume-Checkpoint akzeptiert,
+wenn ihre komplette vorgelagerte Quelle aus dem Run-Start-Zustand
+rekonstruierbar ist.
+
+Wird eine benötigte `foreach`-Quelle dagegen erst im aktuellen Run vom Modell
+erzeugt oder ist eine vorgelagerte Checkpoint-Kette unvollständig, gelten
+Dateien an den daraus später berechneten Output-Pfaden nicht als
+Resume-Checkpoints. Existieren sie zu diesem Zeitpunkt bereits, wird weiterhin
+der normale Output-Kollisionsfehler ausgelöst.
 
 ### Stabile IDs für foreach-Iterationen
 
