@@ -37,6 +37,7 @@ MAX_MCP_SCHEMA_DEPTH = 64
 MAX_MCP_SCHEMA_REF_DEPTH = 32
 MAX_MCP_SCHEMA_EXPANSION_COST = 20_000
 MAX_MCP_VALIDATION_WORK = 1_000_000
+MAX_MCP_UNIQUE_ITEMS_COMPARISONS = 1_000_000
 MAX_MCP_ARGUMENT_NODES = 20_000
 MAX_MCP_ARGUMENT_DEPTH = 64
 
@@ -408,6 +409,22 @@ def _safe_unevaluated_properties_draft2019(
             yield ValidationError(error % _extras_msg(unevaluated_keys))
 
 
+def _bounded_unique_items_validator(original):
+    def _bounded_unique_items(validator, unique, instance, schema):
+        if unique and validator.is_type(instance, "array"):
+            comparisons = len(instance) * max(len(instance) - 1, 0) // 2
+            if comparisons > MAX_MCP_UNIQUE_ITEMS_COMPARISONS:
+                raise RuntimeError(
+                    "MCP-Tool-Argument überschreitet das uniqueItems-"
+                    "Validierungsbudget "
+                    f"({comparisons} > "
+                    f"{MAX_MCP_UNIQUE_ITEMS_COMPARISONS} Vergleiche)."
+                )
+        yield from original(validator, unique, instance, schema)
+
+    return _bounded_unique_items
+
+
 def _safe_validator_class(base_validator: type) -> type:
     safe = _SAFE_VALIDATOR_CLASSES.get(base_validator)
     if safe is not None:
@@ -418,6 +435,11 @@ def _safe_validator_class(base_validator: type) -> type:
         "patternProperties": _safe_pattern_properties,
         "additionalProperties": _safe_additional_properties,
     }
+    unique_items_validator = base_validator.VALIDATORS.get("uniqueItems")
+    if unique_items_validator is not None:
+        overrides["uniqueItems"] = _bounded_unique_items_validator(
+            unique_items_validator
+        )
     if base_validator is Draft201909Validator:
         overrides["unevaluatedProperties"] = (
             _safe_unevaluated_properties_draft2019
@@ -552,13 +574,19 @@ def _validate_schema_complexity(
     # property names are data, so e.g. properties["$id"] must not be mistaken
     # for a nested resource keyword.
     single_schema_keywords = {
-        "additionalProperties", "contains", "contentSchema", "else", "if",
-        "items", "not", "propertyNames", "then", "unevaluatedItems",
-        "unevaluatedProperties",
+        "additionalItems", "additionalProperties", "contains",
+        "contentSchema", "else", "if", "not", "propertyNames", "then",
+        "unevaluatedItems", "unevaluatedProperties",
+    }
+    schema_or_schema_list_keywords = {
+        # Draft 3/4/6/7 use an array-valued "items" for tuple validation.
+        # Draft 3 also has schema/list forms for "extends", "type", and
+        # "disallow". Modern drafts simply ignore the non-schema variants here.
+        "items", "extends", "type", "disallow",
     }
     schema_map_keywords = {
-        "$defs", "definitions", "dependentSchemas", "patternProperties",
-        "properties",
+        "$defs", "definitions", "dependencies", "dependentSchemas",
+        "patternProperties", "properties",
     }
     schema_list_keywords = {"allOf", "anyOf", "oneOf", "prefixItems"}
     stack: list[tuple[Any, bool]] = [(schema, True)]
@@ -583,6 +611,18 @@ def _validate_schema_complexity(
             child = current.get(keyword)
             if isinstance(child, dict):
                 stack.append((child, False))
+
+        for keyword in schema_or_schema_list_keywords:
+            child = current.get(keyword)
+            if isinstance(child, dict):
+                stack.append((child, False))
+            elif isinstance(child, list):
+                stack.extend(
+                    (subschema, False)
+                    for subschema in child
+                    if isinstance(subschema, dict)
+                )
+
         for keyword in schema_map_keywords:
             children = current.get(keyword)
             if isinstance(children, dict):
