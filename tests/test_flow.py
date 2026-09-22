@@ -3541,3 +3541,325 @@ id = "${item.id}"
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
+
+
+
+def test_flow_static_conversation_items_run_in_one_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text(
+        "dir={{var:directory}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "update"
+config = "config.toml"
+prompt_file = "prompt.md"
+conversation_items = ["operations", "application", "rules"]
+response_format = "json"
+
+[steps.vars]
+directory = "${conversation.item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    conversations = []
+
+    async def fail_run_once(*_args, **_kwargs):
+        raise AssertionError("conversation step must not use run_once")
+
+    async def fake_run_conversation(options, *, dependencies=None):
+        conversations.append(options)
+        return SimpleNamespace(
+            answer='{"processed":["operations","application","rules"]}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fail_run_once)
+    monkeypatch.setattr(
+        flow_module,
+        "run_conversation",
+        fake_run_conversation,
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(conversations) == 1
+    assert conversations[0].prompts == (
+        "dir=operations",
+        "dir=application",
+        "dir=rules",
+    )
+    assert conversations[0].response_format == "json"
+
+
+def test_flow_conversation_items_from_foreach_item(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text(
+        "concept={{var:concept}} dir={{var:directory}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+conversation_items = "${item.dirs}"
+response_format = "json"
+
+[steps.vars]
+concept = "${item.id}"
+directory = "${conversation.item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    conversations = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        assert options.prompt == "discover"
+        return SimpleNamespace(
+            answer=(
+                '{"items":['
+                '{"id":"auth","dirs":["operations","rules"]},'
+                '{"id":"logging","dirs":["application"]}'
+                ']}'
+            ),
+            web_context_statuses=(),
+        )
+
+    async def fake_run_conversation(options, *, dependencies=None):
+        conversations.append(options)
+        return SimpleNamespace(
+            answer='{"status":"success"}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module,
+        "run_conversation",
+        fake_run_conversation,
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompts for call in conversations] == [
+        (
+            "concept=auth dir=operations",
+            "concept=auth dir=rules",
+        ),
+        ("concept=logging dir=application",),
+    ]
+    assert [call.dump_file_prefix for call in conversations] == [
+        "process.auth",
+        "process.logging",
+    ]
+
+
+def test_flow_conversation_items_from_step_output_with_optional_final_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "turn.md").write_text(
+        "dir={{var:directory}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "final.md").write_text(
+        "final {{var:concept}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "plan"
+config = "config.toml"
+prompt_file = "plan.md"
+
+[[steps]]
+id = "update"
+config = "config.toml"
+prompt_file = "turn.md"
+conversation_items = "steps.plan.output.dirs"
+conversation_final_prompt_file = "final.md"
+response_format = "json"
+
+[steps.vars]
+directory = "${conversation.item}"
+concept = "cross-links"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    conversations = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(
+            answer='{"dirs":["operations","application"]}',
+            web_context_statuses=(),
+        )
+
+    async def fake_run_conversation(options, *, dependencies=None):
+        conversations.append(options)
+        return SimpleNamespace(
+            answer='{"status":"success"}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module,
+        "run_conversation",
+        fake_run_conversation,
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    validate_flow(definition, workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert conversations[0].prompts == (
+        "dir=operations",
+        "dir=application",
+        "final cross-links",
+    )
+
+
+def test_flow_empty_conversation_items_require_final_prompt_at_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "turn.md").write_text(
+        "dir={{var:directory}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "plan"
+config = "config.toml"
+prompt_file = "plan.md"
+
+[[steps]]
+id = "update"
+config = "config.toml"
+prompt_file = "turn.md"
+conversation_items = "steps.plan.output.dirs"
+
+[steps.vars]
+directory = "${conversation.item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(
+            answer='{"dirs":[]}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="ist leer"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+
+def test_flow_empty_conversation_items_can_run_final_prompt_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "turn.md").write_text(
+        "dir={{var:directory}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "final.md").write_text("finish", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "update"
+config = "config.toml"
+prompt_file = "turn.md"
+conversation_items = []
+conversation_final_prompt_file = "final.md"
+
+[steps.vars]
+directory = "${conversation.item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    conversations = []
+
+    async def fake_run_conversation(options, *, dependencies=None):
+        conversations.append(options)
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(
+        flow_module,
+        "run_conversation",
+        fake_run_conversation,
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert conversations[0].prompts == ("finish",)
+
+
+def test_flow_rejects_conversation_placeholder_without_conversation_items(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "prompt.md").write_text(
+        "dir={{var:directory}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "update"
+prompt_file = "prompt.md"
+
+[steps.vars]
+directory = "${conversation.item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="ohne conversation_items"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
