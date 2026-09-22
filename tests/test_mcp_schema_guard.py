@@ -295,3 +295,29 @@ def test_request_transmission_consumes_request_deadline() -> None:
     assert time.monotonic() - started < 0.5
     assert process.killed is True
     assert worker._process is None
+
+
+def test_partial_worker_pipe_writes_are_completed() -> None:
+    class PartialStdin:
+        def __init__(self) -> None:
+            self.data = bytearray()
+
+        def write(self, data: bytes) -> int:
+            count = min(3, len(data))
+            self.data.extend(data[:count])
+            return count
+
+        def flush(self) -> None:
+            return None
+
+    process = SimpleNamespace(stdin=PartialStdin())
+    worker = guard._PersistentSchemaWorker()
+
+    assert worker._write_payload_locked(
+        process,
+        b'abc123',
+        deadline=time.monotonic() + 1.0,
+        operation="test-validation",
+        timeout_seconds=1.0,
+    )
+    assert bytes(process.stdin.data) == b'abc123\n'
