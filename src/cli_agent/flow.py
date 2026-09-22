@@ -1986,67 +1986,100 @@ async def run_flow(
                 )
                 continue
 
-            prompt = _prompt_for_iteration(
-                step,
-                workspace=workspace,
-                item=item,
-                iteration_id=iteration_id,
-            )
             contexts = _contexts_for_step(
                 step,
                 workspace=workspace,
             )
-
-            result = await run_once(
-                OneShotRunOptions(
-                    workspace=workspace,
-                    prompt=prompt,
-                    config_file=(
-                        _resolve_config(
-                            step,
-                            flow_dir=flow_dir,
-                        )
-                        if step.config is not None
-                        else None
-                    ),
-                    model=step.model,
-                    workspace_access=step.workspace_access,
-                    retry_policy=step.retry_policy,
-                    response_format=step.response_format,
-                    context_files=contexts,
-                    add_web_context=step.add_web_context,
-                    output=output,
-                    overwrite_output=step.overwrite_output,
-                    approval_callback=build_preapproval_callback(
-                        step.approve_tools,
-                        fallback=approval_callback,
-                    ),
-                    mutation_protected_paths=mutation_protected_paths,
-                    excluded_paths=(
-                        tuple(
-                            dict.fromkeys(
-                                (
-                                    *flow.excluded_paths,
-                                    *step.excluded_paths,
-                                )
-                            )
-                        )
-                        if step.workspace_access in {"read", "write"}
-                        else ()
-                    ),
-                    dump_file_prefix=_dump_prefix_for_iteration(
-                        step,
-                        index=index,
-                        case_colliding_step_ids=case_colliding_step_ids,
-                        iteration_id=(
-                            iteration_id
-                            if step.iteration_id is not None
-                            else None
-                        ),
-                    ),
-                ),
-                dependencies=deps,
+            config_file = (
+                _resolve_config(
+                    step,
+                    flow_dir=flow_dir,
+                )
+                if step.config is not None
+                else None
             )
+            callback = build_preapproval_callback(
+                step.approve_tools,
+                fallback=approval_callback,
+            )
+            excluded_paths = (
+                tuple(
+                    dict.fromkeys(
+                        (
+                            *flow.excluded_paths,
+                            *step.excluded_paths,
+                        )
+                    )
+                )
+                if step.workspace_access in {"read", "write"}
+                else ()
+            )
+            dump_file_prefix = _dump_prefix_for_iteration(
+                step,
+                index=index,
+                case_colliding_step_ids=case_colliding_step_ids,
+                iteration_id=(
+                    iteration_id
+                    if step.iteration_id is not None
+                    else None
+                ),
+            )
+
+            conversation_prompts = _conversation_prompts_for_iteration(
+                step,
+                workspace=workspace,
+                outputs=outputs,
+                item=item,
+                iteration_id=iteration_id,
+            )
+            if conversation_prompts is None:
+                prompt = _prompt_for_iteration(
+                    step,
+                    workspace=workspace,
+                    item=item,
+                    iteration_id=iteration_id,
+                )
+                result = await run_once(
+                    OneShotRunOptions(
+                        workspace=workspace,
+                        prompt=prompt,
+                        config_file=config_file,
+                        model=step.model,
+                        workspace_access=step.workspace_access,
+                        retry_policy=step.retry_policy,
+                        response_format=step.response_format,
+                        context_files=contexts,
+                        add_web_context=step.add_web_context,
+                        output=output,
+                        overwrite_output=step.overwrite_output,
+                        approval_callback=callback,
+                        mutation_protected_paths=mutation_protected_paths,
+                        excluded_paths=excluded_paths,
+                        dump_file_prefix=dump_file_prefix,
+                    ),
+                    dependencies=deps,
+                )
+            else:
+                result = await run_conversation(
+                    ConversationRunOptions(
+                        workspace=workspace,
+                        prompts=conversation_prompts,
+                        config_file=config_file,
+                        model=step.model,
+                        workspace_access=step.workspace_access,
+                        retry_policy=step.retry_policy,
+                        response_format=step.response_format,
+                        context_files=contexts,
+                        add_web_context=step.add_web_context,
+                        output=output,
+                        overwrite_output=step.overwrite_output,
+                        approval_callback=callback,
+                        mutation_protected_paths=mutation_protected_paths,
+                        excluded_paths=excluded_paths,
+                        dump_file_prefix=dump_file_prefix,
+                    ),
+                    dependencies=deps,
+                )
             record_iteration_answer(
                 result.answer,
                 iteration_id,
