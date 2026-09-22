@@ -933,8 +933,6 @@ def _render_dynamic_text(
                 raise ValueError("${iteration.id} ist ohne foreach nicht verfügbar.")
             value: Any = iteration_id
         elif match.group("item_path") is not None or match.group(0).startswith("${item"):
-            if item is None:
-                raise ValueError("${item...} ist ohne foreach nicht verfügbar.")
             value = _lookup(
                 item,
                 match.group("item_path"),
