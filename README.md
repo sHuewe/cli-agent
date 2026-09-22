@@ -463,6 +463,34 @@ title = "${item.title}"
 
 Pro Step kann `add_file_context` entweder als einzelner Pfad oder als Liste mehrerer workspace-lokaler Referenzdateien gesetzt werden, z. B. `add_file_context = ["manual.txt", "architecture.md"]`. Im normalen CLI sind `--add-file-context` und sein Alias `--context-file` dafür wiederholbar. `add_web_context = ["...", ...]` akzeptiert weiterhin einen oder mehrere Web-Kontexte. Für alle Dateien gelten dieselben Workspace-, Sensitive-Path-, Symlink-, Hardlink- und Größenprüfungen; zusätzlich ist die Gesamtgröße aller ausgewählten Dateikontexte begrenzt.
 
+JSON-Steps können außerdem einen bereits vorhandenen eigenen Output als
+**Initialzustand laden und weiterbearbeiten**. Dazu werden
+`response_format = "json"`, `output` und `overwrite_output = true`
+kombiniert. Der beim Start des Flow-Laufs vorhandene JSON-Inhalt steht dann über
+`${previous_output}` bzw. `${previous_output.<feld>}` in den
+Step-Variablen zur Verfügung:
+
+```toml
+[[steps]]
+id = "update_state"
+prompt_file = "prompts/update-state.md"
+response_format = "json"
+output = "state/result.json"
+overwrite_output = true
+
+[steps.vars]
+previous = "${previous_output}"
+status = "${previous_output.status}"
+```
+
+Anders als bei einem Resume-Checkpoint wird der Step dabei **nicht**
+übersprungen: Der vorhandene Output ist nur der Startzustand und die finale
+JSON-Antwort ersetzt ihn. Existierte die Output-Datei beim Run-Start nicht, ist
+der vollständige Platzhalter `${previous_output}` gleich `null`. Bei
+`foreach` gilt der Initialzustand entsprechend pro Iterations-Output-Datei.
+Details zu Run-Start-Snapshot, Sicherheit und den Voraussetzungen für
+`foreach` stehen unter [Multi-Step-Flows](docs/flow.md#initialzustand-laden-und-weiterbearbeiten).
+
 Ein Flow-Step kann optional mehrere Prompt-Turns in derselben
 Agent-Session ausführen. Mit `conversation_items` wird der Step-Prompt für
 jedes Element erneut gerendert; das aktuelle Element steht als

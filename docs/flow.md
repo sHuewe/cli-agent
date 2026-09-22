@@ -303,9 +303,15 @@ erhalten: eine vorhandene Datei bei `overwrite_output = false` ist ein Fehler.
 Ein vorhandener, aber ungültiger JSON-Checkpoint führt ebenfalls zu einem Fehler
 und wird niemals still überschrieben.
 
-Ein JSON-Step mit `overwrite_output = true` kann den **beim Run-Start
-vorhandenen Inhalt seines eigenen Outputs** zusätzlich über
-`${previous_output}` in Prompt-Variablen verwenden:
+### Initialzustand laden und weiterbearbeiten
+
+Neben Resume kann ein Step einen vorhandenen JSON-Output bewusst als
+**Initialzustand** laden, den Agenten trotzdem ausführen und anschließend eine
+aktualisierte Version wieder in dieselbe Output-Datei schreiben. Dafür wird
+`overwrite_output = true` mit `response_format = "json"` verwendet.
+
+Ein solcher Step kann den **beim Run-Start vorhandenen Inhalt seines eigenen
+Outputs** über `${previous_output}` in Prompt-Variablen verwenden:
 
 ```toml
 [[steps]]
@@ -336,10 +342,23 @@ denselben `previous_output`; erst die letzte Assistant-Antwort wird als neuer
 Output geschrieben.
 
 Bei `foreach` wird `previous_output` pro konkreter Iterations-Output-Datei
-bestimmt. Dafür müssen die Iterationen bereits beim Run-Start aus vorhandenen
-Checkpoints ableitbar sein. Ist die `foreach`-Quelle erst durch Modellarbeit im
-aktuellen Run bekannt, wird der Flow mit einer klaren Fehlermeldung beendet,
-statt eine später gefundene Datei als Initialzustand zu interpretieren.
+bestimmt. Dadurch kann jede Iteration ihren eigenen bereits vorhandenen Zustand
+einlesen, bearbeiten und wieder unter demselben Output-Pfad speichern. Dafür
+müssen die Iterationen bereits beim Run-Start aus vorhandenen Checkpoints
+ableitbar sein. Ist die `foreach`-Quelle erst durch Modellarbeit im aktuellen
+Run bekannt, wird der Flow mit einer klaren Fehlermeldung beendet, statt eine
+später gefundene Datei als Initialzustand zu interpretieren.
+
+Wichtig ist die Abgrenzung zum Resume-Verhalten:
+
+- `overwrite_output = false`: vorhandenes gültiges JSON ist ein
+  **Resume-Checkpoint**; der Step wird übersprungen.
+- `overwrite_output = true` + `${previous_output}`: vorhandenes gültiges JSON
+  ist der **Initialzustand**; der Step läuft und kann daraus einen neuen Zustand
+  erzeugen.
+- Existiert beim Run-Start noch keine Output-Datei, ist
+  `${previous_output}` gleich `null`; der Step kann damit einen neuen Zustand
+  initialisieren.
 
 Auch die Resume-Auflösung für `foreach` ist rekursiv. Ist ein kompletter
 `foreach` bereits aus Run-Start-Checkpoints rekonstruierbar, wird daraus sein
