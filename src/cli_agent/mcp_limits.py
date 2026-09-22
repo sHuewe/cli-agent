@@ -634,20 +634,22 @@ def _validate_schema_complexity(
 
 def _schema_validator(schema: dict[str, Any], *, tool_name: str):
     _reject_external_schema_references(schema, tool_name=tool_name)
-    try:
-        validator_class = _safe_validator_class(validator_for(schema))
-        validator_class.check_schema(schema)
-    except SchemaError as exc:
-        raise RuntimeError(
-            f"MCP-Tool {tool_name} liefert kein gültiges JSON-Schema."
-        ) from exc
-
+    validator_class = _safe_validator_class(validator_for(schema))
     validator = validator_class(schema)
+
+    # Complexity must be checked before jsonschema.check_schema(): the latter
+    # recursively validates attacker-controlled schema structure itself.
     _validate_schema_complexity(
         schema,
         tool_name=tool_name,
         validator=validator,
     )
+    try:
+        validator_class.check_schema(schema)
+    except SchemaError as exc:
+        raise RuntimeError(
+            f"MCP-Tool {tool_name} liefert kein gültiges JSON-Schema."
+        ) from exc
     return validator
 
 
