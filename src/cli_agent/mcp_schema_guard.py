@@ -272,7 +272,15 @@ class _PersistentSchemaWorker:
         def writer() -> None:
             error: BaseException | None = None
             try:
-                stdin.write(payload + b"\n")
+                message = payload + b"\n"
+                offset = 0
+                while offset < len(message):
+                    written = stdin.write(message[offset:])
+                    if written is None or written <= 0:
+                        raise BrokenPipeError(
+                            "JSON-Schema-Worker-Pipe akzeptiert keine weiteren Daten."
+                        )
+                    offset += written
                 stdin.flush()
             except (BrokenPipeError, OSError, ValueError) as exc:
                 error = exc
