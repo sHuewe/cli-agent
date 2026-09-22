@@ -500,12 +500,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     f"{context_field} darf keine doppelten Dateien enthalten."
                 )
             if any(
-                _ITEM_EXPR.search(value) or _CONVERSATION_ITEM_EXPR.search(value)
+                _ITEM_EXPR.search(value)
+                or _CONVERSATION_ITEM_EXPR.search(value)
+                or _PREVIOUS_OUTPUT_EXPR.search(value)
                 for value in context_strings
             ):
                 raise ValueError(
-                    f"{context_field} darf nicht aus foreach- oder "
-                    "Conversation-Daten parametrisiert werden."
+                    f"{context_field} darf nicht aus foreach-, Conversation- "
+                    "oder previous_output-Daten parametrisiert werden."
                 )
             context_files = tuple(Path(value) for value in context_strings)
 
@@ -531,12 +533,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "doppelten URLs enthalten."
             )
         if any(
-            _ITEM_EXPR.search(value) or _CONVERSATION_ITEM_EXPR.search(value)
+            _ITEM_EXPR.search(value)
+            or _CONVERSATION_ITEM_EXPR.search(value)
+            or _PREVIOUS_OUTPUT_EXPR.search(value)
             for value in add_web_context
         ):
             raise ValueError(
-                f"steps[{index}].add_web_context darf nicht aus foreach- oder "
-                "Conversation-Daten parametrisiert werden."
+                f"steps[{index}].add_web_context darf nicht aus foreach-, "
+                "Conversation- oder previous_output-Daten parametrisiert werden."
             )
 
         config_value = raw.get("config")
@@ -569,10 +573,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if output_value is not None
             else None
         )
-        if output is not None and _CONVERSATION_ITEM_EXPR.search(output):
+        if output is not None and (
+            _CONVERSATION_ITEM_EXPR.search(output)
+            or _PREVIOUS_OUTPUT_EXPR.search(output)
+        ):
             raise ValueError(
-                f"steps[{index}].output darf nicht aus Conversation-Daten "
-                "parametrisiert werden."
+                f"steps[{index}].output darf nicht aus Conversation- oder "
+                "previous_output-Daten parametrisiert werden."
             )
         overwrite_output = raw.get("overwrite_output", False)
         if not isinstance(overwrite_output, bool):
@@ -658,12 +665,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "doppelten Toolnamen enthalten."
             )
         if any(
-            _ITEM_EXPR.search(value) or _CONVERSATION_ITEM_EXPR.search(value)
+            _ITEM_EXPR.search(value)
+            or _CONVERSATION_ITEM_EXPR.search(value)
+            or _PREVIOUS_OUTPUT_EXPR.search(value)
             for value in approve_tools
         ):
             raise ValueError(
-                f"steps[{index}].approve_tools darf nicht aus foreach- oder "
-                "Conversation-Daten parametrisiert werden."
+                f"steps[{index}].approve_tools darf nicht aus foreach-, "
+                "Conversation- oder previous_output-Daten parametrisiert werden."
             )
 
         raw_vars = raw.get("vars", {})
@@ -2198,6 +2207,7 @@ async def run_flow(
                     workspace=workspace,
                     item=item,
                     iteration_id=iteration_id,
+                    previous_output=previous_output,
                 )
                 result = await run_once(
                     OneShotRunOptions(
