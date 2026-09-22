@@ -118,6 +118,26 @@ def test_flow_cli_reports_validation_error(
     assert "Fehler: ValueError:" in capsys.readouterr().err
 
 
+def test_flow_rejects_oversized_static_conversation_items(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    items = ", ".join('"x"' for _ in range(flow_module.MAX_FOREACH_ITEMS + 1))
+    (tmp_path / "flow.toml").write_text(
+        (
+            "version = 1\n\n"
+            "[[steps]]\n"
+            'id = "one"\n'
+            'prompt_file = "prompt.md"\n'
+            f"conversation_items = [{items}]\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="conversation_items.*mehr als"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
 @pytest.mark.parametrize(
     ("flow_text", "message"),
     [
@@ -178,26 +198,6 @@ overwrite_output = "yes"
         ),
     ],
 )
-def test_flow_rejects_oversized_static_conversation_items(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
-    items = ", ".join('"x"' for _ in range(flow_module.MAX_FOREACH_ITEMS + 1))
-    (tmp_path / "flow.toml").write_text(
-        (
-            "version = 1\n\n"
-            "[[steps]]\n"
-            'id = "one"\n'
-            'prompt_file = "prompt.md"\n'
-            f"conversation_items = [{items}]\n"
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="conversation_items.*mehr als"):
-        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-
-
 def test_flow_rejects_invalid_definition_shapes(
     tmp_path: Path,
     flow_text: str,
