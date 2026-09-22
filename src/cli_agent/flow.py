@@ -986,6 +986,11 @@ def _render_dynamic_text(
                 match.group("conversation_path"),
                 label="Conversation-Element",
             )
+        if (
+            is_previous_output
+            and match.group("previous_output_path") is None
+        ):
+            return _json_dumps_preserving_numbers(value)
         if isinstance(value, (dict, list)):
             return _json_dumps_preserving_numbers(value)
         if value is None:
@@ -1889,13 +1894,15 @@ async def run_flow(
         flow,
         workspace=workspace,
     )
-    (
-        initial_checkpoint_fingerprints,
-        initial_checkpoint_paths,
-    ) = _snapshot_initial_checkpoints(
+    run_start_snapshot = _snapshot_initial_flow_state(
         flow,
         workspace=workspace,
     )
+    initial_checkpoint_fingerprints = (
+        run_start_snapshot.checkpoint_fingerprints
+    )
+    initial_checkpoint_paths = run_start_snapshot.checkpoint_paths
+    initial_previous_outputs = run_start_snapshot.previous_outputs
     mutation_protected_paths = tuple(
         dict.fromkeys(
             (
@@ -1928,6 +1935,7 @@ async def run_flow(
                     workspace=workspace,
                     item=item,
                     iteration_id=iteration_id,
+                    previous_output=previous_output,
                 )
                 for item, iteration_id in zip(items, iteration_ids)
             ]
@@ -2119,6 +2127,24 @@ async def run_flow(
                 )
                 continue
 
+            previous_output: Any = None
+            if _uses_previous_output(step):
+                assert output is not None
+                previous_key = _checkpoint_snapshot_key(step, output)
+                if previous_key not in initial_previous_outputs:
+                    raise ValueError(
+                        f"previous_output von Schritt {step.step_id!r}{suffix} "
+                        "konnte beim Run-Start nicht bestimmt werden. "
+                        "Bei foreach muss die Quelle vollständig aus "
+                        "Run-Start-Checkpoints ableitbar sein."
+                    )
+                previous_text = initial_previous_outputs[previous_key]
+                if previous_text is not None:
+                    previous_output = _parse_structured_output(
+                        previous_text,
+                        step_id=step.step_id,
+                    )
+
             contexts = _contexts_for_step(
                 step,
                 workspace=workspace,
@@ -2164,6 +2190,7 @@ async def run_flow(
                 outputs=outputs,
                 item=item,
                 iteration_id=iteration_id,
+                previous_output=previous_output,
             )
             if conversation_prompts is None:
                 prompt = _prompt_for_iteration(
