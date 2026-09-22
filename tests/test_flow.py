@@ -3601,6 +3601,49 @@ directory = "${conversation.item}"
     assert conversations[0].response_format == "json"
 
 
+def test_flow_static_conversation_items_serialize_toml_floats(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text(
+        "item={{var:item}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "update"
+config = "config.toml"
+prompt_file = "prompt.md"
+conversation_items = [{ score = 1.5 }]
+
+[steps.vars]
+item = "${conversation.item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    conversations = []
+
+    async def fake_run_conversation(options, *, dependencies=None):
+        conversations.append(options)
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(
+        flow_module,
+        "run_conversation",
+        fake_run_conversation,
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert conversations[0].prompts == ('item={"score":1.5}',)
+
+
 def test_flow_conversation_items_from_foreach_item(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3815,9 +3858,6 @@ config = "config.toml"
 prompt_file = "turn.md"
 conversation_items = []
 conversation_final_prompt_file = "final.md"
-
-[steps.vars]
-directory = "${conversation.item}"
 """.strip(),
         encoding="utf-8",
     )
@@ -3835,6 +3875,7 @@ directory = "${conversation.item}"
     )
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    validate_flow(definition, workspace=tmp_path)
     asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert conversations[0].prompts == ("finish",)
