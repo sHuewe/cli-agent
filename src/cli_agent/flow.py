@@ -86,6 +86,7 @@ class FlowStep:
     retry_policy: ModelRetryPolicy | None
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
+    global_variables: dict[str, str]
     foreach: str | None
     conversation_items: tuple[Any, ...] | str | None = None
     conversation_final_prompt_file: Path | None = None
@@ -384,7 +385,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             f"Flow-Datei konnte nicht gelesen werden: {exc}"
         ) from exc
 
-    allowed_root = {"version", "steps", "exclude_paths"}
+    allowed_root = {"version", "steps", "exclude_paths", "vars"}
     unknown_root = set(values) - allowed_root
     if unknown_root:
         raise ValueError(
@@ -393,6 +394,26 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
     if values.get("version") != 1:
         raise ValueError("Flow-Datei benötigt version = 1.")
+
+    raw_global_vars = values.get("vars", {})
+    if not isinstance(raw_global_vars, dict):
+        raise ValueError("vars muss eine Tabelle sein.")
+    global_variables: dict[str, str] = {}
+    for name, value in raw_global_vars.items():
+        if not isinstance(name, str) or _STEP_ID.fullmatch(name) is None:
+            raise ValueError(
+                f"Ungültiger globaler Variablenname {name!r}; erlaubt sind "
+                "ASCII-Buchstaben, Ziffern, '_' und '-' und der Name muss mit "
+                "einem Buchstaben oder '_' beginnen."
+            )
+        if not isinstance(value, str):
+            raise ValueError("vars darf nur String-zu-String-Werte enthalten.")
+        if _DYNAMIC_VALUE_EXPR.search(value):
+            raise ValueError(
+                f"Globale Variable {name!r} darf keine dynamischen "
+                "Flow-Platzhalter verwenden."
+            )
+        global_variables[name] = value
 
     excluded_paths = _path_list(
         values.get("exclude_paths"),
@@ -861,6 +882,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 response_format=response_format,
                 approve_tools=approve_tools,
                 variables=variables,
+                global_variables=global_variables,
                 foreach=foreach,
                 conversation_items=conversation_items,
                 conversation_final_prompt_file=conversation_final_prompt_file,
@@ -985,9 +1007,6 @@ def _render_iteration_text(
     item: Any,
     iteration_id: str | None,
 ) -> str:
-    # Substitute flow-owned placeholders before inserting untrusted item values.
-    # Item content that happens to contain '${iteration.id}' must stay literal
-    # instead of being interpreted recursively as flow syntax.
     rendered = template
     if iteration_id is not None:
         rendered = _ITERATION_ID_EXPR.sub(iteration_id, rendered)
@@ -1135,9 +1154,6 @@ def _iteration_ids(
             )
         bases.append(base)
 
-    # Reserve all natural IDs before assigning suffixes. Otherwise a duplicate
-    # such as "card" could consume "card-2" before the item whose actual base
-    # ID is "card-2" is processed, making resume checkpoints unstable.
     reserved_bases = {base.casefold() for base in bases}
     used: set[str] = set()
     result: list[str] = []
@@ -1368,14 +1384,6 @@ def _snapshot_initial_flow_state(
     *,
     workspace: Path,
 ) -> _RunStartSnapshot:
-    """Capture resumable and explicitly requested initial outputs at run start.
-
-    A downstream foreach can only inherit resume eligibility when its complete
-    source output is already reconstructible from run-start checkpoints. This
-    allows chains such as foreach -> output.iterations -> foreach without ever
-    treating files created later in the same run as checkpoints.
-    """
-
     fingerprints: dict[tuple[str, str], bytes] = {}
     paths: dict[str, Path] = {}
     previous_output_fingerprints: dict[
@@ -1532,8 +1540,6 @@ def _snapshot_initial_checkpoints(
     *,
     workspace: Path,
 ) -> tuple[dict[tuple[str, str], bytes], tuple[Path, ...]]:
-    """Compatibility wrapper for callers interested only in resume state."""
-
     snapshot = _snapshot_initial_flow_state(
         flow,
         workspace=workspace,
@@ -1686,11 +1692,14 @@ def _render_prompt_file(
     template = PromptTemplate.parse(prompt.content)
     values: dict[str, str] = {}
     for name in template.variables:
-        if name not in step.variables:
+        if name in step.variables:
+            raw = step.variables[name]
+        elif name in step.global_variables:
+            raw = step.global_variables[name]
+        else:
             raise ValueError(
                 f"Schritt {step.step_id!r} setzt Prompt-Variable {name!r} nicht."
             )
-        raw = step.variables[name]
         if final_prompt and _CONVERSATION_ITEM_EXPR.search(raw):
             raise ValueError(
                 f"Finaler Conversation-Prompt von Schritt {step.step_id!r} "
@@ -1870,7 +1879,7 @@ def validate_flow(
             known_templates.append(final_template)
             required_templates.append(final_template)
             for name in final_template.variables:
-                raw = step.variables.get(name)
+                raw = step.variables.get(name, step.global_variables.get(name))
                 if raw is not None and _CONVERSATION_ITEM_EXPR.search(raw):
                     raise ValueError(
                         f"Finaler Conversation-Prompt von Schritt "
@@ -1879,6 +1888,7 @@ def validate_flow(
                     )
 
         supplied = set(step.variables)
+        available = supplied | set(step.global_variables)
         known = {
             name
             for current_template in known_templates
@@ -1890,7 +1900,7 @@ def validate_flow(
             for name in current_template.variables
         }
         unknown = sorted(supplied - known)
-        missing = sorted(required - supplied)
+        missing = sorted(required - available)
         if unknown:
             raise ValueError(
                 f"Schritt {step.step_id!r} setzt unbekannte "
