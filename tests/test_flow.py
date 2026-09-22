@@ -3863,3 +3863,358 @@ directory = "${conversation.item}"
 
     with pytest.raises(ValueError, match="ohne conversation_items"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+
+def test_overwrite_json_step_can_use_previous_output_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text(
+        "old={{var:old}} count={{var:count}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "result.json").write_text(
+        '{"count":2,"items":["a"]}',
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "refine"
+config = "config.toml"
+prompt_file = "prompt.md"
+response_format = "json"
+output = "result.json"
+overwrite_output = true
+
+[steps.vars]
+old = "${previous_output}"
+count = "${previous_output.count}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        answer = '{"count":3}'
+        assert options.output is not None
+        options.output.write_text(answer)
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == [
+        'old={"count":2,"items":["a"]} count=2'
+    ]
+    assert (tmp_path / "result.json").read_text(encoding="utf-8") == '{"count":3}'
+
+
+def test_previous_output_renders_null_when_output_did_not_exist_at_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text(
+        "old={{var:old}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "create"
+config = "config.toml"
+prompt_file = "prompt.md"
+response_format = "json"
+output = "result.json"
+overwrite_output = true
+
+[steps.vars]
+old = "${previous_output}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer='{"created":true}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[0].prompt == "old=null"
+
+
+def test_foreach_overwrite_uses_previous_output_per_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "update.md").write_text(
+        "id={{var:id}} old={{var:old}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "status").mkdir()
+    (tmp_path / "plan.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "status" / "one.json").write_text(
+        '{"value":"existing"}',
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "plan"
+config = "config.toml"
+prompt_file = "plan.md"
+response_format = "json"
+output = "plan.json"
+overwrite_output = false
+
+[[steps]]
+id = "update"
+config = "config.toml"
+prompt_file = "update.md"
+foreach = "steps.plan.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "status/${iteration.id}.json"
+overwrite_output = true
+
+[steps.vars]
+id = "${item.id}"
+old = "${previous_output}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer='{"value":"new"}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == [
+        'id=one old={"value":"existing"}',
+        "id=two old=null",
+    ]
+
+
+def test_chained_foreach_iterations_resume_from_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "analyze.md").write_text("analyze {{var:id}}", encoding="utf-8")
+    (tmp_path / "again.md").write_text("again {{var:id}}", encoding="utf-8")
+    (tmp_path / "analyze").mkdir()
+    (tmp_path / "again").mkdir()
+    (tmp_path / "plan.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "analyze" / "one.json").write_text(
+        '{"value":1}',
+        encoding="utf-8",
+    )
+    (tmp_path / "analyze" / "two.json").write_text(
+        '{"value":2}',
+        encoding="utf-8",
+    )
+    (tmp_path / "again" / "one.json").write_text(
+        '{"done":1}',
+        encoding="utf-8",
+    )
+    (tmp_path / "again" / "two.json").write_text(
+        '{"done":2}',
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "plan"
+config = "config.toml"
+prompt_file = "plan.md"
+response_format = "json"
+output = "plan.json"
+overwrite_output = false
+
+[[steps]]
+id = "analyze"
+config = "config.toml"
+prompt_file = "analyze.md"
+foreach = "steps.plan.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "analyze/${iteration.id}.json"
+overwrite_output = false
+
+[steps.vars]
+id = "${item.id}"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.analyze.output.iterations"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "again/${iteration.id}.json"
+overwrite_output = false
+
+[steps.vars]
+id = "${item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        raise AssertionError("all steps should resume from run-start checkpoints")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []
+
+
+def test_incomplete_foreach_checkpoint_chain_does_not_promote_downstream_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "analyze.md").write_text("analyze {{var:id}}", encoding="utf-8")
+    (tmp_path / "again.md").write_text("again {{var:id}}", encoding="utf-8")
+    (tmp_path / "analyze").mkdir()
+    (tmp_path / "again").mkdir()
+    (tmp_path / "plan.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "analyze" / "one.json").write_text(
+        '{"value":1}',
+        encoding="utf-8",
+    )
+    (tmp_path / "again" / "one.json").write_text(
+        '{"done":1}',
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "plan"
+config = "config.toml"
+prompt_file = "plan.md"
+response_format = "json"
+output = "plan.json"
+overwrite_output = false
+
+[[steps]]
+id = "analyze"
+config = "config.toml"
+prompt_file = "analyze.md"
+foreach = "steps.plan.output.items"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "analyze/${iteration.id}.json"
+overwrite_output = false
+
+[steps.vars]
+id = "${item.id}"
+
+[[steps]]
+id = "again"
+config = "config.toml"
+prompt_file = "again.md"
+foreach = "steps.analyze.output.iterations"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "again/${iteration.id}.json"
+overwrite_output = false
+
+[steps.vars]
+id = "${item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "analyze two":
+            return SimpleNamespace(answer='{"value":2}', web_context_statuses=())
+        raise AssertionError("downstream existing file must not become a checkpoint")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["analyze two"]
+
+
+def test_previous_output_requires_json_overwrite_output_and_output_file(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "prompt.md").write_text("old={{var:old}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+
+    cases = (
+        ('response_format = "text"\noutput = "x.json"\noverwrite_output = true',),
+        ('response_format = "json"\noutput = "x.json"\noverwrite_output = false',),
+        ('response_format = "json"\noverwrite_output = true',),
+    )
+    for (configuration,) in cases:
+        (tmp_path / "flow.toml").write_text(
+            f"""
+version = 1
+
+[[steps]]
+id = "bad"
+config = "config.toml"
+prompt_file = "prompt.md"
+{configuration}
+
+[steps.vars]
+old = "${{previous_output}}"
+""".strip(),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="previous_output"):
+            load_flow(tmp_path / "flow.toml", workspace=tmp_path)
