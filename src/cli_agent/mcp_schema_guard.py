@@ -17,6 +17,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 from typing import Any
 
 MCP_SCHEMA_WORKER_START_TIMEOUT_SECONDS = 10.0
@@ -104,6 +105,13 @@ def _decode_worker_response(raw: bytes, *, operation: str) -> dict[str, Any]:
     return response
 
 
+def _timeout_error(operation: str, timeout_seconds: float) -> RuntimeError:
+    return RuntimeError(
+        f"{operation} überschreitet das Zeitlimit von "
+        f"{timeout_seconds:g} Sekunden."
+    )
+
+
 class _PersistentSchemaWorker:
     """Serialize requests through one reusable process with per-call deadlines."""
 
@@ -134,23 +142,35 @@ class _PersistentSchemaWorker:
         finally:
             responses.put(None)
 
-    def _discard_inherited_state_locked(self) -> None:
-        """Do not let a forked child reuse or kill its parent's worker."""
+    def _discard_inherited_state_unlocked(self) -> None:
+        """Drop inherited pipe handles without killing the parent's worker."""
 
-        if self._owner_pid == os.getpid():
-            return
         process = self._process
         if process is not None:
             for stream in (process.stdin, process.stdout):
                 if stream is not None:
                     try:
                         stream.close()
-                    except OSError:
+                    except (OSError, ValueError):
                         pass
         self._process = None
         self._responses = None
         self._reader = None
         self._owner_pid = os.getpid()
+
+    def _after_fork_child(self) -> None:
+        """Reset synchronization and worker state in a forked child process."""
+
+        # A mutex may have been held by a thread that does not exist in the
+        # child. Never acquire the inherited lock here; replace it first.
+        self._lock = threading.Lock()
+        self._discard_inherited_state_unlocked()
+
+    def _discard_inherited_state_locked(self) -> None:
+        """Fallback PID check for environments without register_at_fork()."""
+
+        if self._owner_pid != os.getpid():
+            self._discard_inherited_state_unlocked()
 
     def _stop_locked(self) -> None:
         process = self._process
@@ -172,7 +192,7 @@ class _PersistentSchemaWorker:
             if stream is not None:
                 try:
                     stream.close()
-                except OSError:
+                except (OSError, ValueError):
                     pass
 
     def _start_locked(self) -> None:
@@ -233,6 +253,57 @@ class _PersistentSchemaWorker:
                 "MCP-JSON-Schema-Worker lieferte keinen gültigen Start-Handshake."
             )
 
+    def _write_payload_locked(
+        self,
+        process: subprocess.Popen[bytes],
+        payload: bytes,
+        *,
+        deadline: float,
+        operation: str,
+        timeout_seconds: float,
+    ) -> bool:
+        """Write one request without allowing pipe backpressure past the deadline."""
+
+        stdin = process.stdin
+        if stdin is None:
+            return False
+        completed: queue.Queue[BaseException | None] = queue.Queue(maxsize=1)
+
+        def writer() -> None:
+            error: BaseException | None = None
+            try:
+                stdin.write(payload + b"\n")
+                stdin.flush()
+            except (BrokenPipeError, OSError, ValueError) as exc:
+                error = exc
+            try:
+                completed.put_nowait(error)
+            except queue.Full:  # pragma: no cover - defensive
+                pass
+
+        thread = threading.Thread(
+            target=writer,
+            name="cli-agent-mcp-schema-worker-writer",
+            daemon=True,
+        )
+        thread.start()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            self._stop_locked()
+            raise _timeout_error(operation, timeout_seconds)
+        try:
+            error = completed.get(timeout=remaining)
+        except queue.Empty as exc:
+            # Killing/closing the worker unblocks a writer stuck on pipe
+            # backpressure. The daemon thread is then harmless even if shutdown
+            # takes a moment on a particular platform.
+            self._stop_locked()
+            raise _timeout_error(operation, timeout_seconds) from exc
+        if error is not None:
+            self._stop_locked()
+            return False
+        return True
+
     def request(
         self,
         request: dict[str, Any],
@@ -258,37 +329,60 @@ class _PersistentSchemaWorker:
                 f"({len(payload)} > {MAX_MCP_SCHEMA_WORKER_REQUEST_BYTES} Bytes)."
             )
 
-        with self._lock:
+        # Worker startup has its own bounded timeout because interpreter/import
+        # startup is intentionally excluded from the short validation budget.
+        # Waiting behind another validation, request transmission and response
+        # processing all consume the per-request budget.
+        wait_started = time.monotonic()
+        if not self._lock.acquire(timeout=max(timeout_seconds, 0.0)):
+            raise _timeout_error(operation, timeout_seconds)
+        lock_wait = time.monotonic() - wait_started
+        try:
+            self._discard_inherited_state_locked()
+            self._start_locked()
+            deadline = time.monotonic() + max(timeout_seconds - lock_wait, 0.0)
+
             for attempt in range(2):
-                self._start_locked()
                 process = self._process
                 responses = self._responses
-                if process is None or process.stdin is None or responses is None:
+                if process is None or responses is None:
                     self._stop_locked()
                     raise RuntimeError(
                         f"{operation}: JSON-Schema-Worker ist nicht verfügbar."
                     )
-                try:
-                    process.stdin.write(payload + b"\n")
-                    process.stdin.flush()
+                if self._write_payload_locked(
+                    process,
+                    payload,
+                    deadline=deadline,
+                    operation=operation,
+                    timeout_seconds=timeout_seconds,
+                ):
                     break
-                except (BrokenPipeError, OSError):
-                    self._stop_locked()
-                    if attempt:
-                        raise RuntimeError(
-                            f"{operation}: JSON-Schema-Worker wurde unerwartet beendet."
-                        )
-            else:  # pragma: no cover - defensive; the loop either breaks or raises.
-                raise RuntimeError(f"{operation}: JSON-Schema-Worker ist nicht verfügbar.")
+                if attempt:
+                    raise RuntimeError(
+                        f"{operation}: JSON-Schema-Worker wurde unerwartet beendet."
+                    )
+                self._start_locked()
+            else:  # pragma: no cover - defensive
+                raise RuntimeError(
+                    f"{operation}: JSON-Schema-Worker ist nicht verfügbar."
+                )
 
-            try:
-                raw = responses.get(timeout=timeout_seconds)
-            except queue.Empty as exc:
+            responses = self._responses
+            if responses is None:
                 self._stop_locked()
                 raise RuntimeError(
-                    f"{operation} überschreitet das Zeitlimit von "
-                    f"{timeout_seconds:g} Sekunden."
-                ) from exc
+                    f"{operation}: JSON-Schema-Worker ist nicht verfügbar."
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._stop_locked()
+                raise _timeout_error(operation, timeout_seconds)
+            try:
+                raw = responses.get(timeout=remaining)
+            except queue.Empty as exc:
+                self._stop_locked()
+                raise _timeout_error(operation, timeout_seconds) from exc
 
             if raw is None:
                 self._stop_locked()
@@ -300,6 +394,8 @@ class _PersistentSchemaWorker:
                 # untrustworthy; discard the process before propagating.
                 self._stop_locked()
                 raise
+        finally:
+            self._lock.release()
 
     def close(self) -> None:
         with self._lock:
@@ -308,6 +404,8 @@ class _PersistentSchemaWorker:
 
 
 _SCHEMA_WORKER = _PersistentSchemaWorker()
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_SCHEMA_WORKER._after_fork_child)
 
 
 def close_schema_worker() -> None:
