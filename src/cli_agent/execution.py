@@ -372,6 +372,10 @@ async def run_conversation(
         raise ValueError("Conversation benötigt mindestens einen Prompt.")
     if any(not prompt or prompt.isspace() for prompt in options.prompts):
         raise ValueError("Conversation-Prompts dürfen nicht leer sein.")
+    if any(is_local_agent_command(prompt) for prompt in options.prompts):
+        raise ValueError(
+            "Conversation-Prompts dürfen keine lokalen Agent-Befehle sein."
+        )
     return await _run_prompt_sequence(
         options,
         prompts=options.prompts,
