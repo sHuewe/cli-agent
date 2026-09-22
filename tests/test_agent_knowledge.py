@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from cli_agent.agent_prompts import KNOWLEDGE_SYSTEM_PROMPT
 from cli_agent.agent_knowledge import (
     _KnowledgeRunState,
     _assemble_knowledge_payload,
@@ -185,3 +186,9 @@ def test_assemble_payload_rejects_invalid_selection(selection: dict, match: str)
     concepts = {"known": {"path": "known.md", "content": "x"}}
     with pytest.raises(RuntimeError, match=match):
         _assemble_knowledge_payload(selection, concepts)
+
+
+def test_knowledge_system_prompt_forbids_repository_hallucination() -> None:
+    assert "Erfinde keine Repository-Fakten" in KNOWLEDGE_SYSTEM_PROMPT
+    assert "Thematische Plausibilität" in KNOWLEDGE_SYSTEM_PROMPT
+    assert "Fülle Wissenslücken niemals durch Vermutungen" in KNOWLEDGE_SYSTEM_PROMPT
