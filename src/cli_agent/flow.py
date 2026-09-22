@@ -1185,7 +1185,7 @@ def _verified_preflight_checkpoint(
     return checkpoint
 
 
-def _existing_json_checkpoint(
+def _existing_json_output(
     step: FlowStep,
     *,
     workspace: Path,
@@ -1193,7 +1193,6 @@ def _existing_json_checkpoint(
 ) -> str | None:
     if (
         output is None
-        or step.overwrite_output
         or step.response_format != "json"
         or not output.exists()
     ):
@@ -1206,6 +1205,21 @@ def _existing_json_checkpoint(
     )
     _parse_structured_output(text, step_id=step.step_id)
     return text
+
+
+def _existing_json_checkpoint(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+) -> str | None:
+    if step.overwrite_output:
+        return None
+    return _existing_json_output(
+        step,
+        workspace=workspace,
+        output=output,
+    )
 
 
 def _prepare_flow_output(
@@ -1230,112 +1244,184 @@ def _prepare_flow_output(
     return None
 
 
-def _snapshot_initial_checkpoints(
+@dataclass(frozen=True)
+class _RunStartSnapshot:
+    checkpoint_fingerprints: dict[tuple[str, str], bytes]
+    checkpoint_paths: tuple[Path, ...]
+    previous_outputs: dict[tuple[str, str], str | None]
+
+
+def _uses_previous_output(step: FlowStep) -> bool:
+    return any(
+        _PREVIOUS_OUTPUT_EXPR.search(value)
+        for value in step.variables.values()
+    )
+
+
+def _snapshot_initial_flow_state(
     flow: FlowDefinition,
     *,
     workspace: Path,
-) -> tuple[dict[tuple[str, str], bytes], tuple[Path, ...]]:
-    """Snapshot resumable checkpoints before the first model call.
+) -> _RunStartSnapshot:
+    """Capture resumable and explicitly requested initial outputs at run start.
 
-    Static JSON checkpoints are known directly. Foreach checkpoints are only
-    eligible when their source step is itself resumed from a pre-existing
-    static JSON checkpoint, so the concrete iteration outputs can also be
-    derived before any model/tool execution.
+    A downstream foreach can only inherit resume eligibility when its complete
+    source output is already reconstructible from run-start checkpoints. This
+    allows chains such as foreach -> output.iterations -> foreach without ever
+    treating files created later in the same run as checkpoints.
     """
-
-    foreach_consumers: dict[str, list[FlowStep]] = {}
-    for candidate in flow.steps:
-        if candidate.foreach is None:
-            continue
-        match = _FOREACH.fullmatch(candidate.foreach)
-        assert match is not None
-        foreach_consumers.setdefault(match.group(1), []).append(candidate)
 
     fingerprints: dict[tuple[str, str], bytes] = {}
     paths: dict[str, Path] = {}
+    previous_outputs: dict[tuple[str, str], str | None] = {}
+    available_outputs: dict[str, str] = {}
 
-    def remember(step: FlowStep, output: Path, checkpoint: str) -> None:
+    def remember_checkpoint(
+        step: FlowStep,
+        output: Path,
+        checkpoint: str,
+    ) -> None:
         path_key = _filesystem_path_key(output)
         fingerprints[_checkpoint_snapshot_key(step, output)] = (
             _checkpoint_fingerprint(checkpoint)
         )
         paths[path_key] = output
 
+    def remember_previous_output(
+        step: FlowStep,
+        output: Path,
+    ) -> None:
+        key = _checkpoint_snapshot_key(step, output)
+        previous_outputs[key] = _existing_json_output(
+            step,
+            workspace=workspace,
+            output=output,
+        )
+
     for step in flow.steps:
+        if step.foreach is None:
+            if step.output is None:
+                continue
+            output = _output_for_iteration(
+                step,
+                workspace=workspace,
+                item=None,
+            )
+            assert output is not None
+
+            if _uses_previous_output(step):
+                remember_previous_output(step, output)
+
+            checkpoint = _existing_json_checkpoint(
+                step,
+                workspace=workspace,
+                output=output,
+            )
+            if checkpoint is not None:
+                remember_checkpoint(step, output, checkpoint)
+                available_outputs[step.step_id] = checkpoint
+            continue
+
+        match = _FOREACH.fullmatch(step.foreach)
+        assert match is not None
+        source_id = match.group(1)
+        if source_id not in available_outputs:
+            continue
+
+        items = _foreach_items(
+            step,
+            outputs=available_outputs,
+        )
+        iteration_ids = _iteration_ids(
+            step,
+            items=items,
+        )
+        outputs = [
+            _output_for_iteration(
+                step,
+                workspace=workspace,
+                item=item,
+                iteration_id=iteration_id,
+            )
+            for item, iteration_id in zip(items, iteration_ids)
+        ]
+
+        output_keys = [
+            _filesystem_path_key(output)
+            for output in outputs
+            if output is not None
+        ]
+        if len(output_keys) != len(set(output_keys)):
+            raise ValueError(
+                f"Schritt {step.step_id!r} erzeugt für mehrere "
+                "foreach-Elemente nicht eindeutige Output-Pfade."
+            )
+
+        if _uses_previous_output(step):
+            for output in outputs:
+                assert output is not None
+                remember_previous_output(step, output)
+
+        if not items:
+            available_outputs[step.step_id] = _finish_foreach_output([])
+            continue
+
         if (
-            step.foreach is not None
-            or step.output is None
+            step.output is None
             or step.overwrite_output
             or step.response_format != "json"
         ):
             continue
 
-        output = _output_for_iteration(
-            step,
-            workspace=workspace,
-            item=None,
-        )
-        assert output is not None
-        checkpoint = _existing_json_checkpoint(
-            step,
-            workspace=workspace,
-            output=output,
-        )
-        if checkpoint is None:
-            continue
-
-        remember(step, output, checkpoint)
-
-        for consumer in foreach_consumers.get(step.step_id, ()):
-            if (
-                consumer.output is None
-                or consumer.overwrite_output
-                or consumer.response_format != "json"
-            ):
+        parts: list[str] = []
+        payload_bytes = 0
+        complete = True
+        for iteration_id, output in zip(iteration_ids, outputs):
+            assert iteration_id is not None
+            assert output is not None
+            checkpoint = _existing_json_checkpoint(
+                step,
+                workspace=workspace,
+                output=output,
+            )
+            if checkpoint is None:
+                complete = False
                 continue
-            items = _foreach_items(
-                consumer,
-                outputs={step.step_id: checkpoint},
-            )
-            iteration_ids = _iteration_ids(
-                consumer,
-                items=items,
-            )
-            consumer_outputs = [
-                _output_for_iteration(
-                    consumer,
-                    workspace=workspace,
-                    item=item,
+            remember_checkpoint(step, output, checkpoint)
+            if complete:
+                payload_bytes = _append_foreach_iteration(
+                    step,
+                    parts=parts,
+                    payload_bytes=payload_bytes,
                     iteration_id=iteration_id,
-                )
-                for item, iteration_id in zip(items, iteration_ids)
-            ]
-            output_keys = [
-                _filesystem_path_key(candidate)
-                for candidate in consumer_outputs
-                if candidate is not None
-            ]
-            if len(output_keys) != len(set(output_keys)):
-                raise ValueError(
-                    f"Schritt {consumer.step_id!r} erzeugt für mehrere "
-                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                    answer=checkpoint,
                 )
 
-            for candidate in consumer_outputs:
-                assert candidate is not None
-                consumer_checkpoint = _existing_json_checkpoint(
-                    consumer,
-                    workspace=workspace,
-                    output=candidate,
-                )
-                if consumer_checkpoint is not None:
-                    remember(
-                        consumer,
-                        candidate,
-                        consumer_checkpoint,
-                    )
+        if complete:
+            available_outputs[step.step_id] = _finish_foreach_output(parts)
 
-    return fingerprints, tuple(paths.values())
+    return _RunStartSnapshot(
+        checkpoint_fingerprints=fingerprints,
+        checkpoint_paths=tuple(paths.values()),
+        previous_outputs=previous_outputs,
+    )
+
+
+def _snapshot_initial_checkpoints(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> tuple[dict[tuple[str, str], bytes], tuple[Path, ...]]:
+    """Compatibility wrapper for callers interested only in resume state."""
+
+    snapshot = _snapshot_initial_flow_state(
+        flow,
+        workspace=workspace,
+    )
+    return (
+        snapshot.checkpoint_fingerprints,
+        snapshot.checkpoint_paths,
+    )
 
 
 _FOREACH_AGGREGATE_PREFIX = '{"iterations":['
