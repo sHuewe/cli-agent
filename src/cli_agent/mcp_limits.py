@@ -665,7 +665,9 @@ def _validate_schema_complexity(
     return expanded_cost(schema, 0)
 
 
-def _schema_validator(schema: dict[str, Any], *, tool_name: str):
+def _schema_validator(
+    schema: dict[str, Any], *, tool_name: str
+) -> tuple[Any, int]:
     _reject_external_schema_references(schema, tool_name=tool_name)
     validator_class = _safe_validator_class(validator_for(schema))
     validator = validator_class(schema)
@@ -677,14 +679,13 @@ def _schema_validator(schema: dict[str, Any], *, tool_name: str):
         tool_name=tool_name,
         validator=validator,
     )
-    setattr(validator, "_cli_agent_schema_cost", schema_cost)
     try:
         validator_class.check_schema(schema)
     except SchemaError as exc:
         raise RuntimeError(
             f"MCP-Tool {tool_name} liefert kein gültiges JSON-Schema."
         ) from exc
-    return validator
+    return validator, schema_cost
 
 
 def validate_mcp_tool_arguments(
@@ -702,8 +703,7 @@ def validate_mcp_tool_arguments(
         max_nodes=MAX_MCP_ARGUMENT_NODES,
         max_depth=MAX_MCP_ARGUMENT_DEPTH,
     )
-    validator = _schema_validator(schema, tool_name=tool_name)
-    schema_cost = getattr(validator, "_cli_agent_schema_cost", 1)
+    validator, schema_cost = _schema_validator(schema, tool_name=tool_name)
     argument_nodes = 0
     stack = [arguments]
     while stack:
