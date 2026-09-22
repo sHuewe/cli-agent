@@ -18,8 +18,8 @@ from .mcp_limits import (
     MCP_INITIALIZE_TIMEOUT_SECONDS,
     MCP_LIST_TOOLS_TIMEOUT_SECONDS,
     await_mcp_operation,
-    validate_mcp_server_metadata,
 )
+from .mcp_schema_guard import validate_mcp_server_metadata
 from .network_policy import validate_http_url
 
 logger = logging.getLogger("cli_agent.agent_mcp")
