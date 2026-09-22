@@ -463,6 +463,16 @@ title = "${item.title}"
 
 Pro Step kann `add_file_context` entweder als einzelner Pfad oder als Liste mehrerer workspace-lokaler Referenzdateien gesetzt werden, z. B. `add_file_context = ["manual.txt", "architecture.md"]`. Im normalen CLI sind `--add-file-context` und sein Alias `--context-file` dafür wiederholbar. `add_web_context = ["...", ...]` akzeptiert weiterhin einen oder mehrere Web-Kontexte. Für alle Dateien gelten dieselben Workspace-, Sensitive-Path-, Symlink-, Hardlink- und Größenprüfungen; zusätzlich ist die Gesamtgröße aller ausgewählten Dateikontexte begrenzt.
 
+Ein Flow-Step kann optional mehrere Prompt-Turns in derselben
+Agent-Session ausführen. Mit `conversation_items` wird der Step-Prompt für
+jedes Element erneut gerendert; das aktuelle Element steht als
+`${conversation.item}` bzw. `${conversation.item.<feld>}` zur Verfügung.
+Die Quelle kann statisch, ein Feld eines vorherigen Step-Outputs oder innerhalb
+eines äußeren `foreach` ein Feld des aktuellen `${item...}` sein. Ein
+`conversation_final_prompt_file` ist optional; ohne ihn ist die letzte
+reguläre Assistant-Antwort das Step-Ergebnis. `response_format` gilt für
+jeden einzelnen Turn.
+
 Weitere Details und die aktuellen Einschränkungen stehen unter
 [Multi-Step-Flows](docs/flow.md).
 
