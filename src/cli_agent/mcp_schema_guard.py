@@ -1,8 +1,8 @@
-"""Process-isolated JSON Schema validation for untrusted MCP metadata.
+"""Process-isolated JSON Schema validation for untrusted MCP data.
 
 JSON Schema validation can become computationally expensive even when all regexes
-are handled by RE2. The public MCP validation helpers therefore execute
-``jsonschema`` in a disposable Python process with a hard wall-clock timeout.
+are handled by RE2. Runtime MCP schema checks therefore execute ``jsonschema`` in
+a disposable Python process with a hard wall-clock timeout.
 """
 
 from __future__ import annotations
@@ -14,10 +14,12 @@ import subprocess
 import sys
 from typing import Any
 
-MCP_SCHEMA_METADATA_TIMEOUT_SECONDS = 5.0
-MCP_SCHEMA_ARGUMENT_TIMEOUT_SECONDS = 2.0
+MCP_SCHEMA_METADATA_TIMEOUT_SECONDS = 2.0
+MCP_SCHEMA_ARGUMENT_TIMEOUT_SECONDS = 1.0
 MAX_MCP_SCHEMA_WORKER_REQUEST_BYTES = 64_000_000
 MAX_MCP_SCHEMA_WORKER_RESPONSE_BYTES = 64_000
+MAX_MCP_SCHEMA_PARENT_NODES = 25_000
+MAX_MCP_SCHEMA_PARENT_DEPTH = 128
 
 _WORKER_ENV_NAMES = (
     "PATH",
@@ -42,19 +44,44 @@ def _worker_environment() -> dict[str, str]:
     return environment
 
 
+def _validate_parent_structure(value: Any, *, label: str) -> None:
+    """Bound work done before the untrusted value reaches the worker."""
+
+    nodes = 0
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        current, depth = stack.pop()
+        nodes += 1
+        if nodes > MAX_MCP_SCHEMA_PARENT_NODES:
+            raise RuntimeError(
+                f"{label} überschreitet das Knotenlimit "
+                f"({nodes} > {MAX_MCP_SCHEMA_PARENT_NODES})."
+            )
+        if depth > MAX_MCP_SCHEMA_PARENT_DEPTH:
+            raise RuntimeError(
+                f"{label} überschreitet das Tiefenlimit "
+                f"({depth} > {MAX_MCP_SCHEMA_PARENT_DEPTH})."
+            )
+        if isinstance(current, dict):
+            stack.extend((child, depth + 1) for child in current.values())
+        elif isinstance(current, list):
+            stack.extend((child, depth + 1) for child in current)
+
+
 def _run_worker(
     request: dict[str, Any],
     *,
     timeout_seconds: float,
     operation: str,
 ) -> dict[str, Any]:
+    _validate_parent_structure(request, label=operation)
     try:
         payload = json.dumps(
             request,
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
-    except (TypeError, ValueError, UnicodeError) as exc:
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise RuntimeError(
             f"{operation}: Validierungsdaten sind nicht sicher serialisierbar."
         ) from exc
@@ -102,22 +129,113 @@ def _run_worker(
     return response
 
 
-def validate_schemas_in_worker(schemas: list[dict[str, Any]]) -> None:
-    if not schemas:
-        return
-    _run_worker(
-        {"operation": "validate_schemas", "schemas": schemas},
-        timeout_seconds=MCP_SCHEMA_METADATA_TIMEOUT_SECONDS,
-        operation="MCP-JSON-Schema-Prüfung",
-    )
+def validate_mcp_server_metadata(
+    *,
+    server_name: str,
+    instructions: str | None,
+    tools: list[Any],
+) -> None:
+    """Apply cheap parent-side limits, then validate schemas in one worker."""
+
+    from . import mcp_limits
+
+    if instructions is not None and len(instructions) > mcp_limits.MAX_MCP_INSTRUCTIONS_CHARS:
+        raise RuntimeError(
+            f"MCP-Server {server_name!r} liefert zu große Instructions "
+            f"({len(instructions)} > {mcp_limits.MAX_MCP_INSTRUCTIONS_CHARS} Zeichen)."
+        )
+    if len(tools) > mcp_limits.MAX_MCP_TOOLS_PER_SERVER:
+        raise RuntimeError(
+            f"MCP-Server {server_name!r} bietet zu viele Tools an "
+            f"({len(tools)} > {mcp_limits.MAX_MCP_TOOLS_PER_SERVER})."
+        )
+
+    total_metadata_chars = 0
+    seen_tool_names: set[str] = set()
+    schemas: list[dict[str, Any]] = []
+    for tool in tools:
+        tool_name = str(getattr(tool, "name", "<unbekannt>"))
+        if any(0xD800 <= ord(character) <= 0xDFFF for character in tool_name):
+            raise RuntimeError(
+                f"MCP-Server {server_name!r} liefert einen Toolnamen mit "
+                "einem ungültigen Unicode-Surrogate."
+            )
+        if len(tool_name) > mcp_limits.MAX_MCP_TOOL_NAME_CHARS:
+            raise RuntimeError(
+                f"MCP-Server {server_name!r} liefert einen zu langen Toolnamen "
+                f"({len(tool_name)} > {mcp_limits.MAX_MCP_TOOL_NAME_CHARS} Zeichen)."
+            )
+        if tool_name in seen_tool_names:
+            raise RuntimeError(
+                f"MCP-Server {server_name!r} bietet den Toolnamen {tool_name!r} mehrfach an."
+            )
+        seen_tool_names.add(tool_name)
+
+        description = str(getattr(tool, "description", None) or "")
+        if len(description) > mcp_limits.MAX_MCP_TOOL_DESCRIPTION_CHARS:
+            raise RuntimeError(
+                f"MCP-Tool {server_name}__{tool_name} hat eine zu große Beschreibung "
+                f"({len(description)} > {mcp_limits.MAX_MCP_TOOL_DESCRIPTION_CHARS} Zeichen)."
+            )
+        schema = getattr(tool, "inputSchema", {})
+        if not isinstance(schema, dict):
+            raise RuntimeError(
+                f"MCP-Tool {server_name}__{tool_name} liefert kein JSON-Objekt als Input-Schema."
+            )
+        _validate_parent_structure(
+            schema,
+            label=f"MCP-Tool {server_name}__{tool_name}: Input-Schema",
+        )
+        try:
+            schema_text = json.dumps(
+                schema,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+            raise RuntimeError(
+                f"MCP-Tool {server_name}__{tool_name} liefert kein gültig serialisierbares Schema."
+            ) from exc
+        if len(schema_text) > mcp_limits.MAX_MCP_TOOL_SCHEMA_CHARS:
+            raise RuntimeError(
+                f"MCP-Tool {server_name}__{tool_name} hat ein zu großes Schema "
+                f"({len(schema_text)} > {mcp_limits.MAX_MCP_TOOL_SCHEMA_CHARS} Zeichen)."
+            )
+        total_metadata_chars += len(description) + len(schema_text)
+        if total_metadata_chars > mcp_limits.MAX_MCP_TOTAL_TOOL_METADATA_CHARS:
+            raise RuntimeError(
+                f"MCP-Server {server_name!r} liefert insgesamt zu viele Tool-Metadaten "
+                f"({total_metadata_chars} > {mcp_limits.MAX_MCP_TOTAL_TOOL_METADATA_CHARS} Zeichen)."
+            )
+        schemas.append(
+            {
+                "tool_name": f"{server_name}__{tool_name}",
+                "schema": schema,
+            }
+        )
+
+    if schemas:
+        _run_worker(
+            {"operation": "validate_schemas", "schemas": schemas},
+            timeout_seconds=MCP_SCHEMA_METADATA_TIMEOUT_SECONDS,
+            operation=f"MCP-Server {server_name!r}: JSON-Schema-Prüfung",
+        )
 
 
-def validate_arguments_in_worker(
+def validate_mcp_tool_arguments(
     *,
     tool_name: str,
     schema: dict[str, Any],
     arguments: dict[str, Any],
 ) -> str | None:
+    _validate_parent_structure(
+        schema,
+        label=f"MCP-Tool {tool_name}: Input-Schema",
+    )
+    _validate_parent_structure(
+        arguments,
+        label=f"MCP-Tool {tool_name}: Argumente",
+    )
     response = _run_worker(
         {
             "operation": "validate_arguments",
@@ -138,8 +256,6 @@ def validate_arguments_in_worker(
 
 
 def _handle_request(request: Any) -> dict[str, Any]:
-    # Import only in the worker. mcp_limits imports this module lazily from its
-    # public functions, so there is no import cycle in the normal process.
     from . import mcp_limits
 
     if not isinstance(request, dict):
@@ -172,7 +288,7 @@ def _handle_request(request: Any) -> dict[str, Any]:
             raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")
         return {
             "ok": True,
-            "validation_error": mcp_limits._validate_mcp_tool_arguments_direct(
+            "validation_error": mcp_limits.validate_mcp_tool_arguments(
                 tool_name=tool_name,
                 schema=schema,
                 arguments=arguments,
@@ -192,10 +308,10 @@ def _main() -> int:
         response = _handle_request(request)
     except RuntimeError as exc:
         response = {"ok": False, "error": str(exc)}
-    except (UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+    except (UnicodeError, json.JSONDecodeError, TypeError, ValueError, RecursionError):
         response = {"ok": False, "error": "Ungültige JSON-Schema-Worker-Anfrage."}
     except Exception:
-        # Do not expose parser/validator internals or document content.
+        # Do not expose parser/validator internals or argument content.
         response = {"ok": False, "error": "JSON-Schema-Worker ist fehlgeschlagen."}
 
     encoded = json.dumps(response, ensure_ascii=False).encode("utf-8")
