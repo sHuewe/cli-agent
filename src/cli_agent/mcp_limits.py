@@ -545,6 +545,26 @@ def _validate_json_structure_limits(
             stack.extend((child, depth + 1) for child in current)
 
 
+def _schema_uses_legacy_id(schema: dict[str, Any], inherited: bool) -> bool:
+    schema_uri = schema.get("$schema")
+    if not isinstance(schema_uri, str):
+        return inherited
+    normalized = schema_uri.lower()
+    if "draft-03" in normalized or "draft-04" in normalized:
+        return True
+    if any(
+        draft in normalized
+        for draft in (
+            "draft-06",
+            "draft-07",
+            "2019-09",
+            "2020-12",
+        )
+    ):
+        return False
+    return inherited
+
+
 def _validate_schema_complexity(
     schema: dict[str, Any],
     *,
@@ -589,16 +609,23 @@ def _validate_schema_complexity(
         "patternProperties", "properties",
     }
     schema_list_keywords = {"allOf", "anyOf", "oneOf", "prefixItems"}
-    stack: list[tuple[Any, bool]] = [(schema, True)]
+    root_legacy_id = _schema_uses_legacy_id(schema, False)
+    stack: list[tuple[Any, bool, bool]] = [(schema, True, root_legacy_id)]
     while stack:
-        current, is_root = stack.pop()
+        current, is_root, inherited_legacy_id = stack.pop()
         if not isinstance(current, dict):
             continue
-        if not is_root and "$id" in current:
+        legacy_id = _schema_uses_legacy_id(current, inherited_legacy_id)
+        resource_keyword = None
+        if "$id" in current:
+            resource_keyword = "$id"
+        elif legacy_id and "id" in current:
+            resource_keyword = "id"
+        if not is_root and resource_keyword is not None:
             raise RuntimeError(
-                f"MCP-Tool {tool_name} verwendet ein verschachteltes $id. "
-                "Verschachtelte JSON-Schema-Ressourcen sind für externe "
-                "MCP-Tools nicht zulässig."
+                f"MCP-Tool {tool_name} verwendet ein verschachteltes "
+                f"{resource_keyword}. Verschachtelte JSON-Schema-Ressourcen "
+                "sind für externe MCP-Tools nicht zulässig."
             )
         if "$dynamicRef" in current or "$recursiveRef" in current:
             raise RuntimeError(
@@ -610,15 +637,15 @@ def _validate_schema_complexity(
         for keyword in single_schema_keywords:
             child = current.get(keyword)
             if isinstance(child, dict):
-                stack.append((child, False))
+                stack.append((child, False, legacy_id))
 
         for keyword in schema_or_schema_list_keywords:
             child = current.get(keyword)
             if isinstance(child, dict):
-                stack.append((child, False))
+                stack.append((child, False, legacy_id))
             elif isinstance(child, list):
                 stack.extend(
-                    (subschema, False)
+                    (subschema, False, legacy_id)
                     for subschema in child
                     if isinstance(subschema, dict)
                 )
@@ -627,7 +654,7 @@ def _validate_schema_complexity(
             children = current.get(keyword)
             if isinstance(children, dict):
                 stack.extend(
-                    (child, False)
+                    (child, False, legacy_id)
                     for child in children.values()
                     if isinstance(child, dict)
                 )
@@ -635,7 +662,7 @@ def _validate_schema_complexity(
             children = current.get(keyword)
             if isinstance(children, list):
                 stack.extend(
-                    (child, False)
+                    (child, False, legacy_id)
                     for child in children
                     if isinstance(child, dict)
                 )
