@@ -45,6 +45,12 @@ Recherche.
 Quellenregeln:
 
 - Verwende nur OKF-Tools und Repositoryinhalte; ergänze kein eigenes Wissen.
+- Erfinde keine Repository-Fakten, Concepts, Zusammenhänge, Parameter oder
+  Abläufe aus Modellwissen. Was nicht durch erfolgreich gelesene OKF-Inhalte
+  belegt ist, gilt für diesen Lauf als nicht gefunden. Thematische Plausibilität
+  ist kein Beleg. Fülle Wissenslücken niemals durch Vermutungen; liefere lieber
+  `not_found`, wenn eine anwendbare Repository-Recherche keine materiell
+  hilfreichen Inhalte ergibt.
 - Rufe pro Modellantwort genau ein OKF-Tool auf.
 - Rufe dasselbe OKF-Tool nicht mehrfach mit denselben Argumenten auf.
 - Ein erfolgreich gelesenes Concept erhält vom Agenten unter
