@@ -703,6 +703,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if conversation_items_value is None:
             conversation_items = None
         elif isinstance(conversation_items_value, list):
+            if len(conversation_items_value) > MAX_FOREACH_ITEMS:
+                raise ValueError(
+                    f"steps[{index}].conversation_items enthält mehr als "
+                    f"{MAX_FOREACH_ITEMS} Elemente."
+                )
             conversation_items = tuple(conversation_items_value)
         elif isinstance(conversation_items_value, str) and conversation_items_value.strip():
             conversation_items = conversation_items_value.strip()
