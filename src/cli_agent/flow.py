@@ -49,11 +49,17 @@ _CONVERSATION_ITEM_EXPR = re.compile(
     r"\$\{conversation\.item(?:\.([A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
+_PREVIOUS_OUTPUT_EXPR = re.compile(
+    r"\$\{previous_output(?:\.([A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
+)
 _DYNAMIC_VALUE_EXPR = re.compile(
     r"\$\{(?:(?P<iteration>iteration\.id)"
     r"|item(?:\.(?P<item_path>[A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
     r"|conversation\.item(?:\.(?P<conversation_path>[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
+    r"|previous_output(?:\.(?P<previous_output_path>[A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?)\}"
 )
 _ITERATION_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
@@ -798,6 +804,20 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "ohne conversation_items."
             )
 
+        uses_previous_output = any(
+            _PREVIOUS_OUTPUT_EXPR.search(value)
+            for value in variables.values()
+        )
+        if uses_previous_output and (
+            output is None
+            or not overwrite_output
+            or response_format != "json"
+        ):
+            raise ValueError(
+                f"steps[{index}] darf ${{previous_output...}} nur mit "
+                "response_format='json', output und overwrite_output=true verwenden."
+            )
+
         steps.append(
             FlowStep(
                 step_id=step_id,
@@ -940,8 +960,10 @@ def _render_dynamic_text(
     item: Any,
     iteration_id: str | None,
     conversation_item: Any,
+    previous_output: Any,
 ) -> str:
     def replace(match: re.Match[str]) -> str:
+        is_previous_output = match.group(0).startswith("${previous_output")
         if match.group("iteration") is not None:
             if iteration_id is None:
                 raise ValueError("${iteration.id} ist ohne foreach nicht verfügbar.")
@@ -952,6 +974,12 @@ def _render_dynamic_text(
                 match.group("item_path"),
                 label="foreach-Element",
             )
+        elif is_previous_output:
+            value = _lookup(
+                previous_output,
+                match.group("previous_output_path"),
+                label="previous_output",
+            )
         else:
             value = _lookup(
                 conversation_item,
@@ -961,7 +989,7 @@ def _render_dynamic_text(
         if isinstance(value, (dict, list)):
             return _json_dumps_preserving_numbers(value)
         if value is None:
-            return ""
+            return "null" if is_previous_output else ""
         if isinstance(value, bool):
             return "true" if value else "false"
         return str(value)
@@ -1434,6 +1462,7 @@ def _render_prompt_file(
     item: Any,
     iteration_id: str | None,
     conversation_item: Any,
+    previous_output: Any,
     final_prompt: bool = False,
 ) -> str:
     prompt_path = _workspace_path(
@@ -1466,6 +1495,7 @@ def _render_prompt_file(
             item=item,
             iteration_id=iteration_id,
             conversation_item=conversation_item,
+            previous_output=previous_output,
         )
     rendered = template.render(values)
     if not rendered or rendered.isspace():
@@ -1482,6 +1512,7 @@ def _prompt_for_iteration(
     item: Any,
     iteration_id: str | None = None,
     conversation_item: Any = None,
+    previous_output: Any = None,
 ) -> str:
     return _render_prompt_file(
         step,
@@ -1490,6 +1521,7 @@ def _prompt_for_iteration(
         item=item,
         iteration_id=iteration_id,
         conversation_item=conversation_item,
+        previous_output=previous_output,
     )
 
 
@@ -1500,6 +1532,7 @@ def _conversation_prompts_for_iteration(
     outputs: dict[str, str],
     item: Any,
     iteration_id: str | None,
+    previous_output: Any,
 ) -> tuple[str, ...] | None:
     conversation_items = _conversation_items_for_iteration(
         step,
@@ -1515,6 +1548,7 @@ def _conversation_prompts_for_iteration(
             item=item,
             iteration_id=iteration_id,
             conversation_item=conversation_item,
+            previous_output=previous_output,
         )
         for conversation_item in conversation_items
     ]
@@ -1527,6 +1561,7 @@ def _conversation_prompts_for_iteration(
                 item=item,
                 iteration_id=iteration_id,
                 conversation_item=None,
+                previous_output=previous_output,
                 final_prompt=True,
             )
         )
