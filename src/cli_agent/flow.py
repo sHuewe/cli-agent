@@ -60,6 +60,9 @@ _DYNAMIC_VALUE_EXPR = re.compile(
     r"|conversation\.item(?:\.(?P<conversation_path>[A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
     r"|previous_output(?:\.(?P<previous_output_path>[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
+    r"|steps\.(?P<step_output_id>[A-Za-z_][A-Za-z0-9_-]*)\.output"
+    r"(?:\.(?P<step_output_path>[A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?)\}"
 )
 _ITERATION_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
@@ -689,6 +692,17 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
             variables[name] = value
 
+        for value in variables.values():
+            for match in _DYNAMIC_VALUE_EXPR.finditer(value):
+                source_id = match.group("step_output_id")
+                if source_id is None:
+                    continue
+                if source_id not in known_ids or source_id == step_id:
+                    raise ValueError(
+                        f"steps[{index}].vars darf nur Output eines vorherigen "
+                        f"Schritts referenzieren: {source_id!r}."
+                    )
+
         foreach_value = raw.get("foreach")
         foreach = (
             _string(
@@ -987,6 +1001,7 @@ def _render_dynamic_text(
     iteration_id: str | None,
     conversation_item: Any,
     previous_output: Any,
+    outputs: dict[str, str],
 ) -> str:
     def replace(match: re.Match[str]) -> str:
         is_previous_output = match.group(0).startswith("${previous_output")
@@ -1005,6 +1020,24 @@ def _render_dynamic_text(
                 previous_output,
                 match.group("previous_output_path"),
                 label="previous_output",
+            )
+        elif match.group("step_output_id") is not None:
+            source_id = match.group("step_output_id")
+            if source_id not in outputs:
+                raise ValueError(
+                    f"Output von Schritt {source_id!r} ist noch nicht verfügbar."
+                )
+            path = match.group("step_output_path")
+            if path is None:
+                return outputs[source_id]
+            parsed = _parse_structured_output(
+                outputs[source_id],
+                step_id=source_id,
+            )
+            value = _lookup(
+                parsed,
+                path,
+                label=f"Output von Schritt {source_id!r}",
             )
         else:
             value = _lookup(
@@ -1636,6 +1669,7 @@ def _render_prompt_file(
     iteration_id: str | None,
     conversation_item: Any,
     previous_output: Any,
+    outputs: dict[str, str],
     final_prompt: bool = False,
 ) -> str:
     prompt_path = _workspace_path(
@@ -1669,6 +1703,7 @@ def _render_prompt_file(
             iteration_id=iteration_id,
             conversation_item=conversation_item,
             previous_output=previous_output,
+            outputs=outputs,
         )
     rendered = template.render(values)
     if not rendered or rendered.isspace():
@@ -1686,6 +1721,7 @@ def _prompt_for_iteration(
     iteration_id: str | None = None,
     conversation_item: Any = None,
     previous_output: Any = None,
+    outputs: dict[str, str] | None = None,
 ) -> str:
     return _render_prompt_file(
         step,
@@ -1695,6 +1731,7 @@ def _prompt_for_iteration(
         iteration_id=iteration_id,
         conversation_item=conversation_item,
         previous_output=previous_output,
+        outputs=outputs or {},
     )
 
 
@@ -1722,6 +1759,7 @@ def _conversation_prompts_for_iteration(
             iteration_id=iteration_id,
             conversation_item=conversation_item,
             previous_output=previous_output,
+            outputs=outputs,
         )
         for conversation_item in conversation_items
     ]
@@ -1735,6 +1773,7 @@ def _conversation_prompts_for_iteration(
                 iteration_id=iteration_id,
                 conversation_item=None,
                 previous_output=previous_output,
+                outputs=outputs,
                 final_prompt=True,
             )
         )
@@ -2294,6 +2333,7 @@ async def run_flow(
                     item=item,
                     iteration_id=iteration_id,
                     previous_output=previous_output,
+                    outputs=outputs,
                 )
                 result = await run_once(
                     OneShotRunOptions(

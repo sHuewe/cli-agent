@@ -3011,6 +3011,192 @@ overwrite_output = true
     assert (tmp_path / "result.json").read_text(encoding="utf-8") == '{"new":true}'
 
 
+def test_later_step_can_use_previous_json_output_in_variables(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    (tmp_path / "second.md").write_text(
+        "summary={{var:summary}} nested={{var:nested}} complete={{var:complete}}",
+        encoding="utf-8",
+    )
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "first"
+config = "config.toml"
+prompt_file = "first.md"
+response_format = "json"
+
+[[steps]]
+id = "second"
+config = "config.toml"
+prompt_file = "second.md"
+
+[steps.vars]
+summary = "${steps.first.output.summary}"
+nested = "${steps.first.output.details.value}"
+complete = "${steps.first.output}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "first":
+            return SimpleNamespace(
+                answer='{"summary":"done","details":{"value":7}}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    validate_flow(definition, workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == [
+        "first",
+        'summary=done nested=7 complete={"summary":"done","details":{"value":7}}',
+    ]
+
+
+def test_step_output_variable_serializes_structured_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    (tmp_path / "second.md").write_text("items={{var:items}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "first"
+config = "config.toml"
+prompt_file = "first.md"
+response_format = "json"
+
+[[steps]]
+id = "second"
+config = "config.toml"
+prompt_file = "second.md"
+
+[steps.vars]
+items = "${steps.first.output.items}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "first":
+            return SimpleNamespace(
+                answer='{"items":[{"id":1},{"id":2}]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[1].prompt == 'items=[{"id":1},{"id":2}]'
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "${steps.current.output.value}",
+        "${steps.future.output.value}",
+    ],
+)
+def test_step_output_variable_must_reference_previous_step(
+    tmp_path: Path,
+    reference: str,
+) -> None:
+    (tmp_path / "prompt.md").write_text("value={{var:value}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        f"""
+version = 1
+
+[[steps]]
+id = "current"
+config = "config.toml"
+prompt_file = "prompt.md"
+
+[steps.vars]
+value = "{reference}"
+
+[[steps]]
+id = "future"
+config = "config.toml"
+prompt_file = "prompt.md"
+
+[steps.vars]
+value = "static"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="vorherigen Schritt"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_step_output_variable_rejects_missing_json_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    (tmp_path / "second.md").write_text("value={{var:value}}", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "first"
+config = "config.toml"
+prompt_file = "first.md"
+response_format = "json"
+
+[[steps]]
+id = "second"
+config = "config.toml"
+prompt_file = "second.md"
+
+[steps.vars]
+value = "${steps.first.output.missing}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        if options.prompt == "first":
+            return SimpleNamespace(
+                answer='{"summary":"done"}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("second step must fail before model execution")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="enthält kein Feld 'missing'"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+
 def test_foreach_publishes_aggregated_json_output_for_later_foreach(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

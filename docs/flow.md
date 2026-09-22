@@ -109,6 +109,43 @@ id = "${item.id}"
 title = "${item.title}"
 ```
 
+### Outputs vorheriger Schritte in Variablen
+
+Ein späterer Step kann den Output eines bereits abgeschlossenen Steps direkt in
+seinen Prompt-Variablen verwenden. Dafür steht
+`${steps.<id>.output[.<pfad>]}` zur Verfügung:
+
+```toml
+[[steps]]
+id = "plan"
+prompt_file = "prompts/plan.md"
+response_format = "json"
+
+[[steps]]
+id = "implement"
+prompt_file = "prompts/implement.md"
+
+[steps.vars]
+summary = "${steps.plan.output.summary}"
+details = "${steps.plan.output.details}"
+complete = "${steps.plan.output}"
+```
+
+`${steps.plan.output.summary}` parst den Output von `plan` strikt als JSON
+und liest das angegebene Feld. Verschachtelte Pfade wie
+`${steps.plan.output.details.status}` sind ebenfalls möglich. Objekt- und
+Listenwerte werden wieder als kompaktes JSON serialisiert.
+
+Der vollständige Ausdruck `${steps.plan.output}` übernimmt den kompletten
+Output des vorherigen Steps unverändert. Dadurch kann auch Text-Output vollständig
+weitergereicht werden; für einen Feldzugriff muss der referenzierte Output dagegen
+gültiges JSON sein.
+
+Es dürfen ausschließlich **vorherige** Steps referenziert werden. Selbst- und
+Vorwärtsreferenzen werden bereits beim Laden der Flow-Datei abgewiesen. Bei
+`foreach` kann auch der aggregierte Step-Output mit seinem
+`iterations`-Feld auf diese Weise verwendet werden.
+
 ### Mehrere Conversation-Turns innerhalb eines Steps
 
 Ein Step kann optional mehrere Benutzer-Prompts nacheinander in **derselben**
