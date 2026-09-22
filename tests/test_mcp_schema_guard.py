@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -206,3 +208,90 @@ def test_oversized_validation_error_remains_schema_rejection() -> None:
     assert error is not None
     assert "gekürzt" in error
     assert len(error) <= guard.MAX_MCP_VALIDATION_ERROR_CHARS
+
+
+def test_after_fork_child_replaces_inherited_locked_mutex() -> None:
+    worker = guard._PersistentSchemaWorker()
+    inherited_lock = worker._lock
+    assert inherited_lock.acquire(blocking=False)
+    try:
+        worker._after_fork_child()
+        assert worker._lock is not inherited_lock
+        assert worker._lock.acquire(blocking=False)
+        worker._lock.release()
+    finally:
+        inherited_lock.release()
+
+
+def test_lock_wait_consumes_request_deadline() -> None:
+    worker = guard._PersistentSchemaWorker()
+    acquired = threading.Event()
+    release = threading.Event()
+
+    def hold_lock() -> None:
+        with worker._lock:
+            acquired.set()
+            release.wait(timeout=1.0)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert acquired.wait(timeout=1.0)
+    started = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="Zeitlimit"):
+            worker.request(
+                {"operation": "validate_arguments"},
+                timeout_seconds=0.05,
+                operation="test-validation",
+            )
+    finally:
+        release.set()
+        holder.join(timeout=1.0)
+    assert time.monotonic() - started < 0.5
+
+
+def test_request_transmission_consumes_request_deadline() -> None:
+    class SlowStdin:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def write(self, _data: bytes) -> int:
+            time.sleep(0.2)
+            return len(_data)
+
+        def flush(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdin = SlowStdin()
+            self.stdout = None
+            self.killed = False
+
+        def poll(self):
+            return None if not self.killed else -9
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, timeout=None):
+            return -9
+
+    worker = guard._PersistentSchemaWorker()
+    process = FakeProcess()
+    worker._process = process
+    worker._responses = guard.queue.Queue()
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="Zeitlimit"):
+        worker.request(
+            {"operation": "validate_arguments"},
+            timeout_seconds=0.05,
+            operation="test-validation",
+        )
+    assert time.monotonic() - started < 0.5
+    assert process.killed is True
+    assert worker._process is None
