@@ -1389,6 +1389,13 @@ def _snapshot_initial_flow_state(
         assert match is not None
         source_id = match.group(1)
         if source_id not in available_outputs:
+            if _uses_previous_output(step):
+                raise ValueError(
+                    f"previous_output von foreach-Schritt {step.step_id!r} "
+                    "kann beim Run-Start nicht bestimmt werden, weil seine "
+                    f"Quelle {source_id!r} nicht vollständig aus "
+                    "Run-Start-Checkpoints rekonstruierbar ist."
+                )
             continue
 
         items = _foreach_items(
