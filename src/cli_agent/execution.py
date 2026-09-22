@@ -87,6 +87,27 @@ class OneShotRunOptions:
 
 
 @dataclass(frozen=True)
+class ConversationRunOptions:
+    workspace: Path
+    prompts: tuple[str, ...]
+    config_file: Path | None = None
+    model: str | None = None
+    workspace_access: str | None = None
+    retry_policy: ModelRetryPolicy | None = None
+    response_format: str = "text"
+    context_files: tuple[Path, ...] = ()
+    output: Path | None = None
+    overwrite_output: bool = False
+    add_web_context: tuple[str, ...] = ()
+    approval_callback: ApprovalCallback | None = None
+    prepared_file_contexts: tuple[FileContext, ...] = ()
+    prepared_output_target: OutputTarget | None = None
+    mutation_protected_paths: tuple[Path, ...] = ()
+    excluded_paths: tuple[Path, ...] = ()
+    dump_file_prefix: str | None = None
+
+
+@dataclass(frozen=True)
 class OneShotRunResult:
     answer: str
     usage: str
@@ -225,17 +246,16 @@ def apply_model_override(
     return replace(config, model=replace(config.model, model=model))
 
 
-async def run_once(
-    options: OneShotRunOptions,
+async def _run_prompt_sequence(
+    options: OneShotRunOptions | ConversationRunOptions,
     *,
+    prompts: tuple[str, ...],
     dependencies: ExecutionDependencies | None = None,
 ) -> OneShotRunResult:
     deps = dependencies or ExecutionDependencies()
     workspace = options.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
-    if not options.prompt or options.prompt.isspace():
-        raise ValueError("One-Shot-Prompt darf nicht leer sein.")
     response_format = _validate_response_format(options.response_format)
     excluded_paths = resolve_excluded_paths(
         workspace,
@@ -307,12 +327,15 @@ async def run_once(
             web_statuses.append(
                 await agent.ask(f"add_web_context {url}")
             )
-        answer = await agent.ask(options.prompt)
+        answer = ""
+        for prompt in prompts:
+            answer = await agent.ask(prompt)
         usage = await agent.ask("tokens")
 
+    final_prompt = prompts[-1]
     if (
         output_target is not None
-        and not is_local_agent_command(options.prompt)
+        and not is_local_agent_command(final_prompt)
     ):
         output_target.write_text(answer)
 
@@ -323,4 +346,38 @@ async def run_once(
         config=config,
         file_contexts=file_contexts,
         output_target=output_target,
+    )
+
+
+async def run_once(
+    options: OneShotRunOptions,
+    *,
+    dependencies: ExecutionDependencies | None = None,
+) -> OneShotRunResult:
+    if not options.prompt or options.prompt.isspace():
+        raise ValueError("One-Shot-Prompt darf nicht leer sein.")
+    return await _run_prompt_sequence(
+        options,
+        prompts=(options.prompt,),
+        dependencies=dependencies,
+    )
+
+
+async def run_conversation(
+    options: ConversationRunOptions,
+    *,
+    dependencies: ExecutionDependencies | None = None,
+) -> OneShotRunResult:
+    if not options.prompts:
+        raise ValueError("Conversation benötigt mindestens einen Prompt.")
+    if any(not prompt or prompt.isspace() for prompt in options.prompts):
+        raise ValueError("Conversation-Prompts dürfen nicht leer sein.")
+    if any(is_local_agent_command(prompt) for prompt in options.prompts):
+        raise ValueError(
+            "Conversation-Prompts dürfen keine lokalen Agent-Befehle sein."
+        )
+    return await _run_prompt_sequence(
+        options,
+        prompts=options.prompts,
+        dependencies=dependencies,
     )

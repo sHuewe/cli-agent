@@ -3,9 +3,10 @@
 `cli-agent-flow` ist der erste Orchestrierungs-Entry-Point für mehrere
 `cli-agent`-Läufe. Die Flow-Engine besitzt absichtlich keine zusätzlichen
 Agent-Capabilities. `cli-agent` und `cli-agent-flow` verwenden denselben
-wiederverwendbaren One-Shot-Execution-Core. Für jeden Schritt bzw. jede
-Iteration wird eine frische Agent-Instanz aufgebaut, aber kein neuer
-`cli-agent`-Prozess gestartet.
+wiederverwendbaren One-Shot-Execution-Core. Für jeden Schritt bzw. jede äußere
+`foreach`-Iteration wird eine frische Agent-Instanz aufgebaut, aber kein neuer
+`cli-agent`-Prozess gestartet. Optionale Conversation-Turns innerhalb dieser
+Einheit verwenden dagegen bewusst dieselbe Agent-Instanz.
 
 ## Ziele der ersten Version
 
@@ -107,6 +108,97 @@ approve_tools = ["os__write_file", "os__make_directory"]
 id = "${item.id}"
 title = "${item.title}"
 ```
+
+### Mehrere Conversation-Turns innerhalb eines Steps
+
+Ein Step kann optional mehrere Benutzer-Prompts nacheinander in **derselben**
+Agent-Session ausführen. Dafür wird `conversation_items` gesetzt. Das normale
+`foreach` bleibt davon unabhängig: Ein Step kann Conversation-Turns mit oder
+ohne äußeres `foreach` verwenden.
+
+Eine statische Liste:
+
+```toml
+[[steps]]
+id = "update_links"
+prompt_file = "prompts/update-links.md"
+conversation_items = ["operations", "application", "rules"]
+response_format = "json"
+
+[steps.vars]
+directory = "${conversation.item}"
+```
+
+führt denselben gerenderten Prompt dreimal aus. Zwischen zwei `agent.ask()`-
+Aufrufen bleibt die normale Conversation-History erhalten. Frühere Tool-Calls
+und Tool-Ergebnisse werden dabei nicht dauerhaft in die History übernommen;
+erhalten bleiben die Benutzer-Prompts und finalen Assistant-Antworten der
+vorherigen Turns. Dadurch kann ein Step große Teilaufgaben nacheinander
+bearbeiten, ohne alle Tool-Ergebnisse der vorigen Teilaufgaben im Kontext
+mitzuführen.
+
+`conversation_items` akzeptiert drei Quellen:
+
+```toml
+# 1. statisch
+conversation_items = ["operations", "application", "rules"]
+
+# 2. Liste aus einem vorherigen Step
+conversation_items = "steps.plan.output.directories"
+
+# 3. Liste aus dem aktuellen äußeren foreach-Item
+conversation_items = "${item.dirs}"
+```
+
+Die dritte Form benötigt ein normales `foreach`. Die ausgewählte Quelle muss
+zur Laufzeit eine Liste sein und darf höchstens 1000 Elemente enthalten.
+
+Das aktuelle Conversation-Element steht in Variablen als
+`${conversation.item}` zur Verfügung. Bei Objekten sind verschachtelte Felder
+analog zu `${item...}` möglich:
+
+```toml
+[steps.vars]
+directory = "${conversation.item.path}"
+priority = "${conversation.item.priority}"
+concept = "${item.id}"
+```
+
+`${item...}` bezeichnet weiterhin ausschließlich das äußere
+`foreach`-Element. `${iteration.id}` behält ebenfalls seine bisherige
+Bedeutung. Conversation-Turns erzeugen keine eigenen Flow-Iterations-IDs,
+Outputs oder Checkpoints.
+
+Optional kann nach allen Conversation-Items ein zusätzlicher Abschluss-Turn
+ausgeführt werden:
+
+```toml
+conversation_final_prompt_file = "prompts/update-links-final.md"
+```
+
+Ohne diese Option ist die Assistant-Antwort des **letzten regulären
+Conversation-Turns** das Ergebnis des Steps bzw. der äußeren
+`foreach`-Iteration. Mit `conversation_final_prompt_file` ist die Antwort
+dieses zusätzlichen Turns das Ergebnis. Der Final-Prompt darf normale
+Step-Variablen sowie Werte aus einem äußeren `foreach` verwenden, aber kein
+`${conversation.item...}`, weil zu diesem Zeitpunkt kein einzelnes
+Conversation-Element aktiv ist.
+
+Eine leere `conversation_items`-Liste ist nur zulässig, wenn ein
+`conversation_final_prompt_file` vorhanden ist. Dann wird ausschließlich der
+Final-Prompt ausgeführt. Eine zur Laufzeit aufgelöste leere Liste ohne
+Final-Prompt führt zu einem Fehler.
+
+`response_format` gilt für **jede** Assistant-Antwort der Conversation. Bei
+`response_format = "json"` muss daher jeder reguläre Turn und auch der
+optionale Final-Turn gültiges JSON liefern; die bestehende JSON-Reparaturlogik
+läuft für jeden `agent.ask()`-Aufruf separat.
+
+Bei einem äußeren `foreach` erhält weiterhin jede äußere Iteration eine
+frische Agent-Session. Die Conversation-Items dieser einen Iteration laufen
+dagegen gemeinsam innerhalb dieser Session. Ein vorhandener JSON-Checkpoint
+überspringt wie bisher die komplette äußere Iteration bzw. den kompletten Step;
+es gibt bewusst keine Resume-Checkpoints pro Conversation-Turn.
 
 `response_format` steuert das erwartete finale Antwortformat eines Schritts.
 Ohne Angabe gilt `"text"`. Mit `response_format = "json"` ergänzt der Agent
@@ -211,17 +303,68 @@ erhalten: eine vorhandene Datei bei `overwrite_output = false` ist ein Fehler.
 Ein vorhandener, aber ungültiger JSON-Checkpoint führt ebenfalls zu einem Fehler
 und wird niemals still überschrieben.
 
-Bei `foreach` können konkrete Checkpoints bereits beim Run-Start gesichert
-werden, wenn die `foreach`-Quelle selbst aus einem vorhandenen statischen
-JSON-Checkpoint stammt. Das ist beispielsweise bei einem vorhandenen
-Planungs-JSON der Fall: Aus dessen Items werden die konkreten Iterations-IDs und
-Output-Pfade bestimmt, vorhandene Status-Checkpoints werden vor dem ersten
-Modellaufruf validiert und gegen spätere Änderungen abgesichert.
+Ein JSON-Step mit `overwrite_output = true` kann den **beim Run-Start
+vorhandenen Inhalt seines eigenen Outputs** zusätzlich über
+`${previous_output}` in Prompt-Variablen verwenden:
 
-Wird die `foreach`-Quelle dagegen erst im aktuellen Run vom Modell erzeugt,
-gelten Dateien an den daraus berechneten Output-Pfaden nicht als Resume-
-Checkpoints. Existieren sie zu diesem Zeitpunkt bereits, wird der normale
-Output-Kollisionsfehler ausgelöst.
+```toml
+[[steps]]
+id = "update_state"
+prompt_file = "prompts/update-state.md"
+response_format = "json"
+output = "state/result.json"
+overwrite_output = true
+
+[steps.vars]
+previous = "${previous_output}"
+count = "${previous_output.count}"
+```
+
+`${previous_output}` wird als JSON serialisiert. Verschachtelte Objektfelder
+können analog zu `${item...}` adressiert werden. Existierte die Output-Datei
+beim Run-Start nicht, ergibt der vollständige Platzhalter
+`${previous_output}` den JSON-Wert `null`. Ein Zugriff auf ein Unterfeld
+eines nicht vorhandenen Initialzustands ist dagegen ein Fehler.
+
+Das Feature ist absichtlich nur für `response_format = "json"`, gesetztes
+`output` und `overwrite_output = true` zulässig. Der Initialzustand wird
+durch den Run-Start-Snapshot festgelegt. Ein später im selben Run erzeugter oder
+veränderter Dateiinhalt wird niemals still als `previous_output` übernommen.
+War die Datei beim Run-Start vorhanden, wird ihre Integrität vor der Verwendung
+überprüft. Bei Conversation-Steps sehen alle Turns derselben äußeren Iteration
+denselben `previous_output`; erst die letzte Assistant-Antwort wird als neuer
+Output geschrieben.
+
+Bei `foreach` wird `previous_output` pro konkreter Iterations-Output-Datei
+bestimmt. Dafür müssen die Iterationen bereits beim Run-Start aus vorhandenen
+Checkpoints ableitbar sein. Ist die `foreach`-Quelle erst durch Modellarbeit im
+aktuellen Run bekannt, wird der Flow mit einer klaren Fehlermeldung beendet,
+statt eine später gefundene Datei als Initialzustand zu interpretieren.
+
+Auch die Resume-Auflösung für `foreach` ist rekursiv. Ist ein kompletter
+`foreach` bereits aus Run-Start-Checkpoints rekonstruierbar, wird daraus sein
+aggregierter `steps.<id>.output` einschließlich `iterations` aufgebaut.
+Dadurch können auch nachgelagerte Ketten wie
+
+```text
+statischer JSON-Checkpoint
+  -> foreach A
+  -> steps.A.output.iterations
+  -> foreach B
+  -> steps.B.output.iterations
+  -> foreach C
+```
+
+bereits vor dem ersten Modellaufruf auf vorhandene Checkpoints geprüft werden.
+Eine nachgelagerte Iteration wird nur dann als Resume-Checkpoint akzeptiert,
+wenn ihre komplette vorgelagerte Quelle aus dem Run-Start-Zustand
+rekonstruierbar ist.
+
+Wird eine benötigte `foreach`-Quelle dagegen erst im aktuellen Run vom Modell
+erzeugt oder ist eine vorgelagerte Checkpoint-Kette unvollständig, gelten
+Dateien an den daraus später berechneten Output-Pfaden nicht als
+Resume-Checkpoints. Existieren sie zu diesem Zeitpunkt bereits, wird weiterhin
+der normale Output-Kollisionsfehler ausgelöst.
 
 ### Stabile IDs für foreach-Iterationen
 

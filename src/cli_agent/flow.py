@@ -17,9 +17,11 @@ from .config import AppConfig, default_config_file, load_config
 from .execution import (
     ApprovalCallback,
     ExecutionDependencies,
+    ConversationRunOptions,
     OneShotRunOptions,
     build_preapproval_callback,
     resolve_excluded_paths,
+    run_conversation,
     run_once,
 )
 from .file_context import (
@@ -43,6 +45,23 @@ _ITEM_EXPR = re.compile(
     r"\$\{item(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
 _ITERATION_ID_EXPR = re.compile(r"\$\{iteration\.id\}")
+_CONVERSATION_ITEM_EXPR = re.compile(
+    r"\$\{conversation\.item(?:\.([A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
+)
+_PREVIOUS_OUTPUT_EXPR = re.compile(
+    r"\$\{previous_output(?:\.([A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
+)
+_DYNAMIC_VALUE_EXPR = re.compile(
+    r"\$\{(?:(?P<iteration>iteration\.id)"
+    r"|item(?:\.(?P<item_path>[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
+    r"|conversation\.item(?:\.(?P<conversation_path>[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
+    r"|previous_output(?:\.(?P<previous_output_path>[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?)\}"
+)
 _ITERATION_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 _FOREACH = re.compile(
     r"steps\.([A-Za-z_][A-Za-z0-9_-]*)\.output"
@@ -65,6 +84,8 @@ class FlowStep:
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
     foreach: str | None
+    conversation_items: tuple[Any, ...] | str | None = None
+    conversation_final_prompt_file: Path | None = None
     iteration_id: str | None = None
     excluded_paths: tuple[Path, ...] = ()
     response_format: str = "text"
@@ -278,6 +299,17 @@ def _reserved_flow_input_paths(
             must_exist=True,
         )
         reserved[_filesystem_path_key(prompt_path)] = prompt_path
+        if step.conversation_final_prompt_file is not None:
+            final_prompt_path = _workspace_path(
+                workspace,
+                step.conversation_final_prompt_file,
+                purpose=(
+                    f"Finale Conversation-Prompt-Datei von Schritt "
+                    f"{step.step_id!r}"
+                ),
+                must_exist=True,
+            )
+            reserved[_filesystem_path_key(final_prompt_path)] = final_prompt_path
 
         for context_path in _contexts_for_step(
             step,
@@ -393,6 +425,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "approve_tools",
         "vars",
         "foreach",
+        "conversation_items",
+        "conversation_final_prompt_file",
         "iteration_id",
     }
 
@@ -465,10 +499,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 raise ValueError(
                     f"{context_field} darf keine doppelten Dateien enthalten."
                 )
-            if any(_ITEM_EXPR.search(value) for value in context_strings):
+            if any(
+                _ITEM_EXPR.search(value)
+                or _CONVERSATION_ITEM_EXPR.search(value)
+                or _PREVIOUS_OUTPUT_EXPR.search(value)
+                for value in context_strings
+            ):
                 raise ValueError(
-                    f"{context_field} darf nicht aus "
-                    "foreach-Daten parametrisiert werden."
+                    f"{context_field} darf nicht aus foreach-, Conversation- "
+                    "oder previous_output-Daten parametrisiert werden."
                 )
             context_files = tuple(Path(value) for value in context_strings)
 
@@ -493,10 +532,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 f"steps[{index}].add_web_context darf keine "
                 "doppelten URLs enthalten."
             )
-        if any(_ITEM_EXPR.search(value) for value in add_web_context):
+        if any(
+            _ITEM_EXPR.search(value)
+            or _CONVERSATION_ITEM_EXPR.search(value)
+            or _PREVIOUS_OUTPUT_EXPR.search(value)
+            for value in add_web_context
+        ):
             raise ValueError(
-                f"steps[{index}].add_web_context darf nicht aus "
-                "foreach-Daten parametrisiert werden."
+                f"steps[{index}].add_web_context darf nicht aus foreach-, "
+                "Conversation- oder previous_output-Daten parametrisiert werden."
             )
 
         config_value = raw.get("config")
@@ -529,6 +573,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if output_value is not None
             else None
         )
+        if output is not None and (
+            _CONVERSATION_ITEM_EXPR.search(output)
+            or _PREVIOUS_OUTPUT_EXPR.search(output)
+        ):
+            raise ValueError(
+                f"steps[{index}].output darf nicht aus Conversation- oder "
+                "previous_output-Daten parametrisiert werden."
+            )
         overwrite_output = raw.get("overwrite_output", False)
         if not isinstance(overwrite_output, bool):
             raise ValueError(
@@ -612,10 +664,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 f"steps[{index}].approve_tools darf keine "
                 "doppelten Toolnamen enthalten."
             )
-        if any(_ITEM_EXPR.search(value) for value in approve_tools):
+        if any(
+            _ITEM_EXPR.search(value)
+            or _CONVERSATION_ITEM_EXPR.search(value)
+            or _PREVIOUS_OUTPUT_EXPR.search(value)
+            for value in approve_tools
+        ):
             raise ValueError(
-                f"steps[{index}].approve_tools darf nicht aus "
-                "foreach-Daten parametrisiert werden."
+                f"steps[{index}].approve_tools darf nicht aus foreach-, "
+                "Conversation- oder previous_output-Daten parametrisiert werden."
             )
 
         raw_vars = raw.get("vars", {})
@@ -641,6 +698,73 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if foreach_value is not None
             else None
         )
+        conversation_items_value = raw.get("conversation_items")
+        conversation_items: tuple[Any, ...] | str | None
+        if conversation_items_value is None:
+            conversation_items = None
+        elif isinstance(conversation_items_value, list):
+            if len(conversation_items_value) > MAX_FOREACH_ITEMS:
+                raise ValueError(
+                    f"steps[{index}].conversation_items enthält mehr als "
+                    f"{MAX_FOREACH_ITEMS} Elemente."
+                )
+            conversation_items = tuple(conversation_items_value)
+        elif isinstance(conversation_items_value, str) and conversation_items_value.strip():
+            conversation_items = conversation_items_value.strip()
+        else:
+            raise ValueError(
+                f"steps[{index}].conversation_items muss eine Liste oder "
+                "ein nichtleerer String sein."
+            )
+
+        final_prompt_value = raw.get("conversation_final_prompt_file")
+        conversation_final_prompt_file = (
+            Path(
+                _string(
+                    final_prompt_value,
+                    field=f"steps[{index}].conversation_final_prompt_file",
+                )
+            )
+            if final_prompt_value is not None
+            else None
+        )
+        if conversation_final_prompt_file is not None and conversation_items is None:
+            raise ValueError(
+                f"steps[{index}].conversation_final_prompt_file benötigt "
+                "conversation_items."
+            )
+        if isinstance(conversation_items, str):
+            item_match = _ITEM_EXPR.fullmatch(conversation_items)
+            source_match = _FOREACH.fullmatch(conversation_items)
+            if item_match is not None:
+                if foreach is None:
+                    raise ValueError(
+                        f"steps[{index}].conversation_items verwendet "
+                        "${item...} ohne foreach."
+                    )
+            elif source_match is not None:
+                source_id = source_match.group(1)
+                if source_id == step_id or source_id not in known_ids:
+                    raise ValueError(
+                        f"steps[{index}].conversation_items darf nur auf einen "
+                        f"vorherigen Schritt verweisen: {source_id!r}."
+                    )
+            else:
+                raise ValueError(
+                    f"steps[{index}].conversation_items muss entweder eine "
+                    "statische Liste, ${item...} oder "
+                    "steps.<id>.output[.<pfad>] sein."
+                )
+        if (
+            isinstance(conversation_items, tuple)
+            and not conversation_items
+            and conversation_final_prompt_file is None
+        ):
+            raise ValueError(
+                f"steps[{index}].conversation_items darf ohne "
+                "conversation_final_prompt_file nicht leer sein."
+            )
+
         iteration_id_value = raw.get("iteration_id")
         iteration_id = (
             _string(
@@ -685,6 +809,29 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     "${item...} ohne foreach."
                 )
 
+        if conversation_items is None and any(
+            _CONVERSATION_ITEM_EXPR.search(value)
+            for value in variables.values()
+        ):
+            raise ValueError(
+                f"steps[{index}] verwendet ${{conversation.item...}} "
+                "ohne conversation_items."
+            )
+
+        uses_previous_output = any(
+            _PREVIOUS_OUTPUT_EXPR.search(value)
+            for value in variables.values()
+        )
+        if uses_previous_output and (
+            output is None
+            or not overwrite_output
+            or response_format != "json"
+        ):
+            raise ValueError(
+                f"steps[{index}] darf ${{previous_output...}} nur mit "
+                "response_format='json', output und overwrite_output=true verwenden."
+            )
+
         steps.append(
             FlowStep(
                 step_id=step_id,
@@ -701,6 +848,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 approve_tools=approve_tools,
                 variables=variables,
                 foreach=foreach,
+                conversation_items=conversation_items,
+                conversation_final_prompt_file=conversation_final_prompt_file,
                 iteration_id=iteration_id,
                 excluded_paths=step_excluded_paths,
             )
@@ -740,6 +889,18 @@ def _json_dumps_preserving_numbers(value: Any) -> str:
         return _json_dump_string(value)
     if isinstance(value, int):
         return str(value)
+    if isinstance(value, float):
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+        except ValueError as exc:
+            raise TypeError(
+                "Nicht unterstützter JSON-Wert: nicht-endlicher float"
+            ) from exc
     if isinstance(value, list):
         return "[" + ",".join(
             _json_dumps_preserving_numbers(item)
@@ -817,6 +978,108 @@ def _render_iteration_text(
     if iteration_id is not None:
         rendered = _ITERATION_ID_EXPR.sub(iteration_id, rendered)
     return _render_item_text(rendered, item)
+
+
+def _render_dynamic_text(
+    template: str,
+    *,
+    item: Any,
+    iteration_id: str | None,
+    conversation_item: Any,
+    previous_output: Any,
+) -> str:
+    def replace(match: re.Match[str]) -> str:
+        is_previous_output = match.group(0).startswith("${previous_output")
+        if match.group("iteration") is not None:
+            if iteration_id is None:
+                raise ValueError("${iteration.id} ist ohne foreach nicht verfügbar.")
+            value: Any = iteration_id
+        elif match.group("item_path") is not None or match.group(0).startswith("${item"):
+            value = _lookup(
+                item,
+                match.group("item_path"),
+                label="foreach-Element",
+            )
+        elif is_previous_output:
+            value = _lookup(
+                previous_output,
+                match.group("previous_output_path"),
+                label="previous_output",
+            )
+        else:
+            value = _lookup(
+                conversation_item,
+                match.group("conversation_path"),
+                label="Conversation-Element",
+            )
+        if (
+            is_previous_output
+            and match.group("previous_output_path") is None
+        ):
+            return _json_dumps_preserving_numbers(value)
+        if isinstance(value, (dict, list)):
+            return _json_dumps_preserving_numbers(value)
+        if value is None:
+            return "null" if is_previous_output else ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    return _DYNAMIC_VALUE_EXPR.sub(replace, template)
+
+
+def _conversation_items_for_iteration(
+    step: FlowStep,
+    *,
+    outputs: dict[str, str],
+    item: Any,
+) -> list[Any] | None:
+    source = step.conversation_items
+    if source is None:
+        return None
+    if isinstance(source, tuple):
+        values = list(source)
+    else:
+        item_match = _ITEM_EXPR.fullmatch(source)
+        if item_match is not None:
+            values = _lookup(
+                item,
+                item_match.group(1),
+                label="foreach-Element",
+            )
+        else:
+            match = _FOREACH.fullmatch(source)
+            assert match is not None
+            source_id, path = match.groups()
+            if source_id not in outputs:
+                raise ValueError(
+                    f"conversation_items-Quelle {source_id!r} besitzt keinen "
+                    "verfügbaren Output."
+                )
+            parsed = _parse_structured_output(
+                outputs[source_id],
+                step_id=source_id,
+            )
+            values = _lookup(
+                parsed,
+                path,
+                label=f"Output von Schritt {source_id!r}",
+            )
+    if not isinstance(values, list):
+        raise ValueError(
+            f"conversation_items von Schritt {step.step_id!r} ist keine Liste."
+        )
+    if len(values) > MAX_FOREACH_ITEMS:
+        raise ValueError(
+            f"conversation_items enthält {len(values)} Elemente; "
+            f"erlaubt sind höchstens {MAX_FOREACH_ITEMS}."
+        )
+    if not values and step.conversation_final_prompt_file is None:
+        raise ValueError(
+            f"conversation_items von Schritt {step.step_id!r} ist leer und "
+            "es gibt keinen conversation_final_prompt_file."
+        )
+    return values
 
 
 def _iteration_ids(
@@ -953,7 +1216,7 @@ def _verified_preflight_checkpoint(
     return checkpoint
 
 
-def _existing_json_checkpoint(
+def _existing_json_output(
     step: FlowStep,
     *,
     workspace: Path,
@@ -961,7 +1224,6 @@ def _existing_json_checkpoint(
 ) -> str | None:
     if (
         output is None
-        or step.overwrite_output
         or step.response_format != "json"
         or not output.exists()
     ):
@@ -974,6 +1236,62 @@ def _existing_json_checkpoint(
     )
     _parse_structured_output(text, step_id=step.step_id)
     return text
+
+
+def _existing_json_checkpoint(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+) -> str | None:
+    if step.overwrite_output:
+        return None
+    return _existing_json_output(
+        step,
+        workspace=workspace,
+        output=output,
+    )
+
+
+def _previous_output_from_snapshot(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+    fingerprints: dict[tuple[str, str], bytes | None],
+) -> Any:
+    if not _uses_previous_output(step):
+        return None
+    assert output is not None
+    key = _checkpoint_snapshot_key(step, output)
+    if key not in fingerprints:
+        raise ValueError(
+            f"previous_output von Schritt {step.step_id!r} konnte beim "
+            "Run-Start nicht eindeutig bestimmt werden."
+        )
+    expected_fingerprint = fingerprints[key]
+    if expected_fingerprint is None:
+        return None
+
+    text = _existing_json_output(
+        step,
+        workspace=workspace,
+        output=output,
+    )
+    if text is None:
+        raise ValueError(
+            f"previous_output von Schritt {step.step_id!r} wurde nach dem "
+            f"Run-Start entfernt: {output}"
+        )
+    if _checkpoint_fingerprint(text) != expected_fingerprint:
+        raise ValueError(
+            f"previous_output von Schritt {step.step_id!r} wurde nach dem "
+            f"Run-Start verändert: {output}"
+        )
+    return _parse_structured_output(
+        text,
+        step_id=step.step_id,
+    )
 
 
 def _prepare_flow_output(
@@ -998,112 +1316,199 @@ def _prepare_flow_output(
     return None
 
 
-def _snapshot_initial_checkpoints(
+@dataclass(frozen=True)
+class _RunStartSnapshot:
+    checkpoint_fingerprints: dict[tuple[str, str], bytes]
+    checkpoint_paths: tuple[Path, ...]
+    previous_output_fingerprints: dict[tuple[str, str], bytes | None]
+
+
+def _uses_previous_output(step: FlowStep) -> bool:
+    return any(
+        _PREVIOUS_OUTPUT_EXPR.search(value)
+        for value in step.variables.values()
+    )
+
+
+def _snapshot_initial_flow_state(
     flow: FlowDefinition,
     *,
     workspace: Path,
-) -> tuple[dict[tuple[str, str], bytes], tuple[Path, ...]]:
-    """Snapshot resumable checkpoints before the first model call.
+) -> _RunStartSnapshot:
+    """Capture resumable and explicitly requested initial outputs at run start.
 
-    Static JSON checkpoints are known directly. Foreach checkpoints are only
-    eligible when their source step is itself resumed from a pre-existing
-    static JSON checkpoint, so the concrete iteration outputs can also be
-    derived before any model/tool execution.
+    A downstream foreach can only inherit resume eligibility when its complete
+    source output is already reconstructible from run-start checkpoints. This
+    allows chains such as foreach -> output.iterations -> foreach without ever
+    treating files created later in the same run as checkpoints.
     """
-
-    foreach_consumers: dict[str, list[FlowStep]] = {}
-    for candidate in flow.steps:
-        if candidate.foreach is None:
-            continue
-        match = _FOREACH.fullmatch(candidate.foreach)
-        assert match is not None
-        foreach_consumers.setdefault(match.group(1), []).append(candidate)
 
     fingerprints: dict[tuple[str, str], bytes] = {}
     paths: dict[str, Path] = {}
+    previous_output_fingerprints: dict[
+        tuple[str, str],
+        bytes | None,
+    ] = {}
+    available_outputs: dict[str, str] = {}
 
-    def remember(step: FlowStep, output: Path, checkpoint: str) -> None:
+    def remember_checkpoint(
+        step: FlowStep,
+        output: Path,
+        checkpoint: str,
+    ) -> None:
         path_key = _filesystem_path_key(output)
         fingerprints[_checkpoint_snapshot_key(step, output)] = (
             _checkpoint_fingerprint(checkpoint)
         )
         paths[path_key] = output
 
+    def remember_previous_output(
+        step: FlowStep,
+        output: Path,
+    ) -> None:
+        key = _checkpoint_snapshot_key(step, output)
+        text = _existing_json_output(
+            step,
+            workspace=workspace,
+            output=output,
+        )
+        if text is None:
+            previous_output_fingerprints[key] = None
+            return
+        previous_output_fingerprints[key] = _checkpoint_fingerprint(text)
+        paths[_filesystem_path_key(output)] = output
+
     for step in flow.steps:
+        if step.foreach is None:
+            if step.output is None:
+                continue
+            output = _output_for_iteration(
+                step,
+                workspace=workspace,
+                item=None,
+            )
+            assert output is not None
+
+            if _uses_previous_output(step):
+                remember_previous_output(step, output)
+
+            checkpoint = _existing_json_checkpoint(
+                step,
+                workspace=workspace,
+                output=output,
+            )
+            if checkpoint is not None:
+                remember_checkpoint(step, output, checkpoint)
+                available_outputs[step.step_id] = checkpoint
+            continue
+
+        match = _FOREACH.fullmatch(step.foreach)
+        assert match is not None
+        source_id = match.group(1)
+        if source_id not in available_outputs:
+            if _uses_previous_output(step):
+                raise ValueError(
+                    f"previous_output von foreach-Schritt {step.step_id!r} "
+                    "kann beim Run-Start nicht bestimmt werden, weil seine "
+                    f"Quelle {source_id!r} nicht vollständig aus "
+                    "Run-Start-Checkpoints rekonstruierbar ist."
+                )
+            continue
+
+        items = _foreach_items(
+            step,
+            outputs=available_outputs,
+        )
+        iteration_ids = _iteration_ids(
+            step,
+            items=items,
+        )
+        outputs = [
+            _output_for_iteration(
+                step,
+                workspace=workspace,
+                item=item,
+                iteration_id=iteration_id,
+            )
+            for item, iteration_id in zip(items, iteration_ids)
+        ]
+
+        output_keys = [
+            _filesystem_path_key(output)
+            for output in outputs
+            if output is not None
+        ]
+        if len(output_keys) != len(set(output_keys)):
+            raise ValueError(
+                f"Schritt {step.step_id!r} erzeugt für mehrere "
+                "foreach-Elemente nicht eindeutige Output-Pfade."
+            )
+
+        if _uses_previous_output(step):
+            for output in outputs:
+                assert output is not None
+                remember_previous_output(step, output)
+
+        if not items:
+            available_outputs[step.step_id] = _finish_foreach_output([])
+            continue
+
         if (
-            step.foreach is not None
-            or step.output is None
+            step.output is None
             or step.overwrite_output
             or step.response_format != "json"
         ):
             continue
 
-        output = _output_for_iteration(
-            step,
-            workspace=workspace,
-            item=None,
-        )
-        assert output is not None
-        checkpoint = _existing_json_checkpoint(
-            step,
-            workspace=workspace,
-            output=output,
-        )
-        if checkpoint is None:
-            continue
-
-        remember(step, output, checkpoint)
-
-        for consumer in foreach_consumers.get(step.step_id, ()):
-            if (
-                consumer.output is None
-                or consumer.overwrite_output
-                or consumer.response_format != "json"
-            ):
+        parts: list[str] = []
+        payload_bytes = 0
+        complete = True
+        for iteration_id, output in zip(iteration_ids, outputs):
+            assert iteration_id is not None
+            assert output is not None
+            checkpoint = _existing_json_checkpoint(
+                step,
+                workspace=workspace,
+                output=output,
+            )
+            if checkpoint is None:
+                complete = False
                 continue
-            items = _foreach_items(
-                consumer,
-                outputs={step.step_id: checkpoint},
-            )
-            iteration_ids = _iteration_ids(
-                consumer,
-                items=items,
-            )
-            consumer_outputs = [
-                _output_for_iteration(
-                    consumer,
-                    workspace=workspace,
-                    item=item,
+            remember_checkpoint(step, output, checkpoint)
+            if complete:
+                payload_bytes = _append_foreach_iteration(
+                    step,
+                    parts=parts,
+                    payload_bytes=payload_bytes,
                     iteration_id=iteration_id,
-                )
-                for item, iteration_id in zip(items, iteration_ids)
-            ]
-            output_keys = [
-                _filesystem_path_key(candidate)
-                for candidate in consumer_outputs
-                if candidate is not None
-            ]
-            if len(output_keys) != len(set(output_keys)):
-                raise ValueError(
-                    f"Schritt {consumer.step_id!r} erzeugt für mehrere "
-                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                    answer=checkpoint,
                 )
 
-            for candidate in consumer_outputs:
-                assert candidate is not None
-                consumer_checkpoint = _existing_json_checkpoint(
-                    consumer,
-                    workspace=workspace,
-                    output=candidate,
-                )
-                if consumer_checkpoint is not None:
-                    remember(
-                        consumer,
-                        candidate,
-                        consumer_checkpoint,
-                    )
+        if complete:
+            available_outputs[step.step_id] = _finish_foreach_output(parts)
 
-    return fingerprints, tuple(paths.values())
+    return _RunStartSnapshot(
+        checkpoint_fingerprints=fingerprints,
+        checkpoint_paths=tuple(paths.values()),
+        previous_output_fingerprints=previous_output_fingerprints,
+    )
+
+
+def _snapshot_initial_checkpoints(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> tuple[dict[tuple[str, str], bytes], tuple[Path, ...]]:
+    """Compatibility wrapper for callers interested only in resume state."""
+
+    snapshot = _snapshot_initial_flow_state(
+        flow,
+        workspace=workspace,
+    )
+    return (
+        snapshot.checkpoint_fingerprints,
+        snapshot.checkpoint_paths,
+    )
 
 
 _FOREACH_AGGREGATE_PREFIX = '{"iterations":['
@@ -1222,41 +1627,118 @@ def _resolve_config(
     return flow_dir / path
 
 
+def _render_prompt_file(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    prompt_file: Path,
+    item: Any,
+    iteration_id: str | None,
+    conversation_item: Any,
+    previous_output: Any,
+    final_prompt: bool = False,
+) -> str:
+    prompt_path = _workspace_path(
+        workspace,
+        prompt_file,
+        purpose=(
+            f"Finale Conversation-Prompt-Datei von Schritt {step.step_id!r}"
+            if final_prompt
+            else f"Prompt-Datei von Schritt {step.step_id!r}"
+        ),
+        must_exist=True,
+    )
+    prompt = prepare_prompt_file(workspace, prompt_path)
+    template = PromptTemplate.parse(prompt.content)
+    values: dict[str, str] = {}
+    for name in template.variables:
+        if name not in step.variables:
+            raise ValueError(
+                f"Schritt {step.step_id!r} setzt Prompt-Variable {name!r} nicht."
+            )
+        raw = step.variables[name]
+        if final_prompt and _CONVERSATION_ITEM_EXPR.search(raw):
+            raise ValueError(
+                f"Finaler Conversation-Prompt von Schritt {step.step_id!r} "
+                f"kann Variable {name!r} mit ${{conversation.item...}} "
+                "nicht verwenden."
+            )
+        values[name] = _render_dynamic_text(
+            raw,
+            item=item,
+            iteration_id=iteration_id,
+            conversation_item=conversation_item,
+            previous_output=previous_output,
+        )
+    rendered = template.render(values)
+    if not rendered or rendered.isspace():
+        raise ValueError(
+            f"Gerenderter Prompt von Schritt {step.step_id!r} darf nicht leer sein."
+        )
+    return rendered
+
+
 def _prompt_for_iteration(
     step: FlowStep,
     *,
     workspace: Path,
     item: Any,
     iteration_id: str | None = None,
+    conversation_item: Any = None,
+    previous_output: Any = None,
 ) -> str:
-    prompt_path = _workspace_path(
-        workspace,
-        step.prompt_file,
-        purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
-        must_exist=True,
+    return _render_prompt_file(
+        step,
+        workspace=workspace,
+        prompt_file=step.prompt_file,
+        item=item,
+        iteration_id=iteration_id,
+        conversation_item=conversation_item,
+        previous_output=previous_output,
     )
-    prompt = prepare_prompt_file(workspace, prompt_path)
-    template = PromptTemplate.parse(prompt.content)
 
-    values = {
-        name: (
-            _render_iteration_text(
-                value,
+
+def _conversation_prompts_for_iteration(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    outputs: dict[str, str],
+    item: Any,
+    iteration_id: str | None,
+    previous_output: Any,
+) -> tuple[str, ...] | None:
+    conversation_items = _conversation_items_for_iteration(
+        step,
+        outputs=outputs,
+        item=item,
+    )
+    if conversation_items is None:
+        return None
+    prompts = [
+        _prompt_for_iteration(
+            step,
+            workspace=workspace,
+            item=item,
+            iteration_id=iteration_id,
+            conversation_item=conversation_item,
+            previous_output=previous_output,
+        )
+        for conversation_item in conversation_items
+    ]
+    if step.conversation_final_prompt_file is not None:
+        prompts.append(
+            _render_prompt_file(
+                step,
+                workspace=workspace,
+                prompt_file=step.conversation_final_prompt_file,
                 item=item,
                 iteration_id=iteration_id,
+                conversation_item=None,
+                previous_output=previous_output,
+                final_prompt=True,
             )
-            if step.foreach is not None
-            else value
         )
-        for name, value in step.variables.items()
-    }
-    rendered = template.render(values)
-    if not rendered or rendered.isspace():
-        raise ValueError(
-            f"Gerenderter Prompt von Schritt "
-            f"{step.step_id!r} darf nicht leer sein."
-        )
-    return rendered
+    return tuple(prompts)
 
 
 def _contexts_for_step(
@@ -1324,14 +1806,52 @@ def validate_flow(
         )
         prompt = prepare_prompt_file(workspace, prompt_path)
         template = PromptTemplate.parse(prompt.content)
+        known_templates = [template]
+        required_templates = (
+            []
+            if (
+                isinstance(step.conversation_items, tuple)
+                and not step.conversation_items
+                and step.conversation_final_prompt_file is not None
+            )
+            else [template]
+        )
+        if step.conversation_final_prompt_file is not None:
+            final_prompt_path = _workspace_path(
+                workspace,
+                step.conversation_final_prompt_file,
+                purpose=(
+                    f"Finale Conversation-Prompt-Datei von Schritt "
+                    f"{step.step_id!r}"
+                ),
+                must_exist=True,
+            )
+            final_prompt = prepare_prompt_file(workspace, final_prompt_path)
+            final_template = PromptTemplate.parse(final_prompt.content)
+            known_templates.append(final_template)
+            required_templates.append(final_template)
+            for name in final_template.variables:
+                raw = step.variables.get(name)
+                if raw is not None and _CONVERSATION_ITEM_EXPR.search(raw):
+                    raise ValueError(
+                        f"Finaler Conversation-Prompt von Schritt "
+                        f"{step.step_id!r} kann Variable {name!r} mit "
+                        "${conversation.item...} nicht verwenden."
+                    )
+
         supplied = set(step.variables)
-        required = set(template.variables)
-        unknown = sorted(supplied - required)
-        missing = [
+        known = {
             name
-            for name in template.variables
-            if name not in supplied
-        ]
+            for current_template in known_templates
+            for name in current_template.variables
+        }
+        required = {
+            name
+            for current_template in required_templates
+            for name in current_template.variables
+        }
+        unknown = sorted(supplied - known)
+        missing = sorted(required - supplied)
         if unknown:
             raise ValueError(
                 f"Schritt {step.step_id!r} setzt unbekannte "
@@ -1414,6 +1934,16 @@ def validate_flow(
                     f"Schritt {step.step_id!r} verfügbar."
                 )
 
+        if isinstance(step.conversation_items, str):
+            source_match = _FOREACH.fullmatch(step.conversation_items)
+            if source_match is not None:
+                source_id = source_match.group(1)
+                if source_id not in produced:
+                    raise ValueError(
+                        f"conversation_items-Quelle {source_id!r} ist nicht vor "
+                        f"Schritt {step.step_id!r} verfügbar."
+                    )
+
         produced.add(step.step_id)
 
     reserved_inputs = _reserved_flow_input_paths(
@@ -1461,12 +1991,16 @@ async def run_flow(
         flow,
         workspace=workspace,
     )
-    (
-        initial_checkpoint_fingerprints,
-        initial_checkpoint_paths,
-    ) = _snapshot_initial_checkpoints(
+    run_start_snapshot = _snapshot_initial_flow_state(
         flow,
         workspace=workspace,
+    )
+    initial_checkpoint_fingerprints = (
+        run_start_snapshot.checkpoint_fingerprints
+    )
+    initial_checkpoint_paths = run_start_snapshot.checkpoint_paths
+    initial_previous_output_fingerprints = (
+        run_start_snapshot.previous_output_fingerprints
     )
     mutation_protected_paths = tuple(
         dict.fromkeys(
@@ -1691,67 +2225,117 @@ async def run_flow(
                 )
                 continue
 
-            prompt = _prompt_for_iteration(
-                step,
-                workspace=workspace,
-                item=item,
-                iteration_id=iteration_id,
-            )
+            try:
+                previous_output = _previous_output_from_snapshot(
+                    step,
+                    workspace=workspace,
+                    output=output,
+                    fingerprints=initial_previous_output_fingerprints,
+                )
+            except ValueError as exc:
+                if step.foreach is not None and _uses_previous_output(step):
+                    raise ValueError(
+                        f"{exc} Bei foreach muss die Quelle vollständig aus "
+                        "Run-Start-Checkpoints ableitbar sein."
+                    ) from exc
+                raise
+
             contexts = _contexts_for_step(
                 step,
                 workspace=workspace,
             )
-
-            result = await run_once(
-                OneShotRunOptions(
-                    workspace=workspace,
-                    prompt=prompt,
-                    config_file=(
-                        _resolve_config(
-                            step,
-                            flow_dir=flow_dir,
-                        )
-                        if step.config is not None
-                        else None
-                    ),
-                    model=step.model,
-                    workspace_access=step.workspace_access,
-                    retry_policy=step.retry_policy,
-                    response_format=step.response_format,
-                    context_files=contexts,
-                    add_web_context=step.add_web_context,
-                    output=output,
-                    overwrite_output=step.overwrite_output,
-                    approval_callback=build_preapproval_callback(
-                        step.approve_tools,
-                        fallback=approval_callback,
-                    ),
-                    mutation_protected_paths=mutation_protected_paths,
-                    excluded_paths=(
-                        tuple(
-                            dict.fromkeys(
-                                (
-                                    *flow.excluded_paths,
-                                    *step.excluded_paths,
-                                )
-                            )
-                        )
-                        if step.workspace_access in {"read", "write"}
-                        else ()
-                    ),
-                    dump_file_prefix=_dump_prefix_for_iteration(
-                        step,
-                        index=index,
-                        case_colliding_step_ids=case_colliding_step_ids,
-                        iteration_id=(
-                            iteration_id
-                            if step.iteration_id is not None
-                            else None
-                        ),
-                    ),
-                ),
-                dependencies=deps,
+            config_file = (
+                _resolve_config(
+                    step,
+                    flow_dir=flow_dir,
+                )
+                if step.config is not None
+                else None
             )
+            callback = build_preapproval_callback(
+                step.approve_tools,
+                fallback=approval_callback,
+            )
+            excluded_paths = (
+                tuple(
+                    dict.fromkeys(
+                        (
+                            *flow.excluded_paths,
+                            *step.excluded_paths,
+                        )
+                    )
+                )
+                if step.workspace_access in {"read", "write"}
+                else ()
+            )
+            dump_file_prefix = _dump_prefix_for_iteration(
+                step,
+                index=index,
+                case_colliding_step_ids=case_colliding_step_ids,
+                iteration_id=(
+                    iteration_id
+                    if step.iteration_id is not None
+                    else None
+                ),
+            )
+
+            conversation_prompts = _conversation_prompts_for_iteration(
+                step,
+                workspace=workspace,
+                outputs=outputs,
+                item=item,
+                iteration_id=iteration_id,
+                previous_output=previous_output,
+            )
+            if conversation_prompts is None:
+                prompt = _prompt_for_iteration(
+                    step,
+                    workspace=workspace,
+                    item=item,
+                    iteration_id=iteration_id,
+                    previous_output=previous_output,
+                )
+                result = await run_once(
+                    OneShotRunOptions(
+                        workspace=workspace,
+                        prompt=prompt,
+                        config_file=config_file,
+                        model=step.model,
+                        workspace_access=step.workspace_access,
+                        retry_policy=step.retry_policy,
+                        response_format=step.response_format,
+                        context_files=contexts,
+                        add_web_context=step.add_web_context,
+                        output=output,
+                        overwrite_output=step.overwrite_output,
+                        approval_callback=callback,
+                        mutation_protected_paths=mutation_protected_paths,
+                        excluded_paths=excluded_paths,
+                        dump_file_prefix=dump_file_prefix,
+                    ),
+                    dependencies=deps,
+                )
+            else:
+                result = await run_conversation(
+                    ConversationRunOptions(
+                        workspace=workspace,
+                        prompts=conversation_prompts,
+                        config_file=config_file,
+                        model=step.model,
+                        workspace_access=step.workspace_access,
+                        retry_policy=step.retry_policy,
+                        response_format=step.response_format,
+                        context_files=contexts,
+                        add_web_context=step.add_web_context,
+                        output=output,
+                        overwrite_output=step.overwrite_output,
+                        approval_callback=callback,
+                        mutation_protected_paths=mutation_protected_paths,
+                        excluded_paths=excluded_paths,
+                        dump_file_prefix=dump_file_prefix,
+                    ),
+                    dependencies=deps,
+                )
             record_iteration_answer(
                 result.answer,
                 iteration_id,
