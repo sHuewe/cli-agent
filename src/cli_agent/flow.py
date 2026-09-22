@@ -884,6 +884,18 @@ def _json_dumps_preserving_numbers(value: Any) -> str:
         return _json_dump_string(value)
     if isinstance(value, int):
         return str(value)
+    if isinstance(value, float):
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+        except ValueError as exc:
+            raise TypeError(
+                "Nicht unterstützter JSON-Wert: nicht-endlicher float"
+            ) from exc
     if isinstance(value, list):
         return "[" + ",".join(
             _json_dumps_preserving_numbers(item)
@@ -1789,7 +1801,16 @@ def validate_flow(
         )
         prompt = prepare_prompt_file(workspace, prompt_path)
         template = PromptTemplate.parse(prompt.content)
-        templates = [template]
+        known_templates = [template]
+        required_templates = (
+            []
+            if (
+                isinstance(step.conversation_items, tuple)
+                and not step.conversation_items
+                and step.conversation_final_prompt_file is not None
+            )
+            else [template]
+        )
         if step.conversation_final_prompt_file is not None:
             final_prompt_path = _workspace_path(
                 workspace,
@@ -1802,7 +1823,8 @@ def validate_flow(
             )
             final_prompt = prepare_prompt_file(workspace, final_prompt_path)
             final_template = PromptTemplate.parse(final_prompt.content)
-            templates.append(final_template)
+            known_templates.append(final_template)
+            required_templates.append(final_template)
             for name in final_template.variables:
                 raw = step.variables.get(name)
                 if raw is not None and _CONVERSATION_ITEM_EXPR.search(raw):
@@ -1813,12 +1835,17 @@ def validate_flow(
                     )
 
         supplied = set(step.variables)
-        required = {
+        known = {
             name
-            for current_template in templates
+            for current_template in known_templates
             for name in current_template.variables
         }
-        unknown = sorted(supplied - required)
+        required = {
+            name
+            for current_template in required_templates
+            for name in current_template.variables
+        }
+        unknown = sorted(supplied - known)
         missing = sorted(required - supplied)
         if unknown:
             raise ValueError(
