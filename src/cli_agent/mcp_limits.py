@@ -29,6 +29,16 @@ MAX_MCP_TOOL_SCHEMA_CHARS = 2_000_000
 MAX_MCP_TOTAL_TOOL_METADATA_CHARS = 20_000_000
 MAX_MCP_TOOL_RESULT_CHARS = 10_000_000
 
+# JSON Schema validation has complexity classes that are independent of regex
+# backtracking. These bounds keep attacker-controlled MCP schemas cheap to inspect
+# before they can reach jsonschema's recursive/combinator validation paths.
+MAX_MCP_SCHEMA_NODES = 10_000
+MAX_MCP_SCHEMA_DEPTH = 64
+MAX_MCP_SCHEMA_REF_DEPTH = 32
+MAX_MCP_SCHEMA_EXPANSION_COST = 20_000
+MAX_MCP_ARGUMENT_NODES = 20_000
+MAX_MCP_ARGUMENT_DEPTH = 64
+
 # Lifecycle calls should fail reasonably quickly if a server is wedged, while
 # normal tool calls get a deliberately much larger execution window.
 MCP_INITIALIZE_TIMEOUT_SECONDS = 120.0
@@ -481,6 +491,147 @@ def _reject_external_schema_references(schema: Any, *, tool_name: str) -> None:
             stack.extend(current)
 
 
+def _validate_json_structure_limits(
+    value: Any,
+    *,
+    tool_name: str,
+    what: str,
+    max_nodes: int,
+    max_depth: int,
+) -> None:
+    """Reject excessively large/deep JSON structures in linear time."""
+
+    nodes = 0
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        current, depth = stack.pop()
+        nodes += 1
+        if nodes > max_nodes:
+            raise RuntimeError(
+                f"MCP-Tool {tool_name} überschreitet das {what}-Knotenlimit "
+                f"({nodes} > {max_nodes})."
+            )
+        if depth > max_depth:
+            raise RuntimeError(
+                f"MCP-Tool {tool_name} überschreitet das {what}-Tiefenlimit "
+                f"({depth} > {max_depth})."
+            )
+        if isinstance(current, dict):
+            stack.extend((child, depth + 1) for child in current.values())
+        elif isinstance(current, list):
+            stack.extend((child, depth + 1) for child in current)
+
+
+def _validate_schema_complexity(
+    schema: dict[str, Any],
+    *,
+    tool_name: str,
+    validator,
+) -> None:
+    """Bound local-ref/combinator expansion before argument validation.
+
+    RE2 makes schema regexes safe, but JSON Schema can still create exponential
+    work through repeated local references under anyOf/oneOf/allOf. We compute
+    a conservative expanded-tree cost with memoization, so checking the budget
+    itself stays bounded by the literal schema size and the reference-depth cap.
+    """
+
+    _validate_json_structure_limits(
+        schema,
+        tool_name=tool_name,
+        what="Schema",
+        max_nodes=MAX_MCP_SCHEMA_NODES,
+        max_depth=MAX_MCP_SCHEMA_DEPTH,
+    )
+
+    # Nested resources change the meaning of fragment-only references. Keeping
+    # untrusted MCP schemas to a single resource makes the cost model exact and
+    # still supports the common $defs + local $ref shape produced by tool SDKs.
+    stack: list[tuple[Any, bool]] = [(schema, True)]
+    while stack:
+        current, is_root = stack.pop()
+        if isinstance(current, dict):
+            if not is_root and "$id" in current:
+                raise RuntimeError(
+                    f"MCP-Tool {tool_name} verwendet ein verschachteltes $id. "
+                    "Verschachtelte JSON-Schema-Ressourcen sind für externe "
+                    "MCP-Tools nicht zulässig."
+                )
+            if "$dynamicRef" in current or "$recursiveRef" in current:
+                raise RuntimeError(
+                    f"MCP-Tool {tool_name} verwendet dynamische/rekursive "
+                    "JSON-Schema-Referenzen. Für externe MCP-Tools sind nur "
+                    "statische lokale $ref-Referenzen zulässig."
+                )
+            stack.extend((child, False) for child in current.values())
+        elif isinstance(current, list):
+            stack.extend((child, False) for child in current)
+
+    memo: dict[tuple[int, int], int] = {}
+    active_nodes: set[int] = set()
+
+    def expanded_cost(current: Any, ref_depth: int) -> int:
+        if not isinstance(current, (dict, list)):
+            return 1
+
+        cache_key = (id(current), ref_depth)
+        cached = memo.get(cache_key)
+        if cached is not None:
+            return cached
+
+        node_id = id(current)
+        if node_id in active_nodes:
+            raise RuntimeError(
+                f"MCP-Tool {tool_name} verwendet eine zyklische lokale "
+                "JSON-Schema-Referenz."
+            )
+
+        active_nodes.add(node_id)
+        try:
+            cost = 1
+            if isinstance(current, dict):
+                ref = current.get("$ref")
+                if ref is not None:
+                    if ref_depth >= MAX_MCP_SCHEMA_REF_DEPTH:
+                        raise RuntimeError(
+                            f"MCP-Tool {tool_name} überschreitet das "
+                            "JSON-Schema-Referenztiefenlimit "
+                            f"({MAX_MCP_SCHEMA_REF_DEPTH})."
+                        )
+                    try:
+                        resolved = validator._resolver.lookup(ref)
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"MCP-Tool {tool_name} enthält eine nicht "
+                            f"auflösbare lokale JSON-Schema-Referenz {ref!r}."
+                        ) from exc
+                    cost += expanded_cost(resolved.contents, ref_depth + 1)
+
+                children = (
+                    child
+                    for key, child in current.items()
+                    if key != "$ref"
+                )
+            else:
+                children = iter(current)
+
+            for child in children:
+                cost += expanded_cost(child, ref_depth)
+                if cost > MAX_MCP_SCHEMA_EXPANSION_COST:
+                    raise RuntimeError(
+                        f"MCP-Tool {tool_name} überschreitet das "
+                        "JSON-Schema-Komplexitätslimit "
+                        f"({MAX_MCP_SCHEMA_EXPANSION_COST})."
+                    )
+
+            memo[cache_key] = cost
+            return cost
+        finally:
+            active_nodes.remove(node_id)
+
+    expanded_cost(schema, 0)
+
+
 def _schema_validator(schema: dict[str, Any], *, tool_name: str):
     _reject_external_schema_references(schema, tool_name=tool_name)
     try:
@@ -490,7 +641,14 @@ def _schema_validator(schema: dict[str, Any], *, tool_name: str):
         raise RuntimeError(
             f"MCP-Tool {tool_name} liefert kein gültiges JSON-Schema."
         ) from exc
-    return validator_class(schema)
+
+    validator = validator_class(schema)
+    _validate_schema_complexity(
+        schema,
+        tool_name=tool_name,
+        validator=validator,
+    )
+    return validator
 
 
 def validate_mcp_tool_arguments(
@@ -501,24 +659,23 @@ def validate_mcp_tool_arguments(
 ) -> str | None:
     """Return a concise validation error, or ``None`` for valid arguments."""
 
+    _validate_json_structure_limits(
+        arguments,
+        tool_name=tool_name,
+        what="Argument",
+        max_nodes=MAX_MCP_ARGUMENT_NODES,
+        max_depth=MAX_MCP_ARGUMENT_DEPTH,
+    )
     validator = _schema_validator(schema, tool_name=tool_name)
     try:
-        errors = sorted(
-            validator.iter_errors(arguments),
-            key=lambda error: (
-                tuple(str(part) for part in error.absolute_path),
-                str(error.validator),
-                error.message,
-            ),
-        )
+        error = next(validator.iter_errors(arguments), None)
     except _UnsupportedSafeRegex as exc:
         return (
             "$: JSON-Schema-Regex wird von der sicheren RE2-Engine "
             f"nicht unterstützt: {exc}"
         )
-    if not errors:
+    if error is None:
         return None
-    error = errors[0]
     location = "$"
     for part in error.absolute_path:
         if isinstance(part, int):
