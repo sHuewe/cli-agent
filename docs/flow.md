@@ -3,9 +3,10 @@
 `cli-agent-flow` ist der erste Orchestrierungs-Entry-Point für mehrere
 `cli-agent`-Läufe. Die Flow-Engine besitzt absichtlich keine zusätzlichen
 Agent-Capabilities. `cli-agent` und `cli-agent-flow` verwenden denselben
-wiederverwendbaren One-Shot-Execution-Core. Für jeden Schritt bzw. jede
-Iteration wird eine frische Agent-Instanz aufgebaut, aber kein neuer
-`cli-agent`-Prozess gestartet.
+wiederverwendbaren One-Shot-Execution-Core. Für jeden Schritt bzw. jede äußere
+`foreach`-Iteration wird eine frische Agent-Instanz aufgebaut, aber kein neuer
+`cli-agent`-Prozess gestartet. Optionale Conversation-Turns innerhalb dieser
+Einheit verwenden dagegen bewusst dieselbe Agent-Instanz.
 
 ## Ziele der ersten Version
 
@@ -107,6 +108,97 @@ approve_tools = ["os__write_file", "os__make_directory"]
 id = "${item.id}"
 title = "${item.title}"
 ```
+
+### Mehrere Conversation-Turns innerhalb eines Steps
+
+Ein Step kann optional mehrere Benutzer-Prompts nacheinander in **derselben**
+Agent-Session ausführen. Dafür wird `conversation_items` gesetzt. Das normale
+`foreach` bleibt davon unabhängig: Ein Step kann Conversation-Turns mit oder
+ohne äußeres `foreach` verwenden.
+
+Eine statische Liste:
+
+```toml
+[[steps]]
+id = "update_links"
+prompt_file = "prompts/update-links.md"
+conversation_items = ["operations", "application", "rules"]
+response_format = "json"
+
+[steps.vars]
+directory = "${conversation.item}"
+```
+
+führt denselben gerenderten Prompt dreimal aus. Zwischen zwei `agent.ask()`-
+Aufrufen bleibt die normale Conversation-History erhalten. Frühere Tool-Calls
+und Tool-Ergebnisse werden dabei nicht dauerhaft in die History übernommen;
+erhalten bleiben die Benutzer-Prompts und finalen Assistant-Antworten der
+vorherigen Turns. Dadurch kann ein Step große Teilaufgaben nacheinander
+bearbeiten, ohne alle Tool-Ergebnisse der vorigen Teilaufgaben im Kontext
+mitzuführen.
+
+`conversation_items` akzeptiert drei Quellen:
+
+```toml
+# 1. statisch
+conversation_items = ["operations", "application", "rules"]
+
+# 2. Liste aus einem vorherigen Step
+conversation_items = "steps.plan.output.directories"
+
+# 3. Liste aus dem aktuellen äußeren foreach-Item
+conversation_items = "${item.dirs}"
+```
+
+Die dritte Form benötigt ein normales `foreach`. Die ausgewählte Quelle muss
+zur Laufzeit eine Liste sein und darf höchstens 1000 Elemente enthalten.
+
+Das aktuelle Conversation-Element steht in Variablen als
+`${conversation.item}` zur Verfügung. Bei Objekten sind verschachtelte Felder
+analog zu `${item...}` möglich:
+
+```toml
+[steps.vars]
+directory = "${conversation.item.path}"
+priority = "${conversation.item.priority}"
+concept = "${item.id}"
+```
+
+`${item...}` bezeichnet weiterhin ausschließlich das äußere
+`foreach`-Element. `${iteration.id}` behält ebenfalls seine bisherige
+Bedeutung. Conversation-Turns erzeugen keine eigenen Flow-Iterations-IDs,
+Outputs oder Checkpoints.
+
+Optional kann nach allen Conversation-Items ein zusätzlicher Abschluss-Turn
+ausgeführt werden:
+
+```toml
+conversation_final_prompt_file = "prompts/update-links-final.md"
+```
+
+Ohne diese Option ist die Assistant-Antwort des **letzten regulären
+Conversation-Turns** das Ergebnis des Steps bzw. der äußeren
+`foreach`-Iteration. Mit `conversation_final_prompt_file` ist die Antwort
+dieses zusätzlichen Turns das Ergebnis. Der Final-Prompt darf normale
+Step-Variablen sowie Werte aus einem äußeren `foreach` verwenden, aber kein
+`${conversation.item...}`, weil zu diesem Zeitpunkt kein einzelnes
+Conversation-Element aktiv ist.
+
+Eine leere `conversation_items`-Liste ist nur zulässig, wenn ein
+`conversation_final_prompt_file` vorhanden ist. Dann wird ausschließlich der
+Final-Prompt ausgeführt. Eine zur Laufzeit aufgelöste leere Liste ohne
+Final-Prompt führt zu einem Fehler.
+
+`response_format` gilt für **jede** Assistant-Antwort der Conversation. Bei
+`response_format = "json"` muss daher jeder reguläre Turn und auch der
+optionale Final-Turn gültiges JSON liefern; die bestehende JSON-Reparaturlogik
+läuft für jeden `agent.ask()`-Aufruf separat.
+
+Bei einem äußeren `foreach` erhält weiterhin jede äußere Iteration eine
+frische Agent-Session. Die Conversation-Items dieser einen Iteration laufen
+dagegen gemeinsam innerhalb dieser Session. Ein vorhandener JSON-Checkpoint
+überspringt wie bisher die komplette äußere Iteration bzw. den kompletten Step;
+es gibt bewusst keine Resume-Checkpoints pro Conversation-Turn.
 
 `response_format` steuert das erwartete finale Antwortformat eines Schritts.
 Ohne Angabe gilt `"text"`. Mit `response_format = "json"` ergänzt der Agent
