@@ -77,6 +77,38 @@ max_delay_seconds = 60
     assert retry.max_delay_seconds == 60
 
 
+def test_step_retry_can_disable_global_retry(tmp_path: Path) -> None:
+    _write_prompt(tmp_path)
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[retry]
+max_attempts = 4
+initial_delay_seconds = 2
+backoff_multiplier = 3
+max_delay_seconds = 20
+
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+
+[steps.retry]
+max_attempts = 1
+""".strip(),
+        encoding="utf-8",
+    )
+
+    flow = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    retry = flow.steps[0].retry_policy
+
+    assert retry is not None
+    assert retry.max_attempts == 1
+    assert retry.initial_delay_seconds == 2
+    assert retry.backoff_multiplier == 3
+    assert retry.max_delay_seconds == 20
+
+
 def test_step_retry_without_global_keeps_existing_defaults(tmp_path: Path) -> None:
     _write_prompt(tmp_path)
     (tmp_path / "flow.toml").write_text(
@@ -101,7 +133,6 @@ max_attempts = 3
     assert retry.initial_delay_seconds == 1.0
     assert retry.backoff_multiplier == 2.0
     assert retry.max_delay_seconds == 10.0
-
 
 
 def test_partial_global_retry_uses_existing_defaults(tmp_path: Path) -> None:
