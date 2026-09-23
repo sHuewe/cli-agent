@@ -75,6 +75,12 @@ müssen weiterhin innerhalb des festen Workspace liegen.
 ```toml
 version = 1
 
+[retry]
+max_attempts = 3
+initial_delay_seconds = 1
+backoff_multiplier = 2
+max_delay_seconds = 10
+
 [[steps]]
 id = "discover"
 config = "config-discover.toml"
@@ -87,12 +93,6 @@ add_web_context = [
 output = "work/items.json"
 overwrite_output = true
 workspace_access = "read"
-
-[steps.retry]
-max_attempts = 3
-initial_delay_seconds = 1
-backoff_multiplier = 2
-max_delay_seconds = 10
 
 [[steps]]
 id = "process"
@@ -296,15 +296,22 @@ werden vor dem eigentlichen Step-Prompt in derselben frischen Agent-Instanz
 geladen. Netzwerk-Allowlist, Provider-Routing und URL-Sicherheitsregeln bleiben
 die des normalen CLI.
 
-Die optionale Tabelle `[steps.retry]` steuert ausschließlich Wiederholungen
-transient fehlgeschlagener **Modellanfragen** innerhalb dieses Schritts. Sie
-wiederholt niemals einen vollständigen Step und führt daher bereits ausgeführte
-MCP-Tool-Aufrufe nicht erneut aus. `max_attempts` zählt den ersten Versuch mit;
-`max_attempts = 1` deaktiviert Retries. Wiederholt werden derzeit
-Verbindungs-/Transportfehler sowie HTTP 429 und HTTP 5xx von OpenAI-kompatiblen
-bzw. Ollama-Endpunkten. Konfigurations-, Authentifizierungs-/4xx-Fehler (außer
-429), Context-Limits, zu große Antworten und ungültige Modellantworten werden
-nicht automatisch erneut versucht.
+Die optionale globale Tabelle `[retry]` definiert die Retry-Policy für alle
+Steps des Flows. Ein Step kann mit `[steps.retry]` einzelne Werte überschreiben;
+nicht gesetzte Step-Werte werden aus der globalen Policy geerbt. Gibt es keine
+globale Policy, behalten step-spezifische Teilangaben die bisherigen Defaults
+(`max_attempts = 1`, `initial_delay_seconds = 1`, `backoff_multiplier = 2`,
+`max_delay_seconds = 10`). Wenn weder `[retry]` noch `[steps.retry]` gesetzt ist,
+sind Retries weiterhin deaktiviert.
+
+Die Retry-Policy steuert ausschließlich Wiederholungen transient fehlgeschlagener
+**Modellanfragen**. Sie wiederholt niemals einen vollständigen Step und führt
+daher bereits ausgeführte MCP-Tool-Aufrufe nicht erneut aus. `max_attempts` zählt
+den ersten Versuch mit; `max_attempts = 1` deaktiviert Retries. Wiederholt werden
+derzeit Verbindungs-/Transportfehler sowie HTTP 429 und HTTP 5xx von
+OpenAI-kompatiblen bzw. Ollama-Endpunkten. Konfigurations-,
+Authentifizierungs-/4xx-Fehler (außer 429), Context-Limits, zu große Antworten
+und ungültige Modellantworten werden nicht automatisch erneut versucht.
 
 `approve_tools` entspricht semantisch dem wiederholbaren CLI-Schalter
 `--approve-tool`: Die Liste enthält exakte exponierte Toolnamen, z. B.
