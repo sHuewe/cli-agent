@@ -385,7 +385,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             f"Flow-Datei konnte nicht gelesen werden: {exc}"
         ) from exc
 
-    allowed_root = {"version", "steps", "exclude_paths", "vars"}
+    allowed_root = {"version", "steps", "exclude_paths", "vars", "retry"}
     unknown_root = set(values) - allowed_root
     if unknown_root:
         raise ValueError(
@@ -394,6 +394,39 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
     if values.get("version") != 1:
         raise ValueError("Flow-Datei benötigt version = 1.")
+
+    allowed_retry = {
+        "max_attempts",
+        "initial_delay_seconds",
+        "backoff_multiplier",
+        "max_delay_seconds",
+    }
+    raw_global_retry = values.get("retry")
+    global_retry_policy: ModelRetryPolicy | None = None
+    if raw_global_retry is not None:
+        if not isinstance(raw_global_retry, dict):
+            raise ValueError("retry muss eine Tabelle sein.")
+        unknown_retry = set(raw_global_retry) - allowed_retry
+        if unknown_retry:
+            raise ValueError(
+                "retry enthält unbekannte Schlüssel: "
+                + ", ".join(sorted(unknown_retry))
+            )
+        global_retry_policy = ModelRetryPolicy(
+            max_attempts=raw_global_retry.get("max_attempts", 1),
+            initial_delay_seconds=raw_global_retry.get(
+                "initial_delay_seconds",
+                1.0,
+            ),
+            backoff_multiplier=raw_global_retry.get(
+                "backoff_multiplier",
+                2.0,
+            ),
+            max_delay_seconds=raw_global_retry.get(
+                "max_delay_seconds",
+                10.0,
+            ),
+        )
 
     raw_global_vars = values.get("vars", {})
     if not isinstance(raw_global_vars, dict):
@@ -636,37 +669,35 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         response_format = str(response_format_value)
 
         raw_retry = raw.get("retry")
-        retry_policy: ModelRetryPolicy | None = None
+        retry_policy = global_retry_policy
         if raw_retry is not None:
             if not isinstance(raw_retry, dict):
                 raise ValueError(
                     f"steps[{index}].retry muss eine Tabelle sein."
                 )
-            allowed_retry = {
-                "max_attempts",
-                "initial_delay_seconds",
-                "backoff_multiplier",
-                "max_delay_seconds",
-            }
             unknown_retry = set(raw_retry) - allowed_retry
             if unknown_retry:
                 raise ValueError(
                     f"steps[{index}].retry enthält unbekannte Schlüssel: "
                     + ", ".join(sorted(unknown_retry))
                 )
+            inherited_retry = global_retry_policy or ModelRetryPolicy()
             retry_policy = ModelRetryPolicy(
-                max_attempts=raw_retry.get("max_attempts", 1),
+                max_attempts=raw_retry.get(
+                    "max_attempts",
+                    inherited_retry.max_attempts,
+                ),
                 initial_delay_seconds=raw_retry.get(
                     "initial_delay_seconds",
-                    1.0,
+                    inherited_retry.initial_delay_seconds,
                 ),
                 backoff_multiplier=raw_retry.get(
                     "backoff_multiplier",
-                    2.0,
+                    inherited_retry.backoff_multiplier,
                 ),
                 max_delay_seconds=raw_retry.get(
                     "max_delay_seconds",
-                    10.0,
+                    inherited_retry.max_delay_seconds,
                 ),
             )
 

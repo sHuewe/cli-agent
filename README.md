@@ -459,7 +459,7 @@ id = "${item.id}"
 title = "${item.title}"
 ```
 
-`[steps.retry]` kann pro Schritt bounded Retries für transient fehlgeschlagene Modellrequests konfigurieren (z. B. Verbindungsfehler, HTTP 429/5xx). Dabei wird nur der konkrete Modellrequest wiederholt, nicht der gesamte Step oder bereits ausgeführte Tool-Aufrufe.
+`[retry]` kann eine globale bounded Retry-Policy für alle Flow-Schritte definieren. `[steps.retry]` überschreibt bei Bedarf einzelne Werte pro Step und erbt nicht gesetzte Werte aus der globalen Policy. Wiederholt wird nur der konkrete transient fehlgeschlagene Modellrequest (z. B. Verbindungsfehler, HTTP 429/5xx), nicht der gesamte Step oder bereits ausgeführte Tool-Aufrufe.
 
 Pro Step kann `add_file_context` entweder als einzelner Pfad oder als Liste mehrerer workspace-lokaler Referenzdateien gesetzt werden, z. B. `add_file_context = ["manual.txt", "architecture.md"]`. Im normalen CLI sind `--add-file-context` und sein Alias `--context-file` dafür wiederholbar. `add_web_context = ["...", ...]` akzeptiert weiterhin einen oder mehrere Web-Kontexte. Für alle Dateien gelten dieselben Workspace-, Sensitive-Path-, Symlink-, Hardlink- und Größenprüfungen; zusätzlich ist die Gesamtgröße aller ausgewählten Dateikontexte begrenzt.
 
