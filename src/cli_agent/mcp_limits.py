@@ -498,10 +498,12 @@ def validate_mcp_tool_arguments(
     tool_name: str,
     schema: dict[str, Any],
     arguments: dict[str, Any],
+    validator: Any | None = None,
 ) -> str | None:
     """Return a concise validation error, or ``None`` for valid arguments."""
 
-    validator = _schema_validator(schema, tool_name=tool_name)
+    if validator is None:
+        validator = _schema_validator(schema, tool_name=tool_name)
     try:
         errors = sorted(
             validator.iter_errors(arguments),

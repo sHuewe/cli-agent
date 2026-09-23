@@ -10,6 +10,7 @@ worker is killed and replaced on the next request.
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -18,16 +19,18 @@ import subprocess
 import sys
 import threading
 import time
+from collections import OrderedDict
 from typing import Any
 
 MCP_SCHEMA_WORKER_START_TIMEOUT_SECONDS = 10.0
-MCP_SCHEMA_METADATA_TIMEOUT_SECONDS = 2.0
-MCP_SCHEMA_ARGUMENT_TIMEOUT_SECONDS = 1.0
+MCP_SCHEMA_METADATA_TIMEOUT_SECONDS = 5.0
+MCP_SCHEMA_ARGUMENT_TIMEOUT_SECONDS = 3.0
 MAX_MCP_SCHEMA_WORKER_REQUEST_BYTES = 64_000_000
 MAX_MCP_SCHEMA_WORKER_RESPONSE_BYTES = 64_000
 MAX_MCP_VALIDATION_ERROR_CHARS = 8_000
 MAX_MCP_SCHEMA_PARENT_NODES = 25_000
 MAX_MCP_SCHEMA_PARENT_DEPTH = 128
+MAX_MCP_SCHEMA_VALIDATOR_CACHE_ENTRIES = 32
 
 _WORKER_ENV_NAMES = (
     "PATH",
@@ -40,6 +43,12 @@ _WORKER_ENV_NAMES = (
     "LC_ALL",
     "PYTHONIOENCODING",
 )
+
+# This cache is only used by the validator worker. Each entry stores the
+# canonical schema text together with its already checked validator. Keeping the
+# canonical text guards against the (extremely unlikely) possibility of a digest
+# collision while the fixed entry count keeps memory bounded.
+_WORKER_VALIDATOR_CACHE: OrderedDict[str, tuple[str, Any]] = OrderedDict()
 
 
 def _worker_environment() -> dict[str, str]:
@@ -564,6 +573,39 @@ def validate_mcp_tool_arguments(
     return validation_error
 
 
+def _canonical_schema_text(schema: dict[str, Any]) -> str:
+    return json.dumps(
+        schema,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _worker_schema_validator(
+    schema: dict[str, Any],
+    *,
+    tool_name: str,
+):
+    """Return a checked validator from the worker-local bounded LRU cache."""
+
+    from . import mcp_limits
+
+    schema_text = _canonical_schema_text(schema)
+    digest = hashlib.sha256(schema_text.encode("utf-8")).hexdigest()
+    cached = _WORKER_VALIDATOR_CACHE.get(digest)
+    if cached is not None and cached[0] == schema_text:
+        _WORKER_VALIDATOR_CACHE.move_to_end(digest)
+        return cached[1]
+
+    validator = mcp_limits._schema_validator(schema, tool_name=tool_name)
+    _WORKER_VALIDATOR_CACHE[digest] = (schema_text, validator)
+    _WORKER_VALIDATOR_CACHE.move_to_end(digest)
+    while len(_WORKER_VALIDATOR_CACHE) > MAX_MCP_SCHEMA_VALIDATOR_CACHE_ENTRIES:
+        _WORKER_VALIDATOR_CACHE.popitem(last=False)
+    return validator
+
+
 def _handle_request(request: Any) -> dict[str, Any]:
     from . import mcp_limits
 
@@ -582,7 +624,7 @@ def _handle_request(request: Any) -> dict[str, Any]:
             schema = item.get("schema")
             if not isinstance(tool_name, str) or not isinstance(schema, dict):
                 raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")
-            mcp_limits._schema_validator(schema, tool_name=tool_name)
+            _worker_schema_validator(schema, tool_name=tool_name)
         return {"ok": True}
 
     if operation == "validate_arguments":
@@ -595,10 +637,12 @@ def _handle_request(request: Any) -> dict[str, Any]:
             or not isinstance(arguments, dict)
         ):
             raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")
+        validator = _worker_schema_validator(schema, tool_name=tool_name)
         validation_error = mcp_limits.validate_mcp_tool_arguments(
             tool_name=tool_name,
             schema=schema,
             arguments=arguments,
+            validator=validator,
         )
         return {
             "ok": True,
