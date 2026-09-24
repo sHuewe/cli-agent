@@ -110,15 +110,21 @@ def _knowledge_allowed_calls(result: Any) -> dict[str, set[str]]:
         return {}
 
     allowed_calls: dict[str, set[str]] = {}
-    internal_links = structured.get("internal_links")
-    if not isinstance(internal_links, list):
-        return allowed_calls
+    candidates: list[Any] = []
 
-    for link in internal_links:
-        if not isinstance(link, dict) or link.get("exists") is False:
+    internal_links = structured.get("internal_links")
+    if isinstance(internal_links, list):
+        candidates.extend(internal_links)
+
+    entries = structured.get("entries")
+    if isinstance(entries, list):
+        candidates.extend(entries)
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or candidate.get("exists") is False:
             continue
-        path = link.get("path")
-        next_tool = link.get("next_tool")
+        path = candidate.get("path")
+        next_tool = candidate.get("next_tool")
         if not isinstance(path, str) or next_tool not in EXPECTED_KNOWLEDGE_TOOLS:
             continue
         normalized_path = _normalize_knowledge_path(path)
