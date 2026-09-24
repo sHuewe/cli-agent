@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import logging
+import os
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -181,6 +182,61 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         )
         return f"{shortened_prefix}{tail}"
 
+    @staticmethod
+    def _ensure_dump_gitignore(dump_directory: Path) -> None:
+        gitignore = dump_directory / ".gitignore"
+        if path_entry_is_symlink_or_reparse(gitignore):
+            raise RuntimeError(
+                "LLM-Context-Dump verweigert: .cli-agent/.gitignore darf kein "
+                "Symlink oder Reparse Point sein."
+            )
+
+        if gitignore.exists():
+            if not gitignore.is_file():
+                raise RuntimeError(
+                    "LLM-Context-Dump verweigert: .cli-agent/.gitignore muss "
+                    "eine reguläre Datei sein."
+                )
+            try:
+                if regular_file_has_multiple_links(gitignore):
+                    raise RuntimeError(
+                        "LLM-Context-Dump verweigert: .cli-agent/.gitignore "
+                        "besitzt mehrere Hardlinks."
+                    )
+
+                size = gitignore.stat().st_size
+                with gitignore.open("rb") as handle:
+                    if size > 8192:
+                        handle.seek(-8192, os.SEEK_END)
+                    tail = handle.read()
+                last_line = tail.splitlines()[-1] if tail.splitlines() else b""
+                if last_line == b"*":
+                    return
+
+                needs_newline = size > 0 and not tail.endswith((b"\n", b"\r"))
+                with gitignore.open("ab") as handle:
+                    if needs_newline:
+                        handle.write(b"\n")
+                    handle.write(b"*\n")
+                return
+            except OSError as exc:
+                raise RuntimeError(
+                    "LLM-Context-Dump konnte .cli-agent/.gitignore nicht sicher "
+                    "prüfen oder aktualisieren."
+                ) from exc
+
+        try:
+            with gitignore.open("xb") as handle:
+                handle.write(b"*\n")
+        except FileExistsError:
+            # A concurrent creator won the race. Re-run validation so an
+            # existing permissive file is never silently accepted.
+            CliAgent._ensure_dump_gitignore(dump_directory)
+        except OSError as exc:
+            raise RuntimeError(
+                "LLM-Context-Dump konnte .cli-agent/.gitignore nicht anlegen."
+            ) from exc
+
     def _safe_dump_path(self, filename: str) -> Path:
         filename = self._dump_filename(filename)
         if Path(filename).name != filename or not filename:
@@ -195,6 +251,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             raise RuntimeError(
                 "LLM-Context-Dump verweigert: .cli-agent darf kein Symlink oder Reparse Point sein."
             )
+        self._ensure_dump_gitignore(dump_directory)
         try:
             dump_directory.resolve(strict=True).relative_to(self.workspace_directory)
         except (OSError, RuntimeError, ValueError) as exc:
