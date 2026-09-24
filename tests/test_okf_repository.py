@@ -55,6 +55,18 @@ def test_repository_validates_limits_and_directory(tmp_path: Path) -> None:
         OkfRepository.from_directory(tmp_path / "missing")
 
 
+def test_markdown_link_scanner_handles_malformed_input_without_rescanning() -> None:
+    malformed = "[" * 100_000
+    assert list(RepositoryMetadataMixin._iter_markdown_links(malformed)) == []
+
+
+def test_markdown_link_scanner_preserves_inner_valid_link() -> None:
+    content = "[broken [Concept](concept.md)"
+    assert list(RepositoryMetadataMixin._iter_markdown_links(content)) == [
+        ("Concept", "concept.md")
+    ]
+
+
 def test_index_md_is_used_and_only_internal_safe_links_are_exposed(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
