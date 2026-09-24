@@ -643,6 +643,7 @@ def _handle_request(request: Any) -> dict[str, Any]:
             schema=schema,
             arguments=arguments,
             validator=validator,
+            redact_values=True,
         )
         return {
             "ok": True,
