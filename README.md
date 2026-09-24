@@ -592,7 +592,7 @@ log_model_messages = false
 log_tool_results = false
 ```
 
-`[logging].file` ist optional und wird relativ zum lokalen `cli-agent`-State-Verzeichnis aufgelöst. Absolute Pfade und `..` sind nicht zulässig. Beispielsweise schreibt `file = "logs/projekt-a.log"` unter `<cli-agent-state>/logs/projekt-a.log`.
+`[logging].file` ist optional und wird relativ zum lokalen `cli-agent`-State-Verzeichnis aufgelöst. Absolute Pfade und `..` sind nicht zulässig. Um parallele Prozesse sauber zu trennen, ergänzt `cli-agent` die aktuelle Prozess-ID vor der Dateiendung. Beispielsweise schreibt `file = "logs/projekt-a.log"` für PID `12345` nach `<cli-agent-state>/logs/projekt-a-12345.log`. `backup_count` begrenzt zusätzlich die Anzahl abgeschlossener Prozess-Logfamilien, die neben aktuell laufenden Instanzen erhalten bleiben.
 
 `dump_llm_context = true` schreibt Diagnoseinformationen unter `<workspace>/.cli-agent/` und ist standardmäßig deaktiviert.
 

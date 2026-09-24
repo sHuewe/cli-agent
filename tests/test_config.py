@@ -7,7 +7,12 @@ import pytest
 
 import cli_agent.config as config_module
 from cli_agent.config import load_config
-from cli_agent.logging_setup import configure_logging
+from cli_agent.logging_setup import (
+    _FileLock,
+    _cleanup_process_log_files,
+    configure_logging,
+    process_log_file,
+)
 
 
 def test_load_logging_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,8 +99,57 @@ def test_configure_logging_writes_file(tmp_path: Path, monkeypatch: pytest.Monke
     config_file.write_text('[logging]\nfile = "agent.log"\n', encoding="utf-8")
     configure_logging(load_config(config_file).logging)
     logging.getLogger("cli_agent.test").info("tool_call name=example")
-    log_file = state_dir / "agent.log"
+    log_file = process_log_file(state_dir / "agent.log")
     assert "tool_call name=example" in log_file.read_text(encoding="utf-8")
+
+
+def test_process_log_file_includes_pid(tmp_path: Path) -> None:
+    assert process_log_file(tmp_path / "agent.log", pid=12345) == tmp_path / "agent-12345.log"
+    assert process_log_file(tmp_path / "agent", pid=12345) == tmp_path / "agent-12345"
+
+
+def test_cleanup_process_log_files_bounds_inactive_families(tmp_path: Path) -> None:
+    base_file = tmp_path / "agent.log"
+    old_log = process_log_file(base_file, pid=100)
+    middle_log = process_log_file(base_file, pid=200)
+    newest_log = process_log_file(base_file, pid=300)
+    for index, path in enumerate((old_log, middle_log, newest_log), start=1):
+        path.write_text(str(index), encoding="utf-8")
+        path.touch()
+        path.stat()
+    old_log.touch()
+    middle_log.touch()
+    newest_log.touch()
+
+    # Establish deterministic modification ordering without sleeping.
+    import os
+
+    os.utime(old_log, (100, 100))
+    os.utime(middle_log, (200, 200))
+    os.utime(newest_log, (300, 300))
+
+    _cleanup_process_log_files(base_file, current_pid=999, keep_inactive=2)
+
+    assert not old_log.exists()
+    assert middle_log.exists()
+    assert newest_log.exists()
+
+
+def test_cleanup_process_log_files_preserves_active_family(tmp_path: Path) -> None:
+    base_file = tmp_path / "agent.log"
+    active_log = process_log_file(base_file, pid=123)
+    inactive_log = process_log_file(base_file, pid=456)
+    active_log.write_text("active", encoding="utf-8")
+    inactive_log.write_text("inactive", encoding="utf-8")
+
+    active_lock = _FileLock(active_log.with_name(f"{active_log.name}.lock"))
+    assert active_lock.acquire()
+    try:
+        _cleanup_process_log_files(base_file, current_pid=999, keep_inactive=0)
+        assert active_log.exists()
+        assert not inactive_log.exists()
+    finally:
+        active_lock.release()
 
 
 def test_load_stdio_server_reference_is_name_only(tmp_path: Path) -> None:
