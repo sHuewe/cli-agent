@@ -302,10 +302,23 @@ class Workspace:
         return name in TEXT_FILENAMES or path.suffix.lower() in TEXT_SUFFIXES
 
     @staticmethod
-    def _is_sensitive_file(path: Path) -> bool:
+    def _is_sensitive_file(
+        path: Path,
+        *,
+        workspace: Path | None = None,
+    ) -> bool:
         name = path.name.casefold()
+        path_parts = path.parts
+        if workspace is not None:
+            try:
+                path_parts = path.relative_to(workspace).parts
+            except ValueError:
+                # Callers are expected to enforce workspace containment first.
+                # If that invariant is violated, keep the sensitivity check
+                # fail-closed instead of classifying an external path as safe.
+                return True
         return (
-            any(part.casefold() in SENSITIVE_DIRECTORY_NAMES for part in path.parts)
+            any(part.casefold() in SENSITIVE_DIRECTORY_NAMES for part in path_parts)
             or name.startswith(".env")
             or name in SENSITIVE_FILENAMES
             or path.suffix.casefold() in SENSITIVE_SUFFIXES
@@ -314,7 +327,7 @@ class Workspace:
         )
 
     def _is_protected_path(self, path: Path) -> bool:
-        if self._is_sensitive_file(path):
+        if self._is_sensitive_file(path, workspace=self.directory):
             return True
         try:
             # Detect filesystem indirection explicitly instead of relying on
