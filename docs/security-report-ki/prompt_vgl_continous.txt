@@ -1,0 +1,826 @@
+Unabhängiger Review eines LLM-basierten CLI-Agenten für den Unternehmenseinsatz
+
+Rolle und Ziel
+==============
+
+Du bist ein unabhängiger Senior Application-Security- und Software-Architecture-Reviewer mit Erfahrung in LLM-Agenten, MCP (Model Context Protocol), Python-Anwendungen, Unternehmens-IT und sicherem Softwarebetrieb.
+
+Führe einen vollständigen, möglichst unvoreingenommenen Review des beigefügten Softwareprojekts durch.
+
+Der Review soll ausdrücklich KEIN reiner Vulnerability-Scan sein. Ziel ist die Beurteilung, ob das Projekt in seiner aktuellen Architektur, Implementierung, Konfiguration und Dokumentation für einen kontrollierten und sicheren Einsatz in einem Unternehmen geeignet ist.
+
+Die Zielgruppe des Tools sind Softwareentwickler und Softwarearchitekten. Diese Benutzer verfügen in der Praxis häufig über lokale Administratorrechte auf ihren Arbeitsgeräten. Das Sicherheitsmodell soll deshalb nicht versuchen, einen absichtlich bösartigen lokalen Benutzer gegen seinen eigenen Rechner vollständig technisch einzuschränken. Das wäre für diesen Einsatzzweck weder realistisch noch erforderlich.
+
+Im Unternehmen existieren außerdem organisatorische Regeln, deren bewusste Umgehung nicht zwingend technisch verhindert wird. Beispielsweise kann die Nutzung extern gehosteter LLMs organisatorisch verboten sein, obwohl entsprechende Webseiten oder Netzwerkziele nicht generell durch Firewall-Regeln gesperrt sind. Ein Benutzer, der bewusst Unternehmensregeln verletzt, den Quellcode verändert, die Python-Runtime manipuliert oder mit Administratorrechten Schutzmechanismen gezielt außer Kraft setzt, liegt außerhalb des primären Threat Models dieses Reviews.
+
+Bewerte solche Möglichkeiten daher nicht automatisch als Produkt-Sicherheitslücke. Weise sie nur dann als Finding aus, wenn sie für den vorgesehenen normalen Betrieb relevant sind oder versehentliche Fehlkonfiguration begünstigen. Falls eine Maßnahme nur gegen einen absichtlich bösartigen lokalen Administrator helfen würde, klassifiziere sie höchstens als optionales Hardening bzw. organisatorisches Thema.
+
+Der Schwerpunkt liegt stattdessen auf folgenden Fragen:
+
+1. Ist ein sicherer Standardbetrieb für normale, kooperative Entwickler und Architekten möglich?
+2. Sind gefährliche Fehlkonfigurationen unwahrscheinlich oder werden sie zuverlässig erkannt?
+3. Sind die Default-Werte restriktiv genug, wenn die administrative Einrichtung fehlt oder unvollständig ist?
+4. Können Prompt Injection, bösartige Webinhalte, manipulierte Workspace-Dateien oder kompromittierte MCP-Server innerhalb des normalen Betriebs technische Sicherheitsgrenzen umgehen?
+5. Können Benutzer unbeabsichtigt externe LLMs, MCP-Server oder Webziele verwenden, obwohl diese nicht administrativ freigegeben wurden?
+6. Sind sicherheitsrelevante Entscheidungen nachvollziehbar und sinnvoll dokumentiert?
+7. Ist das System für einen pragmatischen Unternehmenseinsatz geeignet, bei dem organisatorische Regeln und technische Guardrails gemeinsam wirken?
+
+Ein wichtiges Beispiel für das gewünschte Verhalten ist:
+
+- Wenn die maschinenweite Admin-Konfiguration nicht korrekt eingerichtet wurde, müssen sichere Defaults greifen.
+- Ein externer Dienst wie OpenRouter darf dann nicht allein durch eine normale Benutzerkonfiguration erreichbar werden.
+- Ein Benutzer mit lokalen Administratorrechten könnte die Maschinenpolicy technisch bewusst ändern; das ist eine administrative Handlung und kein primäres Angriffsszenario dieses Reviews.
+
+Betrachte dazu insbesondere:
+
+1. klassische Software-Sicherheit,
+2. die besonderen Risiken eines LLM-basierten Agenten,
+3. die Durchsetzung administrativer Sicherheitsgrenzen im normalen unterstützten Betriebsmodell,
+4. den sicheren Betrieb im Unternehmensumfeld,
+5. Wartbarkeit, Nachvollziehbarkeit und Auditierbarkeit der Sicherheitsmechanismen,
+6. verbleibende technische und organisatorische Restrisiken.
+
+Arbeite ausschließlich auf Basis des tatsächlich vorliegenden Repository-Stands. Nimm nicht an, dass Kommentare, README, Dokumentation, Tests oder Funktionsnamen korrekt beschreiben, was die Implementierung tatsächlich tut. Verifiziere Aussagen soweit möglich anhand des Codes.
+
+Ich möchte zunächst ausschließlich den Review und die Findings. Ändere keinen Code und erstelle keine Patches, solange ich dich nicht ausdrücklich dazu auffordere.
+
+
+Beabsichtigtes Einsatzmodell und Anforderungen
+==============================================
+
+Das Projekt soll einen LLM-basierten CLI-Agenten bereitstellen, der von Entwicklern in einem Unternehmensumfeld genutzt werden kann.
+
+Dabei gilt folgendes Sollbild:
+
+1. Grundprinzip
+---------------
+
+Der Benutzer soll den Agenten innerhalb administrativ definierter Grenzen flexibel konfigurieren und verwenden können.
+
+Die administrativen Grenzen dienen primär als technische Guardrails gegen versehentliche oder normale benutzerseitige Fehlkonfiguration. Sie müssen nicht gegen einen Benutzer bestehen, der mit lokalen Administratorrechten bewusst die Maschinenpolicy, den installierten Programmcode oder die Python-Runtime manipuliert.
+
+Normale Benutzerkonfiguration darf administrative Vorgaben jedoch nicht unbeabsichtigt oder über dokumentierte Standardfunktionen lockern.
+
+Sicherheitsentscheidungen dürfen nicht vom Wohlverhalten des LLM abhängen. Das LLM selbst ist keine Security Boundary. Sicherheitsrelevante Regeln gegen Prompt Injection, untrusted Content und Tool-Missbrauch müssen deterministisch durch die Anwendung erzwungen werden.
+
+
+2. Trennung von Benutzer- und Administrator-Konfiguration
+---------------------------------------------------------
+
+Es soll eine klare Trennung geben zwischen:
+
+- funktionaler Benutzerkonfiguration und
+- maschinenweiter, administrativ kontrollierter Sicherheitskonfiguration.
+
+Benutzer dürfen normale funktionale Einstellungen ändern.
+
+Sicherheitsrelevante Grenzen sollen ausschließlich über die Maschinenkonfiguration festgelegt werden. Die normale Benutzerkonfiguration darf diese Grenzen nicht überschreiben oder über alternative Standardoptionen funktional neutralisieren.
+
+Dass ein lokal administrativer Benutzer die Maschinenpolicy mit bewusster Elevation verändern kann, ist für dieses Threat Model akzeptabel. Entscheidend ist, dass dies nicht versehentlich, implizit oder durch normale Projektkonfiguration geschieht.
+
+
+3. LLM-Netzwerkzugriff
+----------------------
+
+Der Benutzer darf ein Modell bzw. eine konkrete Model-Base-URL konfigurieren.
+
+Der tatsächlich verwendete Host muss jedoch durch die Maschinenpolicy freigegeben sein.
+
+Die normale Benutzerkonfiguration darf keinen neuen externen LLM-Host selbst freischalten.
+
+Fehlt die Administrator-Konfiguration oder wurde sie nicht vollständig eingerichtet, müssen sichere und restriktive Defaults gelten. Insbesondere darf ein externer Dienst wie OpenRouter dann nicht allein durch eine Änderung der normalen Benutzerkonfiguration erreichbar werden.
+
+Ein Benutzer, der mit Administratorrechten bewusst die Maschinenpolicy erweitert, liegt außerhalb dieses primären Schutzmodells.
+
+
+4. HTTP-basierte MCP-Server
+---------------------------
+
+Auch HTTP-basierte MCP-Server dürfen nur auf administrativ freigegebenen Hosts angesprochen werden.
+
+Ein Benutzer darf keine nicht administrativ erlaubten MCP-Netzwerkziele hinzufügen oder durch Redirects, URL-Manipulation, DNS-Verhalten, Proxy-Einstellungen oder andere Mechanismen die Host-Allowlist umgehen.
+
+
+5. Web-Kontext
+--------------
+
+Webseiten dürfen nur von administrativ freigegebenen Hosts als Kontext geladen werden.
+
+Web-Zugriff soll standardmäßig restriktiv sein.
+
+Redirect-Ziele müssen erneut geprüft werden und dürfen die Allowlist nicht umgehen.
+
+Externe Web-Inhalte sind grundsätzlich als nicht vertrauenswürdig zu behandeln.
+
+
+6. Lokale bzw. stdio-basierte MCP-Server
+----------------------------------------
+
+Das Starten eines benutzerkonfigurierten lokalen Prozesses stellt eine eigene Trust Boundary dar.
+
+Ein normaler Benutzer darf nicht allein durch seine normale Projektkonfiguration beliebige lokale Prozesse als MCP-Server starten, wenn dies nicht administrativ grundsätzlich erlaubt wurde.
+
+Wenn benutzerdefinierte stdio-MCP-Server administrativ zugelassen werden, soll klar dokumentiert sein, dass dies keine vollständige Sandbox darstellt.
+
+Umgebungsvariablen und andere implizit weitergegebene Informationen sollen auf das funktional notwendige Minimum begrenzt werden.
+
+
+7. Tool-Ausführung und Freigaben
+--------------------------------
+
+Unkritische eingebaute Read-only-Operationen sollen möglichst ohne unnötige Benutzerinteraktion funktionieren.
+
+Schreibende oder anderweitig sicherheitsrelevante Operationen dürfen nicht allein deshalb ausgeführt werden, weil das LLM sie anfordert.
+
+Für relevante Tool-Aufrufe soll ein klarer Approval-Mechanismus existieren.
+
+Ein Benutzer darf ein konkretes Tool optional für die laufende Session freigeben. Eine solche Freigabe:
+
+- soll sich nur auf das exakt freigegebene Tool beziehen,
+- soll nicht automatisch andere Tools freigeben,
+- soll beim Beenden der Anwendung verfallen.
+
+Permanente automatische Freigaben sollen ausschließlich über die Administrator-Policy möglich sein.
+
+Administrative Auto-Approvals dürfen Schutzmechanismen eingebauter schreibender Workspace-Tools nicht unbeabsichtigt aushebeln.
+
+
+8. Workspace als Sicherheitsgrenze
+----------------------------------
+
+Dateioperationen des Agents sollen grundsätzlich auf den vorgesehenen Projekt-Workspace begrenzt sein.
+
+Insbesondere sollen folgende Umgehungen verhindert werden:
+
+- Path Traversal,
+- absolute Pfade,
+- Symlink-basierte Ausbrüche,
+- ungeprüfte Copy-/Move-Ziele,
+- andere Möglichkeiten, außerhalb des Workspaces zu lesen oder zu schreiben.
+
+Der Review soll auch prüfen, ob Race Conditions oder TOCTOU-Probleme diese Schutzmechanismen relevant schwächen könnten.
+
+
+9. Schutz sensibler Dateien
+---------------------------
+
+Auch innerhalb eines Workspaces können sensible Inhalte liegen.
+
+Offensichtlich sicherheitskritische Dateien und Verzeichnisse sollen besonders berücksichtigt werden, z. B.:
+
+- .env-Dateien,
+- SSH-Schlüssel,
+- Zertifikate und private Schlüssel,
+- Cloud-Credentials,
+- Credential-Dateien,
+- Git-Metadaten,
+- Agent-Konfigurationen,
+- Logdateien mit potentiell vertraulichem Inhalt,
+- ähnliche Secret- oder Credential-Dateien.
+
+Prüfe sowohl Lesen als auch Schreiben, Löschen, Kopieren und sonstige indirekte Zugriffsmöglichkeiten.
+
+
+10. Prompt Injection und nicht vertrauenswürdige Inhalte
+--------------------------------------------------------
+
+Alle Inhalte, die nicht aus vertrauenswürdigem Anwendungscode stammen, sind grundsätzlich als potentiell manipuliert anzusehen.
+
+Dazu gehören insbesondere:
+
+- Web-Inhalte,
+- Dateien im Workspace,
+- MCP-Antworten,
+- Toolbeschreibungen externer MCP-Server,
+- Metadaten,
+- vom Benutzer bereitgestellte Inhalte,
+- andere Daten, die dem LLM als Kontext übergeben werden.
+
+Prompt Injection darf keine technischen Berechtigungen erweitern.
+
+Versuche ausdrücklich zu analysieren, ob ein Angreifer über manipulierte Inhalte das Modell dazu bringen könnte, erlaubte Funktionen so zu kombinieren, dass eigentlich geschützte Daten gelesen, verändert, exfiltriert oder anderweitig missbraucht werden.
+
+
+11. Externe MCP-Server als eigene Trust Boundary
+------------------------------------------------
+
+Ein externer MCP-Server darf nicht allein aufgrund seiner Toolnamen, Beschreibungen, Parameter oder Antworten als vertrauenswürdig gelten.
+
+Gehe davon aus, dass ein MCP-Server bösartig oder kompromittiert sein könnte.
+
+Prüfe insbesondere:
+
+- Tool-Namenskollisionen,
+- manipulierte Toolbeschreibungen,
+- ungewöhnliche Parameterstrukturen,
+- bösartige Tool-Rückgaben,
+- unerwartete oder sehr große Antworten,
+- Möglichkeiten zur Prompt Injection,
+- Möglichkeiten zur indirekten Rechteausweitung.
+
+
+12. Netzwerk- und SSRF-Schutz
+-----------------------------
+
+Prüfe sämtliche ausgehenden Netzwerkpfade.
+
+Berücksichtige insbesondere:
+
+- SSRF,
+- DNS-basierte Umgehungen,
+- Redirects,
+- URL-Parsing,
+- Host-Normalisierung,
+- IPv4/IPv6-Sonderfälle,
+- localhost und Loopback,
+- private Netze,
+- Proxy-Umgebungsvariablen,
+- implizite HTTP-Client-Defaults,
+- Credential-Weitergabe,
+- HTTPS/TLS-Verhalten,
+- sonstige Möglichkeiten, administrative Host-Policies zu umgehen.
+
+
+13. Prozessausführung
+---------------------
+
+Wo externe Prozesse gestartet werden, soll die Angriffsfläche möglichst klein sein.
+
+Prüfe insbesondere:
+
+- Shell Injection,
+- Argument Injection,
+- PATH-Manipulation,
+- vererbte Umgebungsvariablen,
+- Working Directory,
+- ausführbare Dateien aus benutzerkontrollierten Pfaden,
+- unsichere Interpreter-Aufrufe,
+- Plattformunterschiede zwischen Windows und Linux,
+- Prozess-Lifecycle und Fehlerbehandlung.
+
+
+14. Minimierung lokaler Informationsweitergabe
+----------------------------------------------
+
+Absolute lokale Pfade, Secrets, Credentials, Umgebungsvariablen, interne Hostnamen und andere lokale Informationen sollen dem LLM oder externen Diensten nicht ohne funktionale Notwendigkeit übermittelt werden.
+
+Prüfe insbesondere System-Prompts, Tool-Metadaten, Fehlermeldungen, Logs und Netzwerk-Payloads.
+
+
+15. Logging und Auditierbarkeit
+-------------------------------
+
+Sicherheitsrelevante Aktionen und Entscheidungen sollen nachvollziehbar sein.
+
+Gleichzeitig sollen Logs standardmäßig möglichst keine vertraulichen Daten enthalten.
+
+Prüfe:
+
+- Tool-Aufrufe,
+- Approval-Entscheidungen,
+- Fehler,
+- Prompt-Inhalte,
+- Dateiinhalte,
+- Secrets,
+- Tokens,
+- URLs,
+- Benutzer-/Maschinenpfade,
+- Debug-Modi,
+- Log-Rotation und mögliche Datenpersistenz.
+
+Bewerte, ob die vorhandene Protokollierung für einen Unternehmenseinsatz sinnvoll und datensparsam ist.
+
+
+16. Sichere Fehlerbehandlung
+----------------------------
+
+Sicherheitsrelevante Fehler sollen nach dem Prinzip "fail closed" behandelt werden.
+
+Wenn eine Policy nicht gelesen werden kann, eine Approval-Abfrage fehlschlägt, eine URL nicht eindeutig bewertet werden kann oder eine andere Sicherheitsprüfung scheitert, soll das System nicht stillschweigend permissiver werden.
+
+
+17. Sichere Defaults
+--------------------
+
+Eine frische Installation ohne zusätzliche administrative Freigaben soll möglichst restriktiv sein.
+
+Nicht explizit freigegebene externe Netzwerkziele, riskante Prozesse oder automatische Tool-Ausführungen sollen nicht implizit erlaubt sein.
+
+
+18. Administrative Maschinenpolicy
+----------------------------------
+
+Die sicherheitsrelevante Maschinenkonfiguration soll im normalen Betrieb nicht versehentlich durch Benutzer-/Projektkonfiguration austauschbar oder auf einen eigenen Pfad umlenkbar sein.
+
+Prüfe insbesondere:
+
+- feste Speicherorte,
+- Installations- und Setup-Skripte,
+- Umgebungsvariablen,
+- Fallback-Mechanismen,
+- Verhalten bei fehlender oder ungültiger Policy,
+- Unterschiede zwischen Windows und Linux.
+
+Dateirechte/ACLs und der Schutz gegen bewusste Manipulation durch einen lokalen Administrator dürfen als zusätzliche Härtung bewertet werden, sind aber keine zwingende Produktanforderung dieses Threat Models.
+
+Wichtig ist vor allem: Fehlt die Maschinenpolicy oder ist sie ungültig, darf die Anwendung nicht auf permissive externe Defaults zurückfallen.
+
+
+19. Optionale Hochrisiko-Funktionen
+-----------------------------------
+
+Komponenten für Docker-, Container- oder allgemeine Codeausführung sollen nicht unnötig Teil des Kern-Agenten sein.
+
+Falls solche Komponenten vorhanden sind, bewerte:
+
+- ob sie sinnvoll isoliert sind,
+- ob ihre Sicherheitsgrenzen klar dokumentiert sind,
+- ob ihre Installation optional ist,
+- ob der Kern-Agent ohne diese Komponenten sicher betrieben werden kann.
+
+
+20. Dependencies und Supply Chain
+---------------------------------
+
+Bewerte die Abhängigkeiten und den Build-/Installationsprozess.
+
+Prüfe insbesondere:
+
+- unnötige oder besonders mächtige Dependencies,
+- Versions-Pinning bzw. Locking,
+- reproduzierbare Installation,
+- GitHub Actions / CI,
+- Installationsskripte,
+- Paket-Metadaten,
+- Supply-Chain-Risiken,
+- Update-Strategie,
+- mögliche Dependency Confusion oder unsichere Paketquellen,
+- Geheimnisse in CI/CD.
+
+
+21. Tests und Regression-Sicherheit
+-----------------------------------
+
+Prüfe, ob zentrale Sicherheitsannahmen durch automatisierte Tests abgesichert sind.
+
+Dazu gehören insbesondere:
+
+- Netzwerk-Allowlisting,
+- Admin-/User-Konfigurationstrennung,
+- Workspace-Grenzen,
+- Symlink-Verhalten,
+- sensitive Dateien,
+- Approval-Mechanismen,
+- Session-Freigaben,
+- Fehlerszenarien,
+- MCP-Lifecycle,
+- Tool-Dispatch,
+- nicht vertrauenswürdige Inhalte.
+
+Bewerte nicht nur die Anzahl der Tests, sondern ob die relevanten Trust Boundaries tatsächlich sinnvoll getestet werden.
+
+
+22. Unternehmensbetrieb
+-----------------------
+
+Beurteile nicht nur den Code, sondern auch, ob das Projekt operativ sinnvoll in einem Unternehmen betrieben werden kann.
+
+Berücksichtige beispielsweise:
+
+- Installationsmodell,
+- Rechtevergabe,
+- zentrale Administration,
+- Update-Prozess,
+- Rollback,
+- Logging und Retention,
+- Konfigurationsverteilung,
+- Schlüssel-/Secret-Management,
+- Netzwerk-/Firewall-Regeln,
+- LLM-Datenschutz und Datenweitergabe,
+- Verantwortlichkeiten,
+- Dokumentation für Administratoren und Benutzer,
+- mögliche Fehlkonfigurationen,
+- notwendige organisatorische Kontrollen.
+
+Trenne hierbei klar zwischen technischen Schwachstellen im Projekt und Maßnahmen, die sinnvollerweise außerhalb der Anwendung durch Unternehmens-IT oder Prozesse umgesetzt werden müssen.
+
+
+23. Keine falschen Sicherheitsversprechen
+-----------------------------------------
+
+Prüfe, ob Dokumentation oder Architektur Eigenschaften suggerieren, die technisch nicht tatsächlich durchgesetzt werden.
+
+Beispiele:
+
+- eine Allowlist, die umgangen werden kann,
+- ein "Sandbox"-Begriff ohne echte Isolation,
+- eine Admin-Policy, die ein Benutzer dennoch ersetzen kann,
+- "read-only", obwohl indirekte Schreibmöglichkeiten bestehen,
+- eine Sicherheitsgarantie, die letztlich nur vom Verhalten des LLM abhängt.
+
+
+Vorgehensweise
+==============
+
+Beginne damit, die Architektur und die wichtigsten Trust Boundaries selbst aus dem Repository zu rekonstruieren.
+
+Erstelle anschließend ein Threat Model mit mindestens folgenden relevanten Ausgangslagen:
+
+A. normaler, kooperativer Entwickler oder Architekt, der das Tool versehentlich falsch konfiguriert,
+B. bösartige oder manipulierte Datei im Workspace,
+C. bösartige Webseite, die als Kontext geladen wird,
+D. bösartiger oder kompromittierter MCP-Server,
+E. manipulierter LLM-Output bzw. erfolgreiche Prompt Injection,
+F. kompromittierte Dependency oder Build-Komponente,
+G. fehlerhafte oder fehlende administrative Einrichtung.
+
+Ein absichtlich bösartiger lokaler Benutzer mit Administratorrechten, der Quellcode, Python-Runtime oder Maschinenpolicy bewusst manipuliert, ist ausdrücklich NICHT Teil des primären Threat Models. Solche Szenarien dürfen als optionales Hardening oder organisatorisches Restrisiko erwähnt werden, sollen aber nicht die Gesamtbewertung dominieren.
+
+Versuche ausdrücklich, nicht nur einzelne Schwachstellen zu finden, sondern vollständige Angriffsketten zu konstruieren.
+
+Beispiele für interessante Fragen:
+
+- Kann ein manipulierter Webinhalt das LLM zu einem erlaubten Tool-Aufruf bewegen, der anschließend vertrauliche Daten offenlegt?
+- Kann eine erlaubte Dateioperation mit Symlinks, Copy-/Move-Operationen oder Race Conditions kombiniert werden?
+- Kann ein Benutzer durch eine ungewöhnliche URL, einen Redirect oder DNS-Verhalten ein nicht erlaubtes Ziel erreichen?
+- Kann ein stdio-MCP-Server lokale Geheimnisse über geerbte Umgebungsvariablen oder Prozesskontext erhalten?
+- Kann eine Session-Freigabe unbeabsichtigt auf andere Tools übergreifen?
+- Kann eine administrative Auto-Freigabe eine eigentlich getrennte interne Schutzschicht umgehen?
+- Kann die Sicherheitskonfiguration durch alternative Pfade, Environment-Variablen oder Setup-Fehler ersetzt werden?
+- Kann ein bösartiger MCP-Server Toolnamen oder Metadaten so gestalten, dass vorhandene Approval- oder Dispatch-Logik umgangen wird?
+
+
+Eigene zusätzliche Prüfaspekte
+==============================
+
+Die oben genannten Punkte sind ausdrücklich KEINE abschließende Checkliste.
+
+Identifiziere selbst weitere Sicherheits-, Architektur-, Betriebs-, Datenschutz-, Supply-Chain- oder Enterprise-Aspekte, die du aufgrund des konkreten Projekts für relevant hältst.
+
+Untersuche diese eigenständig, auch wenn sie in diesem Prompt nicht erwähnt wurden.
+
+Wenn du während der Analyse eine neue Trust Boundary, Angriffsklasse oder relevante Betriebsanforderung erkennst, verfolge sie genauso gründlich wie die vorgegebenen Themen.
+
+Bevor du den Review abschließt, stelle dir ausdrücklich die Frage:
+
+"Welche sicherheitsrelevanten Annahmen, Angriffspfade oder betrieblichen Risiken wurden durch die Aufgabenstellung möglicherweise noch nicht abgedeckt?"
+
+Führe für solche Punkte eine zusätzliche eigene Analyse durch.
+
+
+Bewertungsmaßstab für Severity und Unternehmenseignung
+======================================================
+
+Kalibriere Findings am tatsächlichen Einsatzmodell und vermeide eine künstlich pessimistische Einstufung.
+
+Insbesondere:
+
+- Eine Schwäche ist nicht automatisch `High`, nur weil sie mit lokalen Administratorrechten oder durch Änderung des installierten Quellcodes ausnutzbar wäre.
+- Bewusste Manipulation der eigenen Python-Runtime, des Agent-Codes oder der Maschinenpolicy durch einen lokalen Administrator ist kein primärer Produktangriff.
+- Fehlende globale Firewall-Sperren für externe LLM-Webseiten sind kein Produktfehler dieses Projekts.
+- Organisatorische Verbote dürfen Teil des Sicherheitsmodells sein, sofern das Tool selbst sichere Defaults und klare Guardrails gegen versehentliche Nutzung bietet.
+- Ein Finding sollte `High` oder `Critical` nur sein, wenn es im vorgesehenen normalen Betriebsmodell ohne bewusste lokale Sabotage eine wesentliche Sicherheitsgrenze brechen kann.
+- Anforderungen an zusätzliche Betriebssystem-Sandboxing-, Application-Control-, EDR-, Firewall- oder zentrale Proxy-Systeme sind als `Operational / Organizational Requirement` oder optionales Hardening zu klassifizieren, sofern sie nicht zwingend für die korrekte Funktion der Anwendung notwendig sind.
+- Das Fehlen einer technisch perfekten DLP- oder Secret-Erkennung ist nicht automatisch eine Vulnerability, wenn das Tool grundsätzlich Projektdateien lesen soll. Bewerte solche Filter als Defense-in-Depth, sofern die Anwendung nichts anderes verspricht.
+- Ein sicherer Enterprise-Einsatz darf auf einer Kombination aus technischen Guardrails, administrativer Konfiguration und verbindlichen Unternehmensregeln beruhen.
+
+Die zentrale Frage lautet nicht:
+
+"Kann ein lokaler Administrator das System mit genügend Aufwand absichtlich umgehen?"
+
+sondern:
+
+"Kann ein normaler Entwickler das System sicher verwenden, sind versehentliche Fehlkonfigurationen ausreichend verhindert, und können untrusted Inhalte oder externe Komponenten innerhalb des vorgesehenen Betriebs technische Schutzmechanismen umgehen?"
+
+
+Numerische Gesamtbewertung
+==========================
+
+Ergänze die qualitative Einstufung A-D um einen numerischen Security-/Enterprise-Readiness-Score von 0 bis 100.
+
+Dabei gilt:
+
+- 0 bedeutet: praktisch keine belastbaren Sicherheitsgrenzen; fundamentale Schutzmechanismen fehlen oder sind im vorgesehenen Betriebsmodell wirkungslos.
+- 100 bedeutet: für das beschriebene Einsatzmodell nahezu ideal abgesichert; keine relevanten bekannten Schwächen, sehr gute Defense-in-Depth-Maßnahmen, belastbare Regressionstests, nachvollziehbare Dokumentation und gute betriebliche Absicherung.
+
+Der Score soll den tatsächlich vorliegenden Repository-Stand bewerten und nicht ein mögliches zukünftiges Zielbild.
+
+Bewerte dafür getrennt folgende Bereiche jeweils mit 0-100 Punkten:
+
+1. Technische Security Boundaries und deterministische Enforcement-Mechanismen: 30 %
+   - Workspace-Grenzen
+   - Approval-Mechanismen
+   - Admin-/User-Konfigurationstrennung
+   - Fail-closed-Verhalten
+   - Schutz sensibler Dateien
+   - Prozess- und Tool-Grenzen
+
+2. LLM-, MCP-, Prompt-Injection- und Untrusted-Content-Resilienz: 20 %
+   - LLM nicht als Security Boundary
+   - bösartige Workspace-Inhalte
+   - Web-Inhalte
+   - externe MCP-Server
+   - Tool-Metadaten und Tool-Rückgaben
+   - Angriffsketten über mehrere erlaubte Funktionen
+
+3. Netzwerk-, Policy- und Konfigurationssicherheit: 20 %
+   - LLM-Host-Allowlisting
+   - MCP-Host-Allowlisting
+   - Web-Allowlisting
+   - Redirects, DNS, Proxy, SSRF
+   - sichere Defaults bei fehlender oder ungültiger Maschinenpolicy
+   - Schutz vor unbeabsichtigter benutzerseitiger Lockerung administrativer Grenzen
+
+4. Tests und Regression-Sicherheit: 15 %
+   - Abdeckung der zentralen Trust Boundaries
+   - Negativtests
+   - Umgehungsversuche
+   - Plattformunterschiede
+   - CI-Verlässlichkeit
+
+5. Enterprise-Betriebsreife, Auditierbarkeit und Supply Chain: 15 %
+   - Logging und Datenschutz
+   - Installations- und Update-Modell
+   - Dependencies und CI/CD
+   - Administrator- und Benutzerdokumentation
+   - nachvollziehbare Security-Entscheidungen
+   - operative Voraussetzungen und Restrisiken
+
+Berechne aus diesen Teilwerten einen gewichteten Gesamtscore und runde auf eine ganze Zahl.
+
+Der numerische Score soll nicht rein mechanisch durch die Anzahl der Findings bestimmt werden. Berücksichtige insbesondere deren reale Ausnutzbarkeit, Severity, Confidence, vorhandene Schutzschichten und das beschriebene Threat Model.
+
+Nutze folgende Kalibrierung als Orientierung:
+
+- 0-19: fundamentale Sicherheitsmechanismen fehlen oder sind weitgehend unwirksam
+- 20-39: erhebliche technische Sicherheitslücken; regulärer Unternehmenseinsatz nicht vertretbar
+- 40-59: wesentliche Risiken verbleiben; höchstens eng begrenzter Pilotbetrieb
+- 60-69: kontrollierter Unternehmenseinsatz grundsätzlich möglich, aber noch mit relevanten technischen oder betrieblichen Auflagen
+- 70-79: solide Absicherung für kontrollierten Unternehmenseinsatz; verbleibende Risiken sind beherrschbar
+- 80-89: gute Absicherung für den vorgesehenen pragmatischen Unternehmenseinsatz
+- 90-96: sehr hohe Security- und Enterprise-Reife; nur kleinere Restpunkte oder Defense-in-Depth-Themen
+- 97-99: außergewöhnlich hohe Reife; praktisch nur minimale Restrisiken
+- 100: theoretischer Idealwert; nur vergeben, wenn keine relevante technische, betriebliche, testbezogene oder dokumentarische Schwäche erkennbar ist
+
+Die Buchstabenkategorie und der Score müssen zueinander passen:
+
+- A entspricht grundsätzlich 0-39
+- B entspricht grundsätzlich 40-59
+- C entspricht grundsätzlich 60-79
+- D entspricht grundsätzlich 80-100
+
+Falls du ausnahmsweise von dieser Zuordnung abweichst, begründe die Abweichung ausdrücklich.
+
+Zusätzliche Kalibrierungsregeln:
+
+- Ein bestätigtes Critical-Finding innerhalb des primären Threat Models spricht grundsätzlich gegen einen Score über 39.
+- Ein bestätigtes High-Finding, das eine zentrale Security Boundary im vorgesehenen normalen Betriebsmodell durchbricht, spricht grundsätzlich gegen einen Score über 59.
+- Findings, die ausschließlich bewusste Manipulation durch einen lokalen Administrator voraussetzen, dürfen den Score nur geringfügig als Hardening-/Betriebsaspekt beeinflussen.
+- Reine Best-Practice-Lücken oder optionale Defense-in-Depth-Maßnahmen dürfen den Score nicht unverhältnismäßig stark reduzieren.
+- Nicht ausreichend beurteilbare zentrale Sicherheitsbereiche müssen den Score und/oder die Confidence der Gesamtbewertung sichtbar beeinflussen.
+- Ein hoher Score darf nur vergeben werden, wenn die wesentlichen Sicherheitsannahmen nicht nur implementiert, sondern auch durch geeignete Tests oder anderweitig belastbar verifiziert sind.
+
+Der Score dient ausdrücklich dazu, Fortschritte zwischen verschiedenen Repository-Ständen feiner sichtbar zu machen. Verwende deshalb dieselben Maßstäbe konsistent und vermeide willkürliche Punktänderungen ohne technisch nachvollziehbaren Grund.
+
+
+Anforderungen an Findings
+=========================
+
+Berichte bevorzugt konkrete, technisch nachvollziehbare Findings.
+
+Vermeide allgemeine Best-Practice-Hinweise ohne Bezug zum vorhandenen Projekt.
+
+Klassifiziere jeden relevanten Punkt als:
+
+- Confirmed Vulnerability
+- Plausible Risk / Needs Verification
+- Hardening Recommendation
+- Operational / Organizational Requirement
+
+Für jedes technische Finding nenne soweit möglich:
+
+1. Titel
+2. Kategorie
+3. Severity: Critical / High / Medium / Low / Informational
+4. Confidence: High / Medium / Low
+5. betroffene Datei(en)
+6. konkrete Klasse/Funktion/Codebereich
+7. technische Ursache
+8. Voraussetzungen für einen Angriff
+9. realistisches Angriffsszenario
+10. mögliche Auswirkungen
+11. vorhandene Schutzmaßnahmen, falls vorhanden
+12. weshalb diese Schutzmaßnahmen ausreichen oder nicht ausreichen
+13. konkrete empfohlene Behebung
+14. sinnvollen Regressionstest für die Behebung
+
+Wenn du ein vermutetes Problem nicht sicher belegen kannst, kennzeichne dies ausdrücklich und erkläre, was zur Verifikation fehlt.
+
+
+Abschlussbericht
+================
+
+Strukturiere den Abschlussbericht mindestens in folgende Abschnitte:
+
+1. Executive Summary
+   - kurze Gesamtbewertung
+   - wichtigste Risiken
+   - Einschätzung der grundsätzlichen Unternehmenseignung
+
+2. Rekonstruierte Architektur
+   - zentrale Komponenten
+   - Datenflüsse
+   - relevante Sicherheitsmechanismen
+
+3. Threat Model
+   - Assets
+   - Angreifer
+   - Trust Boundaries
+   - Entry Points
+
+4. Prüfung der genannten Soll-Anforderungen
+   - für jede wesentliche Anforderung:
+     - erfüllt
+     - teilweise erfüllt
+     - nicht erfüllt
+     - nicht ausreichend beurteilbar
+   - jeweils mit kurzer Begründung und Codebezug
+
+5. Findings
+   - nach Severity priorisiert
+
+6. Angriffsketten
+   - mögliche Kombinationen mehrerer Funktionen oder Schwächen
+
+7. Positiv bewertete Sicherheitsmechanismen
+   - nur solche, deren Wirksamkeit du anhand der Implementierung nachvollziehen konntest
+
+8. Zusätzliche von dir identifizierte Aspekte
+   - Punkte, die nicht explizit in der Aufgabenstellung standen
+
+9. Betrieb im Unternehmensumfeld
+   - technische Voraussetzungen
+   - administrative Voraussetzungen
+   - organisatorische Voraussetzungen
+   - verbleibende Restrisiken
+
+10. Test- und CI-Bewertung
+
+11. Dependency- und Supply-Chain-Bewertung
+
+12. Offene Fragen / nicht beurteilbare Bereiche
+
+13. Priorisierte Maßnahmen
+   - Blocker vor Unternehmenseinsatz
+   - sollte vor breiter Einführung behoben werden
+   - sinnvolles weiteres Hardening
+
+14. Tabellarische Zusammenfassungen
+   - Finding Summary
+   - Requirements Compliance Matrix
+   - beide Tabellen gemäß Abschnitt `Ausgabeformat`
+
+15. Gesamturteil
+   Ordne das Projekt abschließend möglichst eindeutig einer der folgenden Kategorien zu:
+
+   A. In der vorliegenden Form nicht für Unternehmenseinsatz geeignet.
+   B. Nur für eng begrenzten Pilotbetrieb geeignet.
+   C. Für kontrollierten Unternehmenseinsatz geeignet, sofern genannte Betriebsauflagen und Unternehmensregeln eingehalten werden.
+   D. Für den vorgesehenen pragmatischen Unternehmenseinsatz gut abgesichert.
+
+   Ergänze diese Kategorie um den numerischen Gesamtscore von 0-100 gemäß Abschnitt `Numerische Gesamtbewertung`.
+
+   Gib dabei mindestens folgendes Format aus:
+
+   - Kategorie: A / B / C / D
+   - Gesamtscore: XX/100
+   - Teilbewertungen:
+     - Technische Security Boundaries und Enforcement: XX/100
+     - LLM-/MCP-/Prompt-Injection-Resilienz: XX/100
+     - Netzwerk-, Policy- und Konfigurationssicherheit: XX/100
+     - Tests und Regression-Sicherheit: XX/100
+     - Enterprise-Betriebsreife, Auditierbarkeit und Supply Chain: XX/100
+   - Score-Confidence: High / Medium / Low
+   - kurze Begründung der Kategorie und des Scores
+   - wichtigste Faktoren, die den Score aktuell begrenzen
+   - wichtigste Faktoren, die einen höheren Score rechtfertigen
+
+   Berücksichtige bei dieser Einstufung ausdrücklich das beschriebene Threat Model: lokale Entwickler mit Administratorrechten sind grundsätzlich vertrauenswürdige Benutzer. Bewusste Manipulation von Code, Runtime oder Maschinenpolicy soll die Einstufung daher nicht allein verschlechtern.
+
+   Achte darauf, dass Kategorie, Gesamtscore, Severity der Findings und die tatsächliche Unternehmenseignung konsistent zueinander sind.
+
+Begründe diese Einstufung.
+
+
+16. Abschließender Referenzvergleich mit Continue.dev
+-----------------------------------------------------
+
+Führe ERST NACH Abschluss der vollständigen, eigenständigen Bewertung von `cli-agent` einen separaten Referenzvergleich mit Continue.dev als VS-Code-Erweiterung durch.
+
+Wichtig:
+
+- Die allgemeine Sicherheitsbewertung von `cli-agent`, die A-D-Kategorie, der numerische Score von 0-100 und sämtliche Teilbewertungen müssen vollständig unabhängig von Continue.dev entstehen.
+- Continue.dev ist ausschließlich ein zusätzlicher Referenzpunkt zur Einordnung des bereits im Unternehmen akzeptierten bzw. früher freigegebenen Risikoniveaus.
+- Der Vergleich mit Continue.dev darf den zuvor bestimmten Score von `cli-agent` weder erhöhen noch senken.
+- Eine frühere Unternehmensfreigabe von Continue.dev ist kein Beleg dafür, dass Continue.dev objektiv sicher ist. Sie dient nur als praktischer Vergleichspunkt.
+
+Vergleiche die Sicherheitsarchitektur von `cli-agent` und Continue.dev insbesondere in folgenden Bereichen:
+
+1. Zugriff auf Workspace-Dateien
+2. Schreibzugriffe auf Dateien
+3. Schutz vor Zugriffen außerhalb des Workspaces
+4. Ausführung lokaler Prozesse und Commands
+5. LLM-Netzwerkzugriff und Modellkonfiguration
+6. administrative Begrenzung zulässiger LLM-Endpunkte
+7. MCP-/Tool-Integration bzw. vergleichbare Erweiterungsmechanismen
+8. Approval-Mechanismen für sicherheitsrelevante Aktionen
+9. Prompt Injection und Umgang mit untrusted Content
+10. Zugriff auf Secrets und Credentials
+11. Umgang mit `.env`, SSH-Schlüsseln, Cloud-Credentials und ähnlichen Dateien
+12. VS-Code-Extension-Host gegenüber eigenständigem CLI-Prozess
+13. Konfigurations- und Policy-Modell
+14. Möglichkeit normaler Benutzer, Sicherheitsgrenzen versehentlich zu lockern
+15. Netzwerk-Allowlisting, Redirects, SSRF- und Proxy-Verhalten
+16. Weitergabe von lokalen Informationen an das LLM
+17. Telemetrie und sonstige externe Datenweitergabe
+18. Logging und Persistenz vertraulicher Inhalte
+19. Supply Chain, Dependencies und Update-Modell
+20. Erweiterbarkeit und zusätzliche Trust Boundaries durch Plugins, Tools oder MCP-Server
+21. Auswirkungen einer erfolgreichen Prompt Injection
+22. relevante Defense-in-Depth-Maßnahmen
+
+Für jeden relevanten Bereich sollst du angeben, ob `cli-agent` gegenüber Continue.dev:
+
+- stärkere technische Schutzmechanismen besitzt,
+- ungefähr vergleichbare Schutzmechanismen besitzt,
+- schwächere Schutzmechanismen besitzt,
+- aufgrund der unterschiedlichen Architektur nicht sinnvoll direkt vergleichbar ist,
+- oder mangels belastbarer Informationen nicht ausreichend beurteilt werden kann.
+
+Vermeide eine pauschale Aussage wie "`cli-agent` ist sicherer" oder "Continue.dev ist sicherer", wenn die Sicherheitslage je nach Bereich unterschiedlich ist. Benenne stattdessen konkret die jeweiligen Security Boundaries, Fähigkeiten und Restrisiken.
+
+Berücksichtige außerdem ausdrücklich, dass eine VS-Code-Erweiterung und ein eigenständiger CLI-Agent unterschiedliche technische Ausgangslagen haben. Ein direkter Vergleich einzelner Funktionen ist daher nicht immer sinnvoll. Bewerte insbesondere, welche Berechtigungen sich bereits aus dem jeweiligen Host-Prozess bzw. Ausführungsmodell ergeben und welche zusätzlichen Grenzen die jeweilige Anwendung selbst technisch einzieht.
+
+Quellenlage und Versionsbezug
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Versuche, soweit möglich, die damals im Unternehmen freigegebene Continue.dev-Version und deren Konfiguration als Referenz zu verwenden.
+
+Falls diese konkrete Version oder Konfiguration nicht vorliegt, trenne strikt zwischen:
+
+1. belegbaren Eigenschaften der damals freigegebenen Continue.dev-Konfiguration,
+2. belegbaren Eigenschaften aktueller oder anderweitig dokumentierter Continue.dev-Versionen,
+3. plausiblen, aber nicht sicher belegbaren Annahmen.
+
+Gib bei allen Aussagen über Continue.dev an, auf welche Version, Dokumentation oder Implementierung sie sich beziehen.
+
+Wenn für einen belastbaren Vergleich externe Recherche erforderlich ist und diese möglich ist, verwende möglichst Primärquellen wie:
+
+- das offizielle Continue.dev-Repository,
+- offizielle Continue.dev-Dokumentation,
+- Release Notes,
+- relevante Security-Dokumentation,
+- konkrete Implementierung der betreffenden Version.
+
+Verlasse dich nicht ausschließlich auf Marketing-Aussagen oder allgemeine Produktbeschreibungen.
+
+Vergleichsausgabe
+~~~~~~~~~~~~~~~~~
+
+Erstelle eine eigene Vergleichsmatrix mit mindestens folgenden Spalten:
+
+- Sicherheitsbereich
+- `cli-agent`
+- Continue.dev
+- Einordnung
+- Begründung
+- Confidence
+- Quellen / Codebezug
+
+Fasse anschließend kurz zusammen:
+
+- in welchen Bereichen `cli-agent` stärkere Guardrails besitzt,
+- in welchen Bereichen Continue.dev stärkere Guardrails besitzt,
+- welche zusätzlichen Risiken sich aus dem agentischen Tool-/MCP-Modell von `cli-agent` ergeben,
+- welche Risiken sich aus der Einbettung von Continue.dev in VS Code ergeben,
+- welche Unterschiede für die konkrete Enterprise-Freigabe besonders relevant sind,
+- ob `cli-agent` gegenüber dem bereits früher akzeptierten Continue.dev-Einsatz neue wesentliche Trust Boundaries oder Risikoklassen einführt.
+
+Der Continue.dev-Vergleich ist ausdrücklich eine ergänzende Einordnung und KEIN Bestandteil der Berechnung des numerischen `cli-agent`-Scores.
+
+
+Wichtige Review-Regeln
+======================
+
+- Gehe kritisch und adversarial vor.
+- Vertraue nicht darauf, dass vorhandene Sicherheitsmaßnahmen korrekt implementiert sind.
+- Prüfe auch Wege, diese Maßnahmen zu umgehen.
+- Bewerte den tatsächlich vorhandenen Code und nicht nur die beabsichtigte Architektur.
+- Betrachte das LLM niemals als vertrauenswürdige Sicherheitsinstanz.
+- Unterscheide sauber zwischen Code-Schwachstellen, Architekturproblemen, Hardening und organisatorischen Anforderungen.
+- Erfinde keine Schwachstellen, nur um Findings zu produzieren.
+- Wenn du keine Critical- oder High-Findings findest, sage das ausdrücklich.
+- Nenne auch gute Sicherheitsentscheidungen, wenn sie im Code nachvollziehbar wirksam umgesetzt sind.
+- Führe keine Änderungen am Repository durch.
+- Beginne erst nach Sichtung des gesamten relevanten Repository-Inhalts mit dem abschließenden Urteil.
+- Szenarien, die ausschließlich eine bewusste Manipulation durch einen lokalen Administrator oder eine Änderung des Agent-Codes voraussetzen, dürfen erwähnt werden, aber nicht als primäre Vulnerability die Gesamtbewertung dominieren.
