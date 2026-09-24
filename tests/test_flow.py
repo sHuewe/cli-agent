@@ -1116,6 +1116,79 @@ prompt_file = "later.md"
     assert calls == []
 
 
+
+def test_flow_rejects_dynamic_output_collision_with_default_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    _write_config(tmp_path / "discover.toml")
+
+    default_config = tmp_path / "state" / "cli-agent" / "config.toml"
+    default_config.parent.mkdir(parents=True)
+    _write_config(default_config)
+    original_config = default_config.read_text(encoding="utf-8")
+
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "discover.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+output = "state/cli-agent/${item.path}"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        flow_module,
+        "default_config_file",
+        lambda: default_config,
+    )
+
+    def fake_load_config(path):
+        if path is None:
+            return flow_module.AppConfig()
+        return flow_module.load_config(path)
+
+    dependencies = flow_module.ExecutionDependencies(
+        load_config=fake_load_config,
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(
+            answer='{"items":[{"path":"config.toml"}]}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="reservierten Flow-Eingabe"):
+        asyncio.run(
+            run_flow(
+                definition,
+                workspace=tmp_path,
+                dependencies=dependencies,
+            )
+        )
+
+    assert len(calls) == 1
+    assert default_config.read_text(encoding="utf-8") == original_config
+
+
 def test_filesystem_path_key_collapses_case_when_filesystem_is_case_insensitive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
