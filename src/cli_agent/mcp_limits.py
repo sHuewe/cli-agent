@@ -527,7 +527,11 @@ def validate_mcp_tool_arguments(
             location += f"[{part}]"
         else:
             location += f".{part}"
-    return f"{location}: {error.message}"
+    validator_name = str(error.validator or "unknown")
+    return (
+        f"{location}: JSON-Schema-Validierung fehlgeschlagen "
+        f"(validator={validator_name})."
+    )
 
 
 def validate_mcp_server_metadata(
