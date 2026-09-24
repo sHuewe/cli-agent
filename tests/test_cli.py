@@ -333,6 +333,7 @@ def test_run_sanitizes_dynamic_startup_status_values(
     assert "\u202e" not in output
     assert "server\\nforged" in output
     assert "model\\u001b[2J\\u202eevil" in output
+    assert str(tmp_path) in output
 
 
 def test_terminal_sanitizer_preserves_normal_unicode_and_emoji() -> None:
