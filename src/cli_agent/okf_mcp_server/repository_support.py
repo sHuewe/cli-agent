@@ -17,8 +17,6 @@ FRONTMATTER_PATTERN = re.compile(
     r"\A---[ \t]*\r?\n(?P<yaml>.*?)\r?\n---[ \t]*(?:\r?\n|\Z)",
     re.DOTALL,
 )
-MARKDOWN_LINK_PATTERN = re.compile(r"(?<!!)\[(?P<label>[^\]]+)\]\((?P<target>[^)]+)\)")
-
 
 class OkfRepositoryError(RuntimeError):
     """An OKF repository operation failed."""
@@ -76,15 +74,59 @@ class RepositoryMetadataMixin:
             )
         return parsed
 
+    @staticmethod
+    def _iter_markdown_links(content: str):
+        """Yield inline Markdown links with a single forward scan.
+
+        This intentionally implements the small link subset used by OKF:
+        [label](target), while ignoring image links starting with '!'.
+        Keeping the cursor monotonic avoids quadratic retry behaviour on
+        malformed input such as many unmatched opening brackets.
+        """
+
+        cursor = 0
+        length = len(content)
+        while cursor < length:
+            start = content.find("[", cursor)
+            if start < 0:
+                return
+            if start > 0 and content[start - 1] == "!":
+                cursor = start + 1
+                continue
+
+            label_end = content.find("]", start + 1)
+            if label_end < 0:
+                return
+            if (
+                label_end == start + 1
+                or label_end + 1 >= length
+                or content[label_end + 1] != "("
+            ):
+                cursor = label_end + 1
+                continue
+
+            target_start = label_end + 2
+            target_end = content.find(")", target_start)
+            if target_end < 0:
+                return
+            if target_end == target_start:
+                cursor = target_end + 1
+                continue
+
+            yield content[start + 1 : label_end], content[target_start:target_end]
+            cursor = target_end + 1
+
     def _extract_internal_links(
         self,
         content: str,
         source_path: Path,
+        *,
+        max_links: int | None = None,
     ) -> list[dict[str, Any]]:
         links: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
-        for match in MARKDOWN_LINK_PATTERN.finditer(content):
-            raw_target = self._strip_markdown_link_title(match.group("target"))
+        for label, target in self._iter_markdown_links(content):
+            raw_target = self._strip_markdown_link_title(target)
             if not raw_target or raw_target.startswith("#"):
                 continue
 
@@ -115,20 +157,22 @@ class RepositoryMetadataMixin:
                 # The read-only knowledge tools intentionally expose Markdown
                 # documents and OKF directories only.
                 continue
-            key = (match.group("label"), relative)
+            key = (label, relative)
             if key in seen:
                 continue
             seen.add(key)
             exists = resolved.exists()
             links.append(
                 {
-                    "label": match.group("label"),
+                    "label": label,
                     "path": relative,
                     "kind": kind,
                     "exists": exists,
                     "next_tool": next_tool,
                 }
             )
+            if max_links is not None and len(links) >= max_links:
+                break
         return links
 
     @staticmethod
