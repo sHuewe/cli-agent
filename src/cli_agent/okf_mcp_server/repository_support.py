@@ -18,6 +18,7 @@ FRONTMATTER_PATTERN = re.compile(
     re.DOTALL,
 )
 
+
 class OkfRepositoryError(RuntimeError):
     """An OKF repository operation failed."""
 
