@@ -206,7 +206,11 @@ class OkfRepository(RepositoryMetadataMixin):
         content: str,
         source_path: Path,
     ) -> tuple[list[dict[str, Any]], bool]:
-        links = self._extract_internal_links(content, source_path)
+        links = self._extract_internal_links(
+            content,
+            source_path,
+            max_links=self.max_index_entries + 1,
+        )
         links_truncated = len(links) > self.max_index_entries
         safe_links: list[dict[str, Any]] = []
         validation_cache: dict[Path, bool] = {}
