@@ -195,6 +195,22 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             raise RuntimeError(
                 "LLM-Context-Dump verweigert: .cli-agent darf kein Symlink oder Reparse Point sein."
             )
+        gitignore = dump_directory / ".gitignore"
+        if path_entry_is_symlink_or_reparse(gitignore):
+            raise RuntimeError(
+                "LLM-Context-Dump verweigert: .cli-agent/.gitignore darf kein "
+                "Symlink oder Reparse Point sein."
+            )
+        if not gitignore.exists():
+            try:
+                with gitignore.open("x", encoding="utf-8", newline="\n") as handle:
+                    handle.write("*\n")
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                raise RuntimeError(
+                    "LLM-Context-Dump konnte .cli-agent/.gitignore nicht anlegen."
+                ) from exc
         try:
             dump_directory.resolve(strict=True).relative_to(self.workspace_directory)
         except (OSError, RuntimeError, ValueError) as exc:
