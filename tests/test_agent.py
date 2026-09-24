@@ -897,6 +897,40 @@ def test_dump_file_prefix_is_applied_to_all_context_dumps(
 
 
 @pytest.mark.parametrize(
+    ("existing", "expected"),
+    [
+        ("", "*\n"),
+        ("!*\n", "!*\n*\n"),
+        ("# keep this comment", "# keep this comment\n*\n"),
+        ("# keep\n!README.md\n", "# keep\n!README.md\n*\n"),
+        ("# keep\n*\n", "# keep\n*\n"),
+    ],
+)
+def test_dump_gitignore_enforces_final_catch_all_rule(
+    tmp_path: Path,
+    existing: str,
+    expected: str,
+) -> None:
+    dump_directory = tmp_path / ".cli-agent"
+    dump_directory.mkdir()
+    gitignore = dump_directory / ".gitignore"
+    gitignore.write_text(existing, encoding="utf-8", newline="\n")
+
+    agent = CliAgent(
+        tmp_path,
+        RecordingModel(),
+        (),
+        dump_llm_context=True,
+    )
+
+    agent._safe_dump_path("history.json")
+    agent._safe_dump_path("main_working_messages.json")
+
+    assert gitignore.read_text(encoding="utf-8") == expected
+
+
+
+@pytest.mark.parametrize(
     "prefix",
     ["../escape", "nested/prefix", ".", "..", ""],
 )
