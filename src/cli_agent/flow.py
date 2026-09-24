@@ -260,11 +260,9 @@ def _workspace_local_config_path(
     workspace: Path,
     flow_dir: Path,
 ) -> Path | None:
-    if step.config is None:
-        return None
     config = _resolve_config(step, flow_dir=flow_dir).expanduser()
     try:
-        resolved = config.resolve(strict=True)
+        resolved = config.resolve(strict=False)
     except OSError:
         return None
     try:
