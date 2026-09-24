@@ -7,7 +7,7 @@ import pytest
 
 import cli_agent.config as config_module
 from cli_agent.config import load_config
-from cli_agent.logging_setup import configure_logging
+from cli_agent.logging_setup import configure_logging, process_log_file
 
 
 def test_load_logging_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,8 +94,13 @@ def test_configure_logging_writes_file(tmp_path: Path, monkeypatch: pytest.Monke
     config_file.write_text('[logging]\nfile = "agent.log"\n', encoding="utf-8")
     configure_logging(load_config(config_file).logging)
     logging.getLogger("cli_agent.test").info("tool_call name=example")
-    log_file = state_dir / "agent.log"
+    log_file = process_log_file(state_dir / "agent.log")
     assert "tool_call name=example" in log_file.read_text(encoding="utf-8")
+
+
+def test_process_log_file_includes_pid(tmp_path: Path) -> None:
+    assert process_log_file(tmp_path / "agent.log", pid=12345) == tmp_path / "agent-12345.log"
+    assert process_log_file(tmp_path / "agent", pid=12345) == tmp_path / "agent-12345"
 
 
 def test_load_stdio_server_reference_is_name_only(tmp_path: Path) -> None:
