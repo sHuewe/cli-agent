@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -4992,3 +4993,94 @@ previous = "${previous_output}"
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert [call.prompt for call in calls] == ["mutate"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tokens",
+        "add_web_context https://docs.example/reference",
+        "clear_web_context",
+        "enable os",
+        "disable os",
+    ],
+)
+def test_flow_rejects_rendered_local_agent_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("{{var:task}}", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "process"
+prompt_file = "process.md"
+
+[steps.vars]
+task = "${steps.discover.output.task}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer=json.dumps({"task": command}),
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="unexpected", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="darf kein lokaler Agent-Befehl sein"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(calls) == 1
+    assert calls[0].prompt == "discover"
+
+
+def test_flow_allows_prompt_that_only_mentions_local_agent_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text(
+        "Erkläre den Befehl add_web_context https://docs.example/reference",
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert len(calls) == 1
+    assert calls[0].prompt.startswith("Erkläre den Befehl add_web_context")
