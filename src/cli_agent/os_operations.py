@@ -187,6 +187,8 @@ SENSITIVE_DIRECTORY_NAMES = frozenset(
         ".docker",
         ".git",
         ".ssh",
+        "credentials",
+        "secrets",
     }
 )
 SENSITIVE_SUFFIXES = frozenset({".key", ".pem", ".p12", ".pfx"})
