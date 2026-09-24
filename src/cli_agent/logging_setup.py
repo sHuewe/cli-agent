@@ -1,10 +1,25 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import replace
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from .config import LoggingConfig
+
+
+def process_log_file(path: Path, *, pid: int | None = None) -> Path:
+    """Return the process-specific log path used by cli-agent.
+
+    RotatingFileHandler is not safe for multiple independent processes writing
+    and rotating the same file. Including the process ID keeps each cli-agent
+    instance on its own log file without requiring a platform-specific locking
+    mechanism.
+    """
+
+    process_id = os.getpid() if pid is None else pid
+    return path.with_name(f"{path.stem}-{process_id}{path.suffix}")
 
 
 def configure_logging(
@@ -29,9 +44,10 @@ def configure_logging(
     if default_filename is not None:
         config = replace(config, file=config.file.with_name(default_filename))
 
-    config.file.parent.mkdir(parents=True, exist_ok=True)
+    log_file = process_log_file(config.file)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(
-        config.file,
+        log_file,
         maxBytes=config.max_bytes,
         backupCount=config.backup_count,
         encoding="utf-8",
