@@ -311,12 +311,16 @@ class Workspace:
         path_parts = path.parts
         if workspace is not None:
             try:
-                path_parts = path.relative_to(workspace).parts
+                relative_parts = path.relative_to(workspace).parts
             except ValueError:
                 # Callers are expected to enforce workspace containment first.
                 # If that invariant is violated, keep the sensitivity check
                 # fail-closed instead of classifying an external path as safe.
                 return True
+            # Ignore sensitive ancestors above the selected workspace, but keep
+            # the workspace root itself in scope. A workspace explicitly named
+            # "secrets", "credentials", ".git", etc. remains protected.
+            path_parts = (workspace.name, *relative_parts)
         return (
             any(part.casefold() in SENSITIVE_DIRECTORY_NAMES for part in path_parts)
             or name.startswith(".env")
