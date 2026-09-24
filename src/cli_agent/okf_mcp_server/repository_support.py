@@ -76,45 +76,55 @@ class RepositoryMetadataMixin:
 
     @staticmethod
     def _iter_markdown_links(content: str):
-        """Yield inline Markdown links with a single forward scan.
+        """Yield inline Markdown links with one monotonic forward scan.
 
         This intentionally implements the small link subset used by OKF:
         [label](target), while ignoring image links starting with '!'.
-        Keeping the cursor monotonic avoids quadratic retry behaviour on
-        malformed input such as many unmatched opening brackets.
+        Nested opening brackets restart the candidate in-place instead of
+        rescanning the remaining suffix, so malformed input stays linear.
         """
 
         cursor = 0
         length = len(content)
         while cursor < length:
-            start = content.find("[", cursor)
-            if start < 0:
-                return
-            if start > 0 and content[start - 1] == "!":
-                cursor = start + 1
+            if content[cursor] != "[" or (
+                cursor > 0 and content[cursor - 1] == "!"
+            ):
+                cursor += 1
                 continue
 
-            label_end = content.find("]", start + 1)
-            if label_end < 0:
+            start = cursor
+            cursor += 1
+            while cursor < length and content[cursor] not in "[]":
+                cursor += 1
+            if cursor >= length:
                 return
+            if content[cursor] == "[":
+                # The nested '[' can itself start a valid link. Do not scan
+                # the same suffix again; continue from this character.
+                continue
+
+            label_end = cursor
+            cursor += 1
             if (
                 label_end == start + 1
-                or label_end + 1 >= length
-                or content[label_end + 1] != "("
+                or cursor >= length
+                or content[cursor] != "("
             ):
-                cursor = label_end + 1
                 continue
 
-            target_start = label_end + 2
-            target_end = content.find(")", target_start)
-            if target_end < 0:
+            target_start = cursor + 1
+            cursor = target_start
+            while cursor < length and content[cursor] != ")":
+                cursor += 1
+            if cursor >= length:
                 return
+            target_end = cursor
+            cursor += 1
             if target_end == target_start:
-                cursor = target_end + 1
                 continue
 
             yield content[start + 1 : label_end], content[target_start:target_end]
-            cursor = target_end + 1
 
     def _extract_internal_links(
         self,
