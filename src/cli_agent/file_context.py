@@ -270,7 +270,7 @@ def _prepare_llm_input_file(
     if not resolved.is_file():
         raise ValueError(f"{purpose}-Pfad ist keine reguläre Datei: {resolved}")
     _reject_hardlinked_file(resolved, purpose=purpose)
-    if Workspace._is_sensitive_file(resolved):
+    if Workspace._is_sensitive_file(resolved, workspace=workspace.resolve()):
         raise ValueError(
             f"{purpose} ist als Secret-/Credential- oder interner "
             f"Workspace-Pfad geschützt: {resolved}"
@@ -330,7 +330,7 @@ def prepare_output_target(
         must_exist=False,
         purpose="Output-Datei",
     )
-    if Workspace._is_sensitive_file(resolved):
+    if Workspace._is_sensitive_file(resolved, workspace=workspace.resolve()):
         raise ValueError(
             "Output-Datei ist als Secret-/Credential- oder interner "
             f"Workspace-Pfad geschützt: {resolved}"
@@ -362,7 +362,7 @@ def read_existing_output_text(
         must_exist=True,
         purpose="Output-Datei",
     )
-    if Workspace._is_sensitive_file(resolved):
+    if Workspace._is_sensitive_file(resolved, workspace=workspace.resolve()):
         raise ValueError(
             "Output-Datei ist als Secret-/Credential- oder interner "
             f"Workspace-Pfad geschützt: {resolved}"
