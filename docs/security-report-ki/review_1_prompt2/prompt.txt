@@ -72,11 +72,15 @@ Es soll eine klare Trennung geben zwischen:
 - funktionaler Benutzerkonfiguration und
 - maschinenweiter, administrativ kontrollierter Sicherheitskonfiguration.
 
-Benutzer dürfen normale funktionale Einstellungen ändern.
+Benutzer dürfen normale funktionale Einstellungen ändern und ausdrücklich vorgesehene lokale Datenquellen oder Funktionsoptionen auswählen, sofern deren Trust Boundary klar dokumentiert und technisch eingehalten wird.
 
-Sicherheitsrelevante Grenzen sollen ausschließlich über die Maschinenkonfiguration festgelegt werden. Die normale Benutzerkonfiguration darf diese Grenzen nicht überschreiben oder über alternative Standardoptionen funktional neutralisieren.
+Maschinenweit kontrolliert werden müssen diejenigen Grenzen, die das konkrete Sicherheitsdesign ausdrücklich als administrative Guardrails definiert, insbesondere externe Netzwerkziele, lokale Prozessstarts und dauerhafte Trust-/Freigabeentscheidungen. Die normale Benutzerkonfiguration darf solche administrativen Grenzen nicht überschreiben oder über alternative Standardoptionen funktional neutralisieren.
 
-Dass ein lokal administrativer Benutzer die Maschinenpolicy mit bewusster Elevation verändern kann, ist für dieses Threat Model akzeptabel. Entscheidend ist, dass dies nicht versehentlich, implizit oder durch normale Projektkonfiguration geschieht.
+Leite aus dieser Anforderung NICHT pauschal ab, dass jede lokale Datenquelle, jeder Benutzerwert oder jede funktionale Root-Auswahl zwingend administrativ allowlisted sein muss. Rekonstruiere zuerst aus Code, Dokumentation und tatsächlichem Datenfluss, welche Boundary bewusst benutzerkontrolliert und welche bewusst administrativ kontrolliert sein soll. Eine dokumentierte, absichtlich benutzergewählte und technisch sauber begrenzte lokale read-only Datenquelle ist nicht allein deshalb eine Schwachstelle, weil ihr Root nicht in der Maschinenpolicy steht.
+
+Ebenso darf eine administrative Credential-Regel nicht automatisch als Kontrolle der konkreten Benutzeridentität oder des konkreten Secret-Werts interpretiert werden. Prüfe, welchen Zweck die Regel tatsächlich verfolgt – z. B. zulässige Credential-Quellen bzw. Variablennamen, Schutz vor unbeabsichtigter Secret-Weitergabe oder echte Identitätsbindung – und bewerte nur eine nachweisliche Verletzung dieses beabsichtigten Zwecks als Policy-Bypass.
+
+Dass ein lokal administrativer Benutzer die Maschinenpolicy mit bewusster Elevation verändern kann, ist für dieses Threat Model akzeptabel. Entscheidend ist, dass administrativ definierte Guardrails nicht versehentlich, implizit oder durch normale Projektkonfiguration umgangen werden können.
 
 
 3. LLM-Netzwerkzugriff
@@ -468,6 +472,123 @@ Bevor du den Review abschließt, stelle dir ausdrücklich die Frage:
 Führe für solche Punkte eine zusätzliche eigene Analyse durch.
 
 
+
+Review-Konsistenz, Reproduzierbarkeit und Pflichtprüfungen
+==========================================================
+
+Der Review soll nicht nur fachlich gründlich, sondern auch zwischen verschiedenen Repository-Ständen möglichst reproduzierbar sein.
+
+Arbeite deshalb in dieser Reihenfolge:
+
+1. Rekonstruiere Architektur und Trust Boundaries.
+2. Prüfe die festen Pflichtprüfpunkte und die projektspezifisch zusätzlich erkannten Angriffspfade.
+3. Erstelle die Findings vollständig, bevor du irgendeinen numerischen Score festlegst.
+4. Ordne jedes Finding genau einem primären Bewertungsbereich zu.
+5. Berechne erst danach die Teil-Scores anhand der unten definierten festen Abzugsmatrix.
+6. Führe anschließend einen Konsistenzcheck durch:
+   - Passt der Score zu den Findings?
+   - Wurde dasselbe Finding mehrfach bepunktet?
+   - Wurde ein Bereich abgestraft, obwohl der aktuelle Repository-Stand dort nachweislich starke und getestete Schutzmechanismen besitzt?
+   - Beruht eine Punktänderung auf konkreter Evidenz oder nur auf allgemeinem Eindruck?
+
+Wichtig:
+
+- Ein Finding darf grundsätzlich nur EINMAL als primärer Punktabzug zählen.
+- Dasselbe technische Problem darf nicht gleichzeitig vollständig in mehreren Teilbewertungen abgezogen werden.
+- Sekundäre Auswirkungen eines Findings dürfen nur beschrieben werden; sie erzeugen keinen zusätzlichen Punktabzug, sofern nicht eine klar getrennte, eigenständige Schwäche vorliegt.
+- Reine Wiederholungen desselben Sachverhalts in Dokumentation, Requirements-Matrix oder Angriffsketten sind keine zusätzlichen Findings.
+- Ein Dokumentationsfehler, der lediglich die Beschreibung eines bereits vorhandenen technischen Findings betrifft, ist nur dann ein eigenes Finding, wenn daraus ein eigenständiges betriebliches Risiko entsteht.
+- Bewerte den aktuellen Repository-Stand unabhängig von früheren Reviews oder erwarteten Ergebnissen. Falls frühere Reviews nicht ausdrücklich als Input bereitgestellt wurden, darfst du sie weder annehmen noch rekonstruieren.
+- Ein später hinzugekommener Test, eine strengere Validierung oder zusätzliche Defense-in-Depth darf den Score nicht verschlechtern, außer die Änderung führt selbst nachweislich eine neue Schwäche ein.
+- Wenn zwei Schutzmechanismen dasselbe Risiko adressieren, bewerte die reale Gesamtschutzwirkung und zähle nicht jede Schicht als eigenständiges positives oder negatives Kriterium.
+- Der numerische Score darf nicht steigen, nur weil der Repository-Stand bekannte Einzelprüfungen aus diesem Prompt „besteht“. Ein höherer Score ist nur gerechtfertigt, wenn im aktuellen Stand tatsächlich weniger bzw. weniger schwere Findings oder feste Zusatzabzüge vorliegen.
+- Umgekehrt darf ein früherer Stand nicht allein deshalb schlechter bewertet werden, weil der Prompt eine inzwischen bekannte konkrete Schwachstellenform besonders detailliert nennt. Bewerte stets die zugrunde liegende Angriffsklasse und die damalige tatsächliche Schutzwirkung.
+
+Benchmark-Neutralität und angriffsklassenbasierte Pflichtprüfungen
+-----------------------------------------------------------------
+
+Die Pflichtprüfungen sollen die Breite und Reproduzierbarkeit des Reviews erhöhen, dürfen aber NICHT zu einem auf frühere Findings zugeschnittenen Testkatalog werden.
+
+Beachte deshalb zwingend:
+
+- Die folgenden Punkte beschreiben **Angriffsklassen und Trust-Boundaries**, keine erwarteten konkreten Schwachstellen.
+- Suche innerhalb jeder Klasse eigenständig nach allen relevanten Implementierungswegen. Prüfe nicht nur bereits bekannte oder naheliegende Einzelmechanismen.
+- Bewerte eine abweichende Architektur nicht automatisch als Finding, nur weil eine bestimmte Schutzmaßnahme aus dem Prompt fehlt. Entscheidend ist, ob das beabsichtigte Sicherheitsziel im konkreten Design zuverlässig erreicht wird.
+- Rekonstruiere bei jeder vermeintlichen Policy-Lücke zuerst den beabsichtigten Zweck der Policy. Unterstelle keine stärkere Garantie als Code und Dokumentation tatsächlich versprechen.
+- Eine ausdrücklich vorgesehene Benutzer-Capability ist nicht allein deshalb eine Vulnerability, weil sie Zugriff auf zusätzliche Daten oder Funktionen ermöglicht. Prüfe stattdessen, ob Auswahl, Scope, Datenfluss, Consent/Erwartbarkeit und technische Begrenzung zum dokumentierten Einsatzmodell passen.
+- Ein bestandener Pflichtpunkt erzeugt **keinen Bonus**. Punkte entstehen weiterhin ausschließlich aus tatsächlichen Findings und den ausdrücklich definierten festen Scoring-Regeln.
+- Frühere Findings, deren konkrete technische Form oder frühere Review-Ergebnisse dürfen nur dann in die Analyse einfließen, wenn sie ausdrücklich als Review-Input bereitgestellt wurden. Ansonsten behandle den Repository-Stand wie ein unbekanntes Projekt.
+- Wenn eine Angriffsklasse mehrere technisch äquivalente Pfade besitzt, prüfe die Klasse als Ganzes. Vermeide, den Review auf einen einzelnen bekannten Header, Dateinamen, URL-Parameter, Parser oder Metadatenwert zu verengen.
+
+Prüfe die folgenden Angriffsklassen in JEDEM Review ausdrücklich. Für jeden Punkt sollst du im Abschlussbericht feststellen: `geprüft und unauffällig`, `Finding vorhanden`, `nicht anwendbar` oder `nicht ausreichend beurteilbar`.
+
+1. **Konfigurations- und Policy-Bypässe**
+   - Identifiziere alle normalen Konfigurationswege, die dieselbe sicherheitsrelevante Wirkung erzielen können.
+   - Prüfe, ob administrativ definierte Guardrails über alternative Optionen, Header, Providerparameter, Environment-Quellen, Defaults oder Fallbacks funktional neutralisiert werden können.
+   - Unterscheide dabei sauber zwischen Schutz vor Fehlkonfiguration, Auswahl einer Credential-Quelle, Kontrolle eines Secret-Werts und echter Identitäts-/Account-Governance.
+
+2. **Lokale Datenquellen und Dateisystem-Trust-Boundaries**
+   - Identifiziere Workspace, zusätzliche Knowledge-/Context-/Include-Quellen und sonstige lokale Datenzugriffe.
+   - Rekonstruiere für jede Quelle, wer ihren Root bzw. Scope laut Design wählen darf.
+   - Prüfe Containment, Alias-/Link-Verhalten, Read-vs-Write-Rechte, Weitergabe an das LLM und ob die tatsächliche Implementierung dem dokumentierten Trust-Modell entspricht.
+   - Eine bewusst benutzergewählte, dokumentierte und technisch begrenzte read-only Quelle ist nicht allein wegen ihrer Benutzerkonfigurierbarkeit ein Finding.
+
+3. **Datenminimierung an Netzwerk- und Kontextgrenzen**
+   - Prüfe, ob für einen Request notwendige Daten anschließend unnötig in Modellkontext, Logs, Terminal, Dumps oder persistente History gelangen.
+   - Berücksichtige Metadaten, Authentifizierungsartefakte, URL-Bestandteile, lokale Pfadinformationen, Header und andere potentiell sensitive Begleitdaten.
+   - Prüfe, ob funktional notwendige Request-/Transportdaten sinnvoll von Display-/Model-/Log-Daten getrennt werden.
+
+4. **Ressourcenverbrauch an Protokoll- und Parsergrenzen**
+   - Analysiere untrusted bzw. kompromittierbare externe Eingaben auf Speicher-, CPU- und Event-Loop-DoS.
+   - Unterscheide Transport-/Pre-Parse-, Deserialisierungs-, Validierungs- und Nachverarbeitungsgrenzen.
+   - Prüfe Timeouts, Streamingverhalten, Größenlimits und ob sie vor oder erst nach teuren Verarbeitungsschritten greifen.
+
+5. **Menschliche Freigabe- und Bedienoberflächen als Security Boundary**
+   - Prüfe, ob untrusted Namen, Beschreibungen, Argumente, Resultate oder Modelltexte eine Approval- oder Adminentscheidung visuell verfälschen können.
+   - Berücksichtige uneindeutige Provenance, Rendering-/Steuerzeichen, Unicode-Darstellung, Zeilenstruktur und Verwechslungen zwischen Servern oder Tools.
+   - Trenne klar zwischen rein kosmetischer Darstellung, möglichem Social Engineering und echter technischer Permission-Escalation.
+
+6. **Komplexität untrusted strukturierter Daten**
+   - Prüfe attacker-controlled Schemas, reguläre Ausdrücke, Referenzen, verschachtelte Strukturen, Parser, Dekompression und ähnliche Mechanismen auf algorithmische Komplexitätsangriffe.
+   - Beachte insbesondere synchrone Verarbeitung außerhalb wirksamer Zeit-/CPU-Grenzen und den Zeitpunkt relativ zu Benutzer-Approvals.
+   - Begründe anhand konkreter Implementierung oder reproduzierbarer Evidenz, ob ein Risiko nur theoretisch oder praktisch relevant ist.
+
+7. **Direkte Host-/CLI-Datei-I/O-Pfade außerhalb der normalen Tool-Ausführung**
+   - Inventarisiere alle Ein-/Ausgabefunktionen, die nicht über den gewöhnlichen LLM-Tool-Pfad laufen, z. B. Kontextimport, Promptimport, Export, Dumps oder Ergebnisdateien.
+   - Prüfe, ob Workspace-, Sensitive-Path-, Link-/Alias-, Hardlink- und atomare Schreibregeln dort konsistent gelten.
+
+8. **Dateisystem-Races, Aliasing und Plattformsemantik**
+   - Prüfe Check-vs-Use-Fenster, konkurrierenden Austausch von Pfadkomponenten und plattformspezifische Link-/Reparse-/Handle-Semantik.
+   - Kalibriere die Severity an der realistischen Ausnutzbarkeit im definierten Threat Model und behandle rein theoretische lokale Race-Szenarien nicht automatisch als Boundary-Bypass.
+
+9. **Prozessstart und Kindprozess-Kontext**
+   - Prüfe Executable-Identität, Argumentbildung, Shell-Nutzung, PATH/Interpreter, Working Directory, Environment-Vererbung, Runtime-Platzhalter, Prozess-Lifecycle und Fehlerpfade.
+   - Berücksichtige Windows-/Linux-Unterschiede und ob ein administrativ vertrauter Prozess fälschlich als Sandbox behandelt wird.
+
+10. **Abhängigkeiten, Build, Release und reproduzierbare Distribution**
+    - Prüfe Lockfile-Konsistenz zwischen CI, Build und dokumentiertem Enterprise-Installationsweg.
+    - Bewerte Build-Backend, Artefaktidentität, SBOM, Checksums, SCA/Vulnerability-Scanning, Signierung/Attestation/Provenance sowie Versionierung und Rollback.
+    - Vermeide Doppelabzüge, wenn dasselbe Releaseproblem bereits als Finding bewertet wurde.
+
+11. **Unterstützte Runtime- und Plattformmatrix**
+    - Vergleiche deklarierte Runtime-/Python-Unterstützung mit der tatsächlich getesteten CI-Matrix.
+    - Prüfe plattformabhängige Security-Semantik dort, wo sie für die Implementierung relevant ist.
+
+12. **Netzwerkidentität, SSRF und Namensauflösung**
+    - Prüfe URL-Parsing, Hostnormalisierung, Redirects, Proxyverhalten, DNS-/IP-Auflösung, Loopback/private Netze, IPv4/IPv6 und TLS-Identität.
+    - Bewerte resolved-IP- oder DNS-Themen im konkret verwendeten Sicherheitsmodell; fordere keine zusätzliche IP-Policy, wenn die bestehende Host-/TLS-Boundary das beabsichtigte Ziel bereits belastbar erfüllt.
+
+13. **Logging, Diagnose und lokale Informationsweitergabe**
+    - Prüfe Inhalt, Metadaten, Pfade, interne Zielnamen, Toolparameter, Credentials, Dumps, Rotation, Retention und Opt-in/Default-Verhalten.
+    - Unterscheide lokale Diagnoseinformationen von tatsächlicher Weitergabe an externe Dienste.
+
+14. **Cross-Capability-Angriffsketten**
+    - Versuche untrusted Inhalte, bereits gewährte Toolfähigkeiten, Netzwerkzugriff, lokale Reads/Writes und Approval-Zustände zu realistischen mehrstufigen Angriffsketten zu kombinieren.
+    - Ein Finding entsteht nur, wenn dabei eine beabsichtigte technische oder betriebliche Boundary tatsächlich umgangen oder eine relevante Fehlkonfiguration plausibel begünstigt wird.
+
+Gib im Abschlussbericht zusätzlich eine kompakte `Pflichtprüfungs-Coverage`-Tabelle aus, damit nachvollziehbar ist, welche Angriffsklassen tatsächlich geprüft wurden.
+
+
 Bewertungsmaßstab für Severity und Unternehmenseignung
 ======================================================
 
@@ -498,14 +619,12 @@ Numerische Gesamtbewertung
 
 Ergänze die qualitative Einstufung A-D um einen numerischen Security-/Enterprise-Readiness-Score von 0 bis 100.
 
-Dabei gilt:
+Ziel des Scores ist ausdrücklich, verschiedene Repository-Stände mit demselben Maßstab vergleichbar zu machen. Der Score darf deshalb NICHT frei aus dem Gesamteindruck geschätzt werden.
 
-- 0 bedeutet: praktisch keine belastbaren Sicherheitsgrenzen; fundamentale Schutzmechanismen fehlen oder sind im vorgesehenen Betriebsmodell wirkungslos.
-- 100 bedeutet: für das beschriebene Einsatzmodell nahezu ideal abgesichert; keine relevanten bekannten Schwächen, sehr gute Defense-in-Depth-Maßnahmen, belastbare Regressionstests, nachvollziehbare Dokumentation und gute betriebliche Absicherung.
+Bewertungsbereiche und Gewichte
+-------------------------------
 
-Der Score soll den tatsächlich vorliegenden Repository-Stand bewerten und nicht ein mögliches zukünftiges Zielbild.
-
-Bewerte dafür getrennt folgende Bereiche jeweils mit 0-100 Punkten:
+Bewerte getrennt folgende Bereiche:
 
 1. Technische Security Boundaries und deterministische Enforcement-Mechanismen: 30 %
    - Workspace-Grenzen
@@ -530,12 +649,14 @@ Bewerte dafür getrennt folgende Bereiche jeweils mit 0-100 Punkten:
    - Redirects, DNS, Proxy, SSRF
    - sichere Defaults bei fehlender oder ungültiger Maschinenpolicy
    - Schutz vor unbeabsichtigter benutzerseitiger Lockerung administrativer Grenzen
+   - Credential-Governance
 
 4. Tests und Regression-Sicherheit: 15 %
    - Abdeckung der zentralen Trust Boundaries
    - Negativtests
    - Umgehungsversuche
    - Plattformunterschiede
+   - Runtime-Matrix
    - CI-Verlässlichkeit
 
 5. Enterprise-Betriebsreife, Auditierbarkeit und Supply Chain: 15 %
@@ -546,11 +667,169 @@ Bewerte dafür getrennt folgende Bereiche jeweils mit 0-100 Punkten:
    - nachvollziehbare Security-Entscheidungen
    - operative Voraussetzungen und Restrisiken
 
-Berechne aus diesen Teilwerten einen gewichteten Gesamtscore und runde auf eine ganze Zahl.
+Feste Scoring-Methode
+---------------------
 
-Der numerische Score soll nicht rein mechanisch durch die Anzahl der Findings bestimmt werden. Berücksichtige insbesondere deren reale Ausnutzbarkeit, Severity, Confidence, vorhandene Schutzschichten und das beschriebene Threat Model.
+Jeder der fünf Bereiche startet bei 100 Punkten.
 
-Nutze folgende Kalibrierung als Orientierung:
+Erstelle zunächst ALLE Findings. Weise danach jedem Finding genau EINEN primären Bewertungsbereich zu.
+
+Ziehe in diesem primären Bereich nach folgender Matrix Punkte ab:
+
+### Confirmed Vulnerability
+
+- Critical: -35 Punkte
+- High: -20 Punkte
+- Medium: -8 Punkte
+- Low: -3 Punkte
+- Informational: 0 Punkte
+
+### Plausible Risk / Needs Verification
+
+- Critical: -18 Punkte
+- High: -10 Punkte
+- Medium: -4 Punkte
+- Low: -1 Punkt
+- Informational: 0 Punkte
+
+### Hardening Recommendation
+
+- High: -4 Punkte
+- Medium: -2 Punkte
+- Low: -1 Punkt
+- Informational: 0 Punkte
+
+### Operational / Organizational Requirement
+
+Diese Kategorie soll grundsätzlich nur den Bereich `Enterprise-Betriebsreife, Auditierbarkeit und Supply Chain` reduzieren, außer das Problem betrifft eindeutig einen anderen primären Bereich.
+
+- Critical: -20 Punkte
+- High: -10 Punkte
+- Medium: -4 Punkte
+- Low: -1 Punkt
+- Informational: 0 Punkte
+
+Regeln gegen Doppelzählung
+--------------------------
+
+- Ein Finding erhält genau einen primären Scoring-Bereich.
+- Dasselbe Finding darf nicht in mehreren Bereichen mit vollem Abzug bewertet werden.
+- Ein technisches Finding mit mehreren Auswirkungen bleibt ein Finding und ein Punktabzug.
+- Ein zugehöriger Dokumentationsfehler zählt nicht zusätzlich, sofern er keine eigenständige Fehlkonfiguration oder falsche Betriebsentscheidung wahrscheinlich macht.
+- Eine Angriffskette aus bereits einzeln bewerteten Findings erzeugt keinen zusätzlichen Punktabzug, sofern die Kette keine eigenständige neue Schwäche offenbart.
+- Ein fehlender Test für ein bereits als technisches Finding bewertetes Problem soll nicht zusätzlich als zweites Finding mit vollem Abzug zählen. Der fehlende Regressionstest wird bei der Behebungsempfehlung genannt.
+- Positive Schutzschichten addieren keine Bonuspunkte über 100; sie verhindern oder reduzieren Findings.
+
+Zusätzliche feste Abzüge im Testbereich
+---------------------------------------
+
+Nur der Bereich `Tests und Regression-Sicherheit` erhält zusätzlich zu Findings folgende reproduzierbare Abzüge:
+
+- zentrale Security Boundary implementiert, aber ohne sinnvollen Negativ-/Regressionstest: -2 Punkte je Boundary, maximal -10
+- offiziell unterstützte Plattform wird in CI nicht getestet: -3 Punkte je Plattformfamilie
+- offiziell unterstützte Python-Minor-Versionen werden nur teilweise getestet:
+  - nur eine Minor-Version trotz offenem `>=X.Y` ohne obere Begrenzung: -3 Punkte
+  - zwei oder mehr, aber nicht alle ausdrücklich zugesagten Minor-Versionen: -1 Punkt
+- CI verwendet keinen reproduzierbaren/gelockten Dependency-Stand: -6 Punkte
+- zentrale Tests konnten im Review nicht selbst ausgeführt werden, aber die Repository-CI ist nachvollziehbar vorhanden: KEIN Punktabzug, nur geringere Score-Confidence
+- zentrale Tests sind weder ausführbar noch durch CI nachvollziehbar: -5 Punkte
+
+Zusätzliche feste Abzüge im Enterprise-/Supply-Chain-Bereich
+------------------------------------------------------------
+
+Diese Abzüge dürfen nur angewandt werden, wenn der Sachverhalt nicht bereits als eigenes Operational-/Supply-Chain-Finding bewertet wurde:
+
+- dokumentierter Unternehmens-Installationsweg reproduziert nicht den getesteten Lockfile-Stand: -4 Punkte
+- kein definierter versionierter Release-/Rollbackpfad für Unternehmensverteilung: -3 Punkte
+- keine SBOM: -2 Punkte
+- keine Artefakt-Checksums: -1 Punkt
+- keine Signierung/Attestation/Provenance: -2 Punkte
+- keine automatisierte SCA/Vulnerability-Prüfung: -2 Punkte
+- GitHub Actions nur über mutable Major-Tags statt Commit-SHAs: -1 Punkt
+
+Diese Punkte sind additive Reifeabzüge, aber der gesamte zusätzliche Enterprise-/Supply-Chain-Abzug aus dieser Untersektion ist auf maximal -12 Punkte begrenzt.
+
+Nicht ausreichend beurteilbare Bereiche
+---------------------------------------
+
+Wenn ein zentraler Bereich wegen fehlender Informationen nicht belastbar bewertet werden kann:
+
+- erfinde keinen Score,
+- beginne weiterhin bei 100,
+- ziehe für jede zentrale nicht beurteilbare Security Boundary -5 Punkte im passenden Bereich ab,
+- maximal -15 Punkte pro Bereich,
+- senke zusätzlich die Score-Confidence,
+- benenne exakt, welche Evidenz fehlt.
+
+Dies gilt NICHT für Informationen, die laut Threat Model bewusst außerhalb des Projekts liegen, sofern deren Fehlen keine Aussage über die Produkt-Security verhindert.
+
+Berechnung
+----------
+
+1. Berechne für jeden der fünf Bereiche:
+   `100 - Finding-Abzüge - zulässige feste Zusatzabzüge`
+2. Minimum je Bereich: 0.
+3. Berechne anschließend:
+   - Security Boundaries × 0,30
+   - LLM/MCP/Prompt Injection × 0,20
+   - Netzwerk/Policy/Config × 0,20
+   - Tests × 0,15
+   - Enterprise/Supply Chain × 0,15
+4. Runde erst den finalen Gesamtscore auf eine ganze Zahl.
+5. Gib zusätzlich eine `Score Traceability`-Tabelle aus mit:
+   - Finding/Abzug
+   - Kategorie
+   - Severity
+   - primärer Bewertungsbereich
+   - Punktabzug
+   - kurze Begründung
+6. Gib feste Zusatzabzüge separat in derselben Tabelle aus.
+
+Deployment-/Risk-Gate – strikt getrennt vom Qualitätsscore
+----------------------------------------------------------
+
+Der numerische Gesamtscore und die daraus abgeleitete Buchstabenkategorie beschreiben die **Gesamtqualität und Reife des Projekts**.
+Sie dürfen NICHT durch nachträgliche Score-Caps verändert werden.
+
+Ein einzelnes Critical- oder High-Finding kann für eine konkrete Freigabe sehr relevant sein, soll aber nicht den gesamten Qualitätsscore künstlich auf einen Schwellenwert zusammendrücken. Deshalb wird die Freigaberelevanz separat als `Deployment Gate` ausgewiesen.
+
+Verwende folgende Gate-Logik:
+
+- `BLOCKED`:
+  - mindestens ein bestätigtes Critical-Finding im primären Threat Model, das für den betrachteten Betriebsmodus relevant ist.
+- `REMEDIATION_OR_RISK_ACCEPTANCE_REQUIRED`:
+  - mindestens ein bestätigtes High-Finding im primären Threat Model, das für den betrachteten Betriebsmodus relevant ist.
+- `OPEN_WITH_FINDINGS`:
+  - keine relevanten bestätigten Critical-/High-Findings, aber Medium-/Low-/Hardening-/Operational-Findings vorhanden.
+- `OPEN`:
+  - keine relevanten bestätigten Critical-/High-Findings und keine wesentlichen offenen Findings, die den betrachteten Einsatz blockieren.
+
+Wichtige Regeln für das Deployment Gate:
+
+1. **Der Gate-Status verändert den numerischen Score und die Buchstabenkategorie nicht.**
+2. Ein Finding darf ein Gate nur beeinflussen, wenn du konkret nachgewiesen hast, dass es eine **beabsichtigte Security Boundary oder eine tatsächlich erforderliche Betriebsanforderung** verletzt.
+3. Eine bewusst dokumentierte Produktfunktion oder Trust-Boundary darf nicht allein deshalb zum Gate-Blocker werden, weil ein strengeres alternatives Sicherheitsmodell denkbar wäre.
+4. Ist ein Finding nur für eine optionale Funktion relevant, muss der Gate-Status den betrachteten Betriebsmodus berücksichtigen. Beispiel: Ein High-Finding ausschließlich in einer deaktivierbaren optionalen Funktion kann für einen Betrieb mit deaktivierter Funktion kompensiert sein.
+5. Wenn ein Critical-/High-Finding behoben ist, entfällt der zugehörige Gate-Effekt vollständig. Der Qualitätsscore verbessert sich zusätzlich nur um den regulären Punktabzug dieses Findings bzw. um die dadurch entfallenden festen Zusatzabzüge. Es gibt **keinen künstlichen Score-Sprung durch das Entfernen eines Caps**.
+6. Ist eine zentrale Host-/Workspace-/Approval-Policy nicht ausreichend beurteilbar, setze die Score-Confidence höchstens auf Medium und dokumentiere die fehlende Evidenz. Verwende hierfür die definierten Unknown-Boundary-Abzüge; ändere den Score nicht zusätzlich durch ein Gate-Cap.
+
+Der Abschlussbericht muss deshalb immer **beides getrennt** ausweisen:
+
+- `Security Quality Score: XX/100` plus Kategorie A/B/C/D
+- `Deployment Gate: BLOCKED / REMEDIATION_OR_RISK_ACCEPTANCE_REQUIRED / OPEN_WITH_FINDINGS / OPEN`
+
+Ein Beispiel für die gewünschte Interpretation:
+
+```text
+Security Quality Score: 87/100 – Kategorie D
+Deployment Gate: REMEDIATION_OR_RISK_ACCEPTANCE_REQUIRED
+Grund: ein bestätigtes High-Finding in einer für den betrachteten Rollout aktiven Funktion.
+```
+
+Das bedeutet: Das Projekt kann insgesamt eine hohe Security-Reife besitzen und trotzdem ein einzelnes Finding enthalten, das vor breiter Freigabe behoben oder formal akzeptiert werden sollte.
+
+Kalibrierung
+------------
 
 - 0-19: fundamentale Sicherheitsmechanismen fehlen oder sind weitgehend unwirksam
 - 20-39: erhebliche technische Sicherheitslücken; regulärer Unternehmenseinsatz nicht vertretbar
@@ -560,27 +839,58 @@ Nutze folgende Kalibrierung als Orientierung:
 - 80-89: gute Absicherung für den vorgesehenen pragmatischen Unternehmenseinsatz
 - 90-96: sehr hohe Security- und Enterprise-Reife; nur kleinere Restpunkte oder Defense-in-Depth-Themen
 - 97-99: außergewöhnlich hohe Reife; praktisch nur minimale Restrisiken
-- 100: theoretischer Idealwert; nur vergeben, wenn keine relevante technische, betriebliche, testbezogene oder dokumentarische Schwäche erkennbar ist
+- 100: theoretischer Idealwert; nur wenn keine relevanten technischen, betrieblichen, testbezogenen oder dokumentarischen Schwächen erkennbar sind
 
-Die Buchstabenkategorie und der Score müssen zueinander passen:
+Buchstabenkategorie:
 
-- A entspricht grundsätzlich 0-39
-- B entspricht grundsätzlich 40-59
-- C entspricht grundsätzlich 60-79
-- D entspricht grundsätzlich 80-100
+- A: 0-39
+- B: 40-59
+- C: 60-79
+- D: 80-100
 
-Falls du ausnahmsweise von dieser Zuordnung abweichst, begründe die Abweichung ausdrücklich.
+Kategorie und Score müssen dieser Zuordnung entsprechen. Keine abweichende Kategorie vergeben.
 
-Zusätzliche Kalibrierungsregeln:
+Score-Confidence
+----------------
 
-- Ein bestätigtes Critical-Finding innerhalb des primären Threat Models spricht grundsätzlich gegen einen Score über 39.
-- Ein bestätigtes High-Finding, das eine zentrale Security Boundary im vorgesehenen normalen Betriebsmodell durchbricht, spricht grundsätzlich gegen einen Score über 59.
-- Findings, die ausschließlich bewusste Manipulation durch einen lokalen Administrator voraussetzen, dürfen den Score nur geringfügig als Hardening-/Betriebsaspekt beeinflussen.
-- Reine Best-Practice-Lücken oder optionale Defense-in-Depth-Maßnahmen dürfen den Score nicht unverhältnismäßig stark reduzieren.
-- Nicht ausreichend beurteilbare zentrale Sicherheitsbereiche müssen den Score und/oder die Confidence der Gesamtbewertung sichtbar beeinflussen.
-- Ein hoher Score darf nur vergeben werden, wenn die wesentlichen Sicherheitsannahmen nicht nur implementiert, sondern auch durch geeignete Tests oder anderweitig belastbar verifiziert sind.
+Bewerte die Confidence separat:
 
-Der Score dient ausdrücklich dazu, Fortschritte zwischen verschiedenen Repository-Ständen feiner sichtbar zu machen. Verwende deshalb dieselben Maßstäbe konsistent und vermeide willkürliche Punktänderungen ohne technisch nachvollziehbaren Grund.
+- High:
+  - gesamter relevanter Code einsehbar,
+  - zentrale Security Boundaries nachvollziehbar,
+  - wesentliche Tests/CI belegbar,
+  - keine zentralen unbekannten Implementierungsbereiche.
+
+- Medium:
+  - Code weitgehend vollständig,
+  - einzelne zentrale Runtime-/Deployment-Aspekte nicht praktisch verifiziert,
+  - oder vollständiger Testlauf im Review nicht reproduzierbar.
+
+- Low:
+  - zentrale Komponenten fehlen,
+  - erhebliche Teile der relevanten Implementierung sind nicht einsehbar,
+  - oder mehrere zentrale Security Boundaries können nur angenommen werden.
+
+Die Confidence verändert den berechneten Score nicht automatisch; nicht beurteilbare zentrale Boundaries werden bereits über die oben definierte Regel berücksichtigt.
+
+Wichtig für Vergleichbarkeit
+----------------------------
+
+Der Score dient ausdrücklich dazu, Fortschritte zwischen Repository-Ständen sichtbar zu machen.
+
+Deshalb:
+
+- keine frei geschätzten Teil-Scores,
+- keine Punkte aufgrund eines allgemeinen „guten“ oder „schlechten“ Eindrucks,
+- keine Abzüge ohne Finding oder ausdrücklich definierte feste Zusatzregel,
+- keine Bonuspunkte für bloße Codegröße, Testanzahl oder Dokumentationsmenge,
+- keine Verschlechterung eines Bereichs ohne konkret benennbare negative Evidenz im aktuellen Stand,
+- identische technische Schwächen müssen bei identischer Severity und Kategorie denselben Abzug erhalten,
+- identische Hardening-Lücken müssen denselben Abzug erhalten,
+- ein neu hinzugefügter Security-Test darf einen Score nicht reduzieren,
+- ein behobenes Finding muss den zuvor dafür abgezogenen Betrag vollständig wieder freigeben, sofern kein neues unabhängiges Problem entstanden ist.
+- Score-Historien dürfen niemals durch Score-Caps verzerrt werden; Critical-/High-Findings werden als separate Gate-Zeitreihe betrachtet.
+- Bei Vergleichen zwischen Repository-Ständen sind deshalb mindestens zwei Größen getrennt zu betrachten: `Security Quality Score` und `Deployment Gate`.
 
 
 Anforderungen an Findings
@@ -678,7 +988,9 @@ Strukturiere den Abschlussbericht mindestens in folgende Abschnitte:
 14. Tabellarische Zusammenfassungen
    - Finding Summary
    - Requirements Compliance Matrix
-   - beide Tabellen gemäß Abschnitt `Ausgabeformat`
+   - Pflichtprüfungs-Coverage
+   - Score Traceability
+   - die Tabellen müssen den tatsächlich geprüften Repository-Stand nachvollziehbar abbilden
 
 15. Gesamturteil
    Ordne das Projekt abschließend möglichst eindeutig einer der folgenden Kategorien zu:
@@ -693,7 +1005,9 @@ Strukturiere den Abschlussbericht mindestens in folgende Abschnitte:
    Gib dabei mindestens folgendes Format aus:
 
    - Kategorie: A / B / C / D
-   - Gesamtscore: XX/100
+   - Security Quality Score / Gesamtscore: XX/100
+   - Deployment Gate: BLOCKED / REMEDIATION_OR_RISK_ACCEPTANCE_REQUIRED / OPEN_WITH_FINDINGS / OPEN
+   - kurze Begründung des Deployment Gates und Angabe, welche Findings dafür relevant sind
    - Teilbewertungen:
      - Technische Security Boundaries und Enforcement: XX/100
      - LLM-/MCP-/Prompt-Injection-Resilienz: XX/100
@@ -701,112 +1015,18 @@ Strukturiere den Abschlussbericht mindestens in folgende Abschnitte:
      - Tests und Regression-Sicherheit: XX/100
      - Enterprise-Betriebsreife, Auditierbarkeit und Supply Chain: XX/100
    - Score-Confidence: High / Medium / Low
+   - vollständige gewichtete Berechnung
+   - Score-Traceability mit allen Punktabzügen
    - kurze Begründung der Kategorie und des Scores
    - wichtigste Faktoren, die den Score aktuell begrenzen
    - wichtigste Faktoren, die einen höheren Score rechtfertigen
 
    Berücksichtige bei dieser Einstufung ausdrücklich das beschriebene Threat Model: lokale Entwickler mit Administratorrechten sind grundsätzlich vertrauenswürdige Benutzer. Bewusste Manipulation von Code, Runtime oder Maschinenpolicy soll die Einstufung daher nicht allein verschlechtern.
 
-   Achte darauf, dass Kategorie, Gesamtscore, Severity der Findings und die tatsächliche Unternehmenseignung konsistent zueinander sind.
+   Achte darauf, dass Kategorie und Gesamtscore ausschließlich die nach der festen Scoring-Matrix berechnete Gesamtqualität widerspiegeln. Severity und Freigaberelevanz einzelner Critical-/High-Findings werden zusätzlich über das getrennte Deployment Gate dargestellt. Ein Gate darf den Score oder die Kategorie niemals nachträglich verändern.
 
 Begründe diese Einstufung.
 
-
-16. Abschließender Referenzvergleich mit Continue.dev
------------------------------------------------------
-
-Führe ERST NACH Abschluss der vollständigen, eigenständigen Bewertung von `cli-agent` einen separaten Referenzvergleich mit Continue.dev als VS-Code-Erweiterung durch.
-
-Wichtig:
-
-- Die allgemeine Sicherheitsbewertung von `cli-agent`, die A-D-Kategorie, der numerische Score von 0-100 und sämtliche Teilbewertungen müssen vollständig unabhängig von Continue.dev entstehen.
-- Continue.dev ist ausschließlich ein zusätzlicher Referenzpunkt zur Einordnung des bereits im Unternehmen akzeptierten bzw. früher freigegebenen Risikoniveaus.
-- Der Vergleich mit Continue.dev darf den zuvor bestimmten Score von `cli-agent` weder erhöhen noch senken.
-- Eine frühere Unternehmensfreigabe von Continue.dev ist kein Beleg dafür, dass Continue.dev objektiv sicher ist. Sie dient nur als praktischer Vergleichspunkt.
-
-Vergleiche die Sicherheitsarchitektur von `cli-agent` und Continue.dev insbesondere in folgenden Bereichen:
-
-1. Zugriff auf Workspace-Dateien
-2. Schreibzugriffe auf Dateien
-3. Schutz vor Zugriffen außerhalb des Workspaces
-4. Ausführung lokaler Prozesse und Commands
-5. LLM-Netzwerkzugriff und Modellkonfiguration
-6. administrative Begrenzung zulässiger LLM-Endpunkte
-7. MCP-/Tool-Integration bzw. vergleichbare Erweiterungsmechanismen
-8. Approval-Mechanismen für sicherheitsrelevante Aktionen
-9. Prompt Injection und Umgang mit untrusted Content
-10. Zugriff auf Secrets und Credentials
-11. Umgang mit `.env`, SSH-Schlüsseln, Cloud-Credentials und ähnlichen Dateien
-12. VS-Code-Extension-Host gegenüber eigenständigem CLI-Prozess
-13. Konfigurations- und Policy-Modell
-14. Möglichkeit normaler Benutzer, Sicherheitsgrenzen versehentlich zu lockern
-15. Netzwerk-Allowlisting, Redirects, SSRF- und Proxy-Verhalten
-16. Weitergabe von lokalen Informationen an das LLM
-17. Telemetrie und sonstige externe Datenweitergabe
-18. Logging und Persistenz vertraulicher Inhalte
-19. Supply Chain, Dependencies und Update-Modell
-20. Erweiterbarkeit und zusätzliche Trust Boundaries durch Plugins, Tools oder MCP-Server
-21. Auswirkungen einer erfolgreichen Prompt Injection
-22. relevante Defense-in-Depth-Maßnahmen
-
-Für jeden relevanten Bereich sollst du angeben, ob `cli-agent` gegenüber Continue.dev:
-
-- stärkere technische Schutzmechanismen besitzt,
-- ungefähr vergleichbare Schutzmechanismen besitzt,
-- schwächere Schutzmechanismen besitzt,
-- aufgrund der unterschiedlichen Architektur nicht sinnvoll direkt vergleichbar ist,
-- oder mangels belastbarer Informationen nicht ausreichend beurteilt werden kann.
-
-Vermeide eine pauschale Aussage wie "`cli-agent` ist sicherer" oder "Continue.dev ist sicherer", wenn die Sicherheitslage je nach Bereich unterschiedlich ist. Benenne stattdessen konkret die jeweiligen Security Boundaries, Fähigkeiten und Restrisiken.
-
-Berücksichtige außerdem ausdrücklich, dass eine VS-Code-Erweiterung und ein eigenständiger CLI-Agent unterschiedliche technische Ausgangslagen haben. Ein direkter Vergleich einzelner Funktionen ist daher nicht immer sinnvoll. Bewerte insbesondere, welche Berechtigungen sich bereits aus dem jeweiligen Host-Prozess bzw. Ausführungsmodell ergeben und welche zusätzlichen Grenzen die jeweilige Anwendung selbst technisch einzieht.
-
-Quellenlage und Versionsbezug
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Versuche, soweit möglich, die damals im Unternehmen freigegebene Continue.dev-Version und deren Konfiguration als Referenz zu verwenden.
-
-Falls diese konkrete Version oder Konfiguration nicht vorliegt, trenne strikt zwischen:
-
-1. belegbaren Eigenschaften der damals freigegebenen Continue.dev-Konfiguration,
-2. belegbaren Eigenschaften aktueller oder anderweitig dokumentierter Continue.dev-Versionen,
-3. plausiblen, aber nicht sicher belegbaren Annahmen.
-
-Gib bei allen Aussagen über Continue.dev an, auf welche Version, Dokumentation oder Implementierung sie sich beziehen.
-
-Wenn für einen belastbaren Vergleich externe Recherche erforderlich ist und diese möglich ist, verwende möglichst Primärquellen wie:
-
-- das offizielle Continue.dev-Repository,
-- offizielle Continue.dev-Dokumentation,
-- Release Notes,
-- relevante Security-Dokumentation,
-- konkrete Implementierung der betreffenden Version.
-
-Verlasse dich nicht ausschließlich auf Marketing-Aussagen oder allgemeine Produktbeschreibungen.
-
-Vergleichsausgabe
-~~~~~~~~~~~~~~~~~
-
-Erstelle eine eigene Vergleichsmatrix mit mindestens folgenden Spalten:
-
-- Sicherheitsbereich
-- `cli-agent`
-- Continue.dev
-- Einordnung
-- Begründung
-- Confidence
-- Quellen / Codebezug
-
-Fasse anschließend kurz zusammen:
-
-- in welchen Bereichen `cli-agent` stärkere Guardrails besitzt,
-- in welchen Bereichen Continue.dev stärkere Guardrails besitzt,
-- welche zusätzlichen Risiken sich aus dem agentischen Tool-/MCP-Modell von `cli-agent` ergeben,
-- welche Risiken sich aus der Einbettung von Continue.dev in VS Code ergeben,
-- welche Unterschiede für die konkrete Enterprise-Freigabe besonders relevant sind,
-- ob `cli-agent` gegenüber dem bereits früher akzeptierten Continue.dev-Einsatz neue wesentliche Trust Boundaries oder Risikoklassen einführt.
-
-Der Continue.dev-Vergleich ist ausdrücklich eine ergänzende Einordnung und KEIN Bestandteil der Berechnung des numerischen `cli-agent`-Scores.
 
 
 Wichtige Review-Regeln
