@@ -889,6 +889,7 @@ def test_dump_file_prefix_is_applied_to_all_context_dumps(
     assert asyncio.run(agent.ask("Test")) == "ok"
 
     dump_directory = tmp_path / ".cli-agent"
+    assert (dump_directory / ".gitignore").read_text(encoding="utf-8") == "*\n"
     assert (dump_directory / "extract_history.json").is_file()
     assert (dump_directory / "extract_main_working_messages.json").is_file()
     assert (dump_directory / "extract_main_system_prompt.json").is_file()
