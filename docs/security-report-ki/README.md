@@ -3,7 +3,9 @@
 Dieses Verzeichnis dokumentiert zwei größere, voneinander getrennte Security-Review-Runden für `cli-agent`. Ziel ist nicht, einen einzelnen KI-Report als maßgebliche Sicherheitsfreigabe zu verwenden, sondern mehrere unabhängige Analysen desselben Repository-Stands miteinander zu vergleichen, wiederkehrende Findings zu identifizieren und die Entwicklung des Projekts über mehrere Hardening-Zyklen nachvollziehbar zu machen.
 
 - [Review 1](./review_1/) – erster Multi-Modell-Review
-- [Review 2](./review_2/) – zweiter Multi-Modell-Review mit erweitertem Prompt und numerischem Scoring
+- [Review 1](./review_1/) – ursprünglicher Multi-Modell-Review des Stands `93cc5b`
+- [Review 1 mit Prompt 2](./review_1_prompt2/) – kontrollierte Vergleichsbasis: alter Code mit dem späteren Prompt und demselben Modellensemble wie Review 2
+- [Review 2](./review_2/) – Multi-Modell-Review des neueren Stands `210d53b` mit numerischem Scoring
 - [Review-2-Zusammenfassung](./review_2/README.md) – detaillierte Auswertung der zweiten Runde
 
 ## Methodik und Unabhängigkeit der Reviews
@@ -17,15 +19,18 @@ Ein wichtiger Bestandteil der Methodik ist die **Blindheit der einzelnen Reviews
 
 Dadurch werden zwei Effekte reduziert: Modelle können sich weder an einer vorherigen Severity-Einstufung orientieren noch bekannte Findings einfach wiederholen. Wenn unterschiedliche Modelle denselben technischen Sachverhalt unabhängig finden, ist das deshalb besonders interessant. Umgekehrt ist das **Nicht-Wiederauftreten eines früheren Findings nach einer Codeänderung ein positives Indiz, aber kein formaler Beweis**, dass die Schwachstelle vollständig beseitigt wurde.
 
-Zwischen den beiden Review-Runden wurde auch der Prompt weiterentwickelt. Der zweite Prompt enthält unter anderem eine feste Scoring-Matrix, eine getrennte Deployment-Gate-Logik, Regeln gegen Doppelzählung und einen systematischeren Pflichtkatalog von Angriffsklassen. Deshalb sind die beiden Runden qualitativ gut vergleichbar, **die numerischen Scores aus Review 2 dürfen aber nicht rückwirkend auf Review 1 übertragen werden**.
+Zwischen den beiden Review-Runden wurde auch der Prompt weiterentwickelt. Der zweite Prompt enthält unter anderem eine feste Scoring-Matrix, eine getrennte Deployment-Gate-Logik, Regeln gegen Doppelzählung und einen systematischeren Pflichtkatalog von Angriffsklassen.
 
-## Die drei betrachteten Repository-Stände
+Um den Prompt-Effekt vom Code-Effekt besser zu trennen, wurde der alte Stand `93cc5b` anschließend **noch einmal vollständig mit dem Review-2-Prompt und demselben sechs Modelle umfassenden Ensemble wie Review 2 analysiert**. Diese kontrollierte Vergleichsrunde liegt unter [review_1_prompt2](./review_1_prompt2/). Dadurch ist nun ein direkter numerischer Vergleich `93cc5b` → `210d53b` unter weitgehend identischem Review-Setup möglich.
+
+## Die betrachteten Repository-Stände
 
 | Stufe | Repository-Stand | Bedeutung |
 |---|---|---|
-| Review 1 | `93cc5b20c99a73e22f52144e306608577f0e3f65` | Ausgangspunkt der ersten Multi-Modell-Runde |
-| Review 2 – initial | `210d53b49587faf7e91435f4eaaba6acd0bc0325` | gemeinsamer Stand der zweiten Multi-Modell-Runde |
-| Review 2 – späterer Astra-Re-Review | `a0fbf1488a680346f839a9578cab067cb15324e8` | zusätzlicher Review nach weiteren Hardening-Änderungen |
+| Review 1 | `93cc5b20c99a73e22f52144e306608577f0e3f65` | ursprünglicher Multi-Modell-Review mit Prompt 1 |
+| Review 1 mit Prompt 2 | `93cc5b20c99a73e22f52144e306608577f0e3f65` | kontrollierte Baseline: gleicher Code, aber Prompt und Modellensemble von Review 2 |
+| Review 2 – initial | `210d53b49587faf7e91435f4eaaba6acd0bc0325` | neuerer Code mit Prompt 2 und demselben sechs Modelle umfassenden Ensemble |
+| Review 2 – späterer Astra-Re-Review | `a0fbf1488a680346f839a9578cab067cb15324e8` | zusätzlicher blinder Astra-Review nach weiterem Hardening |
 
 Zwischen `93cc5b` und `210d53b` liegen **730 Commits**. Zwischen `210d53b` und `a0fbf14` liegen weitere **50 Commits**. Die Review-Historie bildet damit nicht nur unterschiedliche Modellmeinungen ab, sondern eine substanzielle Weiterentwicklung des Projekts.
 
@@ -129,6 +134,35 @@ Review 2 findet allerdings neue, tiefer liegende Hardening-Aspekte, etwa:
 
 Das ist ein gutes Beispiel dafür, wie sich der Review-Fokus mit zunehmender Härtung von einfachen konkreten Bypässen zu Randfällen und Defense-in-Depth verschiebt.
 
+## Kontrollierter Vorher-/Nachher-Vergleich mit Prompt 2
+
+Der stärkste quantitative Vergleich in dieser Dokumentation ist nicht mehr der ursprüngliche Review 1 gegen Review 2, sondern:
+
+- **alter Code `93cc5b` + Prompt 2 + sechs Modelle**
+- **neuerer Code `210d53b` + Prompt 2 + dieselben sechs Modelle**
+
+Damit bleiben Prompt und Modellensemble konstant; die wesentliche Variable ist der Repository-Stand.
+
+| Modell | `93cc5b` mit Prompt 2 | `210d53b` mit Prompt 2 | Änderung |
+|---|---:|---:|---:|
+| Claude Opus 5.5 | 87 | 93 | **+6** |
+| DeepSeek V4.1 Flash | 95 | 96 | **+1** |
+| Gemini 3.1 Pro Preview | 99 | 98 | −1 |
+| GLM 5.3 | 94 | 94 | 0 |
+| GPT-6 Astra | 80 | 87 | **+7** |
+| Grok 4.7 | 92 | 97 | **+5** |
+| **Mittelwert** | **91,2** | **94,2** | **+3,0** |
+| **Median** | **93** | **95** | **+2** |
+
+Vier von sechs Modellen bewerten den neueren Stand höher, eines unverändert und eines um einen Punkt niedriger. Deutlich wichtiger als die reine Punktzahl ist die Gate-Entwicklung:
+
+- auf `93cc5b` findet Astra ein **bestätigtes High-Finding** und setzt für den betroffenen externen Python-stdio-Betriebsmodus `REMEDIATION_OR_RISK_ACCEPTANCE_REQUIRED`,
+- auf `210d53b` findet **keines der sechs Modelle ein bestätigtes Critical oder High**,
+- alle sechs Reviews des neueren Stands liegen in Kategorie D,
+- die offenen Findings verschieben sich von direkten Prozess-/Tool-/Dateigrenzen stärker in Richtung Availability, TOCTOU-Residuals, Auditierung und Enterprise-Reife.
+
+Die [README der kontrollierten Baseline](./review_1_prompt2/README.md) dokumentiert diesen Vergleich im Detail.
+
 ## Review 2 – deutlich stärkeres Gesamtbild
 
 Die zweite Multi-Modell-Runde verwendet einen erweiterten Prompt mit reproduzierbarer Scoring-Matrix. Die sechs initialen unabhängigen Reviews ergeben:
@@ -150,9 +184,9 @@ Noch wichtiger als die Scores ist der gemeinsame Sicherheitsbefund:
 - **0 bestätigte High-Findings**
 - **6 von 6 Reviews in der höchsten Kategorie D**
 
-Im Vergleich zu Review 1 ist damit die qualitative Verteilung von **4× C / 1× D** auf **6× D** verschoben.
+Im Vergleich zum ursprünglichen Review 1 ist damit die qualitative Verteilung von **4× C / 1× D** auf **6× D** verschoben.
 
-Diese Verteilung darf wegen der veränderten Modellzusammensetzung und des weiterentwickelten Prompts nicht als streng experimenteller Vorher-/Nachher-Beweis interpretiert werden. Sie ist aber konsistent mit den tatsächlich implementierten Hardening-Maßnahmen und der Verschiebung der Findings hin zu kleineren Rest- und Betriebsrisiken.
+Für den belastbareren quantitativen Vergleich sollte jedoch die zusätzliche Baseline [review_1_prompt2](./review_1_prompt2/) herangezogen werden. Dort wurden der alte und der neuere Stand mit **demselben Prompt und demselben Modellensemble** bewertet. Dieser Vergleich zeigt einen Anstieg des Mittelwerts von **91,2 auf 94,2** und des Medians von **93 auf 95**, während das einzige bestätigte High-Finding der alten Baseline im neueren Stand nicht mehr erscheint.
 
 ## Besonders aussagekräftig: gleiche Modelle in beiden Runden
 
@@ -228,24 +262,25 @@ Diese wiederkehrenden Punkte sind für die weitere Roadmap aussagekräftiger als
 
 ## Was die Verbesserung belastbar macht – und was nicht
 
-Für eine positive Entwicklung sprechen mehrere unabhängige Signale:
+Für eine positive Entwicklung sprechen jetzt mehrere voneinander unabhängige und methodisch unterschiedlich starke Signale:
 
 - konkrete Review-1-Findings wurden mit dedizierten Regressionstests behoben,
-- dieselben konkreten Findings tauchen in der zweiten blinden Runde weitgehend nicht erneut auf,
-- Astra verbessert sich als gleiches Review-Modell qualitativ von C auf D und verliert sein bestätigtes High-Finding,
+- dieselben konkreten Findings tauchen in späteren blinden Reviews weitgehend nicht erneut auf,
+- die kontrollierte Prompt-2-Baseline zeigt bei identischem Modellensemble einen Mittelwertanstieg von **91,2 auf 94,2**,
+- Astra verbessert sich auf demselben Prompt von **80 auf 87** und verliert dabei sein bestätigtes High-Finding,
+- Claude verbessert sich von **87 auf 93**, Grok von **92 auf 97**,
 - in Review 2 gibt es über sechs unabhängige Modelle hinweg kein bestätigtes Critical/High,
 - die offenen Themen verschieben sich in Richtung Availability, Edge-Cases und Enterprise-Reife.
 
-Trotzdem ist die Historie **kein kontrolliertes wissenschaftliches Benchmark-Experiment**:
+Trotz der kontrollierten Zusatzrunde ist die Historie **kein wissenschaftlicher Sicherheitsbeweis**:
 
-- der Prompt wurde zwischen den Runden erweitert,
-- mehrere Modellversionen haben sich geändert,
-- Review 2 enthält andere Modelle als Review 1,
+- der ursprüngliche Review 1 verwendete weiterhin einen anderen Prompt und teils andere Modellversionen,
+- KI-Reviews sind nicht deterministisch und können Findings übersehen oder unterschiedlich kalibrieren,
 - die Reports sind überwiegend statische Analysen,
 - einzelne Runtime-, Windows- und Dependency-Eigenschaften konnten nicht von jedem Modell praktisch verifiziert werden,
 - ein Modell kann ein Finding trotz bestehender Schwachstelle übersehen.
 
-Deshalb sollte der Fortschritt nicht als „Score stieg um X Punkte“ zusammengefasst werden. Aussagekräftiger ist:
+Der kontrollierte Prompt-2-Vergleich erlaubt inzwischen zwar eine quantitative Trendangabe. Aussagekräftiger als die reine Punktdifferenz bleibt aber die Veränderung der konkreten Findings:
 
 > **Review 1 fand noch mehrere konkrete Lücken direkt an Prozess-, Tool- und Dateisystem-Boundaries. Nach gezieltem Hardening bewertet Review 2 die Kern-Boundaries durchgängig als deutlich reifer; die verbleibenden Findings konzentrieren sich überwiegend auf Ressourcenbegrenzung, Race-Residuals, Logging und Enterprise-/Supply-Chain-Reife.**
 
@@ -254,6 +289,10 @@ Deshalb sollte der Fortschritt nicht als „Score stieg um X Punkte“ zusammeng
 ### [review_1](./review_1/)
 
 Enthält den ursprünglichen Prompt, alle fünf unabhängigen Reports und eine detaillierte Zusammenfassung des Stands `93cc5b` inklusive später behobener Findings.
+
+### [review_1_prompt2](./review_1_prompt2/)
+
+Enthält den alten Stand `93cc5b`, erneut bewertet mit exakt dem Prompt und dem sechs Modelle umfassenden Ensemble aus Review 2. Diese Runde ist die kontrollierte numerische Baseline für den Vergleich mit `210d53b`.
 
 ### [review_2](./review_2/)
 
