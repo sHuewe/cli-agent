@@ -25,6 +25,7 @@ from .execution import (
     run_once,
 )
 from .file_context import (
+    is_local_agent_command,
     prepare_file_options,
     prepare_output_target,
     prepare_prompt_file,
@@ -1749,6 +1750,11 @@ def _render_prompt_file(
     if not rendered or rendered.isspace():
         raise ValueError(
             f"Gerenderter Prompt von Schritt {step.step_id!r} darf nicht leer sein."
+        )
+    if is_local_agent_command(rendered):
+        raise ValueError(
+            f"Gerenderter Prompt von Schritt {step.step_id!r} "
+            "darf kein lokaler Agent-Befehl sein."
         )
     return rendered
 
