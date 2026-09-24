@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from dataclasses import replace
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -18,33 +19,54 @@ class _FileLock:
         self.path = path
         self._handle: BinaryIO | None = None
 
-    def acquire(self) -> bool:
+    def acquire(
+        self,
+        *,
+        wait: bool = False,
+        timeout_seconds: float | None = None,
+    ) -> bool:
         if self._handle is not None:
             return True
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.path.open("a+b")
+        deadline = (
+            time.monotonic() + timeout_seconds
+            if timeout_seconds is not None
+            else None
+        )
 
-        try:
-            if os.name == "nt":
-                import msvcrt
+        if os.name == "nt":
+            import msvcrt
 
-                handle.seek(0, os.SEEK_END)
-                if handle.tell() == 0:
-                    handle.write(b"\0")
-                    handle.flush()
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
 
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            handle.close()
-            return False
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
 
-        self._handle = handle
-        return True
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                if not wait:
+                    handle.close()
+                    return False
+                if deadline is not None and time.monotonic() >= deadline:
+                    handle.close()
+                    return False
+                time.sleep(0.05)
+                continue
+
+            self._handle = handle
+            return True
 
     def release(self) -> None:
         handle = self._handle
@@ -66,8 +88,11 @@ class _FileLock:
             handle.close()
 
     def __enter__(self) -> _FileLock:
-        if not self.acquire():
-            raise RuntimeError(f"Log-Lock konnte nicht erworben werden: {self.path}")
+        if not self.acquire(wait=True, timeout_seconds=30.0):
+            raise RuntimeError(
+                f"Log-Lock konnte nicht innerhalb von 30 Sekunden erworben werden: "
+                f"{self.path}"
+            )
         return self
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:
