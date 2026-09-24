@@ -30,7 +30,7 @@ from .execution import (
     run_once,
     resolve_excluded_paths,
 )
-from .logging_setup import configure_logging
+from .logging_setup import configure_logging, process_log_file
 from .mcp_contracts import tool_contract_fingerprint
 from .model_factory import create_model_client
 from .prompt_template import PromptTemplate, parse_variable_assignments
@@ -468,7 +468,7 @@ async def run(args: argparse.Namespace) -> None:
     print("MCP-Server: " + (", ".join(server.name for server in config.mcp_servers) or "(keine)"))
     print(f"Modell: {config.model.model} ({config.model.provider}, {config.model.base_url})")
     if config.logging.enabled:
-        print(f"Logdatei: {config.logging.file}")
+        print(f"Logdatei: {process_log_file(config.logging.file)}")
     if config.okf:
         print(f"OKF-Repository: {config.okf.repository}")
     for file_context in file_contexts:
