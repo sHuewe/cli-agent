@@ -106,6 +106,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self._server_stacks: dict[str, AsyncExitStack] = {}
         self._server_configs: dict[str, ServerConfig] = {}
         self._tool_routes: dict[str, ToolRoute] = {}
+        self._tool_identities: dict[str, tuple[str, str]] = {}
         self._server_tools: dict[str, list[dict[str, Any]]] = {}
         self._server_instructions: dict[str, str] = {}
         self._server_untrusted_instructions: dict[str, str] = {}
