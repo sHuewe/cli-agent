@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from cli_agent.agent_knowledge import (
     _fallback_knowledge_selection,
     _validate_knowledge_selection,
 )
+from cli_agent.agent_knowledge_support import _knowledge_allowed_calls
 
 
 def _state_with_concept() -> tuple[_KnowledgeRunState, str]:
@@ -48,6 +50,33 @@ def test_add_allowed_calls_merges_tool_sets() -> None:
     assert state.allowed_calls == {
         "a": {"knowledge_read", "knowledge_index"},
         "b": {"knowledge_read"},
+    }
+
+
+def test_synthesized_index_entries_are_allowed_for_followup_calls() -> None:
+    result = SimpleNamespace(
+        structuredContent={
+            "directory": "area",
+            "source": "synthesized",
+            "entries": [
+                {
+                    "kind": "concept",
+                    "path": "area/concept.md",
+                    "next_tool": "knowledge_read",
+                },
+                {
+                    "kind": "directory",
+                    "path": "area/nested",
+                    "next_tool": "knowledge_index",
+                },
+            ],
+            "internal_links": [],
+        }
+    )
+
+    assert _knowledge_allowed_calls(result) == {
+        "area/concept.md": {"knowledge_read"},
+        "area/nested": {"knowledge_index"},
     }
 
 

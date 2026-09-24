@@ -275,8 +275,12 @@ base_url = "http://localhost:11434"
     assert config_file.read_text(encoding="utf-8") == original
 
 
-def test_missing_explicit_config_is_not_created(tmp_path: Path) -> None:
+def test_missing_explicit_config_fails_closed_and_is_not_created(
+    tmp_path: Path,
+) -> None:
     config_file = tmp_path / "custom" / "config.toml"
-    config = load_config(config_file)
-    assert config.mcp_servers == ()
+
+    with pytest.raises(FileNotFoundError, match="Explizit angegebene"):
+        load_config(config_file)
+
     assert not config_file.exists()

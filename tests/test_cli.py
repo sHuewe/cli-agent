@@ -291,6 +291,51 @@ def test_without_model_cli_argument_keeps_config_unchanged() -> None:
     assert apply_model_cli_override(original, model=None) is original
 
 
+def test_run_sanitizes_dynamic_startup_status_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = AppConfig(
+        model=ModelConfig(
+            provider="ollama",
+            model="model\x1b[2J\u202eevil",
+            base_url="http://localhost:11434",
+        ),
+        mcp_servers=(
+            McpServerConfig(
+                name="server\nforged",
+                command="unused",
+                built_in=True,
+            ),
+        ),
+    )
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "load_admin_config", lambda: AdminConfig())
+
+    async def fake_run_once(_options, *, dependencies=None):
+        return SimpleNamespace(
+            answer="ok",
+            usage="tokens",
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(cli_module, "run_once", fake_run_once)
+
+    args = build_parser().parse_args(
+        ["--workspace", str(tmp_path), "hello"]
+    )
+    asyncio.run(cli_module.run(args))
+
+    output = capsys.readouterr().out
+    assert "\x1b" not in output
+    assert "\u202e" not in output
+    assert "server\\nforged" in output
+    assert "model\\u001b[2J\\u202eevil" in output
+    assert str(tmp_path) in output
+
+
 def test_terminal_sanitizer_preserves_normal_unicode_and_emoji() -> None:
     value = "Grüße ✅ 🚀 👨‍💻 ❤️"
 

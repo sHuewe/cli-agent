@@ -53,6 +53,37 @@ prompt_file = "prompt.md"
     assert "1 Schritte" in output
 
 
+def test_flow_cli_validate_sanitizes_dynamic_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_flow = SimpleNamespace(
+        source=Path("flow\x1b[2J\u202eevil.toml"),
+        steps=(object(),),
+    )
+    monkeypatch.setattr(flow_module, "load_flow", lambda *_args, **_kwargs: fake_flow)
+    monkeypatch.setattr(flow_module, "validate_flow", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        flow_module.sys,
+        "argv",
+        [
+            "cli-agent-flow",
+            "validate",
+            "flow.toml",
+            "--workspace",
+            str(tmp_path),
+        ],
+    )
+
+    flow_module.main()
+
+    output = capsys.readouterr().out
+    assert "\x1b" not in output
+    assert "\u202e" not in output
+    assert "flow\\u001b[2J\\u202eevil.toml" in output
+
+
 def test_flow_cli_run_command_invokes_runner(
     tmp_path: Path,
     monkeypatch,

@@ -297,7 +297,14 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
 
 
 def load_config(path: Path | None = None) -> AppConfig:
-    config_file = ensure_default_config_file() if path is None else path.expanduser()
+    if path is None:
+        config_file = ensure_default_config_file()
+    else:
+        config_file = path.expanduser()
+        if not config_file.exists():
+            raise FileNotFoundError(
+                f"Explizit angegebene Konfigurationsdatei existiert nicht: {config_file}"
+            )
     if not config_file.exists():
         return AppConfig()
     with config_file.open("rb") as handle:
