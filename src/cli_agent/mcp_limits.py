@@ -529,10 +529,16 @@ def validate_mcp_tool_arguments(
         else:
             location += f".{part}"
     if redact_values:
+        schema_location = "$"
+        for part in error.absolute_schema_path:
+            if isinstance(part, int):
+                schema_location += f"[{part}]"
+            else:
+                schema_location += f".{part}"
         validator_name = str(error.validator or "unknown")
         return (
-            f"{location}: JSON-Schema-Validierung fehlgeschlagen "
-            f"(validator={validator_name})."
+            "JSON-Schema-Validierung fehlgeschlagen "
+            f"(validator={validator_name}, schema_path={schema_location})."
         )
     return f"{location}: {error.message}"
 
