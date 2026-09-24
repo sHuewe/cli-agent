@@ -46,7 +46,6 @@ def _status_text(value: object) -> str:
         str(value),
         multiline=False,
         escape_invisible_formatting=True,
-        escape_literal_backslashes=True,
     )
 
 
