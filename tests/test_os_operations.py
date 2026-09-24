@@ -762,3 +762,18 @@ def test_sensitive_named_directories_protect_descendants_recursively(
     assert not (tmp_path / "copy.json").exists()
     assert not (sensitive_dir / "copy.json").exists()
     assert not (tmp_path / "moved.json").exists()
+
+
+@pytest.mark.parametrize("ancestor_name", ["secrets", "credentials", ".git", ".ssh"])
+def test_sensitive_workspace_ancestor_name_does_not_poison_workspace(
+    tmp_path: Path,
+    ancestor_name: str,
+) -> None:
+    workspace_dir = tmp_path / ancestor_name / "project"
+    workspace_dir.mkdir(parents=True)
+    (workspace_dir / "readme.txt").write_text("ok", encoding="utf-8")
+
+    workspace = _workspace(workspace_dir)
+
+    assert workspace.read_file("readme.txt") == "ok"
+    assert "readme.txt" in workspace.list_files(".")
