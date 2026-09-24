@@ -929,6 +929,26 @@ def test_dump_gitignore_enforces_final_catch_all_rule(
     assert gitignore.read_text(encoding="utf-8") == expected
 
 
+def test_dump_gitignore_handles_large_existing_file(tmp_path: Path) -> None:
+    dump_directory = tmp_path / ".cli-agent"
+    dump_directory.mkdir()
+    gitignore = dump_directory / ".gitignore"
+    existing = ("# filler\n" * 1200) + "!*\n"
+    assert len(existing.encode("utf-8")) > 8192
+    gitignore.write_text(existing, encoding="utf-8", newline="\n")
+
+    agent = CliAgent(
+        tmp_path,
+        RecordingModel(),
+        (),
+        dump_llm_context=True,
+    )
+
+    agent._safe_dump_path("history.json")
+
+    assert gitignore.read_text(encoding="utf-8") == existing + "*\n"
+
+
 
 @pytest.mark.parametrize(
     "prefix",
