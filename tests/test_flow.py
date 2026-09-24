@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -5036,7 +5037,7 @@ task = "${steps.discover.output.task}"
         calls.append(options)
         if options.prompt == "discover":
             return SimpleNamespace(
-                answer='{"task":' + __import__("json").dumps(command) + "}",
+                answer=json.dumps({"task": command}),
                 web_context_statuses=(),
             )
         return SimpleNamespace(answer="unexpected", web_context_statuses=())
