@@ -132,19 +132,30 @@ class McpLifecycleMixin:
                 tools=list(listed.tools),
             )
             native_names: set[str] = set()
-            tool_names: list[str] = []; server_tools: list[dict[str, Any]] = []; routes: dict[str, ToolRoute] = {}
+            tool_names: list[str] = []; server_tools: list[dict[str, Any]] = []; routes: dict[str, ToolRoute] = {}; identities: dict[str, tuple[str, str]] = {}
             for tool in listed.tools:
                 if tool.name in native_names:
                     raise RuntimeError(f"MCP-Server {server_config.name!r} bietet Tool {tool.name!r} mehrfach an.")
                 native_names.add(tool.name)
                 exposed_name = f"{server_config.name}__{tool.name}"
+                identity = (server_config.name, tool.name)
+                known_identity = self._tool_identities.get(exposed_name)
+                if known_identity is not None and known_identity != identity:
+                    raise RuntimeError(
+                        f"MCP-Toolname {exposed_name!r} wurde in diesem Agent-Lauf "
+                        f"bereits für {known_identity[0]!r}/{known_identity[1]!r} "
+                        f"verwendet und darf nicht für {identity[0]!r}/{identity[1]!r} "
+                        "wiederverwendet werden."
+                    )
                 if exposed_name in self._tool_routes:
                     raise RuntimeError(f"Doppelter Toolname: {exposed_name}")
+                identities[exposed_name] = identity
                 routes[exposed_name] = (session, tool.name, server_config)
                 server_tools.append({"type": "function", "function": {"name": exposed_name, "description": f"MCP-Server {server_config.name}: {tool.description or ''}", "parameters": tool.inputSchema}})
                 tool_names.append(exposed_name)
         except BaseException:
             await server_stack.aclose(); raise
+        self._tool_identities.update(identities)
         self._sessions[server_config.name] = session; self._server_stacks[server_config.name] = server_stack; self._server_configs[server_config.name] = server_config; self._server_tools[server_config.name] = server_tools; self._tool_routes.update(routes)
         if instructions and self._instructions_are_trusted(server_config):
             self._server_instructions[server_config.name] = instructions

@@ -170,6 +170,96 @@ def test_start_server_closes_transport_on_exposed_tool_collision(
     assert "os" not in agent._sessions
 
 
+
+def test_exposed_tool_identity_cannot_move_to_different_server_tool(
+    tmp_path: Path,
+) -> None:
+    agent = _agent(tmp_path)
+    first = McpServerConfig(name="a", command="unused", built_in=True)
+    second = McpServerConfig(name="a__b", command="unused", built_in=True)
+
+    class Session:
+        def __init__(self, tool_name: str) -> None:
+            self.tool_name = tool_name
+
+        async def list_tools(self):
+            return SimpleNamespace(
+                tools=[
+                    SimpleNamespace(
+                        name=self.tool_name,
+                        description="test",
+                        inputSchema={"type": "object"},
+                    )
+                ]
+            )
+
+    async def fake_connect(_stack, server_config):
+        tool_name = "b__c" if server_config.name == "a" else "c"
+        return Session(tool_name), None
+
+    agent._connect_server = fake_connect
+
+    async def exercise() -> None:
+        parent = AsyncExitStack()
+        await parent.__aenter__()
+        agent._exit_stack = parent
+        try:
+            await agent._start_server(first, parent)
+            agent._active_servers.add(first.name)
+            await agent.disable_server(first.name)
+
+            with pytest.raises(RuntimeError, match="bereits für"):
+                await agent._start_server(second, parent)
+        finally:
+            await parent.aclose()
+
+    asyncio.run(exercise())
+
+    assert agent._tool_identities["a__b__c"] == ("a", "b__c")
+    assert "a__b" not in agent._sessions
+
+
+def test_exposed_tool_identity_allows_same_server_tool_reconnect(
+    tmp_path: Path,
+) -> None:
+    agent = _agent(tmp_path)
+    server = McpServerConfig(name="a", command="unused", built_in=True)
+
+    class Session:
+        async def list_tools(self):
+            return SimpleNamespace(
+                tools=[
+                    SimpleNamespace(
+                        name="b__c",
+                        description="test",
+                        inputSchema={"type": "object"},
+                    )
+                ]
+            )
+
+    async def fake_connect(_stack, _server_config):
+        return Session(), None
+
+    agent._connect_server = fake_connect
+
+    async def exercise() -> None:
+        parent = AsyncExitStack()
+        await parent.__aenter__()
+        agent._exit_stack = parent
+        try:
+            await agent._start_server(server, parent)
+            agent._active_servers.add(server.name)
+            await agent.disable_server(server.name)
+            await agent.enable_server(server.name)
+        finally:
+            await parent.aclose()
+
+    asyncio.run(exercise())
+
+    assert agent._tool_identities["a__b__c"] == ("a", "b__c")
+    assert "a" in agent._sessions
+
+
 def test_optional_missing_knowledge_repository_is_disabled(
     tmp_path: Path,
 ) -> None:
