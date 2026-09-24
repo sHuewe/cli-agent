@@ -777,3 +777,20 @@ def test_sensitive_workspace_ancestor_name_does_not_poison_workspace(
 
     assert workspace.read_file("readme.txt") == "ok"
     assert "readme.txt" in workspace.list_files(".")
+
+
+@pytest.mark.parametrize("workspace_name", ["secrets", "credentials", ".git", ".ssh"])
+def test_sensitive_workspace_root_name_protects_all_descendants(
+    tmp_path: Path,
+    workspace_name: str,
+) -> None:
+    workspace_dir = tmp_path / workspace_name
+    workspace_dir.mkdir()
+    (workspace_dir / "service.json").write_text('{"token":"secret"}', encoding="utf-8")
+
+    workspace = _workspace(workspace_dir)
+
+    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+        workspace.read_file("service.json")
+    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+        workspace.list_files(".")
