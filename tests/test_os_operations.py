@@ -727,3 +727,38 @@ def test_read_file_range_handles_utf8_character_across_binary_chunks(
         _workspace(tmp_path).read_file("utf8.txt", start_line=2, end_line=2)
         == "äöü\n"
     )
+
+
+@pytest.mark.parametrize("directory", ["secrets", "credentials"])
+def test_sensitive_named_directories_protect_descendants_recursively(
+    tmp_path: Path,
+    directory: str,
+) -> None:
+    sensitive_dir = tmp_path / directory
+    sensitive_dir.mkdir()
+    secret = sensitive_dir / "service.json"
+    secret.write_text('{"token":"secret"}', encoding="utf-8")
+    (tmp_path / "source.json").write_text('{"safe":true}', encoding="utf-8")
+    workspace = _workspace(tmp_path)
+
+    assert directory not in workspace.list_files(".")
+
+    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+        workspace.list_files(directory)
+    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+        workspace.read_file(f"{directory}/service.json")
+    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+        workspace.file_info(f"{directory}/service.json")
+    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+        workspace.copy_file(f"{directory}/service.json", "copy.json")
+    with pytest.raises(WorkspaceError, match="Ändern|geschützten"):
+        workspace.write_file(f"{directory}/service.json", '{"changed":true}')
+    with pytest.raises(WorkspaceError, match="Ändern|geschützten"):
+        workspace.copy_file("source.json", f"{directory}/copy.json")
+    with pytest.raises(WorkspaceError, match="Ändern|geschützten"):
+        workspace.move_file(f"{directory}/service.json", "moved.json")
+
+    assert secret.read_text(encoding="utf-8") == '{"token":"secret"}'
+    assert not (tmp_path / "copy.json").exists()
+    assert not (sensitive_dir / "copy.json").exists()
+    assert not (tmp_path / "moved.json").exists()
