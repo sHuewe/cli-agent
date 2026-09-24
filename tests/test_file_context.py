@@ -458,3 +458,23 @@ def test_aggregate_context_limit_stops_before_loading_later_files(
         )
 
     assert loaded == [Path("one.txt"), Path("two.txt")]
+
+
+@pytest.mark.parametrize("ancestor_name", ["secrets", "credentials", ".git", ".ssh"])
+def test_direct_file_options_ignore_sensitive_workspace_ancestor_name(
+    tmp_path: Path,
+    ancestor_name: str,
+) -> None:
+    workspace = tmp_path / ancestor_name / "project"
+    workspace.mkdir(parents=True)
+    (workspace / "context.txt").write_text("context", encoding="utf-8")
+    (workspace / "prompt.md").write_text("prompt", encoding="utf-8")
+
+    context = prepare_context_file(workspace, Path("context.txt"))
+    prompt = prepare_prompt_file(workspace, Path("prompt.md"))
+    output = prepare_output_target(workspace, Path("output.md"), overwrite=False)
+
+    assert context.content == "context"
+    assert prompt.content == "prompt"
+    output.write_text("result")
+    assert (workspace / "output.md").read_text(encoding="utf-8") == "result"
