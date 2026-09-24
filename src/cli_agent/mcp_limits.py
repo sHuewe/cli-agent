@@ -499,6 +499,7 @@ def validate_mcp_tool_arguments(
     schema: dict[str, Any],
     arguments: dict[str, Any],
     validator: Any | None = None,
+    redact_values: bool = False,
 ) -> str | None:
     """Return a concise validation error, or ``None`` for valid arguments."""
 
@@ -527,11 +528,13 @@ def validate_mcp_tool_arguments(
             location += f"[{part}]"
         else:
             location += f".{part}"
-    validator_name = str(error.validator or "unknown")
-    return (
-        f"{location}: JSON-Schema-Validierung fehlgeschlagen "
-        f"(validator={validator_name})."
-    )
+    if redact_values:
+        validator_name = str(error.validator or "unknown")
+        return (
+            f"{location}: JSON-Schema-Validierung fehlgeschlagen "
+            f"(validator={validator_name})."
+        )
+    return f"{location}: {error.message}"
 
 
 def validate_mcp_server_metadata(
