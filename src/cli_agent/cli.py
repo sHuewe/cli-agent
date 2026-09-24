@@ -41,6 +41,16 @@ REDACTED_CONFIG_VALUE = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"
 logger = logging.getLogger("cli_agent.cli")
 
 
+def _status_text(value: object) -> str:
+    return sanitize_terminal_text(
+        str(value),
+        multiline=False,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+
+
+
 @dataclass(frozen=True)
 class McpToolInspection:
     server_name: str
@@ -379,7 +389,7 @@ async def run_admin(args: argparse.Namespace) -> None:
     print("\nDie Admin-Konfiguration wurde NICHT geändert.")
     print("Prüfe Tool, Beschreibung und Schema und übernimm die folgenden Blöcke bei bewusster Freigabe manuell in die Admin-Policy.")
     print("\nPfad zur Admin-Konfiguration:")
-    print(default_admin_config_file())
+    print(_status_text(default_admin_config_file()))
     print("\nBeispiel für den Trusted-Server-Eintrag:")
     print(
         sanitize_terminal_text(
@@ -463,23 +473,40 @@ async def run(args: argparse.Namespace) -> None:
     else:
         one_shot_prompt = " ".join(args.prompt) if args.prompt else None
 
-    print(f"Arbeitsordner: {workspace}")
-    print(f"Admin-Policy: {default_admin_config_file()}")
-    print("MCP-Server: " + (", ".join(server.name for server in config.mcp_servers) or "(keine)"))
-    print(f"Modell: {config.model.model} ({config.model.provider}, {config.model.base_url})")
+    print(_status_text(f"Arbeitsordner: {workspace}"))
+    print(_status_text(f"Admin-Policy: {default_admin_config_file()}"))
+    print(
+        _status_text(
+            "MCP-Server: "
+            + (", ".join(server.name for server in config.mcp_servers) or "(keine)")
+        )
+    )
+    print(
+        _status_text(
+            f"Modell: {config.model.model} "
+            f"({config.model.provider}, {config.model.base_url})"
+        )
+    )
     if config.logging.enabled:
-        print(f"Logdatei: {process_log_file(config.logging.file)}")
+        print(_status_text(f"Logdatei: {process_log_file(config.logging.file)}"))
     if config.okf:
-        print(f"OKF-Repository: {config.okf.repository}")
+        print(_status_text(f"OKF-Repository: {config.okf.repository}"))
     for file_context in file_contexts:
         print(
-            f"Context-Datei: {file_context.relative_path} "
-            f"({len(file_context.content)} Zeichen)"
+            _status_text(
+                f"Context-Datei: {file_context.relative_path} "
+                f"({len(file_context.content)} Zeichen)"
+            )
         )
     if prompt_file is not None:
-        print(f"Prompt-Datei: {prompt_file.relative_path} ({len(prompt_file.content)} Zeichen)")
+        print(
+            _status_text(
+                f"Prompt-Datei: {prompt_file.relative_path} "
+                f"({len(prompt_file.content)} Zeichen)"
+            )
+        )
     if output_target is not None:
-        print(f"Output-Datei: {output_target.path}")
+        print(_status_text(f"Output-Datei: {output_target.path}"))
 
     approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
 
