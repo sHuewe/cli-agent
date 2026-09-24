@@ -2490,9 +2490,14 @@ def main() -> None:
         )
         if args.command == "validate":
             print(
-                f"Flow gültig: {flow.source} "
-                f"({len(flow.steps)} Schritte, "
-                f"Workspace: {workspace})"
+                sanitize_terminal_text(
+                    f"Flow gültig: {flow.source} "
+                    f"({len(flow.steps)} Schritte, "
+                    f"Workspace: {workspace})",
+                    multiline=False,
+                    escape_invisible_formatting=True,
+                    escape_literal_backslashes=True,
+                )
             )
             return
         asyncio.run(
