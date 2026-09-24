@@ -63,7 +63,27 @@ def test_argument_validation_runs_in_worker() -> None:
         arguments={"query": 42},
     )
     assert error is not None
-    assert "not of type 'string'" in error
+    assert "$.query" in error
+    assert "validator=type" in error
+    assert "42" not in error
+
+
+def test_argument_validation_error_does_not_expose_rejected_value() -> None:
+    secret = "SECRET-SENTINEL-DO-NOT-LOG"
+    error = guard.validate_mcp_tool_arguments(
+        tool_name="server__search",
+        schema={
+            "type": "object",
+            "properties": {"query": {"type": "integer"}},
+            "required": ["query"],
+        },
+        arguments={"query": secret},
+    )
+
+    assert error is not None
+    assert "$.query" in error
+    assert "validator=type" in error
+    assert secret not in error
 
 
 def test_metadata_schema_validation_runs_in_worker() -> None:
@@ -206,7 +226,8 @@ def test_oversized_validation_error_remains_schema_rejection() -> None:
     )
 
     assert error is not None
-    assert "gekürzt" in error
+    assert "validator=type" in error
+    assert large_value not in error
     assert len(error) <= guard.MAX_MCP_VALIDATION_ERROR_CHARS
 
 
