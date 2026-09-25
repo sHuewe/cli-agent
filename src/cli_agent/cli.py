@@ -511,8 +511,14 @@ async def run(args: argparse.Namespace) -> None:
     web_ui = bool(getattr(args, "with_web_ui", False))
     web_approval_broker = None
     if web_ui:
-        from .web_ui import WebUiApprovalBroker, run_web_ui
+        from .web_ui import (
+            WebUiApprovalBroker,
+            ensure_web_ui_available,
+            run_web_ui,
+        )
 
+        # Validate the optional dependency set before model/MCP construction.
+        ensure_web_ui_available()
         web_approval_broker = WebUiApprovalBroker()
         approval_callback = build_preapproval_callback(
             getattr(args, "approve_tool", ()),
