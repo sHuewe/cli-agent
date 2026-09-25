@@ -311,3 +311,9 @@ def test_web_ui_queue_marks_request_busy_until_processed() -> None:
         assert await session.next_prompt() == "tokens"
 
     asyncio.run(run())
+
+
+def test_web_ui_client_retries_transient_connection_conflict() -> None:
+    assert "event.code === 4409" in web_ui.APP_JS
+    assert "window.setTimeout(connectSocket, reconnectDelayMs)" in web_ui.APP_JS
+    assert "maxReconnectAttempts" in web_ui.APP_JS
