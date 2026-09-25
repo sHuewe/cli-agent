@@ -162,7 +162,8 @@ def test_web_ui_answer_is_sent_before_output_write() -> None:
         async def sender(payload):
             sent.append(payload)
 
-        await session._handle_prompt("hello", sender)
+        session._active_sender = sender
+        await session._handle_prompt("hello")
         return sent
 
     sent = asyncio.run(run())
@@ -191,3 +192,46 @@ def test_web_ui_concurrent_prompt_rejection_releases_browser_busy_state() -> Non
         "continue", 1
     )[0]
     assert 'await sender({"type": "busy", "value": False})' in concurrent
+
+
+def test_web_ui_prompt_result_is_buffered_across_disconnect() -> None:
+    class Agent:
+        async def ask(self, _prompt):
+            await asyncio.sleep(0)
+            return "answer after reconnect"
+
+    async def run():
+        broker = web_ui.WebUiApprovalBroker()
+        session = web_ui._WebUiSession(
+            agent=Agent(),
+            approval_broker=broker,
+            token="secret",
+            expected_origin="http://127.0.0.1:12345",
+            workspace=Path("."),
+            model="model",
+            mcp_servers=(),
+            output_target=None,
+            initial_messages=(),
+            debug=False,
+        )
+
+        async def stale_sender(_payload):
+            raise RuntimeError("disconnected")
+
+        session._active_sender = stale_sender
+        await session._handle_prompt("hello")
+
+        delivered = []
+
+        async def new_sender(payload):
+            delivered.append(payload)
+
+        session._active_sender = new_sender
+        await session._flush_pending_events()
+        return delivered
+
+    delivered = asyncio.run(run())
+    assert delivered == [
+        {"type": "answer", "content": "answer after reconnect"},
+        {"type": "busy", "value": False},
+    ]
