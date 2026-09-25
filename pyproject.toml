@@ -20,7 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 web = [
-    "starlette>=0.48,<1",
+    "starlette>=1.6,<2",
     "uvicorn>=0.35,<1",
     "websockets>=17,<18",
 ]
