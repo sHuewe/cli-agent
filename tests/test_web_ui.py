@@ -126,3 +126,47 @@ def test_missing_web_extra_has_actionable_error(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match=r"cli-agent\[web\]"):
         web_ui._load_web_dependencies()
+
+
+def test_web_ui_oversized_prompt_releases_busy_state() -> None:
+    source = web_ui._WebUiSession.websocket.__code__
+    assert source is not None
+    assert "busy" in web_ui.APP_JS
+
+
+def test_web_ui_answer_is_sent_before_output_write() -> None:
+    class Agent:
+        async def ask(self, _prompt):
+            return "successful answer"
+
+    class FailingOutput:
+        def write_text(self, _text):
+            raise OSError("write failed")
+
+    async def run():
+        broker = web_ui.WebUiApprovalBroker()
+        session = web_ui._WebUiSession(
+            agent=Agent(),
+            approval_broker=broker,
+            token="secret",
+            expected_origin="http://127.0.0.1:12345",
+            workspace=Path("."),
+            model="model",
+            mcp_servers=(),
+            output_target=FailingOutput(),
+            initial_messages=(),
+            debug=False,
+        )
+        sent = []
+
+        async def sender(payload):
+            sent.append(payload)
+
+        await session._handle_prompt("hello", sender)
+        return sent
+
+    sent = asyncio.run(run())
+    assert sent[0] == {"type": "answer", "content": "successful answer"}
+    assert sent[1]["type"] == "error"
+    assert "write failed" in sent[1]["content"]
+    assert sent[-1] == {"type": "busy", "value": False}
