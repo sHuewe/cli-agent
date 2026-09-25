@@ -374,8 +374,8 @@ class _WebUiSession:
         finally:
             self.approval_broker.detach(sender)
             async with self._connection_lock:
-            if self._active_sender is sender:
-                self._active_sender = None
+                if self._active_sender is sender:
+                    self._active_sender = None
 
     async def close(self) -> None:
         self.approval_broker.deny_all()
