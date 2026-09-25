@@ -235,3 +235,48 @@ def test_web_ui_prompt_result_is_buffered_across_disconnect() -> None:
         {"type": "answer", "content": "answer after reconnect"},
         {"type": "busy", "value": False},
     ]
+
+
+@pytest.mark.parametrize(
+    ("command", "argument", "expected"),
+    [
+        ("tokens", None, "tokens"),
+        ("clear_web_context", None, "clear_web_context"),
+        ("add_web_context", "https://example.com", "add_web_context https://example.com"),
+        ("enable", "os", "enable os"),
+        ("disable", "os", "disable os"),
+    ],
+)
+def test_web_ui_command_prompt_builds_only_local_commands(
+    command,
+    argument,
+    expected,
+) -> None:
+    assert web_ui._web_ui_command_prompt(command, argument) == expected
+
+
+@pytest.mark.parametrize(
+    ("command", "argument"),
+    [
+        ("unknown", None),
+        ("tokens", "unexpected"),
+        ("add_web_context", None),
+        ("add_web_context", "not-a-url"),
+        ("enable", None),
+        ("disable", ""),
+    ],
+)
+def test_web_ui_command_prompt_rejects_invalid_commands(command, argument) -> None:
+    with pytest.raises(ValueError):
+        web_ui._web_ui_command_prompt(command, argument)
+
+
+def test_web_ui_renders_local_command_buttons() -> None:
+    for command in (
+        "tokens",
+        "add_web_context",
+        "clear_web_context",
+        "enable",
+        "disable",
+    ):
+        assert f'data-command="{command}"' in web_ui.INDEX_HTML
