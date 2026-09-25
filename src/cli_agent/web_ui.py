@@ -170,7 +170,9 @@ class _WebUiSession:
         self.debug = debug
         self._active_sender: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._connection_lock = asyncio.Lock()
+        self._delivery_lock = asyncio.Lock()
         self._agent_lock = asyncio.Lock()
+        self._pending_events: list[dict[str, Any]] = []
         self._tasks: set[asyncio.Task[None]] = set()
         self.shutdown_callback: Callable[[], None] | None = None
 
@@ -183,15 +185,36 @@ class _WebUiSession:
             and origin == self.expected_origin
         )
 
-    async def _handle_prompt(
-        self,
-        prompt: str,
-        sender: Callable[[dict[str, Any]], Awaitable[None]],
-    ) -> None:
+    async def _flush_pending_events(self) -> None:
+        async with self._delivery_lock:
+            sender = self._active_sender
+            if sender is None:
+                return
+            while self._pending_events:
+                try:
+                    await sender(self._pending_events[0])
+                except Exception:
+                    return
+                self._pending_events.pop(0)
+
+    async def _send_event(self, payload: dict[str, Any]) -> None:
+        async with self._delivery_lock:
+            self._pending_events.append(payload)
+            sender = self._active_sender
+            if sender is None:
+                return
+            while self._pending_events:
+                try:
+                    await sender(self._pending_events[0])
+                except Exception:
+                    return
+                self._pending_events.pop(0)
+
+    async def _handle_prompt(self, prompt: str) -> None:
         async with self._agent_lock:
             try:
                 answer = await self.agent.ask(prompt)
-                await sender({"type": "answer", "content": answer})
+                await self._send_event({"type": "answer", "content": answer})
                 if self.output_target is not None and not is_local_agent_command(prompt):
                     try:
                         self.output_target.write_text(answer)
@@ -205,7 +228,9 @@ class _WebUiSession:
                                 if detail
                                 else type(exc).__name__
                             )
-                        await sender({"type": "error", "content": message})
+                        await self._send_event(
+                            {"type": "error", "content": message}
+                        )
             except Exception as exc:
                 if self.debug:
                     message = "".join(traceback.format_exception(exc))
@@ -216,15 +241,9 @@ class _WebUiSession:
                         if detail
                         else type(exc).__name__
                     )
-                try:
-                    await sender({"type": "error", "content": message})
-                except Exception:
-                    pass
+                await self._send_event({"type": "error", "content": message})
             finally:
-                try:
-                    await sender({"type": "busy", "value": False})
-                except Exception:
-                    pass
+                await self._send_event({"type": "busy", "value": False})
 
     def _track(self, task: asyncio.Task[None]) -> None:
         self._tasks.add(task)
@@ -259,6 +278,8 @@ class _WebUiSession:
                     "initial_messages": list(self.initial_messages),
                 }
             )
+            await self._flush_pending_events()
+            await sender({"type": "busy", "value": self._agent_lock.locked()})
             while True:
                 try:
                     payload = await websocket.receive_json()
@@ -368,7 +389,7 @@ class _WebUiSession:
                 await sender({"type": "busy", "value": True})
                 self._track(
                     asyncio.create_task(
-                        self._handle_prompt(prompt, sender)
+                        self._handle_prompt(prompt)
                     )
                 )
         finally:
