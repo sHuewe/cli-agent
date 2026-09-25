@@ -208,7 +208,8 @@ class _WebUiSession:
         self._delivery_lock = asyncio.Lock()
         self._agent_lock = asyncio.Lock()
         self._pending_events: list[dict[str, Any]] = []
-        self._tasks: set[asyncio.Task[None]] = set()
+        self._prompt_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=1)
+        self._request_pending = False
         self.shutdown_callback: Callable[[], None] | None = None
 
     def _authorized(self, websocket: Any) -> bool:
@@ -245,6 +246,22 @@ class _WebUiSession:
                     return
                 self._pending_events.pop(0)
 
+    def _busy(self) -> bool:
+        return self._request_pending or self._agent_lock.locked()
+
+    def _enqueue_prompt(self, prompt: str) -> None:
+        if self._busy():
+            raise RuntimeError("Es läuft bereits eine Anfrage.")
+        self._request_pending = True
+        try:
+            self._prompt_queue.put_nowait(prompt)
+        except BaseException:
+            self._request_pending = False
+            raise
+
+    async def next_prompt(self) -> str:
+        return await self._prompt_queue.get()
+
     async def _handle_prompt(self, prompt: str) -> None:
         async with self._agent_lock:
             try:
@@ -278,11 +295,8 @@ class _WebUiSession:
                     )
                 await self._send_event({"type": "error", "content": message})
             finally:
+                self._request_pending = False
                 await self._send_event({"type": "busy", "value": False})
-
-    def _track(self, task: asyncio.Task[None]) -> None:
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
 
     async def websocket(self, websocket: Any) -> None:
         if not self._authorized(websocket):
@@ -314,7 +328,7 @@ class _WebUiSession:
                 }
             )
             await self._flush_pending_events()
-            await sender({"type": "busy", "value": self._agent_lock.locked()})
+            await sender({"type": "busy", "value": self._busy()})
             while True:
                 try:
                     payload = await websocket.receive_json()
@@ -388,7 +402,7 @@ class _WebUiSession:
                         )
                         await sender({"type": "busy", "value": False})
                         continue
-                    if self._agent_lock.locked():
+                    if self._busy():
                         await sender(
                             {
                                 "type": "error",
@@ -401,11 +415,11 @@ class _WebUiSession:
                         await sender({"type": "busy", "value": False})
                         continue
                     await sender({"type": "busy", "value": True})
-                    self._track(
-                        asyncio.create_task(
-                            self._handle_prompt(command_prompt)
-                        )
-                    )
+                    try:
+                        self._enqueue_prompt(command_prompt)
+                    except RuntimeError as exc:
+                        await sender({"type": "error", "content": str(exc)})
+                        await sender({"type": "busy", "value": False})
                     continue
 
                 if kind != "message":
@@ -466,11 +480,11 @@ class _WebUiSession:
                     return
 
                 await sender({"type": "busy", "value": True})
-                self._track(
-                    asyncio.create_task(
-                        self._handle_prompt(prompt)
-                    )
-                )
+                try:
+                    self._enqueue_prompt(prompt)
+                except RuntimeError as exc:
+                    await sender({"type": "error", "content": str(exc)})
+                    await sender({"type": "busy", "value": False})
         finally:
             self.approval_broker.detach(sender)
             async with self._connection_lock:
@@ -479,10 +493,6 @@ class _WebUiSession:
 
     async def close(self) -> None:
         self.approval_broker.deny_all()
-        if self._tasks:
-            for task in tuple(self._tasks):
-                task.cancel()
-            await asyncio.gather(*self._tasks, return_exceptions=True)
 
 
 INDEX_HTML = """<!doctype html>
@@ -962,7 +972,24 @@ async def run_web_ui(
 
         await asyncio.to_thread(webbrowser.open, url, new=2)
         try:
-            await server_task
+            while True:
+                prompt_task = asyncio.create_task(session.next_prompt())
+                done, _pending = await asyncio.wait(
+                    {server_task, prompt_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if server_task in done:
+                    prompt_task.cancel()
+                    await asyncio.gather(prompt_task, return_exceptions=True)
+                    await server_task
+                    break
+
+                prompt = prompt_task.result()
+                # MCP client contexts are entered by the surrounding CLI task.
+                # Run every agent interaction in this same task as well: AnyIO
+                # cancel scopes used by MCP transports must be exited by the
+                # task that entered them.
+                await session._handle_prompt(prompt)
         finally:
             await session.close()
     finally:
