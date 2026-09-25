@@ -235,21 +235,21 @@ class _WebUiSession:
             await websocket.close(code=4403)
             return
 
+        send_lock = asyncio.Lock()
+
+        async def sender(payload: dict[str, Any]) -> None:
+            async with send_lock:
+                await websocket.send_json(payload)
+
         async with self._connection_lock:
             if self._active_sender is not None:
                 await websocket.close(code=4409)
                 return
-
-            await websocket.accept()
-            send_lock = asyncio.Lock()
-
-            async def sender(payload: dict[str, Any]) -> None:
-                async with send_lock:
-                    await websocket.send_json(payload)
-
             self._active_sender = sender
-            self.approval_broker.attach(sender)
-            try:
+
+        await websocket.accept()
+        self.approval_broker.attach(sender)
+        try:
                 await sender(
                     {
                         "type": "session",
@@ -351,6 +351,7 @@ class _WebUiSession:
                                 ),
                             }
                         )
+                        await sender({"type": "busy", "value": False})
                         continue
                     if prompt.casefold() in {"exit", "quit"}:
                         self.approval_broker.deny_all()
@@ -370,9 +371,11 @@ class _WebUiSession:
                             self._handle_prompt(prompt, sender)
                         )
                     )
-            finally:
-                self.approval_broker.detach(sender)
-                self._active_sender = None
+        finally:
+            self.approval_broker.detach(sender)
+            async with self._connection_lock:
+                if self._active_sender is sender:
+                    self._active_sender = None
 
     async def close(self) -> None:
         self.approval_broker.deny_all()
