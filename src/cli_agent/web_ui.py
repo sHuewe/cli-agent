@@ -33,15 +33,10 @@ def _load_web_dependencies() -> dict[str, Any]:
         starlette_routing = importlib.import_module("starlette.routing")
         trustedhost = importlib.import_module("starlette.middleware.trustedhost")
         uvicorn = importlib.import_module("uvicorn")
-        # Uvicorn needs a WebSocket implementation in addition to its core
-        # dependencies. Keep it in the explicit web extra rather than relying
-        # on whatever happens to be installed in the environment.
-        importlib.import_module("websockets")
     except ModuleNotFoundError as exc:
         if (exc.name or "").split(".", 1)[0] in {
             "starlette",
             "uvicorn",
-            "websockets",
         }:
             raise RuntimeError(_WEB_EXTRA_ERROR) from exc
         raise
