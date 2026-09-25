@@ -701,22 +701,38 @@ APP_JS = """
   }
 
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(
-    scheme + "://" + window.location.host + "/ws?token=" + encodeURIComponent(token)
-  );
+  const wsUrl =
+    scheme + "://" + window.location.host + "/ws?token=" + encodeURIComponent(token);
+  const maxReconnectAttempts = 12;
+  const reconnectDelayMs = 250;
+  let reconnectAttempts = 0;
 
-  socket.addEventListener("open", () => setBusy(false));
+  function connectSocket() {
+    socket = new WebSocket(wsUrl);
 
-  socket.addEventListener("close", () => {
-    setBusy(true);
-    quit.disabled = true;
-    if (approval.open) {
-      approval.close();
-    }
-    meta.textContent = "Web-UI-Verbindung beendet.";
-  });
+    socket.addEventListener("open", () => {
+      meta.textContent = "Web-UI-Verbindung wird hergestellt …";
+    });
 
-  socket.addEventListener("message", (event) => {
+    socket.addEventListener("close", (event) => {
+      setBusy(true);
+      quit.disabled = true;
+      if (approval.open) {
+        approval.close();
+      }
+      if (event.code === 4409 && reconnectAttempts < maxReconnectAttempts) {
+        reconnectAttempts += 1;
+        meta.textContent = "Vorherige Web-UI-Verbindung wird beendet …";
+        window.setTimeout(connectSocket, reconnectDelayMs);
+        return;
+      }
+      meta.textContent =
+        event.code === 4409
+          ? "Eine andere Web-UI-Verbindung ist noch aktiv."
+          : "Web-UI-Verbindung beendet.";
+    });
+
+    socket.addEventListener("message", (event) => {
     let payload;
     try {
       payload = JSON.parse(event.data);
@@ -726,6 +742,8 @@ APP_JS = """
     }
 
     if (payload.type === "session") {
+      reconnectAttempts = 0;
+      quit.disabled = false;
       const servers = Array.isArray(payload.mcp_servers)
         ? payload.mcp_servers.join(", ")
         : "";
@@ -761,7 +779,11 @@ APP_JS = """
       addMessage("system", String(payload.content || "Sitzung beendet."));
       setBusy(true);
     }
-  });
+    });
+  }
+
+  setBusy(true);
+  connectSocket();
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
