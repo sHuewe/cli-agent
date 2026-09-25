@@ -247,9 +247,9 @@ class _WebUiSession:
                 return
             self._active_sender = sender
 
-        await websocket.accept()
-        self.approval_broker.attach(sender)
         try:
+            await websocket.accept()
+            self.approval_broker.attach(sender)
                 await sender(
                     {
                         "type": "session",
