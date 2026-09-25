@@ -33,10 +33,12 @@ def _load_web_dependencies() -> dict[str, Any]:
         starlette_routing = importlib.import_module("starlette.routing")
         trustedhost = importlib.import_module("starlette.middleware.trustedhost")
         uvicorn = importlib.import_module("uvicorn")
+        importlib.import_module("websockets")
     except ModuleNotFoundError as exc:
         if (exc.name or "").split(".", 1)[0] in {
             "starlette",
             "uvicorn",
+            "websockets",
         }:
             raise RuntimeError(_WEB_EXTRA_ERROR) from exc
         raise
