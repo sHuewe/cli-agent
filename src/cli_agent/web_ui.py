@@ -13,6 +13,7 @@ from typing import Any
 
 from .approval_display import approval_arguments
 from .file_context import OutputTarget, is_local_agent_command
+from .local_commands import classify_local_command
 from .terminal_output import sanitize_terminal_text
 
 WEB_UI_HOST = "127.0.0.1"
@@ -23,6 +24,40 @@ _WEB_EXTRA_ERROR = (
     "Die Web-UI ist nicht installiert. Installiere cli-agent mit dem optionalen "
     "Extra 'web', z. B. mit: pipx install 'cli-agent[web]'"
 )
+
+_WEB_UI_COMMANDS: dict[str, tuple[int, str]] = {
+    "tokens": (0, "tokens"),
+    "clear_web_context": (0, "clear_web_context"),
+    "add_web_context": (1, "add_web_context <URL>"),
+    "enable": (1, "enable <SERVER>"),
+    "disable": (1, "disable <SERVER>"),
+}
+
+
+def _web_ui_command_prompt(command: object, argument: object = None) -> str:
+    """Build a validated local command without ever falling through to the LLM."""
+
+    if not isinstance(command, str) or command not in _WEB_UI_COMMANDS:
+        raise ValueError("Unbekannter Web-UI-Befehl.")
+
+    argument_count, usage = _WEB_UI_COMMANDS[command]
+    if argument_count == 0:
+        if argument not in (None, ""):
+            raise ValueError(f"Ungültige Syntax. Verwendung: {usage}")
+        prompt = command
+    else:
+        if not isinstance(argument, str) or not argument.strip():
+            raise ValueError(f"Argument fehlt. Verwendung: {usage}")
+        prompt = f"{command} {argument.strip()}"
+
+    parsed = classify_local_command(prompt)
+    if (
+        not parsed.is_local
+        or parsed.error is not None
+        or parsed.command != command
+    ):
+        raise ValueError(f"Ungültiges Argument. Verwendung: {usage}")
+    return prompt
 
 
 def _load_web_dependencies() -> dict[str, Any]:
@@ -329,6 +364,50 @@ class _WebUiSession:
                         self.shutdown_callback()
                     return
 
+                if kind == "command":
+                    try:
+                        command_prompt = _web_ui_command_prompt(
+                            payload.get("command"),
+                            payload.get("argument"),
+                        )
+                    except ValueError as exc:
+                        await sender(
+                            {"type": "error", "content": str(exc)}
+                        )
+                        await sender({"type": "busy", "value": False})
+                        continue
+                    if len(command_prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": (
+                                    "Befehl überschreitet das Web-UI-Limit von "
+                                    f"{MAX_PROMPT_BYTES} Bytes."
+                                ),
+                            }
+                        )
+                        await sender({"type": "busy", "value": False})
+                        continue
+                    if self._agent_lock.locked():
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": (
+                                    "Es läuft bereits eine Anfrage. "
+                                    "Bitte warte auf deren Abschluss."
+                                ),
+                            }
+                        )
+                        await sender({"type": "busy", "value": False})
+                        continue
+                    await sender({"type": "busy", "value": True})
+                    self._track(
+                        asyncio.create_task(
+                            self._handle_prompt(command_prompt)
+                        )
+                    )
+                    continue
+
                 if kind != "message":
                     await sender(
                         {
@@ -425,6 +504,14 @@ INDEX_HTML = """<!doctype html>
       <button id="quit" class="secondary" type="button">Sitzung beenden</button>
     </header>
     <section id="chat" class="chat" aria-live="polite"></section>
+    <div id="commands" class="commands" aria-label="Lokale Befehle">
+      <button class="secondary" data-command="tokens" type="button">Tokens</button>
+      <button class="secondary" data-command="add_web_context" type="button">Web-Kontext hinzufügen</button>
+      <button class="secondary" data-command="clear_web_context" type="button">Web-Kontext löschen</button>
+      <button class="secondary" data-command="enable" type="button">MCP aktivieren</button>
+      <button class="secondary" data-command="disable" type="button">MCP deaktivieren</button>
+      <button id="cancel-command" class="secondary hidden" type="button">Abbrechen</button>
+    </div>
     <form id="composer">
       <textarea id="prompt" rows="3" placeholder="Nachricht an cli-agent" required></textarea>
       <button id="send" type="submit">Senden</button>
@@ -460,6 +547,9 @@ h1 { margin: 0 0 4px; font-size: 1.35rem; }
 .message.user { align-self: flex-end; background: color-mix(in srgb, Highlight 18%, Canvas); }
 .message.assistant, .message.system { align-self: flex-start; background: color-mix(in srgb, CanvasText 8%, Canvas); }
 .message.error { align-self: flex-start; border: 1px solid #b42318; }
+.commands { display: flex; flex-wrap: wrap; gap: 8px; }
+.commands button { padding: 7px 10px; font-size: .9rem; }
+.hidden { display: none; }
 form { display: grid; grid-template-columns: 1fr auto; gap: 10px; position: sticky; bottom: 0; background: Canvas; padding: 10px 0 4px; }
 textarea { width: 100%; resize: vertical; min-height: 70px; padding: 10px; font: inherit; }
 button { border: 0; border-radius: 9px; padding: 10px 16px; background: Highlight; color: HighlightText; font: inherit; cursor: pointer; }
@@ -487,13 +577,47 @@ APP_JS = """
   const send = document.getElementById("send");
   const quit = document.getElementById("quit");
   const meta = document.getElementById("session-meta");
+  const commandButtons = Array.from(
+    document.querySelectorAll("button[data-command]")
+  );
+  const cancelCommand = document.getElementById("cancel-command");
   const approval = document.getElementById("approval");
   const approvalTool = document.getElementById("approval-tool");
   const approvalArguments = document.getElementById("approval-arguments");
 
   let socket = null;
   let pendingApprovalId = null;
+  let pendingCommand = null;
   let busy = false;
+
+  const COMMANDS = {
+    tokens: {
+      argument: false,
+      display: "tokens"
+    },
+    clear_web_context: {
+      argument: false,
+      display: "clear_web_context"
+    },
+    add_web_context: {
+      argument: true,
+      display: "add_web_context",
+      question: "Welche URL soll als Web-Kontext hinzugefügt werden?",
+      placeholder: "https://…"
+    },
+    enable: {
+      argument: true,
+      display: "enable",
+      question: "Welcher MCP-Server soll aktiviert werden?",
+      placeholder: "Name des MCP-Servers"
+    },
+    disable: {
+      argument: true,
+      display: "disable",
+      question: "Welcher MCP-Server soll deaktiviert werden?",
+      placeholder: "Name des MCP-Servers"
+    }
+  };
 
   function addMessage(kind, content) {
     const element = document.createElement("div");
@@ -505,11 +629,52 @@ APP_JS = """
 
   function setBusy(value) {
     busy = Boolean(value);
+    const disconnected = !socket || socket.readyState !== WebSocket.OPEN;
     prompt.disabled = busy;
-    send.disabled = busy || !socket || socket.readyState !== WebSocket.OPEN;
+    send.disabled = busy || disconnected;
+    for (const button of commandButtons) {
+      button.disabled = busy || disconnected;
+    }
+    cancelCommand.disabled = busy || disconnected;
     if (!busy) {
       prompt.focus();
     }
+  }
+
+  function resetPendingCommand() {
+    pendingCommand = null;
+    prompt.placeholder = "Nachricht an cli-agent";
+    cancelCommand.classList.add("hidden");
+  }
+
+  function sendCommand(name, argument = null) {
+    if (busy || !socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    socket.send(JSON.stringify({
+      type: "command",
+      command: name,
+      argument
+    }));
+    setBusy(true);
+  }
+
+  function beginCommand(name) {
+    const spec = COMMANDS[name];
+    if (!spec) {
+      return;
+    }
+    if (!spec.argument) {
+      resetPendingCommand();
+      addMessage("user", spec.display);
+      sendCommand(name);
+      return;
+    }
+    pendingCommand = name;
+    prompt.placeholder = spec.placeholder;
+    cancelCommand.classList.remove("hidden");
+    addMessage("system", spec.question);
+    prompt.focus();
   }
 
   function tokenFromFragment() {
@@ -598,8 +763,14 @@ APP_JS = """
       return;
     }
     addMessage("user", content);
-    socket.send(JSON.stringify({ type: "message", content }));
     prompt.value = "";
+    if (pendingCommand) {
+      const command = pendingCommand;
+      resetPendingCommand();
+      sendCommand(command, content);
+      return;
+    }
+    socket.send(JSON.stringify({ type: "message", content }));
     setBusy(true);
   });
 
@@ -608,6 +779,20 @@ APP_JS = """
       event.preventDefault();
       form.requestSubmit();
     }
+  });
+
+  for (const button of commandButtons) {
+    button.addEventListener("click", () => {
+      beginCommand(button.dataset.command);
+    });
+  }
+
+  cancelCommand.addEventListener("click", () => {
+    if (pendingCommand) {
+      addMessage("system", "Befehl abgebrochen.");
+    }
+    resetPendingCommand();
+    prompt.focus();
   });
 
   approval.addEventListener("click", (event) => {
