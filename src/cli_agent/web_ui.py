@@ -191,9 +191,21 @@ class _WebUiSession:
         async with self._agent_lock:
             try:
                 answer = await self.agent.ask(prompt)
-                if self.output_target is not None and not is_local_agent_command(prompt):
-                    self.output_target.write_text(answer)
                 await sender({"type": "answer", "content": answer})
+                if self.output_target is not None and not is_local_agent_command(prompt):
+                    try:
+                        self.output_target.write_text(answer)
+                    except Exception as exc:
+                        if self.debug:
+                            message = "".join(traceback.format_exception(exc))
+                        else:
+                            detail = str(exc).strip()
+                            message = (
+                                f"{type(exc).__name__}: {detail}"
+                                if detail
+                                else type(exc).__name__
+                            )
+                        await sender({"type": "error", "content": message})
             except Exception as exc:
                 if self.debug:
                     message = "".join(traceback.format_exception(exc))
@@ -327,6 +339,7 @@ class _WebUiSession:
                                 ),
                             }
                         )
+                        await sender({"type": "busy", "value": False})
                         continue
                     if self._agent_lock.locked():
                         await sender(
