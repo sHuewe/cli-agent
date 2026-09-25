@@ -379,6 +379,11 @@ Die erste Version ist absichtlich **localhost-only**. Der Server bindet fest an
 keine Share-/Tunnel-Funktion. Ein zufälliger Prozess-Token und eine strikte
 Origin-Prüfung schützen die WebSocket-Session zusätzlich vor fremden Webseiten.
 Statische UI-Inhalte stammen aus dem Paketcode und nicht aus dem Workspace.
+Die Web-UI ist in dieser ersten Version ausdrücklich nicht für Reverse-Proxies,
+Tunnel oder den Zugriff von anderen Rechnern vorgesehen. Die vorhandenen MCP-
+und Workspace-Berechtigungen werden durch die Web-UI weder erweitert noch
+reduziert; sie entsprechen den Rechten, mit denen derselbe Agent im
+Terminalmodus gestartet würde.
 Details zum Threat Model stehen in [Security](docs/security.md#optionale-lokale-web-ui).
 
 ## Prompt-Dateien und Templates
