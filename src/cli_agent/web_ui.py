@@ -55,6 +55,12 @@ def _load_web_dependencies() -> dict[str, Any]:
     }
 
 
+def ensure_web_ui_available() -> None:
+    """Fail before model/MCP startup when the optional web extra is absent."""
+
+    _load_web_dependencies()
+
+
 class WebUiApprovalBroker:
     """Bridge the agent's approval callback to one authenticated browser."""
 
