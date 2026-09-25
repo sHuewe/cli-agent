@@ -250,132 +250,132 @@ class _WebUiSession:
         try:
             await websocket.accept()
             self.approval_broker.attach(sender)
-                await sender(
-                    {
-                        "type": "session",
-                        "workspace": str(self.workspace),
-                        "model": self.model,
-                        "mcp_servers": list(self.mcp_servers),
-                        "initial_messages": list(self.initial_messages),
-                    }
-                )
-                while True:
-                    try:
-                        payload = await websocket.receive_json()
-                    except Exception:
-                        break
-                    if not isinstance(payload, dict):
-                        await sender(
-                            {
-                                "type": "error",
-                                "content": "Ungültige Web-UI-Nachricht.",
-                            }
-                        )
-                        continue
-
-                    kind = payload.get("type")
-                    if kind == "approval_response":
-                        request_id = payload.get("id")
-                        decision = payload.get("decision")
-                        if not isinstance(request_id, str) or not isinstance(
-                            decision, str
-                        ):
-                            continue
-                        if not self.approval_broker.resolve(
-                            request_id,
-                            decision,
-                        ):
-                            await sender(
-                                {
-                                    "type": "error",
-                                    "content": (
-                                        "Die Tool-Freigabe ist nicht mehr aktiv "
-                                        "oder ungültig."
-                                    ),
-                                }
-                            )
-                        continue
-
-                    if kind == "quit":
-                        self.approval_broker.deny_all()
-                        await sender(
-                            {
-                                "type": "shutdown",
-                                "content": "Web-UI wird beendet.",
-                            }
-                        )
-                        if self.shutdown_callback is not None:
-                            self.shutdown_callback()
-                        return
-
-                    if kind != "message":
-                        await sender(
-                            {
-                                "type": "error",
-                                "content": "Unbekannter Web-UI-Nachrichtentyp.",
-                            }
-                        )
-                        continue
-
-                    content = payload.get("content")
-                    if not isinstance(content, str):
-                        await sender(
-                            {
-                                "type": "error",
-                                "content": "Prompt muss Text sein.",
-                            }
-                        )
-                        continue
-                    prompt = content.strip()
-                    if not prompt:
-                        continue
-                    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-                        await sender(
-                            {
-                                "type": "error",
-                                "content": (
-                                    "Prompt überschreitet das Web-UI-Limit von "
-                                    f"{MAX_PROMPT_BYTES} Bytes."
-                                ),
-                            }
-                        )
-                        await sender({"type": "busy", "value": False})
-                        continue
-                    if self._agent_lock.locked():
-                        await sender(
-                            {
-                                "type": "error",
-                                "content": (
-                                    "Es läuft bereits eine Anfrage. "
-                                    "Bitte warte auf deren Abschluss."
-                                ),
-                            }
-                        )
-                        await sender({"type": "busy", "value": False})
-                        continue
-                    if prompt.casefold() in {"exit", "quit"}:
-                        self.approval_broker.deny_all()
-                        await sender(
-                            {
-                                "type": "shutdown",
-                                "content": "Web-UI wird beendet.",
-                            }
-                        )
-                        if self.shutdown_callback is not None:
-                            self.shutdown_callback()
-                        return
-
-                    await sender({"type": "busy", "value": True})
-                    self._track(
-                        asyncio.create_task(
-                            self._handle_prompt(prompt, sender)
-                        )
+            await sender(
+                {
+                    "type": "session",
+                    "workspace": str(self.workspace),
+                    "model": self.model,
+                    "mcp_servers": list(self.mcp_servers),
+                    "initial_messages": list(self.initial_messages),
+                }
+            )
+            while True:
+                try:
+                    payload = await websocket.receive_json()
+                except Exception:
+                    break
+                if not isinstance(payload, dict):
+                    await sender(
+                        {
+                            "type": "error",
+                            "content": "Ungültige Web-UI-Nachricht.",
+                        }
                     )
+                    continue
+
+                kind = payload.get("type")
+                if kind == "approval_response":
+                    request_id = payload.get("id")
+                    decision = payload.get("decision")
+                    if not isinstance(request_id, str) or not isinstance(
+                        decision, str
+                    ):
+                        continue
+                    if not self.approval_broker.resolve(
+                        request_id,
+                        decision,
+                    ):
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": (
+                                    "Die Tool-Freigabe ist nicht mehr aktiv "
+                                    "oder ungültig."
+                                ),
+                            }
+                        )
+                    continue
+
+                if kind == "quit":
+                    self.approval_broker.deny_all()
+                    await sender(
+                        {
+                            "type": "shutdown",
+                            "content": "Web-UI wird beendet.",
+                        }
+                    )
+                    if self.shutdown_callback is not None:
+                        self.shutdown_callback()
+                    return
+
+                if kind != "message":
+                    await sender(
+                        {
+                            "type": "error",
+                            "content": "Unbekannter Web-UI-Nachrichtentyp.",
+                        }
+                    )
+                    continue
+
+                content = payload.get("content")
+                if not isinstance(content, str):
+                    await sender(
+                        {
+                            "type": "error",
+                            "content": "Prompt muss Text sein.",
+                        }
+                    )
+                    continue
+                prompt = content.strip()
+                if not prompt:
+                    continue
+                if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
+                    await sender(
+                        {
+                            "type": "error",
+                            "content": (
+                                "Prompt überschreitet das Web-UI-Limit von "
+                                f"{MAX_PROMPT_BYTES} Bytes."
+                            ),
+                        }
+                    )
+                    await sender({"type": "busy", "value": False})
+                    continue
+                if self._agent_lock.locked():
+                    await sender(
+                        {
+                            "type": "error",
+                            "content": (
+                                "Es läuft bereits eine Anfrage. "
+                                "Bitte warte auf deren Abschluss."
+                            ),
+                        }
+                    )
+                    await sender({"type": "busy", "value": False})
+                    continue
+                if prompt.casefold() in {"exit", "quit"}:
+                    self.approval_broker.deny_all()
+                    await sender(
+                        {
+                            "type": "shutdown",
+                            "content": "Web-UI wird beendet.",
+                        }
+                    )
+                    if self.shutdown_callback is not None:
+                        self.shutdown_callback()
+                    return
+
+                await sender({"type": "busy", "value": True})
+                self._track(
+                    asyncio.create_task(
+                        self._handle_prompt(prompt, sender)
+                    )
+                )
         finally:
             self.approval_broker.detach(sender)
             async with self._connection_lock:
-                if self._active_sender is sender:
-                    self._active_sender = None
+            if self._active_sender is sender:
+                self._active_sender = None
 
     async def close(self) -> None:
         self.approval_broker.deny_all()
