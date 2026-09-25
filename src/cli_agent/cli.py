@@ -148,6 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overwrite-output", action="store_true", help="Allow --output to replace an existing regular file. Requires --output.")
     parser.add_argument("--approve-tool", action="append", default=[], metavar="TOOL", help="Pre-approve one exact exposed tool name for this process run; repeat for multiple tools.")
     parser.add_argument("--add-web-context", action="append", default=[], metavar="URL", help="Load a web URL before processing the prompt; repeat for multiple URLs.")
+    parser.add_argument("--with-web-ui", action="store_true", help="Run interactive mode in a localhost-only browser UI. Requires the optional web extra.")
     parser.add_argument("--debug", action="store_true", help="Show a complete traceback when an error occurs")
     return parser
 
@@ -507,7 +508,26 @@ async def run(args: argparse.Namespace) -> None:
     if output_target is not None:
         print(_status_text(f"Output-Datei: {output_target.path}"))
 
-    approval_callback = build_approval_callback(getattr(args, "approve_tool", ()))
+    web_ui = bool(getattr(args, "with_web_ui", False))
+    web_approval_broker = None
+    if web_ui:
+        from .web_ui import WebUiApprovalBroker, run_web_ui
+
+        web_approval_broker = WebUiApprovalBroker()
+        approval_callback = build_preapproval_callback(
+            getattr(args, "approve_tool", ()),
+            fallback=web_approval_broker.approve_tool_call,
+        )
+    else:
+        approval_callback = build_approval_callback(
+            getattr(args, "approve_tool", ())
+        )
+
+    if web_ui and one_shot_prompt is not None:
+        raise ValueError(
+            "--with-web-ui ist nur für den interaktiven Modus ohne positional "
+            "Prompt oder --prompt-file vorgesehen."
+        )
 
     if one_shot_prompt is not None:
         result = await run_once(
@@ -561,13 +581,28 @@ async def run(args: argparse.Namespace) -> None:
     )
 
     async with agent:
+        web_context_statuses: list[str] = []
         for url in getattr(args, "add_web_context", ()):
-            print(
-                sanitize_terminal_text(
-                    await agent.ask(f"add_web_context {url}"),
-                    multiline=True,
-                )
+            status = await agent.ask(f"add_web_context {url}")
+            if web_ui:
+                web_context_statuses.append(status)
+            else:
+                print(sanitize_terminal_text(status, multiline=True))
+
+        if web_ui:
+            assert web_approval_broker is not None
+            await run_web_ui(
+                agent=agent,
+                approval_broker=web_approval_broker,
+                workspace=workspace,
+                model=config.model.model,
+                mcp_servers=tuple(server.name for server in config.mcp_servers),
+                output_target=output_target,
+                initial_messages=tuple(web_context_statuses),
+                debug=args.debug,
             )
+            return
+
         print("Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung.")
         while True:
             try:
