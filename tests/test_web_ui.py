@@ -170,3 +170,24 @@ def test_web_ui_answer_is_sent_before_output_write() -> None:
     assert sent[1]["type"] == "error"
     assert "write failed" in sent[1]["content"]
     assert sent[-1] == {"type": "busy", "value": False}
+
+
+def test_web_ui_connection_lock_only_guards_active_sender_state() -> None:
+    import inspect
+
+    source = inspect.getsource(web_ui._WebUiSession.websocket)
+    guarded = source.split("async with self._connection_lock:", 1)[1].split(
+        "await websocket.accept()", 1
+    )[0]
+    assert "self._active_sender = sender" in guarded
+    assert "while True:" not in guarded
+
+
+def test_web_ui_concurrent_prompt_rejection_releases_browser_busy_state() -> None:
+    import inspect
+
+    source = inspect.getsource(web_ui._WebUiSession.websocket)
+    concurrent = source.split("if self._agent_lock.locked():", 1)[1].split(
+        "continue", 1
+    )[0]
+    assert 'await sender({"type": "busy", "value": False})' in concurrent
