@@ -340,7 +340,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<8" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "trafilatura", specifier = ">=2.2,<3" },
-    { name = "starlette", marker = "extra == 'web'", specifier = ">=0.48,<1" },
+    { name = "starlette", marker = "extra == 'web'", specifier = ">=1.6,<2" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.35,<1" },
     { name = "websockets", marker = "extra == 'web'", specifier = ">=17,<18" },
 ]
@@ -1672,3 +1672,7 @@ wheels = [
 name = "websockets"
 version = "17.1"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/72/fba934cb3dff7a85d811820efffcd141ddd52b5a2a01637f64551373ff4d/websockets-17.1.tar.gz", hash = "sha256:acfea4c20bf54384883ea33b1240fc1db4f52e190823a4e2b334bc3e8bfca96a", size = 187520, upload-time = "2026-08-26T17:25:33.063Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/41/63/23572870e01836a98346075b9e17a8bc24a6ddd9800a3204ceee58677f3c/websockets-17.1-py3-none-any.whl", hash = "sha256:f221081107b8c48184d99f7019604486376e7ef826037e70aad6b02540732c23", size = 211134, upload-time = "2026-08-26T17:25:31.397Z" },
+]
