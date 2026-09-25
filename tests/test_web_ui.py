@@ -188,7 +188,7 @@ def test_web_ui_concurrent_prompt_rejection_releases_browser_busy_state() -> Non
     import inspect
 
     source = inspect.getsource(web_ui._WebUiSession.websocket)
-    concurrent = source.split("if self._agent_lock.locked():", 1)[1].split(
+    concurrent = source.split("if self._busy():", 1)[1].split(
         "continue", 1
     )[0]
     assert 'await sender({"type": "busy", "value": False})' in concurrent
@@ -280,3 +280,34 @@ def test_web_ui_renders_local_command_buttons() -> None:
         "disable",
     ):
         assert f'data-command="{command}"' in web_ui.INDEX_HTML
+
+
+def test_web_ui_prompt_queue_keeps_agent_execution_out_of_websocket_task() -> None:
+    import inspect
+
+    source = inspect.getsource(web_ui._WebUiSession.websocket)
+    assert "asyncio.create_task(" not in source
+    assert "self._enqueue_prompt(" in source
+
+
+def test_web_ui_queue_marks_request_busy_until_processed() -> None:
+    async def run():
+        broker = web_ui.WebUiApprovalBroker()
+        session = web_ui._WebUiSession(
+            agent=SimpleNamespace(),
+            approval_broker=broker,
+            token="secret",
+            expected_origin="http://127.0.0.1:12345",
+            workspace=Path("."),
+            model="model",
+            mcp_servers=(),
+            output_target=None,
+            initial_messages=(),
+            debug=False,
+        )
+        assert session._busy() is False
+        session._enqueue_prompt("tokens")
+        assert session._busy() is True
+        assert await session.next_prompt() == "tokens"
+
+    asyncio.run(run())
