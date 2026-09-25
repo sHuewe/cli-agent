@@ -728,6 +728,7 @@ async def run_web_ui(
                 escape_invisible_formatting=True,
             )
         )
+        print("Web-UI Access Token:", token)
         print("Zum Beenden Strg+C im Terminal oder 'Sitzung beenden' im Browser.")
 
         server_task = asyncio.create_task(server.serve(sockets=[sock]))
