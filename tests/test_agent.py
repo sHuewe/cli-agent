@@ -310,6 +310,41 @@ def test_built_in_os_approval_depends_on_write_capability(tmp_path: Path) -> Non
     assert agent._requires_approval(writable, "write_file", "os__write_file") is True
 
 
+def test_built_in_data_approval_depends_on_write_capability(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+    read_only = McpServerConfig(name="data", built_in=True)
+    writable = McpServerConfig(
+        name="data",
+        built_in=True,
+        config={"allow_write_files": True},
+    )
+
+    assert (
+        agent._requires_approval(
+            read_only,
+            "aggregate_data",
+            "data__aggregate_data",
+        )
+        is False
+    )
+    assert (
+        agent._requires_approval(
+            read_only,
+            "aggregate_data_to_file",
+            "data__aggregate_data_to_file",
+        )
+        is False
+    )
+    assert (
+        agent._requires_approval(
+            writable,
+            "aggregate_data_to_file",
+            "data__aggregate_data_to_file",
+        )
+        is True
+    )
+
+
 def test_admin_auto_approval_cannot_bypass_built_in_write_approval(tmp_path: Path) -> None:
     contract = tool_contract_fingerprint("write_file", {})
     policy = McpPolicy(
