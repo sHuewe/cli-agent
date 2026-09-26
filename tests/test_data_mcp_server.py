@@ -30,6 +30,9 @@ class FakeFastMCP:
 
 def _operations(calls):
     return SimpleNamespace(
+        calculate=lambda expression: (
+            calls.append(("calculate", expression)) or "calculated"
+        ),
         inspect_data=lambda path=None, **kwargs: (
             calls.append(("inspect", path, kwargs)) or "inspected"
         ),
@@ -70,11 +73,13 @@ def test_create_server_read_mode_exposes_only_non_mutating_data_tools(
     assert server.name == "Workspace Data Operations"
     assert "untrusted data" in server.instructions
     assert set(server.tools) == {
+        "calculate",
         "inspect_data",
         "select_data",
         "value_counts",
         "aggregate_data",
     }
+    assert server.tools["calculate"]("2 + 3") == "calculated"
     assert server.tools["inspect_data"](
         path="data.csv",
         sample_rows=3,
@@ -89,6 +94,7 @@ def test_create_server_read_mode_exposes_only_non_mutating_data_tools(
         == "counted"
     )
     assert calls == [
+        ("calculate", "2 + 3"),
         (
             "inspect",
             "data.csv",
@@ -120,6 +126,7 @@ def test_create_server_write_mode_adds_only_derived_data_mutations(
     )
 
     assert set(server.tools) == {
+        "calculate",
         "inspect_data",
         "select_data",
         "value_counts",
