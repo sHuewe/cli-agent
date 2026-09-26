@@ -373,3 +373,64 @@ def test_inline_json_rejects_nested_values() -> None:
             data='[{"name":"A","nested":{"x":1}}]',
             data_format="json",
         )
+
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("0.1 + 0.2", "0.3"),
+        ("(417.3 - 382.1) / 382.1 * 100", "9.212248102591991625229)",
+        ("2 ** 10", "1024"),
+        ("sqrt(2)", "1.4142135623730950488016887242096980785696718753769"),
+        ("round(10 / 3, 4)", "3.3333"),
+        ("min(7, 2, 9) + max(1, 4)", "6"),
+        ("abs(-12.5)", "12.5"),
+        ("17 % 5", "2"),
+    ],
+)
+def test_calculate_uses_decimal_arithmetic(
+    expression: str,
+    expected: str,
+) -> None:
+    result = json.loads(DataOperations(None).calculate(expression))
+
+    assert result["expression"] == expression
+    assert result["result"] == expected
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "__import__('os').system('echo unsafe')",
+        "open('x')",
+        "(1).__class__",
+        "[1, 2, 3]",
+        "lambda: 1",
+        "sum([1, 2])",
+        "True + 1",
+    ],
+)
+def test_calculate_rejects_code_and_unsupported_syntax(expression: str) -> None:
+    with pytest.raises(DataOperationError):
+        DataOperations(None).calculate(expression)
+
+
+def test_calculate_rejects_division_by_zero() -> None:
+    with pytest.raises(DataOperationError, match="nicht definiert"):
+        DataOperations(None).calculate("1 / 0")
+
+
+def test_calculate_rejects_fractional_power_exponent() -> None:
+    with pytest.raises(DataOperationError, match="ganze Zahl"):
+        DataOperations(None).calculate("2 ** 0.5")
+
+
+def test_calculate_rejects_excessive_power() -> None:
+    with pytest.raises(DataOperationError, match="Exponent"):
+        DataOperations(None).calculate("2 ** 1001")
+
+
+def test_calculate_rejects_oversized_expression() -> None:
+    with pytest.raises(DataOperationError, match="512"):
+        DataOperations(None).calculate("1+" * 300 + "1")
