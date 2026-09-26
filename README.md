@@ -185,22 +185,23 @@ name = "compose"
 
 Ein identischer `[[mcp.trusted_servers]]`-Eintrag mit `transport = "stdio"` muss in der Admin-Policy existieren. Benutzerseitige Angaben für `transport`, `command`, `args`, `env` oder andere Launch-Details eines stdio-MCPs werden nicht akzeptiert.
 
-## Workspace-Pfade für den OS-MCP ausschließen
+## Workspace-Pfade für eingebaute Workspace-MCPs ausschließen
 
-Mit aktiviertem eingebautem OS-MCP können einzelne Dateien oder ganze
-Verzeichnisse vollständig vor den OS-Tools verborgen werden:
+Mit aktiviertem eingebautem OS- oder Data-MCP können einzelne Dateien oder ganze
+Verzeichnisse vollständig vor diesen Workspace-Tools verborgen werden:
 
 ```powershell
 cli-agent --with-os-write --exclude-path flow --exclude-path private "..."
 ```
 
 `--exclude-path` ist wiederholbar und wird relativ zum Workspace interpretiert.
-Ein ausgeschlossener Pfad kann über den eingebauten OS-MCP weder gelesen,
-aufgelistet, durchsucht noch verändert werden; Verzeichnisse werden rekursiv
-ausgeschlossen. Die Option benötigt deshalb `--with-os-read` oder
-`--with-os-write`. Sie betrifft ausschließlich den OS-MCP: eine explizit per
-`--add-file-context` geladene Datei bleibt weiterhin Benutzer-Input des
-Agenten.
+Ein ausgeschlossener Pfad kann über aktivierte eingebaute OS-/Data-MCPs nicht
+gelesen oder verändert werden; beim OS-MCP ist er zusätzlich nicht auflistbar
+oder durchsuchbar. Verzeichnisse werden rekursiv ausgeschlossen. Die Option
+benötigt mindestens einen aktivierten Workspace-MCP über `--with-os-read`,
+`--with-os-write`, `--with-data-read` oder `--with-data-write`. Eine
+explizit per `--add-file-context` geladene Datei bleibt weiterhin
+Benutzer-Input des Agenten.
 
 ## MCP-Tool-Freigaben
 
@@ -338,14 +339,22 @@ Eine projektbezogene Konfiguration kann relativ zum aktuellen Verzeichnis angege
 cli-agent --config mein_config.toml
 ```
 
-Der eingebaute Workspace-OS-MCP wird explizit aktiviert:
+Die eingebauten Workspace-MCPs werden explizit aktiviert:
 
 ```powershell
 cli-agent --with-os-read
 cli-agent --with-os-write
+cli-agent --with-data-read
+cli-agent --with-data-write
 ```
 
-Details: [Workspace OS MCP](docs/mcp-os.md).
+Der Data-MCP wertet CSV/TSV/JSONL/NDJSON lokal und deterministisch aus, sodass
+große Rohdatensätze nicht vollständig in den LLM-Kontext geladen werden müssen.
+Im Write-Modus kann er ausschließlich abgeleitete Datensätze über seine
+dedizierten Data-Tools speichern.
+
+Details: [Workspace OS MCP](docs/mcp-os.md) und
+[Workspace Data MCP](docs/mcp-data.md).
 
 ## Prompt-Dateien und Templates
 
