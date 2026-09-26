@@ -261,7 +261,12 @@ class Workspace:
         raw_path = path.strip()
         candidate = Path(raw_path)
         windows_path = PureWindowsPath(raw_path)
-        if candidate.is_absolute() or windows_path.is_absolute() or windows_path.drive:
+        if (
+            candidate.is_absolute()
+            or windows_path.is_absolute()
+            or windows_path.drive
+            or windows_path.root
+        ):
             raise WorkspaceError("Der Pfad muss relativ zum Projekt-Workspace sein.")
 
         # Check the lexical path before resolving it. Resolving first would
