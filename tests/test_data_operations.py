@@ -41,7 +41,7 @@ def _write_csv(tmp_path: Path) -> Path:
 def test_inspect_data_returns_schema_counts_and_bounded_sample(tmp_path: Path) -> None:
     _write_csv(tmp_path)
 
-    result = json.loads(_operations(tmp_path).inspect_data("sales.csv", 2))
+    result = json.loads(_operations(tmp_path).inspect_data("sales.csv", sample_rows=2))
 
     assert result["row_count"] == 4
     assert result["sample"] == [
@@ -88,8 +88,8 @@ def test_value_counts_supports_filters(tmp_path: Path) -> None:
 
     result = json.loads(
         _operations(tmp_path).value_counts(
-            "sales.csv",
             "category",
+            "sales.csv",
             filters=[{"column": "country", "op": "eq", "value": "DE"}],
         )
     )
@@ -107,9 +107,7 @@ def test_aggregate_data_groups_and_computes_numeric_statistics(
 
     result = json.loads(
         _operations(tmp_path).aggregate_data(
-            "sales.csv",
-            group_by=["country"],
-            aggregations=[
+            [
                 {
                     "column": "revenue",
                     "function": "sum",
@@ -126,6 +124,8 @@ def test_aggregate_data_groups_and_computes_numeric_statistics(
                     "alias": "rows",
                 },
             ],
+            "sales.csv",
+            group_by=["country"],
             sort_by=["country"],
         )
     )
@@ -169,8 +169,8 @@ def test_select_data_to_file_uses_same_workspace_security_and_writes_csv(
 
     status = json.loads(
         operations.select_data_to_file(
-            "sales.csv",
             "derived.csv",
+            "sales.csv",
             columns=["country", "revenue"],
             filters=[{"column": "country", "op": "eq", "value": "FR"}],
         )
@@ -189,12 +189,10 @@ def test_aggregate_data_to_file_supports_jsonl_output(tmp_path: Path) -> None:
 
     status = json.loads(
         operations.aggregate_data_to_file(
-            "sales.csv",
             "summary.jsonl",
+            [{"column": "revenue", "function": "sum", "alias": "total"}],
+            "sales.csv",
             group_by=["country"],
-            aggregations=[
-                {"column": "revenue", "function": "sum", "alias": "total"}
-            ],
             sort_by=["country"],
         )
     )
@@ -238,8 +236,8 @@ def test_data_write_rejects_protected_path(tmp_path: Path) -> None:
 
     with pytest.raises(WorkspaceError, match="geschützten"):
         operations.select_data_to_file(
-            "sales.csv",
             "derived.csv",
+            "sales.csv",
         )
     assert not protected.exists()
 
@@ -272,11 +270,8 @@ def test_aggregation_rejects_non_numeric_sum(tmp_path: Path) -> None:
 
     with pytest.raises(DataOperationError, match="numerische"):
         _operations(tmp_path).aggregate_data(
+            [{"column": "country", "function": "sum"}],
             "sales.csv",
-            group_by=None,
-            aggregations=[
-                {"column": "country", "function": "sum"}
-            ],
         )
 
 
@@ -285,7 +280,7 @@ def test_limits_are_validated(tmp_path: Path) -> None:
     operations = _operations(tmp_path)
 
     with pytest.raises(DataOperationError, match="sample_rows"):
-        operations.inspect_data("sales.csv", 0)
+        operations.inspect_data("sales.csv", sample_rows=0)
     with pytest.raises(DataOperationError, match="limit"):
         operations.select_data("sales.csv", limit=1001)
 
@@ -302,3 +297,79 @@ def test_csv_missing_trailing_field_is_null(tmp_path: Path) -> None:
     )
 
     assert result["rows"] == [{"a": 1, "b": None}]
+
+
+
+def test_inline_csv_works_without_workspace() -> None:
+    operations = DataOperations(None)
+
+    result = json.loads(
+        operations.aggregate_data(
+            [{"column": "revenue", "function": "sum", "alias": "total"}],
+            data="country,revenue\nDE,10\nFR,7.5\n",
+            data_format="csv",
+        )
+    )
+
+    assert result["rows"] == [{"total": 17.5}]
+
+
+def test_inline_json_array_works_without_workspace() -> None:
+    operations = DataOperations(None)
+
+    result = json.loads(
+        operations.select_data(
+            data='[{"name":"A","value":2},{"name":"B","value":5}]',
+            data_format="json",
+            filters=[{"column": "value", "op": "gt", "value": 2}],
+        )
+    )
+
+    assert result["rows"] == [{"name": "B", "value": 5}]
+
+
+def test_path_is_rejected_without_workspace_access() -> None:
+    operations = DataOperations(None)
+
+    with pytest.raises(DataOperationError, match="Dateizugriff"):
+        operations.inspect_data("sales.csv")
+
+
+def test_exactly_one_source_is_required() -> None:
+    operations = DataOperations(None)
+
+    with pytest.raises(DataOperationError, match="Genau eine Datenquelle"):
+        operations.inspect_data()
+    with pytest.raises(DataOperationError, match="Genau eine Datenquelle"):
+        operations.inspect_data(
+            "sales.csv",
+            data="a,b\n1,2\n",
+            data_format="csv",
+        )
+
+
+def test_inline_data_requires_explicit_format() -> None:
+    operations = DataOperations(None)
+
+    with pytest.raises(DataOperationError, match="data_format"):
+        operations.inspect_data(data="a,b\n1,2\n")
+
+
+def test_data_format_is_rejected_for_path_source(tmp_path: Path) -> None:
+    _write_csv(tmp_path)
+
+    with pytest.raises(DataOperationError, match="data_format"):
+        _operations(tmp_path).inspect_data(
+            "sales.csv",
+            data_format="csv",
+        )
+
+
+def test_inline_json_rejects_nested_values() -> None:
+    operations = DataOperations(None)
+
+    with pytest.raises(DataOperationError, match="skalare"):
+        operations.inspect_data(
+            data='[{"name":"A","nested":{"x":1}}]',
+            data_format="json",
+        )
