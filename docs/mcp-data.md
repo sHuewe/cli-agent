@@ -1,58 +1,66 @@
 # Workspace Data MCP Server
 
 Der eingebaute Data-MCP-Server führt deterministische Auswertungen auf
-strukturierten Datendateien innerhalb des Projekt-Workspaces aus. Die Rohdaten
-werden dabei lokal verarbeitet; nur das begrenzte Ergebnis des jeweiligen
-Tools wird an das Modell zurückgegeben.
+strukturierten Daten aus. Als Quelle kann entweder ein direkt übergebener
+Text-Payload oder – bei entsprechend aktiviertem OS-Zugriff – eine Datendatei
+innerhalb des Projekt-Workspaces verwendet werden.
 
-Der Server verwendet dieselbe `Workspace`-Klasse und damit dieselben
-Pfad-, Secret-, Symlink/Junction-, Hardlink- und Protected-Path-Prüfungen wie
-der eingebaute OS-MCP. Er stellt jedoch keine allgemeinen Dateioperationen wie
-`read_file`, `write_file` oder `delete_file` als Tools bereit.
+Für Dateizugriffe verwendet der Server dieselbe `Workspace`-Klasse und damit
+dieselben Pfad-, Secret-, Symlink/Junction-, Hardlink- und Protected-Path-
+Prüfungen wie der eingebaute OS-MCP. Er stellt jedoch keine allgemeinen
+Dateioperationen wie `read_file`, `write_file` oder `delete_file` als Tools
+bereit.
 
 ## Aktivierung
 
-Read-only:
+Der Data-MCP wird mit genau einem Schalter aktiviert:
 
 ```powershell
-cli-agent --with-data-read
+cli-agent --with-data
 ```
 
-Lesen und Schreiben abgeleiteter Datensätze:
+Der erlaubte Dateisystemzugriff wird ausschließlich über die bestehenden
+OS-Optionen bestimmt:
 
 ```powershell
-cli-agent --with-data-write
+# Nur Inline-Daten; kein Workspace-Dateizugriff für Data
+cli-agent --with-data
+
+# Inline-Daten + Workspace-Dateien lesen
+cli-agent --with-os-read --with-data
+
+# Inline-Daten + Workspace-Dateien lesen und abgeleitete Datensätze schreiben
+cli-agent --with-os-write --with-data
 ```
 
-Beide Optionen sind gegenseitig ausschließend. `--with-data-write` enthält
-die Read-Tools und ergänzt ausschließlich die beiden Data-Write-Tools.
+Ohne `--with-os-read` bzw. `--with-os-write` wird für den Data-MCP gar keine
+`Workspace`-Instanz erzeugt. Die Read-Tools bleiben trotzdem verfügbar und
+können CSV/JSON-Daten direkt als Toolargument verarbeiten.
 
-Der Data-MCP ist ein Built-in. Seine Launchparameter werden vom Agenten erzeugt,
-und der aktuelle Workspace wird außerhalb der Modellkontrolle gebunden.
+Der Data-MCP ist ein Built-in. Seine Launchparameter werden vom Agenten erzeugt;
+der OS-Zugriffsmodus wird außerhalb der Modellkontrolle aus den CLI-Rechten
+abgeleitet.
 
 ## Unterstützte Datenformate
 
-Die erste Version unterstützt:
+Workspace-Dateien unterstützen `.csv`, `.tsv`, `.jsonl` und `.ndjson`.
+Inline-Payloads unterstützen `csv`, `tsv`, `json`, `jsonl` und `ndjson`.
 
-- `.csv`
-- `.tsv`
-- `.jsonl`
-- `.ndjson`
-
-CSV/TSV-Werte werden konservativ als `null`, Boolean, Integer, Float oder
-String interpretiert. JSONL/NDJSON muss pro nicht-leerer Zeile genau ein
-JSON-Objekt mit skalaren JSON-Werten enthalten; verschachtelte Arrays oder
-Objekte werden abgewiesen.
+Bei `json` muss der Payload ein Array flacher Objekte enthalten. JSONL/NDJSON
+enthält pro nicht-leerer Zeile genau ein Objekt. Verschachtelte Arrays oder
+Objekte werden bewusst abgewiesen. CSV/TSV-Werte werden konservativ als
+`null`, Boolean, Integer, Float oder String interpretiert.
 
 Eine Datendatei ist derzeit auf 100 MB und 1.000.000 Datensätze begrenzt.
-Tool-Ergebnisse sind zusätzlich begrenzt, damit große Quelldatensätze nicht
-ungefiltert in den LLM-Kontext gelangen.
+Inline-Payloads sind auf 2.000.000 Zeichen begrenzt. Tool-Ergebnisse sind
+zusätzlich begrenzt, damit große Quelldatensätze nicht ungefiltert in den
+LLM-Kontext gelangen.
 
 ## Read-Tools
 
 | Tool | Funktion |
 | --- | --- |
-| `inspect_data(path, sample_rows=5)` | Liefert Zeilenzahl, Spalten, einfache Typinferenz, Null-/Unique-Zahlen und eine kleine Stichprobe. |
+| `inspect_data(path=..., ...)` / `inspect_data(data=..., data_format=..., ...)` | Liefert Zeilenzahl, Spalten, einfache Typinferenz, Null-/Unique-Zahlen und eine kleine Stichprobe. |
 | `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert höchstens 1.000 Zeilen. |
 | `value_counts(...)` | Zählt unterschiedliche Werte einer Spalte. |
 | `aggregate_data(...)` | Gruppiert und aggregiert Daten deterministisch. |
@@ -93,7 +101,7 @@ Unterstützte Funktionen:
 
 ## Write-Tools
 
-Nur mit `--with-data-write` werden zusätzlich registriert:
+Nur bei `--with-os-write --with-data` werden zusätzlich registriert:
 
 | Tool | Funktion |
 | --- | --- |
@@ -117,8 +125,9 @@ Dateipfade werden vor dem Parsen beziehungsweise Schreiben über dieselbe
 - Zielverzeichnisse müssen bereits existieren,
 - die aktive Agent-Konfiguration bleibt geschützt.
 
-`--exclude-path` wirkt auf alle in demselben CLI-Lauf aktivierten Built-in
-OS- und Data-MCP-Server.
+`--exclude-path` wird bei aktiviertem OS-Zugriff sowohl an den OS-MCP als auch
+an den Data-MCP weitergereicht. Mit `--with-data` allein hat der Data-MCP
+keinen Dateizugriff und benötigt daher keine Workspace-Pfadausschlüsse.
 
 ## Implementierungsgrenze der ersten Version
 
