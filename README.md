@@ -354,9 +354,10 @@ Datendateien im Workspace lesen; mit `--with-os-write` kommen die dedizierten
 Data-Write-Tools hinzu. Dadurch kann z. B. aus Web-Kontext extrahierter
 Tabelleninhalt ausgewertet werden, ohne dem Data-MCP Dateisystemzugriff zu geben.
 
-Der Data-MCP wertet CSV/TSV/JSON/JSONL/NDJSON lokal und deterministisch aus,
-sodass große lokale Rohdatensätze bei Dateizugriff nicht vollständig in den
-LLM-Kontext geladen werden müssen.
+Der Data-MCP bietet außerdem einen deterministischen Calculator für
+nicht-triviale skalare Arithmetik sowie lokale Auswertungen von
+CSV/TSV/JSON/JSONL/NDJSON. Große lokale Rohdatensätze müssen bei Dateizugriff
+dadurch nicht vollständig in den LLM-Kontext geladen werden.
 
 Details: [Workspace OS MCP](docs/mcp-os.md) und
 [Workspace Data MCP](docs/mcp-data.md).
