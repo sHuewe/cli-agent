@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -157,7 +158,7 @@ def test_parse_args_requires_access_and_reads_workspace_options(
     assert args.project_directory == tmp_path
     assert args.config_file == config_file
     assert args.access == "write"
-    assert args.protected_path == [tmp_path / "private.csv"]
+    assert args.protected_path == [Path("private.csv")]
 
 
 def test_main_uses_shared_workspace_and_runs_stdio(
