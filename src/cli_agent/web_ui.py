@@ -366,6 +366,16 @@ class _WebUiSession:
                         )
                     continue
 
+                if kind == "working_messages":
+                    snapshot = self.agent.working_messages_snapshot()
+                    await sender(
+                        {
+                            "type": "working_messages",
+                            "messages": snapshot,
+                        }
+                    )
+                    continue
+
                 if kind == "quit":
                     self.approval_broker.deny_all()
                     await sender(
@@ -511,7 +521,10 @@ INDEX_HTML = """<!doctype html>
         <h1>cli-agent</h1>
         <div id="session-meta" class="meta">Verbindung wird hergestellt …</div>
       </div>
-      <button id="quit" class="secondary" type="button">Sitzung beenden</button>
+      <div class="header-actions">
+        <button id="show-working-messages" class="secondary" type="button">Working Messages</button>
+        <button id="quit" class="secondary" type="button">Sitzung beenden</button>
+      </div>
     </header>
     <section id="chat" class="chat" aria-live="polite"></section>
     <div id="commands" class="commands" aria-label="Lokale Befehle">
@@ -527,6 +540,19 @@ INDEX_HTML = """<!doctype html>
       <button id="send" type="submit">Senden</button>
     </form>
   </main>
+  <dialog id="working-messages-dialog" class="working-messages-dialog">
+    <div class="dialog-header">
+      <div>
+        <h2>Working Messages</h2>
+        <div class="meta">Aktueller bzw. letzter Main-Loop, nur lesend.</div>
+      </div>
+      <div class="dialog-actions">
+        <button id="refresh-working-messages" class="secondary" type="button">Aktualisieren</button>
+        <button id="close-working-messages" class="secondary" type="button">Schließen</button>
+      </div>
+    </div>
+    <pre id="working-messages-json">[]</pre>
+  </dialog>
   <dialog id="approval">
     <h2>Tool-Freigabe erforderlich</h2>
     <div id="approval-tool" class="tool"></div>
@@ -549,7 +575,8 @@ APP_CSS = """
 * { box-sizing: border-box; }
 body { margin: 0; background: Canvas; color: CanvasText; }
 .shell { max-width: 960px; min-height: 100vh; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 18px; }
-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent); padding-bottom: 14px; }
+header { position: sticky; top: 0; z-index: 20; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent); padding: 14px 0; background: Canvas; }
+.header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 h1 { margin: 0 0 4px; font-size: 1.35rem; }
 .meta { opacity: .72; font-size: .9rem; overflow-wrap: anywhere; }
 .chat { flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 50vh; }
@@ -570,6 +597,11 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .tool { font-weight: 650; margin-bottom: 10px; overflow-wrap: anywhere; }
 pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: color-mix(in srgb, CanvasText 8%, Canvas); border-radius: 8px; }
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.working-messages-dialog { width: min(1100px, calc(100vw - 32px)); }
+.working-messages-dialog pre { min-height: 55vh; max-height: 72vh; }
+.dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.dialog-header h2 { margin: 0 0 4px; }
+.dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 @media (max-width: 640px) {
   .shell { padding: 14px; }
   form { grid-template-columns: 1fr; }
@@ -587,6 +619,11 @@ APP_JS = """
   const send = document.getElementById("send");
   const quit = document.getElementById("quit");
   const meta = document.getElementById("session-meta");
+  const showWorkingMessages = document.getElementById("show-working-messages");
+  const workingMessagesDialog = document.getElementById("working-messages-dialog");
+  const workingMessagesJson = document.getElementById("working-messages-json");
+  const refreshWorkingMessages = document.getElementById("refresh-working-messages");
+  const closeWorkingMessages = document.getElementById("close-working-messages");
   const commandButtons = Array.from(
     document.querySelectorAll("button[data-command]")
   );
@@ -642,7 +679,24 @@ APP_JS = """
     const disconnected = !socket || socket.readyState !== WebSocket.OPEN;
     prompt.disabled = busy;
     send.disabled = busy || disconnected;
-    for (const button of commandButtons) {
+    showWorkingMessages.addEventListener("click", () => {
+    workingMessagesJson.textContent = "Wird geladen …";
+    if (!workingMessagesDialog.open) {
+      workingMessagesDialog.showModal();
+    }
+    requestWorkingMessages();
+  });
+
+  refreshWorkingMessages.addEventListener("click", () => {
+    workingMessagesJson.textContent = "Wird geladen …";
+    requestWorkingMessages();
+  });
+
+  closeWorkingMessages.addEventListener("click", () => {
+    workingMessagesDialog.close();
+  });
+
+  for (const button of commandButtons) {
       button.disabled = busy || disconnected;
     }
     cancelCommand.disabled = busy || disconnected;
@@ -685,6 +739,14 @@ APP_JS = """
     cancelCommand.classList.remove("hidden");
     addMessage("system", spec.question);
     prompt.focus();
+  }
+
+  function requestWorkingMessages() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      workingMessagesJson.textContent = "Web-UI-Verbindung ist nicht aktiv.";
+      return;
+    }
+    socket.send(JSON.stringify({ type: "working_messages" }));
   }
 
   function tokenFromFragment() {
@@ -766,6 +828,14 @@ APP_JS = """
     }
     if (payload.type === "error") {
       addMessage("error", String(payload.content || "Unbekannter Fehler."));
+      return;
+    }
+    if (payload.type === "working_messages") {
+      const messages = Array.isArray(payload.messages) ? payload.messages : [];
+      workingMessagesJson.textContent = JSON.stringify(messages, null, 2);
+      if (!workingMessagesDialog.open) {
+        workingMessagesDialog.showModal();
+      }
       return;
     }
     if (payload.type === "approval_required") {
