@@ -288,3 +288,17 @@ def test_limits_are_validated(tmp_path: Path) -> None:
         operations.inspect_data("sales.csv", 0)
     with pytest.raises(DataOperationError, match="limit"):
         operations.select_data("sales.csv", limit=1001)
+
+
+
+def test_csv_missing_trailing_field_is_null(tmp_path: Path) -> None:
+    (tmp_path / "incomplete.csv").write_text(
+        "a,b\n1\n",
+        encoding="utf-8",
+    )
+
+    result = json.loads(
+        _operations(tmp_path).select_data("incomplete.csv")
+    )
+
+    assert result["rows"] == [{"a": 1, "b": None}]
