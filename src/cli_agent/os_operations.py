@@ -595,6 +595,41 @@ class Workspace:
                 f"Datei konnte nicht gelesen werden: {path!r}: {exc}"
             ) from exc
 
+    def resolve_readable_file(
+        self,
+        path: str,
+        *,
+        direct: bool = false,
+    ) -> Path:
+        """Resolve and validate one readable regular workspace file.
+
+        This is the shared filesystem-security primitive for built-in MCP
+        capabilities that need direct file access without exposing the file
+        contents through the OS MCP tool surface.
+        """
+        resolver = self.resolve_direct_path if direct else self.resolve_path
+        file_path = resolver(path)
+        if not file_path.is_file():
+            raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
+        self._reject_hardlinked_file(file_path)
+        self._reject_protected_read(file_path)
+        return file_path
+
+    def resolve_writable_file(self, path: str) -> Path:
+        """Resolve and validate one writable regular workspace file path."""
+        file_path = self.resolve_direct_path(path, must_exist=False)
+        self._reject_protected_mutation(file_path)
+        if file_path.exists() and not file_path.is_file():
+            raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
+        if file_path.exists():
+            self._reject_hardlinked_file(file_path)
+        if not file_path.parent.is_dir():
+            raise WorkspaceError(
+                f"Zielordner existiert nicht: "
+                f"{file_path.parent.relative_to(self.directory).as_posix()!r}"
+            )
+        return file_path
+
     def read_file(
         self,
         path: str,
@@ -618,11 +653,7 @@ class Workspace:
                 "start_line darf nicht größer als end_line sein."
             )
 
-        file_path = self.resolve_path(path)
-        if not file_path.is_file():
-            raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
-        self._reject_hardlinked_file(file_path)
-        self._reject_protected_read(file_path)
+        file_path = self.resolve_readable_file(path)
 
         ranged_read = start_line is not None or end_line is not None
         if file_path.suffix.lower() == ".pdf":
@@ -941,20 +972,10 @@ class Workspace:
         return f"Ordner erstellt: {relative}"
 
     def write_file(self, path: str, content: str) -> str:
-        file_path = self.resolve_direct_path(path, must_exist=False)
-        self._reject_protected_mutation(file_path)
-        if file_path.exists() and not file_path.is_file():
-            raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")
-        if file_path.exists():
-            self._reject_hardlinked_file(file_path)
+        file_path = self.resolve_writable_file(path)
         if not self._is_text_file(file_path):
             raise WorkspaceError(
                 f"Dateityp darf nicht als Text geschrieben werden: {path!r}"
-            )
-        if not file_path.parent.is_dir():
-            raise WorkspaceError(
-                f"Zielordner existiert nicht: "
-                f"{file_path.parent.relative_to(self.directory).as_posix()!r}"
             )
 
         try:
