@@ -73,7 +73,7 @@ class OneShotRunOptions:
     config_file: Path | None = None
     model: str | None = None
     workspace_access: str | None = None
-    data_access: str | None = None
+    with_data: bool = False
     retry_policy: ModelRetryPolicy | None = None
     response_format: str = "text"
     context_files: tuple[Path, ...] = ()
@@ -95,7 +95,7 @@ class ConversationRunOptions:
     config_file: Path | None = None
     model: str | None = None
     workspace_access: str | None = None
-    data_access: str | None = None
+    with_data: bool = False
     retry_policy: ModelRetryPolicy | None = None
     response_format: str = "text"
     context_files: tuple[Path, ...] = ()
@@ -207,7 +207,7 @@ def data_mcp_server_config(
     mutation_protected_paths: tuple[Path, ...] = (),
     excluded_paths: tuple[Path, ...] = (),
 ) -> McpServerConfig:
-    if access not in {"read", "write"}:
+    if access not in {"none", "read", "write"}:
         raise ValueError(f"Unsupported Data MCP access mode: {access!r}")
     return McpServerConfig(
         name=DATA_MCP_SERVER_NAME,
@@ -246,35 +246,38 @@ def data_mcp_server_config(
     )
 
 
-def apply_data_access_override(
+def apply_data_override(
     config: AppConfig,
     *,
-    data_access: str | None,
+    enabled: bool,
+    workspace_access: str | None,
     mutation_protected_paths: tuple[Path, ...] = (),
     excluded_paths: tuple[Path, ...] = (),
 ) -> AppConfig:
-    if data_access is None:
+    if not enabled:
         return config
-    if data_access == "none":
-        servers = tuple(
-            server
-            for server in config.mcp_servers
-            if server.name != DATA_MCP_SERVER_NAME
-        )
-        return replace(config, mcp_servers=servers)
-    if data_access not in {"read", "write"}:
-        raise ValueError(
-            "data_access muss 'none', 'read' oder 'write' sein."
-        )
+    access = (
+        workspace_access
+        if workspace_access in {"read", "write"}
+        else "none"
+    )
     servers = tuple(
         server
         for server in config.mcp_servers
         if server.name != DATA_MCP_SERVER_NAME
     ) + (
         data_mcp_server_config(
-            data_access,
-            mutation_protected_paths=mutation_protected_paths,
-            excluded_paths=excluded_paths,
+            access,
+            mutation_protected_paths=(
+                mutation_protected_paths
+                if access == "write"
+                else ()
+            ),
+            excluded_paths=(
+                excluded_paths
+                if access in {"read", "write"}
+                else ()
+            ),
         ),
     )
     return replace(config, mcp_servers=servers)
@@ -343,13 +346,9 @@ async def _run_prompt_sequence(
         workspace,
         options.excluded_paths,
     )
-    if (
-        excluded_paths
-        and options.workspace_access not in {"read", "write"}
-        and options.data_access not in {"read", "write"}
-    ):
+    if excluded_paths and options.workspace_access not in {"read", "write"}:
         raise ValueError(
-            "excluded_paths benötigen aktivierten OS- oder Data-Workspace-Zugriff."
+            "excluded_paths benötigen workspace_access='read' oder 'write'."
         )
 
     config = deps.load_config(options.config_file)
@@ -361,9 +360,10 @@ async def _run_prompt_sequence(
         mutation_protected_paths=options.mutation_protected_paths,
         excluded_paths=excluded_paths,
     )
-    config = apply_data_access_override(
+    config = apply_data_override(
         config,
-        data_access=options.data_access,
+        enabled=options.with_data,
+        workspace_access=options.workspace_access,
         mutation_protected_paths=options.mutation_protected_paths,
         excluded_paths=excluded_paths,
     )
