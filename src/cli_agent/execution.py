@@ -25,6 +25,7 @@ from .model import ModelRetryPolicy, RetryingModelClient
 from .model_factory import create_model_client
 
 OS_MCP_SERVER_NAME = "os"
+DATA_MCP_SERVER_NAME = "data"
 logger = logging.getLogger("cli_agent.execution")
 ApprovalCallback = Callable[
     [str, dict[str, object]],
@@ -72,6 +73,7 @@ class OneShotRunOptions:
     config_file: Path | None = None
     model: str | None = None
     workspace_access: str | None = None
+    data_access: str | None = None
     retry_policy: ModelRetryPolicy | None = None
     response_format: str = "text"
     context_files: tuple[Path, ...] = ()
@@ -93,6 +95,7 @@ class ConversationRunOptions:
     config_file: Path | None = None
     model: str | None = None
     workspace_access: str | None = None
+    data_access: str | None = None
     retry_policy: ModelRetryPolicy | None = None
     response_format: str = "text"
     context_files: tuple[Path, ...] = ()
@@ -198,6 +201,85 @@ def os_mcp_server_config(
     )
 
 
+def data_mcp_server_config(
+    access: str,
+    *,
+    mutation_protected_paths: tuple[Path, ...] = (),
+    excluded_paths: tuple[Path, ...] = (),
+) -> McpServerConfig:
+    if access not in {"read", "write"}:
+        raise ValueError(f"Unsupported Data MCP access mode: {access!r}")
+    return McpServerConfig(
+        name=DATA_MCP_SERVER_NAME,
+        transport="stdio",
+        command="{python}",
+        args=(
+            "-m",
+            "cli_agent.data_mcp_server",
+            "--project-directory",
+            "{workspace_directory}",
+            "--config-file",
+            "{config_file}",
+            "--access",
+            access,
+        ),
+        literal_args=(
+            tuple(
+                argument
+                for path in excluded_paths
+                for argument in (
+                    "--protected-path",
+                    str(path),
+                )
+            )
+            + tuple(
+                argument
+                for path in mutation_protected_paths
+                for argument in (
+                    "--mutation-protected-path",
+                    str(path),
+                )
+            )
+        ),
+        config={"allow_write_files": access == "write"},
+        built_in=True,
+    )
+
+
+def apply_data_access_override(
+    config: AppConfig,
+    *,
+    data_access: str | None,
+    mutation_protected_paths: tuple[Path, ...] = (),
+    excluded_paths: tuple[Path, ...] = (),
+) -> AppConfig:
+    if data_access is None:
+        return config
+    if data_access == "none":
+        servers = tuple(
+            server
+            for server in config.mcp_servers
+            if server.name != DATA_MCP_SERVER_NAME
+        )
+        return replace(config, mcp_servers=servers)
+    if data_access not in {"read", "write"}:
+        raise ValueError(
+            "data_access muss 'none', 'read' oder 'write' sein."
+        )
+    servers = tuple(
+        server
+        for server in config.mcp_servers
+        if server.name != DATA_MCP_SERVER_NAME
+    ) + (
+        data_mcp_server_config(
+            data_access,
+            mutation_protected_paths=mutation_protected_paths,
+            excluded_paths=excluded_paths,
+        ),
+    )
+    return replace(config, mcp_servers=servers)
+
+
 def apply_workspace_access_override(
     config: AppConfig,
     *,
@@ -261,9 +343,13 @@ async def _run_prompt_sequence(
         workspace,
         options.excluded_paths,
     )
-    if excluded_paths and options.workspace_access not in {"read", "write"}:
+    if (
+        excluded_paths
+        and options.workspace_access not in {"read", "write"}
+        and options.data_access not in {"read", "write"}
+    ):
         raise ValueError(
-            "excluded_paths benötigen workspace_access='read' oder 'write'."
+            "excluded_paths benötigen aktivierten OS- oder Data-Workspace-Zugriff."
         )
 
     config = deps.load_config(options.config_file)
@@ -272,6 +358,12 @@ async def _run_prompt_sequence(
     config = apply_workspace_access_override(
         config,
         workspace_access=options.workspace_access,
+        mutation_protected_paths=options.mutation_protected_paths,
+        excluded_paths=excluded_paths,
+    )
+    config = apply_data_access_override(
+        config,
+        data_access=options.data_access,
         mutation_protected_paths=options.mutation_protected_paths,
         excluded_paths=excluded_paths,
     )
