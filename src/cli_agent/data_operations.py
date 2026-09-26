@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .data_calculator import CalculatorError, calculate_expression
 from .os_operations import Workspace, WorkspaceError
 
 DATA_SUFFIXES = frozenset({".csv", ".tsv", ".jsonl", ".ndjson"})
@@ -112,6 +113,21 @@ class DataOperations:
 
     def __init__(self, workspace: Workspace | None) -> None:
         self.workspace = workspace
+
+    @staticmethod
+    def calculate(expression: str) -> str:
+        try:
+            result = calculate_expression(expression)
+        except CalculatorError as exc:
+            raise DataOperationError(str(exc)) from exc
+        return json.dumps(
+            {
+                "expression": expression,
+                "result": result,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     @staticmethod
     def _validate_suffix(path: Path) -> str:
