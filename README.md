@@ -199,7 +199,7 @@ Ein ausgeschlossener Pfad kann über aktivierte eingebaute OS-/Data-MCPs nicht
 gelesen oder verändert werden; beim OS-MCP ist er zusätzlich nicht auflistbar
 oder durchsuchbar. Verzeichnisse werden rekursiv ausgeschlossen. Die Option
 benötigt mindestens einen aktivierten Workspace-MCP über `--with-os-read`,
-`--with-os-write`, `--with-data-read` oder `--with-data-write`. Eine
+`--with-os-write`. `--with-data` allein gewährt keinen Workspace-Dateizugriff. Eine
 explizit per `--add-file-context` geladene Datei bleibt weiterhin
 Benutzer-Input des Agenten.
 
@@ -339,19 +339,24 @@ Eine projektbezogene Konfiguration kann relativ zum aktuellen Verzeichnis angege
 cli-agent --config mein_config.toml
 ```
 
-Die eingebauten Workspace-MCPs werden explizit aktiviert:
+Die eingebauten Workspace-/Data-Capabilities werden explizit aktiviert:
 
 ```powershell
-cli-agent --with-os-read
-cli-agent --with-os-write
-cli-agent --with-data-read
-cli-agent --with-data-write
+cli-agent --with-data
+cli-agent --with-os-read --with-data
+cli-agent --with-os-write --with-data
 ```
 
-Der Data-MCP wertet CSV/TSV/JSONL/NDJSON lokal und deterministisch aus, sodass
-große Rohdatensätze nicht vollständig in den LLM-Kontext geladen werden müssen.
-Im Write-Modus kann er ausschließlich abgeleitete Datensätze über seine
-dedizierten Data-Tools speichern.
+`--with-data` aktiviert immer die Data-Tools. Der OS-Modus bestimmt separat,
+ob diese Tools Workspace-Dateien verwenden dürfen: ohne OS-Flag akzeptieren sie
+nur direkt übergebene CSV/JSON-Daten; mit `--with-os-read` dürfen sie zusätzlich
+Datendateien im Workspace lesen; mit `--with-os-write` kommen die dedizierten
+Data-Write-Tools hinzu. Dadurch kann z. B. aus Web-Kontext extrahierter
+Tabelleninhalt ausgewertet werden, ohne dem Data-MCP Dateisystemzugriff zu geben.
+
+Der Data-MCP wertet CSV/TSV/JSON/JSONL/NDJSON lokal und deterministisch aus,
+sodass große lokale Rohdatensätze bei Dateizugriff nicht vollständig in den
+LLM-Kontext geladen werden müssen.
 
 Details: [Workspace OS MCP](docs/mcp-os.md) und
 [Workspace Data MCP](docs/mcp-data.md).
