@@ -4,6 +4,7 @@ import csv
 import json
 import math
 import statistics
+import io
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,9 @@ from typing import Any
 from .os_operations import Workspace, WorkspaceError
 
 DATA_SUFFIXES = frozenset({".csv", ".tsv", ".jsonl", ".ndjson"})
+DATA_FORMATS = frozenset({"csv", "tsv", "json", "jsonl", "ndjson"})
 MAX_DATA_FILE_BYTES = 100_000_000
+MAX_DATA_PAYLOAD_CHARS = 2_000_000
 MAX_DATA_ROWS = 1_000_000
 MAX_RESULT_ROWS = 1_000
 MAX_SAMPLE_ROWS = 20
@@ -107,7 +110,7 @@ class DataOperations:
     pandas expressions, SQL, regexes, lambdas, or model-provided code.
     """
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace | None) -> None:
         self.workspace = workspace
 
     @staticmethod
@@ -132,7 +135,56 @@ class DataOperations:
             )
         return value
 
-    def _read_records(self, path: str) -> tuple[list[str], list[Record]]:
+    def _read_records(
+        self,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+    ) -> tuple[list[str], list[Record]]:
+        if (path is None) == (data is None):
+            raise DataOperationError(
+                "Genau eine Datenquelle muss angegeben werden: path oder data."
+            )
+
+        if data is not None:
+            if not isinstance(data, str):
+                raise DataOperationError("data muss ein String sein.")
+            if len(data) > MAX_DATA_PAYLOAD_CHARS:
+                raise DataOperationError(
+                    "Inline-Daten überschreiten das Limit von "
+                    f"{MAX_DATA_PAYLOAD_CHARS} Zeichen."
+                )
+            if not isinstance(data_format, str):
+                raise DataOperationError(
+                    "Für Inline-Daten muss data_format angegeben werden."
+                )
+            normalized_format = data_format.casefold()
+            if normalized_format not in DATA_FORMATS:
+                raise DataOperationError(
+                    "Nicht unterstütztes Inline-Datenformat. Erlaubt sind "
+                    "csv, tsv, json, jsonl und ndjson."
+                )
+            if normalized_format in {"csv", "tsv"}:
+                return self._read_delimited_text(
+                    data,
+                    delimiter="," if normalized_format == "csv" else "\t",
+                )
+            if normalized_format == "json":
+                return self._read_json_array(data)
+            return self._read_json_lines_text(data)
+
+        if data_format is not None:
+            raise DataOperationError(
+                "data_format darf nur zusammen mit data verwendet werden."
+            )
+        if self.workspace is None:
+            raise DataOperationError(
+                "Dateizugriff ist für den Data-MCP nicht aktiviert. "
+                "Verwende Inline-Daten oder starte cli-agent zusätzlich mit "
+                "--with-os-read bzw. --with-os-write."
+            )
+
         file_path = self.workspace.resolve_readable_file(path, direct=True)
         suffix = self._validate_suffix(file_path)
         try:
@@ -202,6 +254,111 @@ class DataOperations:
             ) from exc
 
     @staticmethod
+    def _read_delimited_text(
+        data: str,
+        *,
+        delimiter: str,
+    ) -> tuple[list[str], list[Record]]:
+        try:
+            reader = csv.DictReader(io.StringIO(data), delimiter=delimiter)
+            if reader.fieldnames is None:
+                return [], []
+            columns = [str(name) for name in reader.fieldnames]
+            if any(not name for name in columns) or len(columns) != len(set(columns)):
+                raise DataOperationError(
+                    "CSV/TSV benötigt eindeutige, nicht-leere Spaltennamen."
+                )
+            rows: list[Record] = []
+            for index, raw in enumerate(reader, start=1):
+                if index > MAX_DATA_ROWS:
+                    raise DataOperationError(
+                        "Datendaten überschreiten das Zeilenlimit von "
+                        f"{MAX_DATA_ROWS}."
+                    )
+                if None in raw:
+                    raise DataOperationError(
+                        "CSV/TSV enthält mehr Felder als die Kopfzeile definiert."
+                    )
+                rows.append(
+                    {
+                        column: _infer_csv_scalar(raw.get(column, ""))
+                        for column in columns
+                    }
+                )
+            return columns, rows
+        except csv.Error as exc:
+            raise DataOperationError(
+                f"CSV/TSV konnte nicht geparst werden: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _normalize_json_records(raw_rows: Any) -> tuple[list[str], list[Record]]:
+        if not isinstance(raw_rows, list):
+            raise DataOperationError(
+                "JSON-Inline-Daten müssen ein Array von Objekten enthalten."
+            )
+        if len(raw_rows) > MAX_DATA_ROWS:
+            raise DataOperationError(
+                "Datendaten überschreiten das Zeilenlimit von "
+                f"{MAX_DATA_ROWS}."
+            )
+        columns: list[str] = []
+        known_columns: set[str] = set()
+        rows: list[Record] = []
+        for index, raw in enumerate(raw_rows, start=1):
+            if not isinstance(raw, dict):
+                raise DataOperationError(
+                    f"JSON-Eintrag {index} muss ein Objekt enthalten."
+                )
+            record: Record = {}
+            for raw_name, raw_value in raw.items():
+                if not isinstance(raw_name, str) or not raw_name:
+                    raise DataOperationError(
+                        f"JSON-Eintrag {index} enthält einen ungültigen Spaltennamen."
+                    )
+                if raw_name not in known_columns:
+                    known_columns.add(raw_name)
+                    columns.append(raw_name)
+                record[raw_name] = _json_scalar(raw_value)
+            rows.append(record)
+        return columns, [
+            {column: row.get(column) for column in columns}
+            for row in rows
+        ]
+
+    @classmethod
+    def _read_json_array(cls, data: str) -> tuple[list[str], list[Record]]:
+        try:
+            raw = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise DataOperationError(
+                f"Ungültiges JSON: {exc.msg}"
+            ) from exc
+        return cls._normalize_json_records(raw)
+
+    @classmethod
+    def _read_json_lines_text(
+        cls,
+        data: str,
+    ) -> tuple[list[str], list[Record]]:
+        raw_rows: list[Any] = []
+        for line_number, line in enumerate(data.splitlines(), start=1):
+            if not line.strip():
+                continue
+            if len(raw_rows) >= MAX_DATA_ROWS:
+                raise DataOperationError(
+                    "Datendaten überschreiten das Zeilenlimit von "
+                    f"{MAX_DATA_ROWS}."
+                )
+            try:
+                raw_rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise DataOperationError(
+                    f"Ungültiges JSON in Zeile {line_number}: {exc.msg}"
+                ) from exc
+        return cls._normalize_json_records(raw_rows)
+
+    @staticmethod
     def _read_json_lines(file_path: Path) -> tuple[list[str], list[Record]]:
         rows: list[Record] = []
         columns: list[str] = []
@@ -260,6 +417,10 @@ class DataOperations:
         columns: list[str],
         rows: list[Record],
     ) -> str:
+        if self.workspace is None:
+            raise DataOperationError(
+                "Dateischreibzugriff ist für den Data-MCP nicht aktiviert."
+            )
         file_path = self.workspace.resolve_writable_file(path)
         suffix = self._validate_suffix(file_path)
         try:
@@ -476,13 +637,24 @@ class DataOperations:
             indent=2,
         )
 
-    def inspect_data(self, path: str, sample_rows: int = 5) -> str:
+    def inspect_data(
+        self,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        sample_rows: int = 5,
+    ) -> str:
         sample_rows = self._validate_limit(
             sample_rows,
             maximum=MAX_SAMPLE_ROWS,
             name="sample_rows",
         )
-        columns, rows = self._read_records(path)
+        columns, rows = self._read_records(
+            path,
+            data=data,
+            data_format=data_format,
+        )
         metadata = []
         for column in columns:
             values = [row.get(column) for row in rows]
@@ -496,7 +668,7 @@ class DataOperations:
             )
         return json.dumps(
             {
-                "path": path,
+                "source": path if path is not None else f"inline:{data_format}",
                 "row_count": len(rows),
                 "columns": metadata,
                 "sample": rows[:sample_rows],
@@ -507,7 +679,10 @@ class DataOperations:
 
     def select_data(
         self,
-        path: str,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
         columns: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
@@ -515,7 +690,11 @@ class DataOperations:
         limit: int = 100,
     ) -> str:
         limit = self._validate_limit(limit, maximum=MAX_RESULT_ROWS)
-        source_columns, rows = self._read_records(path)
+        source_columns, rows = self._read_records(
+            path,
+            data=data,
+            data_format=data_format,
+        )
         selected_columns = self._require_columns(source_columns, columns)
         filtered = self._apply_filters(rows, source_columns, filters)
         ordered = self._sort_rows(
@@ -636,15 +815,21 @@ class DataOperations:
 
     def _aggregate_records(
         self,
-        path: str,
+        path: str | None,
         *,
+        data: str | None,
+        data_format: str | None,
         group_by: list[str] | None,
         aggregations: list[dict[str, str]],
         filters: list[dict[str, Any]] | None,
         sort_by: list[str] | None,
         descending: bool,
     ) -> tuple[list[str], list[Record]]:
-        columns, rows = self._read_records(path)
+        columns, rows = self._read_records(
+            path,
+            data=data,
+            data_format=data_format,
+        )
         groups = (
             []
             if group_by is None
@@ -693,9 +878,12 @@ class DataOperations:
 
     def aggregate_data(
         self,
-        path: str,
-        group_by: list[str] | None,
         aggregations: list[dict[str, str]],
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        group_by: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
         descending: bool = False,
@@ -704,6 +892,8 @@ class DataOperations:
         limit = self._validate_limit(limit, maximum=MAX_RESULT_ROWS)
         _, rows = self._aggregate_records(
             path,
+            data=data,
+            data_format=data_format,
             group_by=group_by,
             aggregations=aggregations,
             filters=filters,
@@ -718,8 +908,11 @@ class DataOperations:
 
     def value_counts(
         self,
-        path: str,
         column: str,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
         filters: list[dict[str, Any]] | None = None,
         limit: int = 50,
     ) -> str:
@@ -727,7 +920,11 @@ class DataOperations:
             limit,
             maximum=MAX_VALUE_COUNT_ROWS,
         )
-        columns, rows = self._read_records(path)
+        columns, rows = self._read_records(
+            path,
+            data=data,
+            data_format=data_format,
+        )
         if column not in columns:
             raise DataOperationError(
                 f"Unbekannte Spalte: {column!r}"
@@ -746,14 +943,21 @@ class DataOperations:
 
     def select_data_to_file(
         self,
-        input_path: str,
         output_path: str,
+        input_path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
         columns: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
         descending: bool = False,
     ) -> str:
-        source_columns, rows = self._read_records(input_path)
+        source_columns, rows = self._read_records(
+            input_path,
+            data=data,
+            data_format=data_format,
+        )
         selected_columns = self._require_columns(
             source_columns,
             columns,
@@ -784,16 +988,21 @@ class DataOperations:
 
     def aggregate_data_to_file(
         self,
-        input_path: str,
         output_path: str,
-        group_by: list[str] | None,
         aggregations: list[dict[str, str]],
+        input_path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        group_by: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
         descending: bool = False,
     ) -> str:
         columns, rows = self._aggregate_records(
             input_path,
+            data=data,
+            data_format=data_format,
             group_by=group_by,
             aggregations=aggregations,
             filters=filters,
