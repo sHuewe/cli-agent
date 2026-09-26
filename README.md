@@ -347,6 +347,45 @@ cli-agent --with-os-write
 
 Details: [Workspace OS MCP](docs/mcp-os.md).
 
+## Optionale lokale Web-UI
+
+Der interaktive Agent kann optional in einer kleinen Browser-Oberfläche statt
+im Terminal bedient werden. Die Web-Abhängigkeiten gehören bewusst nicht zur
+Standardinstallation:
+
+```powershell
+pipx install "cli-agent[web]"
+```
+
+Bei einer normalen Installation mit `pipx install cli-agent` bleibt
+`cli-agent` unverändert nutzbar; `--with-web-ui` schlägt dann mit einem
+Hinweis auf das optionale `web`-Extra fehl.
+
+Die Web-UI wird explizit aktiviert:
+
+```powershell
+cli-agent --config config.toml --with-os-read --with-web-ui
+```
+
+`--with-web-ui` ist ausschließlich ein alternativer Ein-/Ausgabekanal für den
+interaktiven Modus. Workspace, Modell, MCP-Server, Web-Kontext, lokale
+Agent-Befehle und Tool-Freigaben verwenden denselben laufenden Agenten wie der
+Terminalmodus. `--approve-tool` behält seine bisherige Bedeutung; alle übrigen
+zustimmungspflichtigen Tool-Aufrufe werden im Browser mit `Ja`, `Für Session`
+oder `Nein` bestätigt.
+
+Die erste Version ist absichtlich **localhost-only**. Der Server bindet fest an
+`127.0.0.1`; es gibt keine CLI- oder Config-Option für einen anderen Host und
+keine Share-/Tunnel-Funktion. Ein zufälliger Prozess-Token und eine strikte
+Origin-Prüfung schützen die WebSocket-Session zusätzlich vor fremden Webseiten.
+Statische UI-Inhalte stammen aus dem Paketcode und nicht aus dem Workspace.
+Die Web-UI ist in dieser ersten Version ausdrücklich nicht für Reverse-Proxies,
+Tunnel oder den Zugriff von anderen Rechnern vorgesehen. Die vorhandenen MCP-
+und Workspace-Berechtigungen werden durch die Web-UI weder erweitert noch
+reduziert; sie entsprechen den Rechten, mit denen derselbe Agent im
+Terminalmodus gestartet würde.
+Details zum Threat Model stehen in [Security](docs/security.md#optionale-lokale-web-ui).
+
 ## Prompt-Dateien und Templates
 
 Ein One-Shot-Prompt kann aus einer expliziten UTF-8-Datei innerhalb des
