@@ -354,7 +354,7 @@ class Workspace:
         if self._is_protected_path(path):
             raise WorkspaceError(
                 "Das Lesen von Secret-/Credential- oder geschützten "
-                "Agent-Dateien ist über den Workspace-OS-Server nicht erlaubt."
+                "Agent-Dateien ist über den Workspace-Dateizugriff nicht erlaubt."
             )
 
     def _is_mutation_protected_path(self, path: Path) -> bool:
@@ -375,7 +375,7 @@ class Workspace:
         if self._is_mutation_protected_path(path):
             raise WorkspaceError(
                 "Das Ändern von Secret-/Credential- oder geschützten "
-                "Workspace-Dateien ist über den Workspace-OS-Server nicht erlaubt."
+                "Workspace-Dateien ist über den Workspace-Dateizugriff nicht erlaubt."
             )
 
     @staticmethod
@@ -388,7 +388,7 @@ class Workspace:
             ) from exc
         if hardlinked:
             raise WorkspaceError(
-                "Dateien mit mehreren Hardlinks werden vom Workspace-OS-Server "
+                "Dateien mit mehreren Hardlinks werden vom Workspace-Dateizugriff "
                 "aus Sicherheitsgründen nicht verarbeitet."
             )
 
