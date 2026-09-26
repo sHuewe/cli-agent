@@ -599,7 +599,7 @@ class Workspace:
         self,
         path: str,
         *,
-        direct: bool = false,
+        direct: bool = False,
     ) -> Path:
         """Resolve and validate one readable regular workspace file.
 
