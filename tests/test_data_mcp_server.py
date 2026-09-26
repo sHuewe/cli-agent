@@ -30,24 +30,27 @@ class FakeFastMCP:
 
 def _operations(calls):
     return SimpleNamespace(
-        inspect_data=lambda path, sample_rows=5: (
-            calls.append(("inspect", path, sample_rows)) or "inspected"
+        inspect_data=lambda path=None, **kwargs: (
+            calls.append(("inspect", path, kwargs)) or "inspected"
         ),
-        select_data=lambda path, **kwargs: (
+        select_data=lambda path=None, **kwargs: (
             calls.append(("select", path, kwargs)) or "selected"
         ),
-        value_counts=lambda path, column, **kwargs: (
-            calls.append(("counts", path, column, kwargs)) or "counted"
+        value_counts=lambda column, path=None, **kwargs: (
+            calls.append(("counts", column, path, kwargs)) or "counted"
         ),
-        aggregate_data=lambda path, **kwargs: (
-            calls.append(("aggregate", path, kwargs)) or "aggregated"
+        aggregate_data=lambda aggregations, path=None, **kwargs: (
+            calls.append(("aggregate", aggregations, path, kwargs))
+            or "aggregated"
         ),
-        select_data_to_file=lambda input_path, output_path, **kwargs: (
-            calls.append(("select_write", input_path, output_path, kwargs))
+        select_data_to_file=lambda output_path, input_path=None, **kwargs: (
+            calls.append(("select_write", output_path, input_path, kwargs))
             or "selected-written"
         ),
-        aggregate_data_to_file=lambda input_path, output_path, **kwargs: (
-            calls.append(("aggregate_write", input_path, output_path, kwargs))
+        aggregate_data_to_file=lambda output_path, aggregations, input_path=None, **kwargs: (
+            calls.append(
+                ("aggregate_write", output_path, aggregations, input_path, kwargs)
+            )
             or "aggregated-written"
         ),
     )
@@ -72,23 +75,35 @@ def test_create_server_read_mode_exposes_only_non_mutating_data_tools(
         "value_counts",
         "aggregate_data",
     }
-    assert server.tools["inspect_data"]("data.csv", 3) == "inspected"
+    assert server.tools["inspect_data"](
+        path="data.csv",
+        sample_rows=3,
+    ) == "inspected"
     assert (
         server.tools["value_counts"](
-            "data.csv",
             "kind",
+            path="data.csv",
             filters=None,
             limit=7,
         )
         == "counted"
     )
     assert calls == [
-        ("inspect", "data.csv", 3),
+        (
+            "inspect",
+            "data.csv",
+            {"data": None, "data_format": None, "sample_rows": 3},
+        ),
         (
             "counts",
-            "data.csv",
             "kind",
-            {"filters": None, "limit": 7},
+            "data.csv",
+            {
+                "data": None,
+                "data_format": None,
+                "filters": None,
+                "limit": 7,
+            },
         ),
     ]
 
@@ -114,17 +129,17 @@ def test_create_server_write_mode_adds_only_derived_data_mutations(
     }
     assert (
         server.tools["select_data_to_file"](
-            "raw.csv",
             "filtered.csv",
+            input_path="raw.csv",
             columns=["x"],
         )
         == "selected-written"
     )
     assert (
         server.tools["aggregate_data_to_file"](
-            "raw.csv",
             "summary.csv",
             [{"column": "x", "function": "sum"}],
+            input_path="raw.csv",
         )
         == "aggregated-written"
     )
@@ -272,3 +287,110 @@ def test_main_converts_workspace_initialization_error_to_system_exit(
 
     with pytest.raises(SystemExit, match="blocked"):
         data_mcp_server.main()
+
+
+
+def test_create_server_read_tools_accept_inline_payload(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(
+        _operations(calls),
+        allow_write=False,
+    )
+
+    assert (
+        server.tools["select_data"](
+            data="a,b\n1,2\n",
+            data_format="csv",
+            limit=1,
+        )
+        == "selected"
+    )
+    assert calls == [
+        (
+            "select",
+            None,
+            {
+                "data": "a,b\n1,2\n",
+                "data_format": "csv",
+                "columns": None,
+                "filters": None,
+                "sort_by": None,
+                "descending": False,
+                "limit": 1,
+            },
+        )
+    ]
+
+
+def test_parse_args_accepts_payload_only_access(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "data-mcp",
+            "--project-directory",
+            str(tmp_path),
+            "--access",
+            "none",
+        ],
+    )
+
+    args = data_mcp_server.parse_args()
+
+    assert args.access == "none"
+
+
+def test_main_payload_only_mode_does_not_create_workspace(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runner = FakeFastMCP("runner")
+    captured = {}
+
+    monkeypatch.setattr(
+        data_mcp_server,
+        "parse_args",
+        lambda: SimpleNamespace(
+            project_directory=tmp_path,
+            config_file=None,
+            access="none",
+            protected_path=[],
+            mutation_protected_path=[],
+        ),
+    )
+    monkeypatch.setattr(
+        data_mcp_server,
+        "load_config",
+        lambda path: SimpleNamespace(logging=object()),
+    )
+    monkeypatch.setattr(
+        data_mcp_server,
+        "configure_logging",
+        lambda *_args, **_kwargs: None,
+    )
+
+    class WorkspaceFactory:
+        @classmethod
+        def from_directory(cls, *_args, **_kwargs):
+            raise AssertionError("Workspace must not be created")
+
+    monkeypatch.setattr(data_mcp_server, "Workspace", WorkspaceFactory)
+
+    def make_operations(workspace):
+        captured["workspace"] = workspace
+        return object()
+
+    monkeypatch.setattr(data_mcp_server, "DataOperations", make_operations)
+    monkeypatch.setattr(
+        data_mcp_server,
+        "create_server",
+        lambda _operations, *, allow_write: runner
+        if allow_write is False
+        else None,
+    )
+
+    data_mcp_server.main()
+
+    assert captured["workspace"] is None
+    assert runner.run_transport == "stdio"
