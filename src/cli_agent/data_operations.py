@@ -53,8 +53,8 @@ def _json_scalar(value: Any) -> Scalar:
     )
 
 
-def _infer_csv_scalar(value: str) -> Scalar:
-    if value == "":
+def _infer_csv_scalar(value: str | None) -> Scalar:
+    if value is None or value == "":
         return None
     stripped = value.strip()
     if stripped == "":
