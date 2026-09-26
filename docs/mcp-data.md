@@ -56,14 +56,37 @@ Inline-Payloads sind auf 2.000.000 Zeichen begrenzt. Tool-Ergebnisse sind
 zusätzlich begrenzt, damit große Quelldatensätze nicht ungefiltert in den
 LLM-Kontext gelangen.
 
-## Read-Tools
+## Read-/Analyse-Tools
 
 | Tool | Funktion |
 | --- | --- |
+| `calculate(expression)` | Wertet einen begrenzten arithmetischen Ausdruck deterministisch mit Dezimalarithmetik aus. |
 | `inspect_data(path=..., ...)` / `inspect_data(data=..., data_format=..., ...)` | Liefert Zeilenzahl, Spalten, einfache Typinferenz, Null-/Unique-Zahlen und eine kleine Stichprobe. |
 | `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert höchstens 1.000 Zeilen. |
 | `value_counts(...)` | Zählt unterschiedliche Werte einer Spalte. |
 | `aggregate_data(...)` | Gruppiert und aggregiert Daten deterministisch. |
+
+### Calculator
+
+`calculate(expression)` ist unabhängig vom OS-Zugriff immer mit
+`--with-data` verfügbar. Das Tool ist für nicht-triviale Arithmetik,
+Prozent-/Verhältnisrechnungen, Dezimalrechnung, Potenzen und Wurzeln gedacht.
+
+Beispiel:
+
+```text
+calculate("(417.3 - 382.1) / 382.1 * 100")
+```
+
+Unterstützt werden ausschließlich numerische Literale, Klammern, `+`, `-`,
+`*`, `/`, `%`, `**`, unäres `+`/`-` sowie `abs()`, `round()`,
+`min()`, `max()` und `sqrt()`. Die Auswertung verwendet `Decimal` mit
+begrenzter Präzision statt binärer Float-Arithmetik. Es gibt kein `eval()`,
+keine Variablen, Attribute, Imports oder beliebigen Python-Ausdrücke.
+
+Ausdruckslänge, AST-Größe/-Tiefe, Exponenten, Funktionsargumente und
+Ergebnisgrößen sind begrenzt, damit der Calculator nicht als
+Ressourcenverbrauchs-/Codeausführungsprimitive missbraucht werden kann.
 
 ### Filter
 
