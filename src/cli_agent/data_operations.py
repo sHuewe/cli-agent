@@ -26,6 +26,7 @@ DATA_FORMATS = frozenset({"csv", "tsv", "json", "jsonl", "ndjson", "markdown"})
 MAX_DATA_FILE_BYTES = 100_000_000
 MAX_DATA_PAYLOAD_CHARS = 2_000_000
 MAX_DATA_ROWS = 1_000_000
+MAX_CSV_FIELD_CHARS = MAX_DATA_FILE_BYTES
 MAX_RESULT_ROWS = 1_000
 MAX_SAMPLE_ROWS = 20
 MAX_VALUE_COUNT_ROWS = 200
@@ -67,6 +68,14 @@ def _json_scalar(value: Any) -> Scalar:
     raise DataOperationError(
         "Tabellarische Daten dürfen nur skalare JSON-Werte enthalten."
     )
+
+
+def _configure_csv_field_limit() -> None:
+    """Allow fields up to the already-enforced dataset size boundary."""
+
+    current = csv.field_size_limit()
+    if current < MAX_CSV_FIELD_CHARS:
+        csv.field_size_limit(MAX_CSV_FIELD_CHARS)
 
 
 def _infer_csv_scalar(value: str | None) -> Scalar:
@@ -278,7 +287,10 @@ class DataOperations:
                 f"{MAX_DATA_PAYLOAD_CHARS} Zeichen."
             )
         try:
-            tables = extract_markdown_tables(markdown)
+            tables = extract_markdown_tables(
+                markdown,
+                max_rows=MAX_DATA_ROWS,
+            )
             if not tables:
                 return "No Markdown tables found."
             rendered: list[str] = []
@@ -364,7 +376,10 @@ class DataOperations:
                 "table_index muss eine nicht-negative ganze Zahl sein."
             )
         try:
-            tables = extract_markdown_tables(data)
+            tables = extract_markdown_tables(
+                data,
+                max_rows=MAX_DATA_ROWS,
+            )
         except MarkdownTableError as exc:
             raise DataOperationError(str(exc)) from exc
         if table_index >= len(tables):
@@ -501,6 +516,7 @@ class DataOperations:
         delimiter: str,
     ) -> tuple[list[str], list[Record]]:
         try:
+            _configure_csv_field_limit()
             with file_path.open("r", encoding="utf-8", newline="") as handle:
                 reader = csv.DictReader(handle, delimiter=delimiter)
                 if reader.fieldnames is None:
@@ -548,6 +564,7 @@ class DataOperations:
         delimiter: str,
     ) -> tuple[list[str], list[Record]]:
         try:
+            _configure_csv_field_limit()
             reader = csv.DictReader(io.StringIO(data), delimiter=delimiter)
             if reader.fieldnames is None:
                 return [], []

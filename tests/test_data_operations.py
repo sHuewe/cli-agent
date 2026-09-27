@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from cli_agent.config import McpServerConfig
-from cli_agent.data_markdown import extract_markdown_tables as parse_markdown_tables
+from cli_agent.data_markdown import (
+    MarkdownTableError,
+    extract_markdown_tables as parse_markdown_tables,
+)
 from cli_agent.data_operations import (
     DataOperationError,
     DataOperations,
@@ -1006,3 +1009,70 @@ def test_decimal_aggregation_rejects_excessive_working_precision() -> None:
             data=data,
             data_format="markdown",
         )
+
+
+
+@pytest.mark.parametrize("data_format,delimiter", [("csv", ","), ("tsv", "\t")])
+def test_inline_delimited_accepts_field_above_python_csv_default(
+    data_format: str,
+    delimiter: str,
+) -> None:
+    long_value = "x" * 150_000
+    columns, rows = DataOperations(None)._read_records(
+        data=f"value{delimiter}other\n{long_value}{delimiter}ok\n",
+        data_format=data_format,
+    )
+
+    assert columns == ["value", "other"]
+    assert rows == [{"value": long_value, "other": "ok"}]
+
+
+@pytest.mark.parametrize(
+    "suffix,delimiter",
+    [(".csv", ","), (".tsv", "\t")],
+)
+def test_delimited_file_accepts_field_above_python_csv_default(
+    tmp_path: Path,
+    suffix: str,
+    delimiter: str,
+) -> None:
+    long_value = "x" * 150_000
+    path = tmp_path / f"large-field{suffix}"
+    path.write_text(
+        f"value{delimiter}other\n{long_value}{delimiter}ok\n",
+        encoding="utf-8",
+    )
+
+    columns, rows = _operations(tmp_path)._read_records(path.name)
+
+    assert columns == ["value", "other"]
+    assert rows == [{"value": long_value, "other": "ok"}]
+
+
+def test_markdown_row_limit_is_checked_before_table_materialization() -> None:
+    markdown = (
+        "| value |\n"
+        "|---|\n"
+        "| 1 |\n"
+        "| 2 |\n"
+        "| 3 |\n"
+    )
+
+    with pytest.raises(MarkdownTableError, match="Zeilenlimit"):
+        parse_markdown_tables(markdown, max_rows=2)
+
+
+def test_markdown_row_budget_applies_across_all_extracted_tables() -> None:
+    markdown = (
+        "| first |\n"
+        "|---|\n"
+        "| 1 |\n"
+        "| 2 |\n"
+        "\n"
+        "| second |\n"
+        "|---|\n"
+        "| 3 |\n"
+    )
+
+    with pytest.raises(MarkdownTableError, match="Zeilenlimit"):
+        parse_markdown_tables(markdown, max_rows=2)

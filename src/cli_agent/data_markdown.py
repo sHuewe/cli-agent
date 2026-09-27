@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import math
 import re
@@ -157,7 +158,72 @@ def _normalize_table_separator_widths(markdown: str) -> str:
     return "\n".join(lines)
 
 
-def _normalize_markdown_input(markdown: str) -> str:
+def _enforce_markdown_row_limit(
+    markdown: str,
+    *,
+    max_rows: int,
+) -> None:
+    """Reject oversized pipe-table input before MarkdownIt tokenization.
+
+    The scan is deliberately conservative and streaming. It recognizes the
+    same strict separator rows that the normalizer accepts, including the
+    narrowly supported short-separator repair. The budget applies to the total
+    number of materialized body rows across the document because the parser
+    extracts all tables before table_index is applied.
+    """
+
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows < 0:
+        raise MarkdownTableError(
+            "Markdown-Zeilenlimit muss eine nicht-negative ganze Zahl sein."
+        )
+
+    total_rows = 0
+    previous_line: str | None = None
+    in_table = False
+
+    for raw_line in io.StringIO(markdown):
+        line = raw_line.rstrip("\r\n")
+        cells = _split_pipe_row(line)
+
+        if in_table:
+            if cells is not None and line.strip():
+                total_rows += 1
+                if total_rows > max_rows:
+                    raise MarkdownTableError(
+                        "Markdown-Tabellen überschreiten das Zeilenlimit von "
+                        f"{max_rows}."
+                    )
+                previous_line = line
+                continue
+            in_table = False
+
+        separator_cells = cells
+        if (
+            separator_cells is not None
+            and separator_cells
+            and all(
+                _SEPARATOR_CELL.fullmatch(cell)
+                for cell in separator_cells
+            )
+            and previous_line is not None
+        ):
+            header_cells = _split_pipe_row(previous_line)
+            if (
+                header_cells is not None
+                and separator_cells
+                and len(separator_cells) <= len(header_cells)
+                and len(header_cells) <= MAX_MARKDOWN_COLUMNS
+            ):
+                in_table = True
+
+        previous_line = line
+
+
+def _normalize_markdown_input(
+    markdown: str,
+    *,
+    max_rows: int | None = None,
+) -> str:
     """Normalize transport artifacts before parsing Markdown tables.
 
     Reference contexts are serialized as JSON before they reach the model. A
@@ -180,6 +246,13 @@ def _normalize_markdown_input(markdown: str) -> str:
     if not had_real_newline and "\\n" in normalized:
         normalized = normalized.replace("\\r\\n", "\n")
         normalized = normalized.replace("\\n", "\n")
+
+    if max_rows is not None:
+        _enforce_markdown_row_limit(
+            normalized,
+            max_rows=max_rows,
+        )
+
     return _normalize_table_separator_widths(normalized)
 
 
@@ -333,8 +406,15 @@ def render_markdown_table(
     return "\n".join(lines)
 
 
-def extract_markdown_tables(markdown: str) -> list[dict[str, Any]]:
-    markdown = _normalize_markdown_input(markdown)
+def extract_markdown_tables(
+    markdown: str,
+    *,
+    max_rows: int | None = None,
+) -> list[dict[str, Any]]:
+    markdown = _normalize_markdown_input(
+        markdown,
+        max_rows=max_rows,
+    )
     tokens = _MARKDOWN.parse(markdown)
     lines = markdown.splitlines()
     tables: list[dict[str, Any]] = []

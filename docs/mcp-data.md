@@ -60,9 +60,13 @@ Felder weiterhin wie `null`. CSV/TSV-Werte werden konservativ als `null`,
 Boolean, Integer, Float oder String interpretiert.
 
 Eine Datendatei ist derzeit auf 100 MB und 1.000.000 Datensätze begrenzt.
-Inline-Payloads sind auf 2.000.000 Zeichen begrenzt. Tool-Ergebnisse sind
-zusätzlich begrenzt, damit große Quelldatensätze nicht ungefiltert in den
-LLM-Kontext gelangen.
+Inline-Payloads sind auf 2.000.000 Zeichen begrenzt. Für CSV/TSV wird das
+Python-Feldgrößenlimit bewusst bis zur bereits geltenden maximalen
+Dateigröße angehoben; Inline-Daten bleiben unabhängig davon durch ihr
+2.000.000-Zeichen-Limit begrenzt. Bei Markdown wird das Zeilenbudget für die
+Summe aller zu materialisierenden Tabellenzeilen bereits vor der eigentlichen
+Markdown-Tokenisierung geprüft. Tool-Ergebnisse sind zusätzlich begrenzt,
+damit große Quelldatensätze nicht ungefiltert in den LLM-Kontext gelangen.
 
 ## Read-/Analyse-Tools
 
