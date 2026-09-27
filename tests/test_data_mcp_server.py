@@ -33,6 +33,9 @@ def _operations(calls):
         calculate=lambda expression: (
             calls.append(("calculate", expression)) or "calculated"
         ),
+        extract_markdown_tables=lambda markdown: (
+            calls.append(("extract_markdown_tables", markdown)) or "tables"
+        ),
         inspect_data=lambda path=None, **kwargs: (
             calls.append(("inspect", path, kwargs)) or "inspected"
         ),
@@ -74,12 +77,14 @@ def test_create_server_read_mode_exposes_only_non_mutating_data_tools(
     assert "untrusted data" in server.instructions
     assert set(server.tools) == {
         "calculate",
+        "extract_markdown_tables",
         "inspect_data",
         "select_data",
         "value_counts",
         "aggregate_data",
     }
     assert server.tools["calculate"]("2 + 3") == "calculated"
+    assert server.tools["extract_markdown_tables"]("| a |\n|---|\n| 1 |") == "tables"
     assert server.tools["inspect_data"](
         path="data.csv",
         sample_rows=3,
@@ -95,10 +100,11 @@ def test_create_server_read_mode_exposes_only_non_mutating_data_tools(
     )
     assert calls == [
         ("calculate", "2 + 3"),
+        ("extract_markdown_tables", "| a |\n|---|\n| 1 |"),
         (
             "inspect",
             "data.csv",
-            {"data": None, "data_format": None, "sample_rows": 3},
+            {"data": None, "data_format": None, "table": None, "sample_rows": 3},
         ),
         (
             "counts",
@@ -107,6 +113,7 @@ def test_create_server_read_mode_exposes_only_non_mutating_data_tools(
             {
                 "data": None,
                 "data_format": None,
+                "table": None,
                 "filters": None,
                 "limit": 7,
             },
@@ -127,6 +134,7 @@ def test_create_server_write_mode_adds_only_derived_data_mutations(
 
     assert set(server.tools) == {
         "calculate",
+        "extract_markdown_tables",
         "inspect_data",
         "select_data",
         "value_counts",
@@ -320,6 +328,7 @@ def test_create_server_read_tools_accept_inline_payload(monkeypatch) -> None:
             {
                 "data": "a,b\n1,2\n",
                 "data_format": "csv",
+                "table": None,
                 "columns": None,
                 "filters": None,
                 "sort_by": None,
@@ -401,3 +410,26 @@ def test_main_payload_only_mode_does_not_create_workspace(
 
     assert captured["workspace"] is None
     assert runner.run_transport == "stdio"
+
+
+
+def test_create_server_passes_extracted_table_to_data_tools(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(_operations(calls), allow_write=False)
+    table = {"columns": ["a"], "rows": [{"a": 1}]}
+
+    assert server.tools["inspect_data"](table=table) == "inspected"
+
+    assert calls == [
+        (
+            "inspect",
+            None,
+            {
+                "data": None,
+                "data_format": None,
+                "table": table,
+                "sample_rows": 5,
+            },
+        )
+    ]
