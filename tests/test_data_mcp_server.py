@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 import sys
+
+from mcp.server.fastmcp.tools.base import Tool
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -205,6 +207,61 @@ def test_extract_tool_description_and_result_are_markdown_oriented(monkeypatch) 
     assert calls == [
         ("extract_markdown_tables", "| a |\n|---|\n| 1 |")
     ]
+
+
+def test_select_data_exposes_structured_filter_schema(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(_operations(calls), access="none")
+
+    function = server.tools["select_data"]
+    tool = Tool.from_function(function)
+    filter_schema = tool.parameters["$defs"]["DataFilter"]
+
+    assert set(filter_schema["required"]) == {"column", "op"}
+    assert filter_schema["properties"]["column"]["type"] == "string"
+    assert set(filter_schema["properties"]["op"]["enum"]) == {
+        "eq",
+        "ne",
+        "lt",
+        "lte",
+        "gt",
+        "gte",
+        "in",
+        "not_in",
+        "is_null",
+        "not_null",
+        "contains",
+    }
+    assert "value" in filter_schema["properties"]
+
+    validated = tool.fn_metadata.arg_model.model_validate(
+        {
+            "data": "| a |\n|---|\n| 1 |",
+            "filters": [{"column": "a", "op": "eq", "value": 1}],
+        }
+    )
+    assert validated.filters == [
+        data_mcp_server.DataFilter(column="a", op="eq", value=1)
+    ]
+
+    with pytest.raises(ValueError):
+        tool.fn_metadata.arg_model.model_validate(
+            {
+                "data": "| a |\n|---|\n| 1 |",
+                "filters": [{"column_1": {"==": "D1-D1"}}],
+            }
+        )
+
+    assert function(
+        "| a |\n|---|\n| 1 |",
+        filters=[data_mcp_server.DataFilter(column="a", op="eq", value=1)],
+    ) == "selected"
+    assert calls[-1][2]["filters"] == [
+        {"column": "a", "op": "eq", "value": 1}
+    ]
+    assert "Multiple filters are combined with AND" in server.instructions
+    assert 'op="in"' in server.instructions
 
 
 def test_create_server_rejects_unknown_access(monkeypatch) -> None:
