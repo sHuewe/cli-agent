@@ -31,7 +31,10 @@ Die Flow-Datei selbst, Prompt-Dateien, Context-Dateien und Outputs müssen
 innerhalb dieses Workspace liegen. Relative Pfade für `prompt_file`,
 `add_file_context`/`context_file` und `output` werden immer relativ zum
 Workspace-Root interpretiert, unabhängig davon, in welchem Unterordner die
-`flow.toml` liegt. Konfigurationsdateien sind davon bewusst ausgenommen:
+`flow.toml` liegt. Fehlende Elternordner eines `output`-Pfads werden beim
+Flow-Lauf automatisch rekursiv angelegt. Das gilt auch für dynamische
+`foreach`-Outputs wie `states/\${item.state_id}/players/\${iteration.id}.json`.
+Die reine Validierung des Flows legt dabei noch keine Verzeichnisse an. Konfigurationsdateien sind davon bewusst ausgenommen:
 relative `config`-Pfade werden weiterhin relativ zum Ordner der
 `flow.toml` aufgelöst und dürfen wie bei `cli-agent --config` auch außerhalb
 des Workspace liegen.
