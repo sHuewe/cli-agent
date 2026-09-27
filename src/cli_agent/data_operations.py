@@ -29,6 +29,7 @@ MAX_DATA_ROWS = 1_000_000
 MAX_RESULT_ROWS = 1_000
 MAX_SAMPLE_ROWS = 20
 MAX_VALUE_COUNT_ROWS = 200
+MAX_DECIMAL_WORKING_PRECISION = 10_000
 FILTER_OPERATORS = frozenset(
     {
         "eq",
@@ -210,7 +211,13 @@ def _decimal_working_precision(values: list[Decimal]) -> int:
         for value in values
     )
     span = max(1, highest_adjusted - lowest_exponent + 2)
-    return max(DECIMAL_PRECISION, span + DECIMAL_PRECISION)
+    required = max(DECIMAL_PRECISION, span + DECIMAL_PRECISION)
+    if required > MAX_DECIMAL_WORKING_PRECISION:
+        raise DataOperationError(
+            "Dezimalwerte benötigen eine zu hohe Arbeitspräzision "
+            f"(maximal {MAX_DECIMAL_WORKING_PRECISION} Stellen)."
+        )
+    return required
 
 
 class DataOperations:
@@ -602,10 +609,7 @@ class DataOperations:
                     columns.append(raw_name)
                 record[raw_name] = _json_scalar(raw_value)
             rows.append(record)
-        return columns, [
-            {column: row.get(column) for column in columns}
-            for row in rows
-        ]
+        return columns, rows
 
     @classmethod
     def _read_json_array(cls, data: str) -> tuple[list[str], list[Record]]:
@@ -685,11 +689,7 @@ class DataOperations:
                 f"Datendatei konnte nicht gelesen werden: {file_path.name!r}: {exc}"
             ) from exc
 
-        normalized = [
-            {column: row.get(column) for column in columns}
-            for row in rows
-        ]
-        return columns, normalized
+        return columns, rows
 
     def _write_records(
         self,
@@ -964,17 +964,38 @@ class DataOperations:
             data_format=data_format,
             table_index=table_index,
         )
+        column_stats = {
+            column: {
+                "present_count": 0,
+                "null_count": 0,
+                "values": [],
+                "unique": set(),
+            }
+            for column in columns
+        }
+        for row in rows:
+            for column, value in row.items():
+                stats = column_stats[column]
+                stats["present_count"] += 1
+                if value is None:
+                    stats["null_count"] += 1
+                else:
+                    stats["values"].append(value)
+                stats["unique"].add(_scalar_identity(value))
+
         metadata = []
         for column in columns:
-            values = [row.get(column) for row in rows]
+            stats = column_stats[column]
+            missing_count = len(rows) - stats["present_count"]
+            unique = stats["unique"]
+            if missing_count:
+                unique.add(_scalar_identity(None))
             metadata.append(
                 {
                     "name": column,
-                    "dtype": _dtype_name(values),
-                    "null_count": sum(value is None for value in values),
-                    "unique_count": len(
-                        {_scalar_identity(value) for value in values}
-                    ),
+                    "dtype": _dtype_name(stats["values"]),
+                    "null_count": stats["null_count"] + missing_count,
+                    "unique_count": len(unique),
                 }
             )
         return _json_dumps_precise(
@@ -1019,14 +1040,10 @@ class DataOperations:
             sort_by,
             descending=descending,
         )
-        projected = [
-            {column: row.get(column) for column in selected_columns}
-            for row in ordered
-        ]
         return self._result(
             selected_columns,
-            projected,
-            total_rows=len(projected),
+            ordered,
+            total_rows=len(ordered),
             limit=limit,
         )
 
@@ -1387,10 +1404,12 @@ class DataOperations:
             sort_by,
             descending=descending,
         )
+        selected_set = set(selected_columns)
         projected = [
             {
-                column: row.get(column)
-                for column in selected_columns
+                column: value
+                for column, value in row.items()
+                if column in selected_set
             }
             for row in ordered
         ]

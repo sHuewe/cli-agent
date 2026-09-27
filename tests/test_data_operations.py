@@ -921,3 +921,88 @@ def test_failed_non_finite_aggregation_does_not_truncate_output(
         )
 
     assert output.read_text(encoding="utf-8") == "keep\n"
+
+
+
+def test_inline_json_records_remain_sparse() -> None:
+    operations = DataOperations(None)
+    columns, rows = operations._read_records(
+        data='[{"a":1},{"b":2},{"c":3}]',
+        data_format="json",
+    )
+
+    assert columns == ["a", "b", "c"]
+    assert rows == [{"a": 1}, {"b": 2}, {"c": 3}]
+
+    selected = operations.select_data(
+        data='[{"a":1},{"b":2},{"c":3}]',
+        data_format="json",
+    )
+    assert _markdown_rows(selected) == [
+        {"a": 1, "b": None, "c": None},
+        {"a": None, "b": 2, "c": None},
+        {"a": None, "b": None, "c": 3},
+    ]
+
+
+def test_jsonl_file_records_remain_sparse(tmp_path: Path) -> None:
+    path = tmp_path / "sparse.jsonl"
+    path.write_text(
+        '{"a":1}\n{"b":2}\n{"c":3}\n',
+        encoding="utf-8",
+    )
+    operations = _operations(tmp_path)
+
+    columns, rows = operations._read_records("sparse.jsonl")
+
+    assert columns == ["a", "b", "c"]
+    assert rows == [{"a": 1}, {"b": 2}, {"c": 3}]
+
+    inspected = json.loads(operations.inspect_data("sparse.jsonl"))
+    metadata = {
+        column["name"]: column
+        for column in inspected["columns"]
+    }
+    assert metadata["a"]["null_count"] == 2
+    assert metadata["a"]["unique_count"] == 2
+
+
+def test_sparse_jsonl_to_jsonl_keeps_missing_fields_absent(
+    tmp_path: Path,
+) -> None:
+    operations = _operations(tmp_path)
+    operations.select_data_to_file(
+        "sparse.jsonl",
+        data='[{"a":1},{"b":2}]',
+        data_format="json",
+    )
+
+    assert (
+        tmp_path / "sparse.jsonl"
+    ).read_text(encoding="utf-8").splitlines() == [
+        '{"a":1}',
+        '{"b":2}',
+    ]
+
+
+def test_decimal_aggregation_rejects_excessive_working_precision() -> None:
+    operations = DataOperations(None)
+    data = (
+        "| value |\n"
+        "|---|\n"
+        "| `decimal:1e1000000000` |\n"
+        "| `decimal:1` |"
+    )
+
+    with pytest.raises(DataOperationError, match="Arbeitspräzision"):
+        operations.aggregate_data(
+            [
+                {
+                    "column": "value",
+                    "function": "mean",
+                    "alias": "mean",
+                }
+            ],
+            data=data,
+            data_format="markdown",
+        )

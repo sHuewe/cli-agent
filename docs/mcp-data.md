@@ -53,8 +53,11 @@ Markdown das bevorzugte Austauschformat.
 
 Bei `json` muss der Payload ein Array flacher Objekte enthalten. JSONL/NDJSON
 enthält pro nicht-leerer Zeile genau ein Objekt. Verschachtelte Arrays oder
-Objekte werden bewusst abgewiesen. CSV/TSV-Werte werden konservativ als
-`null`, Boolean, Integer, Float oder String interpretiert.
+Objekte werden bewusst abgewiesen. Heterogene JSON-/JSONL-Datensätze bleiben
+intern sparse: fehlende Felder werden nicht für jede Zeile als zusätzliche
+`null`-Einträge materialisiert. Tabellarische Ausgaben behandeln fehlende
+Felder weiterhin wie `null`. CSV/TSV-Werte werden konservativ als `null`,
+Boolean, Integer, Float oder String interpretiert.
 
 Eine Datendatei ist derzeit auf 100 MB und 1.000.000 Datensätze begrenzt.
 Inline-Payloads sind auf 2.000.000 Zeichen begrenzt. Tool-Ergebnisse sind
@@ -184,10 +187,14 @@ Reine Integer-Summen werden mit Python-Integer-Arithmetik ohne Float-Konvertieru
 berechnet. Für `mean`, `median` und `std` auf reinen Integer-Spalten sowie
 für Aggregationen, die bereits präzise Dezimalwerte enthalten, wird intern
 `Decimal` mit einer an die Größenordnung der Werte angepassten Präzision
-verwendet. Vorhandene Float-Spalten behalten aus Kompatibilitätsgründen ihre
-bisherige Float-Semantik; nicht-endliche Aggregationsergebnisse werden jedoch
-abgewiesen. Präzise Dezimalwerte bleiben beim Markdown-Chaining und beim
-Schreiben von JSONL als numerische Werte erhalten.
+verwendet. Die daraus abgeleitete Decimal-Arbeitspräzision ist auf 10.000
+Stellen begrenzt; Datensätze mit einem größeren erforderlichen Exponenten-/
+Präzisionsbereich werden abgewiesen, bevor ein Decimal-Kontext mit dieser
+Präzision angelegt wird. Vorhandene Float-Spalten behalten aus
+Kompatibilitätsgründen ihre bisherige Float-Semantik; nicht-endliche
+Aggregationsergebnisse werden jedoch abgewiesen. Präzise Dezimalwerte bleiben
+beim Markdown-Chaining und beim Schreiben von JSONL als numerische Werte
+erhalten.
 
 Boolesche Werte besitzen bei Gleichheit, Membership, Gruppierung und
 Distinct-Zählungen eine eigene skalare Identität und werden daher nicht mit den
