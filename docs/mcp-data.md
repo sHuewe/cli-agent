@@ -34,9 +34,11 @@ cli-agent --with-os-write --with-data
 ```
 
 Ohne `--with-os-read` bzw. `--with-os-write` wird für den Data-MCP gar keine
-`Workspace`-Instanz erzeugt. Die Read-Tools bleiben trotzdem verfügbar und
-können CSV/JSON-Daten direkt als Toolargument oder zuvor aus Markdown
-extrahierte Tabellenobjekte verarbeiten.
+`Workspace`-Instanz erzeugt. Die Analyse-Tools bleiben trotzdem verfügbar,
+exponieren in diesem Modus aber bewusst keinen `path`-Parameter. Mit
+`--with-os-read` bzw. `--with-os-write` wird `path` zusätzlich im
+Tool-Schema angeboten. Nur mit `--with-os-write` werden die mutierenden
+`*_to_file`-Tools registriert.
 
 Der Data-MCP ist ein Built-in. Seine Launchparameter werden vom Agenten erzeugt;
 der OS-Zugriffsmodus wird außerhalb der Modellkontrolle aus den CLI-Rechten
@@ -44,8 +46,10 @@ abgeleitet.
 
 ## Unterstützte Datenformate
 
-Workspace-Dateien unterstützen `.csv`, `.tsv`, `.jsonl` und `.ndjson`.
-Inline-Payloads unterstützen `csv`, `tsv`, `json`, `jsonl` und `ndjson`.
+Workspace-Dateien unterstützen `.csv`, `.tsv`, `.jsonl`, `.ndjson`,
+`.md` und `.markdown`. Inline-Payloads unterstützen `csv`, `tsv`,
+`json`, `jsonl`, `ndjson` und `markdown`. Für Inline-Tabellen ist
+Markdown das bevorzugte Austauschformat.
 
 Bei `json` muss der Payload ein Array flacher Objekte enthalten. JSONL/NDJSON
 enthält pro nicht-leerer Zeile genau ein Objekt. Verschachtelte Arrays oder
@@ -62,7 +66,7 @@ LLM-Kontext gelangen.
 | Tool | Funktion |
 | --- | --- |
 | `calculate(expression)` | Wertet einen begrenzten arithmetischen Ausdruck deterministisch mit Dezimalarithmetik aus. |
-| `extract_markdown_tables(markdown)` | Extrahiert alle Pipe-Tabellen aus einem vollständigen Markdown-Dokument in kanonische Tabellenobjekte. |
+| `extract_markdown_tables(markdown)` | Extrahiert und normalisiert alle Pipe-Tabellen aus einem vollständigen Markdown-Dokument und gibt sie wieder als Markdown zurück. |
 | `inspect_data(path=..., ...)` / `inspect_data(data=..., data_format=..., ...)` | Liefert Zeilenzahl, Spalten, einfache Typinferenz, Null-/Unique-Zahlen und eine kleine Stichprobe. |
 | `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert höchstens 1.000 Zeilen. |
 | `value_counts(...)` | Zählt unterschiedliche Werte einer Spalte. |
@@ -70,42 +74,48 @@ LLM-Kontext gelangen.
 
 ### Markdown-Tabellen
 
+Markdown ist das bevorzugte Inline-Format für tabellarische Referenzinhalte und
+für die Weitergabe tabellarischer Ergebnisse zwischen Data-Tools.
+
 `extract_markdown_tables(markdown)` nimmt ein vollständiges Markdown-Dokument
-entgegen und sucht darin selbstständig nach GFM-artigen Pipe-Tabellen. Das LLM
-muss die Tabelle deshalb nicht vorher aus dem Web-/Dateikontext ausschneiden.
+entgegen und sucht darin selbstständig nach Pipe-Tabellen. Das LLM muss die
+Tabelle deshalb nicht vorher ausschneiden oder als JSON rekonstruieren. Das
+Ergebnis besteht wieder aus normalisierten Markdown-Tabellen in Quellreihenfolge.
 
-Das Ergebnis enthält `table_count` und eine Liste kanonischer Tabellenobjekte.
-Jede Tabelle enthält unter anderem:
+Bei der Normalisierung werden leere bzw. doppelte Header deterministisch in
+eindeutige Spaltennamen überführt. Außerdem werden eng begrenzte Syntaxdefekte
+repariert, die typische HTML-zu-Text-Extraktoren erzeugen können: insbesondere
+wörtlich kopierte `\n`-Zeilenumbrüche sowie eine zu kurze, ansonsten formal
+gültige Markdown-Separatorzeile. Datenzellen selbst werden dabei nicht
+heuristisch ergänzt oder umgedeutet. Die ausgegebene Separatorzeile besitzt
+immer exakt dieselbe Spaltenanzahl wie der Header.
 
-```json
-{
-  "index": 0,
-  "context": "Spielbericht",
-  "source_headers": ["", "Heim", "Gast", "Sätze", "Spiele"],
-  "columns": ["column_1", "Heim", "Gast", "Sätze", "Spiele"],
-  "row_count": 2,
-  "rows": [
-    {
-      "column_1": "D1-D1",
-      "Heim": "A / B",
-      "Gast": "C / D",
-      "Sätze": "3:1",
-      "Spiele": "1:0"
-    }
-  ]
-}
+Beispiel:
+
+```markdown
+## Table 0
+
+Context: Spielbericht
+
+| column_1 | Heim | Gast | Sätze | Spiele |
+|---|---|---|---|---|
+| D1-D1 | A / B | C / D | 3:1 | 1:0 |
+| 1-2 | A | D | 2:3 | 0:1 |
 ```
 
-Leere Spaltenüberschriften werden deterministisch als `column_N` benannt;
-doppelte Überschriften erhalten Suffixe wie `_2`. Die ursprünglichen Header
-bleiben in `source_headers` erhalten. Bis zu drei unmittelbar vorangehende
-nicht-leere Markdown-Zeilen werden als kurzer `context` mitgegeben.
+Alle tabellarischen Analyse-Tools akzeptieren diesen Output direkt mit
+`data_format="markdown"`. Enthält ein Markdown-Dokument mehrere Tabellen, wählt
+`table_index` die gewünschte Tabelle aus.
 
-Ein solches Tabellenobjekt kann anschließend direkt als `table=...` an
-`inspect_data`, `select_data`, `value_counts` und `aggregate_data`
-übergeben werden. Auch die beiden Write-Tools akzeptieren bei aktiviertem
-Schreibzugriff ein Tabellenobjekt als Quelle. Für die tabellarischen Tools gilt
-damit: exakt eine Quelle aus `path`, `data + data_format` oder `table`.
+Auch `select_data`, `value_counts` und `aggregate_data` liefern ihre
+tabellarischen Ergebnisse als normalisiertes Markdown. Dadurch kann ihr Output
+ohne JSON-Rekonstruktion an einen weiteren Data-Tool-Aufruf weitergegeben werden.
+
+Bei aktiviertem Workspace-Zugriff ist ein vorhandener Dateipfad vorzuziehen.
+Insbesondere mit `--with-os-write` sollen mehrstufige Transformationen nach
+Möglichkeit einmal über ein `*_to_file`-Tool persistiert und anschließend per
+`path` weiterverarbeitet werden. Ohne Schreibzugriff bleibt Markdown das
+bevorzugte stateless Austauschformat.
 
 ### Calculator
 
@@ -173,8 +183,12 @@ Nur bei `--with-os-write --with-data` werden zusätzlich registriert:
 | `aggregate_data_to_file(...)` | Schreibt ein Aggregationsergebnis in eine Datendatei. |
 
 Diese Tools können ausschließlich die unterstützten Datenformate schreiben und
-sind keine allgemeinen `write_file`-Ersatztools. Wie die mutierenden
-OS-Built-ins benötigen sie standardmäßig eine explizite Tool-Freigabe.
+sind keine allgemeinen `write_file`-Ersatztools. Dazu gehören auch
+`.md`/`.markdown`; Markdown-Dateien werden dabei kanonisch mit konsistenter
+Spaltenanzahl geschrieben. Für mehrstufige Datenverarbeitung ist dieser
+dateibasierte Weg bei vorhandenem Schreibzugriff der bevorzugte Pfad. Wie die
+mutierenden OS-Built-ins benötigen die Tools standardmäßig eine explizite
+Tool-Freigabe.
 
 ## Workspace-Sicherheit
 
