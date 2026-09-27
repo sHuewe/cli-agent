@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import math
 import re
@@ -17,9 +15,8 @@ MAX_CONTEXT_CHARS = 500
 
 _MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("table")
 _SEPARATOR_CELL = re.compile(r"^:?-{3,}:?$")
-_SCALAR_OVERRIDE_MARKER = re.compile(
-    r"^<!-- cli-agent:data-overrides:v1:([A-Za-z0-9_-]+) -->$"
-)
+_TYPED_STRING_PREFIX = "string:"
+_TYPED_DECIMAL_PREFIX = "decimal:"
 
 
 class MarkdownTableError(ValueError):
@@ -67,14 +64,6 @@ def _preceding_context(lines: list[str], start_line: int) -> str | None:
     index = start_line - 1
     while index >= 0 and not lines[index].strip():
         index -= 1
-
-    if (
-        index >= 0
-        and _SCALAR_OVERRIDE_MARKER.fullmatch(lines[index].strip())
-    ):
-        index -= 1
-        while index >= 0 and not lines[index].strip():
-            index -= 1
 
     if index < 0:
         return None
@@ -194,7 +183,7 @@ def _normalize_markdown_input(markdown: str) -> str:
     return _normalize_table_separator_widths(normalized)
 
 
-def _string_requires_override(value: str) -> bool:
+def _string_requires_type_annotation(value: str) -> bool:
     if (
         value == ""
         or value != value.strip()
@@ -221,123 +210,71 @@ def _string_requires_override(value: str) -> bool:
     return math.isfinite(number)
 
 
-def _encode_scalar_overrides(
-    columns: list[str],
-    rows: list[dict[str, Any]],
-) -> str | None:
-    entries: list[list[Any]] = []
-    for row_index, row in enumerate(rows):
-        for column_index, column in enumerate(columns):
-            value = row.get(column)
-            if isinstance(value, str) and _string_requires_override(value):
-                entries.append([row_index, column_index, "s", value])
-            elif isinstance(value, Decimal):
-                if not value.is_finite():
-                    raise MarkdownTableError(
-                        "Dezimalwerte in Markdown-Tabellen müssen endlich sein."
-                    )
-                entries.append(
-                    [row_index, column_index, "d", str(value)]
-                )
-
-    if not entries:
-        return None
-
-    payload = json.dumps(
-        entries,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
-    return f"<!-- cli-agent:data-overrides:v1:{encoded} -->"
+def _markdown_code_span(content: str) -> str:
+    longest_run = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", content)),
+        default=0,
+    )
+    fence = "`" * (longest_run + 1)
+    return f"{fence}{content}{fence}"
 
 
-def _decode_scalar_overrides(
-    line: str,
-    *,
-    width: int,
-    row_count: int,
-) -> tuple[dict[tuple[int, int], Any], set[tuple[int, int]]]:
-    match = _SCALAR_OVERRIDE_MARKER.fullmatch(line.strip())
-    if match is None:
-        return {}, set()
-
-    encoded = match.group(1)
-    padding = "=" * (-len(encoded) % 4)
-    try:
-        payload = base64.urlsafe_b64decode(encoded + padding)
-        entries = json.loads(payload.decode("utf-8"))
-    except (
-        binascii.Error,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-        ValueError,
-    ) as exc:
-        raise MarkdownTableError(
-            "Ungültige interne Typmetadaten in Markdown-Tabelle."
-        ) from exc
-
-    if not isinstance(entries, list):
-        raise MarkdownTableError(
-            "Ungültige interne Typmetadaten in Markdown-Tabelle."
-        )
-
-    overrides: dict[tuple[int, int], Any] = {}
-    preserved_strings: set[tuple[int, int]] = set()
-    for entry in entries:
-        if not isinstance(entry, list) or len(entry) != 4:
-            raise MarkdownTableError(
-                "Ungültige interne Typmetadaten in Markdown-Tabelle."
-            )
-        row_index, column_index, kind, raw_value = entry
-        if (
-            isinstance(row_index, bool)
-            or not isinstance(row_index, int)
-            or isinstance(column_index, bool)
-            or not isinstance(column_index, int)
-            or not 0 <= row_index < row_count
-            or not 0 <= column_index < width
-            or (row_index, column_index) in overrides
-        ):
-            raise MarkdownTableError(
-                "Ungültige interne Typmetadaten in Markdown-Tabelle."
-            )
-
-        if kind == "s":
-            if not isinstance(raw_value, str):
-                raise MarkdownTableError(
-                    "Ungültige interne Typmetadaten in Markdown-Tabelle."
-                )
-            value: Any = raw_value
-            preserved_strings.add((row_index, column_index))
-        elif kind == "d":
-            if not isinstance(raw_value, str):
-                raise MarkdownTableError(
-                    "Ungültige interne Typmetadaten in Markdown-Tabelle."
-                )
+def _inline_scalar(token: Token) -> tuple[Any, bool]:
+    children = token.children or []
+    if len(children) == 1 and children[0].type == "code_inline":
+        content = children[0].content
+        if content.startswith(_TYPED_STRING_PREFIX):
+            payload = content[len(_TYPED_STRING_PREFIX):]
             try:
-                value = Decimal(raw_value)
-            except InvalidOperation as exc:
-                raise MarkdownTableError(
-                    "Ungültige interne Typmetadaten in Markdown-Tabelle."
-                ) from exc
-            if not value.is_finite():
-                raise MarkdownTableError(
-                    "Ungültige interne Typmetadaten in Markdown-Tabelle."
-                )
-        else:
-            raise MarkdownTableError(
-                "Ungültige interne Typmetadaten in Markdown-Tabelle."
-            )
+                value = json.loads(payload)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(value, str):
+                    return value, True
 
-        overrides[(row_index, column_index)] = value
+        if content.startswith(_TYPED_DECIMAL_PREFIX):
+            payload = content[len(_TYPED_DECIMAL_PREFIX):]
+            try:
+                value = Decimal(payload)
+            except InvalidOperation:
+                pass
+            else:
+                if value.is_finite():
+                    return value, False
 
-    return overrides, preserved_strings
+    return _inline_text(token), False
 
 
-def _markdown_scalar(value: Any) -> str:
+def _markdown_scalar(
+    value: Any,
+    *,
+    preserve_scalar_type: bool = False,
+) -> str:
     if value is None:
         return ""
+
+    if (
+        preserve_scalar_type
+        and isinstance(value, str)
+        and _string_requires_type_annotation(value)
+    ):
+        payload = json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return _markdown_code_span(_TYPED_STRING_PREFIX + payload)
+
+    if preserve_scalar_type and isinstance(value, Decimal):
+        if not value.is_finite():
+            raise MarkdownTableError(
+                "Dezimalwerte in Markdown-Tabellen müssen endlich sein."
+            )
+        return _markdown_code_span(
+            _TYPED_DECIMAL_PREFIX + str(value)
+        )
+
     if isinstance(value, bool):
         text = "true" if value else "false"
     else:
@@ -353,7 +290,13 @@ def render_markdown_table(
     *,
     preserve_scalar_types: bool = False,
 ) -> str:
-    """Render a canonical Markdown pipe table with a fixed column count."""
+    """Render a canonical Markdown pipe table with a fixed column count.
+
+    When scalar preservation is enabled, values whose plain Markdown spelling
+    is ambiguous are encoded visibly as typed inline-code cells. The type is
+    therefore part of the displayed table instead of hidden metadata that an
+    untrusted document could spoof independently of the visible value.
+    """
 
     if not columns:
         raise MarkdownTableError("Markdown-Tabelle benötigt mindestens eine Spalte.")
@@ -377,15 +320,17 @@ def render_markdown_table(
     for row in rows:
         lines.append(
             "| "
-            + " | ".join(_markdown_scalar(row.get(column)) for column in columns)
+            + " | ".join(
+                _markdown_scalar(
+                    row.get(column),
+                    preserve_scalar_type=preserve_scalar_types,
+                )
+                for column in columns
+            )
             + " |"
         )
 
-    table = "\n".join(lines)
-    if not preserve_scalar_types:
-        return table
-    marker = _encode_scalar_overrides(columns, rows)
-    return table if marker is None else marker + "\n" + table
+    return "\n".join(lines)
 
 
 def extract_markdown_tables(markdown: str) -> list[dict[str, Any]]:
@@ -409,10 +354,13 @@ def extract_markdown_tables(markdown: str) -> list[dict[str, Any]]:
 
         start_line = token.map[0] if token.map is not None else 0
         section: str | None = None
-        current_row: list[str] | None = None
-        current_cell: str | None = None
+        current_row: list[Any] | None = None
+        current_row_preserved_strings: set[int] | None = None
+        current_cell: Any | None = None
+        current_cell_preserved_string = False
         source_headers: list[str] | None = None
-        raw_rows: list[list[str]] = []
+        raw_rows: list[list[Any]] = []
+        raw_preserved_strings: list[set[int]] = []
 
         index += 1
         while index < len(tokens) and tokens[index].type != "table_close":
@@ -428,20 +376,44 @@ def extract_markdown_tables(markdown: str) -> list[dict[str, Any]]:
                 section = None
             elif current.type == "tr_open":
                 current_row = []
+                current_row_preserved_strings = set()
             elif current.type in {"th_open", "td_open"}:
                 current_cell = ""
+                current_cell_preserved_string = False
             elif current.type == "inline" and current_cell is not None:
-                current_cell = _inline_text(current)
+                if section == "body":
+                    (
+                        current_cell,
+                        current_cell_preserved_string,
+                    ) = _inline_scalar(current)
+                else:
+                    current_cell = _inline_text(current)
             elif current.type in {"th_close", "td_close"}:
                 if current_row is not None:
-                    current_row.append((current_cell or "").strip())
+                    value = current_cell
+                    if isinstance(value, str):
+                        value = value.strip()
+                    if (
+                        current_cell_preserved_string
+                        and current_row_preserved_strings is not None
+                    ):
+                        current_row_preserved_strings.add(len(current_row))
+                    current_row.append(value)
                 current_cell = None
+                current_cell_preserved_string = False
             elif current.type == "tr_close" and current_row is not None:
                 if section == "head" and source_headers is None:
-                    source_headers = current_row
+                    source_headers = [
+                        str(value)
+                        for value in current_row
+                    ]
                 elif section == "body":
                     raw_rows.append(current_row)
+                    raw_preserved_strings.append(
+                        set(current_row_preserved_strings or ())
+                    )
                 current_row = None
+                current_row_preserved_strings = None
 
             index += 1
 
@@ -453,23 +425,26 @@ def extract_markdown_tables(markdown: str) -> list[dict[str, Any]]:
         columns = _normalize_headers(source_headers)
         width = len(columns)
         rows: list[dict[str, Any]] = []
-        for raw_row in raw_rows:
+        preserved_strings: set[tuple[int, int]] = set()
+        for row_index, raw_row in enumerate(raw_rows):
             normalized_row = raw_row[:width] + [""] * max(0, width - len(raw_row))
-            rows.append(
-                {
-                    column: (value if value != "" else None)
-                    for column, value in zip(columns, normalized_row, strict=True)
-                }
+            preserved_columns = (
+                raw_preserved_strings[row_index]
+                if row_index < len(raw_preserved_strings)
+                else set()
             )
-
-        marker_line = lines[start_line - 1] if start_line > 0 else ""
-        overrides, preserved_strings = _decode_scalar_overrides(
-            marker_line,
-            width=width,
-            row_count=len(rows),
-        )
-        for (row_index, column_index), value in overrides.items():
-            rows[row_index][columns[column_index]] = value
+            normalized_record: dict[str, Any] = {}
+            for column_index, (column, value) in enumerate(
+                zip(columns, normalized_row, strict=True)
+            ):
+                if column_index in preserved_columns:
+                    normalized_record[column] = value
+                    preserved_strings.add((row_index, column_index))
+                elif isinstance(value, str) and value == "":
+                    normalized_record[column] = None
+                else:
+                    normalized_record[column] = value
+            rows.append(normalized_record)
 
         tables.append(
             {

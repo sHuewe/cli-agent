@@ -767,3 +767,157 @@ def test_decimal_aggregate_jsonl_write_preserves_numeric_text(
     ).read_text(encoding="utf-8").strip() == (
         '{"mean":9007199254740992.5}'
     )
+
+
+
+def test_untrusted_legacy_scalar_override_comment_cannot_change_visible_value() -> None:
+    operations = DataOperations(None)
+    markdown = """<!-- cli-agent:data-overrides:v1:W1swLDAsInMiLCJhdHRhY2tlciJdXQ -->
+| value |
+|---|
+| 5 |
+"""
+
+    result = json.loads(
+        operations.inspect_data(
+            data=markdown,
+            data_format="markdown",
+        )
+    )
+
+    assert result["sample"] == [{"value": 5}]
+    assert result["columns"][0]["dtype"] == "int"
+
+
+def test_lossless_string_chaining_uses_visible_typed_cells() -> None:
+    operations = DataOperations(None)
+    result = operations.select_data(
+        data='[{"value":"001"},{"value":"true"},{"value":""}]',
+        data_format="json",
+    )
+
+    assert '`string:"001"`' in result
+    assert '`string:"true"`' in result
+    assert '`string:""`' in result
+
+    chained = json.loads(
+        operations.inspect_data(
+            data=result,
+            data_format="markdown",
+            sample_rows=3,
+        )
+    )
+    assert [row["value"] for row in chained["sample"]] == [
+        "001",
+        "true",
+        "",
+    ]
+
+
+def test_descending_sort_keeps_nulls_last() -> None:
+    operations = DataOperations(None)
+    result = operations.select_data(
+        data='[{"value":null},{"value":2},{"value":5},{"value":null}]',
+        data_format="json",
+        sort_by=["value"],
+        descending=True,
+    )
+
+    assert _markdown_rows(result) == [
+        {"value": 5},
+        {"value": 2},
+        {"value": None},
+        {"value": None},
+    ]
+
+
+def test_bool_and_numbers_have_distinct_scalar_identity() -> None:
+    operations = DataOperations(None)
+    data = (
+        '[{"id":"t","value":true},'
+        '{"id":"one","value":1},'
+        '{"id":"f","value":false},'
+        '{"id":"zero","value":0}]'
+    )
+
+    equal = operations.select_data(
+        data=data,
+        data_format="json",
+        columns=["id"],
+        filters=[{"column": "value", "op": "eq", "value": 1}],
+    )
+    member = operations.select_data(
+        data=data,
+        data_format="json",
+        columns=["id"],
+        filters=[{"column": "value", "op": "in", "value": [1]}],
+    )
+    inspected = json.loads(
+        operations.inspect_data(
+            data=data,
+            data_format="json",
+            sample_rows=4,
+        )
+    )
+    counts = operations.value_counts(
+        "value",
+        data=data,
+        data_format="json",
+    )
+    grouped = operations.aggregate_data(
+        [{"column": "id", "function": "count", "alias": "count"}],
+        data=data,
+        data_format="json",
+        group_by=["value"],
+    )
+    unique = operations.aggregate_data(
+        [{"column": "value", "function": "nunique", "alias": "unique"}],
+        data=data,
+        data_format="json",
+    )
+
+    assert _markdown_rows(equal) == [{"id": "one"}]
+    assert _markdown_rows(member) == [{"id": "one"}]
+    value_metadata = next(
+        column
+        for column in inspected["columns"]
+        if column["name"] == "value"
+    )
+    assert value_metadata["unique_count"] == 4
+    assert _markdown_rows(counts) == [
+        {"value": True, "count": 1},
+        {"value": 1, "count": 1},
+        {"value": False, "count": 1},
+        {"value": 0, "count": 1},
+    ]
+    assert len(_markdown_rows(grouped)) == 4
+    assert _markdown_rows(unique) == [{"unique": 4}]
+
+
+def test_float_aggregation_rejects_non_finite_result() -> None:
+    operations = DataOperations(None)
+
+    with pytest.raises(DataOperationError, match="endliches Ergebnis"):
+        operations.aggregate_data(
+            [{"column": "value", "function": "sum", "alias": "total"}],
+            data="value\n1e308\n1e308\n",
+            data_format="csv",
+        )
+
+
+def test_failed_non_finite_aggregation_does_not_truncate_output(
+    tmp_path: Path,
+) -> None:
+    operations = _operations(tmp_path)
+    output = tmp_path / "summary.jsonl"
+    output.write_text("keep\n", encoding="utf-8")
+
+    with pytest.raises(DataOperationError, match="endliches Ergebnis"):
+        operations.aggregate_data_to_file(
+            "summary.jsonl",
+            [{"column": "value", "function": "sum", "alias": "total"}],
+            data="value\n1e308\n1e308\n",
+            data_format="csv",
+        )
+
+    assert output.read_text(encoding="utf-8") == "keep\n"

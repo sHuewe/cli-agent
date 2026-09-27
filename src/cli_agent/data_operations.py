@@ -6,7 +6,6 @@ import math
 import statistics
 import io
 from decimal import Decimal, DecimalException, localcontext
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +116,34 @@ def _dtype_name(values: list[Scalar]) -> str:
     if len(kinds) == 1:
         return next(iter(kinds))
     return "mixed"
+
+
+def _scalar_identity(value: Scalar) -> tuple[str, Scalar]:
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, (int, float, Decimal)):
+        return ("number", value)
+    if value is None:
+        return ("null", None)
+    return ("string", value)
+
+
+def _typed_equal(left: Scalar, right: Scalar) -> bool:
+    return _scalar_identity(left) == _scalar_identity(right)
+
+
+def _require_finite_float_result(
+    value: float,
+    *,
+    function: str,
+    column: str,
+) -> float:
+    if not math.isfinite(value):
+        raise DataOperationError(
+            f"Aggregation {function!r} erzeugt kein endliches Ergebnis "
+            f"für Spalte {column!r}."
+        )
+    return value
 
 
 def _json_dumps_precise(value: Any, *, indent: int | None = None) -> str:
@@ -811,9 +838,9 @@ class DataOperations:
             for column, operator, expected in validated:
                 actual = row.get(column)
                 try:
-                    if operator == "eq" and actual != expected:
+                    if operator == "eq" and not _typed_equal(actual, expected):
                         return False
-                    if operator == "ne" and actual == expected:
+                    if operator == "ne" and _typed_equal(actual, expected):
                         return False
                     if operator == "lt" and not (
                         actual is not None and actual < expected
@@ -831,9 +858,15 @@ class DataOperations:
                         actual is not None and actual >= expected
                     ):
                         return False
-                    if operator == "in" and actual not in expected:
+                    if operator == "in" and not any(
+                        _typed_equal(actual, candidate)
+                        for candidate in expected
+                    ):
                         return False
-                    if operator == "not_in" and actual in expected:
+                    if operator == "not_in" and any(
+                        _typed_equal(actual, candidate)
+                        for candidate in expected
+                    ):
                         return False
                     if operator == "is_null" and actual is not None:
                         return False
@@ -864,15 +897,25 @@ class DataOperations:
         if sort_by is None:
             return list(rows)
         selected = DataOperations._require_columns(columns, sort_by)
+        ordered = list(rows)
         try:
-            return sorted(
-                rows,
-                key=lambda row: tuple(
-                    (row.get(column) is None, row.get(column))
-                    for column in selected
-                ),
-                reverse=bool(descending),
-            )
+            for column in reversed(selected):
+                present = [
+                    row
+                    for row in ordered
+                    if row.get(column) is not None
+                ]
+                missing = [
+                    row
+                    for row in ordered
+                    if row.get(column) is None
+                ]
+                present.sort(
+                    key=lambda row: row.get(column),
+                    reverse=bool(descending),
+                )
+                ordered = present + missing
+            return ordered
         except TypeError as exc:
             raise DataOperationError(
                 "Sortierung ist wegen gemischter Datentypen nicht möglich."
@@ -929,7 +972,9 @@ class DataOperations:
                     "name": column,
                     "dtype": _dtype_name(values),
                     "null_count": sum(value is None for value in values),
-                    "unique_count": len(set(values)),
+                    "unique_count": len(
+                        {_scalar_identity(value) for value in values}
+                    ),
                 }
             )
         return _json_dumps_precise(
@@ -995,7 +1040,9 @@ class DataOperations:
         if function == "count":
             return len(present)
         if function == "nunique":
-            return len(set(present))
+            return len(
+                {_scalar_identity(value) for value in present}
+            )
         if function in {"sum", "mean", "median", "std"}:
             if any(
                 isinstance(value, bool)
@@ -1026,16 +1073,31 @@ class DataOperations:
                     float(value)
                     for value in present
                 ]
-                if function == "sum":
-                    return sum(numeric)
-                if function == "mean":
-                    return statistics.fmean(numeric)
-                if function == "median":
-                    return statistics.median(numeric)
-                return (
-                    statistics.stdev(numeric)
-                    if len(numeric) >= 2
-                    else None
+                try:
+                    if function == "sum":
+                        result = sum(numeric)
+                    elif function == "mean":
+                        result = statistics.fmean(numeric)
+                    elif function == "median":
+                        result = statistics.median(numeric)
+                    else:
+                        result = (
+                            statistics.stdev(numeric)
+                            if len(numeric) >= 2
+                            else None
+                        )
+                except (ArithmeticError, ValueError) as exc:
+                    raise DataOperationError(
+                        f"Aggregation {function!r} konnte für Spalte "
+                        f"{column!r} nicht berechnet werden."
+                    ) from exc
+
+                if result is None:
+                    return None
+                return _require_finite_float_result(
+                    float(result),
+                    function=function,
+                    column=column,
                 )
 
             decimal_values = [
@@ -1161,16 +1223,25 @@ class DataOperations:
         )
         filtered = self._apply_filters(rows, columns, filters)
 
-        grouped: dict[tuple[Scalar, ...], list[Record]] = {}
+        grouped: dict[
+            tuple[tuple[str, Scalar], ...],
+            tuple[tuple[Scalar, ...], list[Record]],
+        ] = {}
         if groups:
             for row in filtered:
-                key = tuple(row.get(column) for column in groups)
-                grouped.setdefault(key, []).append(row)
+                values = tuple(row.get(column) for column in groups)
+                identity = tuple(
+                    _scalar_identity(value)
+                    for value in values
+                )
+                if identity not in grouped:
+                    grouped[identity] = (values, [])
+                grouped[identity][1].append(row)
         else:
-            grouped[()] = filtered
+            grouped[()] = ((), filtered)
 
         result_rows: list[Record] = []
-        for key, group_rows in grouped.items():
+        for key, group_rows in grouped.values():
             result: Record = {
                 column: key[index]
                 for index, column in enumerate(groups)
@@ -1254,10 +1325,26 @@ class DataOperations:
                 f"Unbekannte Spalte: {column!r}"
             )
         filtered = self._apply_filters(rows, columns, filters)
-        counts = Counter(row.get(column) for row in filtered)
+        counts: dict[
+            tuple[str, Scalar],
+            tuple[Scalar, int],
+        ] = {}
+        for row in filtered:
+            value = row.get(column)
+            identity = _scalar_identity(value)
+            if identity in counts:
+                original, count = counts[identity]
+                counts[identity] = (original, count + 1)
+            else:
+                counts[identity] = (value, 1)
+
         result_rows: list[Record] = [
             {"value": value, "count": count}
-            for value, count in counts.most_common()
+            for value, count in sorted(
+                counts.values(),
+                key=lambda item: item[1],
+                reverse=True,
+            )
         ]
         return self._result(
             ["value", "count"],

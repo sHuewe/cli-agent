@@ -75,12 +75,15 @@ LLM-Kontext gelangen.
 ### Markdown-Tabellen
 
 Markdown ist das bevorzugte Inline-Format für tabellarische Referenzinhalte und
-für die Weitergabe tabellarischer Ergebnisse zwischen Data-Tools. Vom Data-MCP
-erzeugte Markdown-Tabellen enthalten bei Bedarf interne Typmetadaten. Dadurch
-bleiben insbesondere JSON-Strings wie `"001"`, `"true"` oder `"1e3"`,
-leere Strings und präzise Dezimalergebnisse beim unveränderten Weiterreichen
-zwischen Data-Tools erhalten. Normales Markdown ohne diese Metadaten wird
-weiterhin wie bisher heuristisch typisiert.
+für die Weitergabe tabellarischer Ergebnisse zwischen Data-Tools. Wenn eine
+einfache Markdown-Schreibweise den Skalartyp nicht eindeutig erhalten könnte,
+verwendet der Data-MCP eine sichtbare Typannotation als Inline-Code-Zelle, zum
+Beispiel `string:"001"`, `string:"true"` oder `decimal:1.25`. Dadurch
+bleiben leere bzw. numerisch aussehende Strings und präzise Dezimalergebnisse
+beim unveränderten Weiterreichen erhalten, ohne versteckte Metadaten zu
+vertrauen, die von externem Markdown unabhängig vom sichtbaren Zellwert
+manipuliert werden könnten. Normale unannotierte Zellen werden weiterhin
+heuristisch typisiert.
 
 `extract_markdown_tables(markdown)` nimmt ein vollständiges Markdown-Dokument
 entgegen und sucht darin selbstständig nach Pipe-Tabellen. Das LLM muss die
@@ -182,8 +185,14 @@ berechnet. Für `mean`, `median` und `std` auf reinen Integer-Spalten sowie
 für Aggregationen, die bereits präzise Dezimalwerte enthalten, wird intern
 `Decimal` mit einer an die Größenordnung der Werte angepassten Präzision
 verwendet. Vorhandene Float-Spalten behalten aus Kompatibilitätsgründen ihre
-bisherige Float-Semantik. Präzise Dezimalwerte bleiben beim Markdown-Chaining
-und beim Schreiben von JSONL als numerische Werte erhalten.
+bisherige Float-Semantik; nicht-endliche Aggregationsergebnisse werden jedoch
+abgewiesen. Präzise Dezimalwerte bleiben beim Markdown-Chaining und beim
+Schreiben von JSONL als numerische Werte erhalten.
+
+Boolesche Werte besitzen bei Gleichheit, Membership, Gruppierung und
+Distinct-Zählungen eine eigene skalare Identität und werden daher nicht mit den
+numerischen Werten `0` bzw. `1` zusammengelegt. Bei Sortierungen bleiben
+Nullwerte unabhängig von auf- oder absteigender Sortierrichtung am Ende.
 
 ## Write-Tools
 
