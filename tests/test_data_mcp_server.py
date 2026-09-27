@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,104 +63,155 @@ def _operations(calls):
     )
 
 
-def test_create_server_read_mode_exposes_only_non_mutating_data_tools(
-    monkeypatch,
-) -> None:
+BASE_TOOLS = {
+    "calculate",
+    "extract_markdown_tables",
+    "inspect_data",
+    "select_data",
+    "value_counts",
+    "aggregate_data",
+}
+
+
+def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
 
     server = data_mcp_server.create_server(
         _operations(calls),
-        allow_write=False,
+        access="none",
     )
 
-    assert server.name == "Workspace Data Operations"
-    assert "untrusted data" in server.instructions
-    assert set(server.tools) == {
-        "calculate",
-        "extract_markdown_tables",
-        "inspect_data",
-        "select_data",
-        "value_counts",
-        "aggregate_data",
-    }
-    assert server.tools["calculate"]("2 + 3") == "calculated"
-    assert server.tools["extract_markdown_tables"]("| a |\n|---|\n| 1 |") == "tables"
+    assert set(server.tools) == BASE_TOOLS
+    assert "path" not in inspect.signature(server.tools["inspect_data"]).parameters
+    assert "path" not in inspect.signature(server.tools["select_data"]).parameters
+    assert "path" not in inspect.signature(server.tools["value_counts"]).parameters
+    assert "path" not in inspect.signature(server.tools["aggregate_data"]).parameters
+    assert "Markdown is preferred" in server.instructions
+    assert "Workspace file access is not available" in server.instructions
+
+    assert (
+        server.tools["select_data"](
+            "| a | b |\n|---|---|\n| 1 | 2 |",
+            limit=1,
+        )
+        == "selected"
+    )
+    assert calls == [
+        (
+            "select",
+            None,
+            {
+                "data": "| a | b |\n|---|---|\n| 1 | 2 |",
+                "data_format": "markdown",
+                "table_index": 0,
+                "columns": None,
+                "filters": None,
+                "sort_by": None,
+                "descending": False,
+                "limit": 1,
+            },
+        )
+    ]
+
+
+def test_read_mode_exposes_path_but_not_write_tools(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+
+    server = data_mcp_server.create_server(
+        _operations(calls),
+        access="read",
+    )
+
+    assert set(server.tools) == BASE_TOOLS
+    assert "path" in inspect.signature(server.tools["inspect_data"]).parameters
+    assert "path" in inspect.signature(server.tools["select_data"]).parameters
+    assert "input_path" not in inspect.signature(server.tools["select_data"]).parameters
+    assert "Prefer a workspace path" in server.instructions
+
     assert server.tools["inspect_data"](
         path="data.csv",
         sample_rows=3,
     ) == "inspected"
-    assert (
-        server.tools["value_counts"](
-            "kind",
-            path="data.csv",
-            filters=None,
-            limit=7,
-        )
-        == "counted"
-    )
     assert calls == [
-        ("calculate", "2 + 3"),
-        ("extract_markdown_tables", "| a |\n|---|\n| 1 |"),
         (
             "inspect",
-            "data.csv",
-            {"data": None, "data_format": None, "table": None, "sample_rows": 3},
-        ),
-        (
-            "counts",
-            "kind",
             "data.csv",
             {
                 "data": None,
                 "data_format": None,
-                "table": None,
-                "filters": None,
-                "limit": 7,
+                "table_index": 0,
+                "sample_rows": 3,
             },
-        ),
+        )
     ]
 
 
-def test_create_server_write_mode_adds_only_derived_data_mutations(
-    monkeypatch,
-) -> None:
+def test_write_mode_adds_file_tools_and_prefers_path_workflows(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
 
     server = data_mcp_server.create_server(
         _operations(calls),
-        allow_write=True,
+        access="write",
     )
 
-    assert set(server.tools) == {
-        "calculate",
-        "extract_markdown_tables",
-        "inspect_data",
-        "select_data",
-        "value_counts",
-        "aggregate_data",
+    assert set(server.tools) == BASE_TOOLS | {
         "select_data_to_file",
         "aggregate_data_to_file",
     }
+    assert "path" in inspect.signature(server.tools["inspect_data"]).parameters
+    assert "input_path" in inspect.signature(
+        server.tools["select_data_to_file"]
+    ).parameters
+    assert "Prefer path-based datasets" in server.instructions
+    assert "*_to_file" in server.instructions
+
     assert (
         server.tools["select_data_to_file"](
-            "filtered.csv",
+            "filtered.md",
             input_path="raw.csv",
             columns=["x"],
         )
         == "selected-written"
     )
-    assert (
-        server.tools["aggregate_data_to_file"](
-            "summary.csv",
-            [{"column": "x", "function": "sum"}],
-            input_path="raw.csv",
+    assert calls == [
+        (
+            "select_write",
+            "filtered.md",
+            "raw.csv",
+            {
+                "data": None,
+                "data_format": None,
+                "table_index": 0,
+                "columns": ["x"],
+                "filters": None,
+                "sort_by": None,
+                "descending": False,
+            },
         )
-        == "aggregated-written"
-    )
-    assert calls[0][0] == "select_write"
-    assert calls[1][0] == "aggregate_write"
+    ]
+
+
+def test_extract_tool_description_and_result_are_markdown_oriented(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(_operations(calls), access="none")
+
+    tool = server.tools["extract_markdown_tables"]
+    assert "normalize" in (tool.__doc__ or "").lower()
+    assert tool("| a |\n|---|\n| 1 |") == "tables"
+    assert calls == [
+        ("extract_markdown_tables", "| a |\n|---|\n| 1 |")
+    ]
+
+
+def test_create_server_rejects_unknown_access(monkeypatch) -> None:
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+
+    with pytest.raises(ValueError, match="Unsupported"):
+        data_mcp_server.create_server(_operations([]), access="invalid")
 
 
 def test_parse_args_requires_access_and_reads_workspace_options(
@@ -189,6 +241,24 @@ def test_parse_args_requires_access_and_reads_workspace_options(
     assert args.config_file == config_file
     assert args.access == "write"
     assert args.protected_path == [Path("private.csv")]
+
+
+def test_parse_args_accepts_payload_only_access(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "data-mcp",
+            "--project-directory",
+            str(tmp_path),
+            "--access",
+            "none",
+        ],
+    )
+
+    args = data_mcp_server.parse_args()
+
+    assert args.access == "none"
 
 
 def test_main_uses_shared_workspace_and_runs_stdio(
@@ -251,8 +321,8 @@ def test_main_uses_shared_workspace_and_runs_stdio(
     monkeypatch.setattr(
         data_mcp_server,
         "create_server",
-        lambda actual_operations, *, allow_write: runner
-        if actual_operations is operations and allow_write is True
+        lambda actual_operations, *, access: runner
+        if actual_operations is operations and access == "write"
         else None,
     )
 
@@ -265,96 +335,6 @@ def test_main_uses_shared_workspace_and_runs_stdio(
     assert protected == (tmp_path / "config.toml",)
     assert mutation_protected == (tmp_path / "answer.csv",)
     assert runner.run_transport == "stdio"
-
-
-def test_main_converts_workspace_initialization_error_to_system_exit(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        data_mcp_server,
-        "parse_args",
-        lambda: SimpleNamespace(
-            project_directory=tmp_path,
-            config_file=None,
-            access="read",
-            protected_path=[],
-            mutation_protected_path=[],
-        ),
-    )
-    monkeypatch.setattr(
-        data_mcp_server,
-        "load_config",
-        lambda path: SimpleNamespace(logging=object()),
-    )
-    monkeypatch.setattr(
-        data_mcp_server,
-        "configure_logging",
-        lambda *_args, **_kwargs: None,
-    )
-
-    class WorkspaceFactory:
-        @classmethod
-        def from_directory(cls, *_args, **_kwargs):
-            raise data_mcp_server.WorkspaceError("blocked")
-
-    monkeypatch.setattr(data_mcp_server, "Workspace", WorkspaceFactory)
-
-    with pytest.raises(SystemExit, match="blocked"):
-        data_mcp_server.main()
-
-
-
-def test_create_server_read_tools_accept_inline_payload(monkeypatch) -> None:
-    calls = []
-    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
-    server = data_mcp_server.create_server(
-        _operations(calls),
-        allow_write=False,
-    )
-
-    assert (
-        server.tools["select_data"](
-            data="a,b\n1,2\n",
-            data_format="csv",
-            limit=1,
-        )
-        == "selected"
-    )
-    assert calls == [
-        (
-            "select",
-            None,
-            {
-                "data": "a,b\n1,2\n",
-                "data_format": "csv",
-                "table": None,
-                "columns": None,
-                "filters": None,
-                "sort_by": None,
-                "descending": False,
-                "limit": 1,
-            },
-        )
-    ]
-
-
-def test_parse_args_accepts_payload_only_access(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "data-mcp",
-            "--project-directory",
-            str(tmp_path),
-            "--access",
-            "none",
-        ],
-    )
-
-    args = data_mcp_server.parse_args()
-
-    assert args.access == "none"
 
 
 def test_main_payload_only_mode_does_not_create_workspace(
@@ -401,8 +381,8 @@ def test_main_payload_only_mode_does_not_create_workspace(
     monkeypatch.setattr(
         data_mcp_server,
         "create_server",
-        lambda _operations, *, allow_write: runner
-        if allow_write is False
+        lambda _operations, *, access: runner
+        if access == "none"
         else None,
     )
 
@@ -412,24 +392,38 @@ def test_main_payload_only_mode_does_not_create_workspace(
     assert runner.run_transport == "stdio"
 
 
+def test_main_converts_workspace_initialization_error_to_system_exit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        data_mcp_server,
+        "parse_args",
+        lambda: SimpleNamespace(
+            project_directory=tmp_path,
+            config_file=None,
+            access="read",
+            protected_path=[],
+            mutation_protected_path=[],
+        ),
+    )
+    monkeypatch.setattr(
+        data_mcp_server,
+        "load_config",
+        lambda path: SimpleNamespace(logging=object()),
+    )
+    monkeypatch.setattr(
+        data_mcp_server,
+        "configure_logging",
+        lambda *_args, **_kwargs: None,
+    )
 
-def test_create_server_passes_extracted_table_to_data_tools(monkeypatch) -> None:
-    calls = []
-    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
-    server = data_mcp_server.create_server(_operations(calls), allow_write=False)
-    table = {"columns": ["a"], "rows": [{"a": 1}]}
+    class WorkspaceFactory:
+        @classmethod
+        def from_directory(cls, *_args, **_kwargs):
+            raise data_mcp_server.WorkspaceError("blocked")
 
-    assert server.tools["inspect_data"](table=table) == "inspected"
+    monkeypatch.setattr(data_mcp_server, "Workspace", WorkspaceFactory)
 
-    assert calls == [
-        (
-            "inspect",
-            None,
-            {
-                "data": None,
-                "data_format": None,
-                "table": table,
-                "sample_rows": 5,
-            },
-        )
-    ]
+    with pytest.raises(SystemExit, match="blocked"):
+        data_mcp_server.main()
