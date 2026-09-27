@@ -317,6 +317,7 @@ def prepare_output_target(
     path: Path,
     *,
     overwrite: bool,
+    allow_missing_parent: bool = False,
 ) -> OutputTarget:
     lexical = _lexical_workspace_candidate(workspace, path)
     if path_entry_is_symlink_or_reparse(lexical):
@@ -336,7 +337,8 @@ def prepare_output_target(
             f"Workspace-Pfad geschützt: {resolved}"
         )
     if not resolved.parent.is_dir():
-        raise ValueError(f"Output-Ordner existiert nicht: {resolved.parent}")
+        if not (allow_missing_parent and not resolved.parent.exists()):
+            raise ValueError(f"Output-Ordner existiert nicht: {resolved.parent}")
 
     exists = resolved.exists()
     if exists:
