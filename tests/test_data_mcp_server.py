@@ -91,6 +91,9 @@ def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> Non
     assert "path" not in inspect.signature(server.tools["aggregate_data"]).parameters
     assert "Markdown is preferred" in server.instructions
     assert "Workspace file access is not available" in server.instructions
+    assert "use only\nnormalized tabular output returned by Data MCP tools" in server.instructions
+    assert "Use select_data whenever a subset" in server.instructions
+    assert "Dependent Data MCP calls must wait" in server.instructions
 
     assert (
         server.tools["select_data"](

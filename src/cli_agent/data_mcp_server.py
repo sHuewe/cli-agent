@@ -88,14 +88,21 @@ arithmetic may be answered directly.
 
 {source_guidance}
 
-When relevant reference content contains Markdown tables, use
-extract_markdown_tables to normalize or discover them instead of manually
-reconstructing rows. Inline tabular tools accept Markdown, CSV, TSV, JSON,
-JSONL or NDJSON; Markdown is preferred unless a workspace path is the better
-source. For Markdown containing multiple tables, select one with table_index.
-Tools that return tabular data return normalized Markdown pipe tables so their
-output can be passed directly to another tabular tool with
-data_format="markdown".
+When relevant reference content contains Markdown tables, first use
+extract_markdown_tables to normalize or discover them. After that, use only
+normalized tabular output returned by Data MCP tools as inline data for further
+Data MCP calls. Do not manually reconstruct, copy, merge, relabel, split or
+extract rows, columns or cells in the model and then pass that reconstruction
+back as data. Use select_data whenever a subset, projection or ordering is
+needed, and pass its returned Markdown unchanged to later Data MCP tools.
+Dependent Data MCP calls must wait for the tool result they consume instead of
+reconstructing that expected result in parallel.
+
+Inline tabular tools accept Markdown, CSV, TSV, JSON, JSONL or NDJSON, but for
+reference-content workflows prefer the normalized Markdown emitted by Data MCP.
+For Markdown containing multiple tables, select one with table_index. Tools that
+return tabular data return normalized Markdown pipe tables so their output can be
+passed directly to another tabular tool with data_format="markdown".
 
 Filters use structured objects with column, op and, except for null checks,
 value. Supported operators are eq, ne, lt, lte, gt, gte, in, not_in, is_null,
@@ -166,8 +173,10 @@ def create_server(
             """
             Inspect one inline tabular dataset.
 
-            Prefer data_format="markdown" for reference content and chained
-            tabular tool results. Other supported formats are csv, tsv, json,
+            For reference-content workflows, pass only normalized Markdown
+            returned by a previous Data MCP tool. Normalize raw Markdown first
+            with extract_markdown_tables; do not manually reconstruct or extract
+            a table in the model. Other supported formats are csv, tsv, json,
             jsonl and ndjson. For Markdown with multiple tables, table_index
             selects the table to inspect.
             """
@@ -192,8 +201,11 @@ def create_server(
             """
             Select, filter and sort one inline dataset.
 
-            Prefer Markdown input. The result is normalized Markdown and can be
-            passed directly to another tabular tool with data_format="markdown".
+            For reference-content workflows, use only normalized Markdown
+            returned by a previous Data MCP tool as data. Never manually copy or
+            reconstruct rows or columns in the model. Use this tool itself to
+            create every subset or projection needed for downstream analysis.
+            Pass the returned Markdown unchanged to later tabular tools.
             Filters use the structured column/op/value contract from the tool
             schema. Multiple filters are combined with AND; use op="in" for
             alternatives within one column. No Python, SQL, regex or expressions
@@ -222,7 +234,10 @@ def create_server(
             """
             Count distinct values in one inline dataset column.
 
-            Prefer Markdown input. The result is a normalized Markdown table.
+            For reference-content workflows, use only normalized Markdown
+            returned by a previous Data MCP tool as data. Do not manually
+            reconstruct or extract rows in the model; use select_data first when
+            only a subset is relevant. The result is normalized Markdown.
             """
             return operations.value_counts(
                 column,
@@ -248,8 +263,11 @@ def create_server(
             """
             Deterministically aggregate one inline tabular dataset.
 
-            Prefer Markdown input. The result is normalized Markdown and can be
-            chained into another tabular tool call. Supported functions are
+            For reference-content workflows, use only normalized Markdown
+            returned by a previous Data MCP tool as data. Do not manually
+            reconstruct or extract rows in the model; use select_data first when
+            only a subset is relevant. The result is normalized Markdown and can
+            be chained into another tabular tool call. Supported functions are
             count, sum, mean, min, max, median, nunique and std.
             """
             return operations.aggregate_data(
@@ -278,9 +296,12 @@ def create_server(
             Inspect one tabular dataset from a workspace path or inline data.
 
             Prefer path when the dataset already exists in the workspace.
-            Otherwise prefer inline Markdown. Exactly one source must be used:
-            path, or data plus data_format. For Markdown with multiple tables,
-            table_index selects the table.
+            Otherwise, for reference-content workflows, use only normalized
+            Markdown returned by a previous Data MCP tool as inline data.
+            Normalize raw Markdown first with extract_markdown_tables and do not
+            manually reconstruct or extract a table in the model. Exactly one
+            source must be used: path, or data plus data_format. For Markdown
+            with multiple tables, table_index selects the table.
             """
             return operations.inspect_data(
                 path,
@@ -305,8 +326,12 @@ def create_server(
             """
             Select, filter and sort rows from a workspace path or inline data.
 
-            Prefer path when available; otherwise prefer inline Markdown. The
-            result is normalized Markdown. Filters use the structured
+            Prefer path when available. Otherwise, for reference-content
+            workflows, use only normalized Markdown returned by a previous Data
+            MCP tool as inline data. Never manually copy or reconstruct rows or
+            columns in the model. Use this tool itself to create every subset or
+            projection needed for downstream analysis, and pass its returned
+            Markdown unchanged to later tabular tools. Filters use the structured
             column/op/value contract from the tool schema. Multiple filters are
             combined with AND; use op="in" for alternatives within one column.
             No Python, SQL, regex or expression evaluation is performed.
@@ -336,8 +361,11 @@ def create_server(
             """
             Count distinct values in one dataset column.
 
-            Prefer a workspace path when available; otherwise prefer inline
-            Markdown. The result is a normalized Markdown table.
+            Prefer a workspace path when available. Otherwise, for
+            reference-content workflows, use only normalized Markdown returned
+            by a previous Data MCP tool as inline data. Do not manually
+            reconstruct or extract rows in the model; use select_data first when
+            only a subset is relevant. The result is normalized Markdown.
             """
             return operations.value_counts(
                 column,
@@ -365,9 +393,13 @@ def create_server(
             """
             Deterministically aggregate a workspace path or inline dataset.
 
-            Prefer a workspace path when available; otherwise prefer inline
-            Markdown. The result is normalized Markdown. Supported functions
-            are count, sum, mean, min, max, median, nunique and std.
+            Prefer a workspace path when available. Otherwise, for
+            reference-content workflows, use only normalized Markdown returned
+            by a previous Data MCP tool as inline data. Do not manually
+            reconstruct or extract rows in the model; use select_data first when
+            only a subset is relevant. The result is normalized Markdown.
+            Supported functions are count, sum, mean, min, max, median, nunique
+            and std.
             """
             return operations.aggregate_data(
                 aggregations,
@@ -402,9 +434,12 @@ def create_server(
             For multi-step work this is the preferred transformation path:
             write the derived dataset once, then reuse output_path as path in
             later data tools instead of repeatedly passing inline content.
-            Prefer input_path when the source already exists in the workspace;
-            otherwise prefer inline Markdown. Supported output formats are CSV,
-            TSV, JSONL, NDJSON and Markdown based on output_path suffix.
+            Prefer input_path when the source already exists in the workspace.
+            Otherwise, for reference-content workflows, use only normalized
+            Markdown returned by a previous Data MCP tool as inline data. Do not
+            manually reconstruct or extract rows or columns in the model; use
+            select_data for subsets and projections. Supported output formats are
+            CSV, TSV, JSONL, NDJSON and Markdown based on output_path suffix.
             """
             return operations.select_data_to_file(
                 output_path,
@@ -436,9 +471,12 @@ def create_server(
 
             For multi-step work this is the preferred aggregation path: persist
             the derived result and reuse output_path as path in later calls.
-            Prefer input_path for an existing workspace source; otherwise prefer
-            inline Markdown. Supported output formats are CSV, TSV, JSONL,
-            NDJSON and Markdown based on output_path suffix.
+            Prefer input_path for an existing workspace source. Otherwise, for
+            reference-content workflows, use only normalized Markdown returned
+            by a previous Data MCP tool as inline data. Do not manually
+            reconstruct or extract rows in the model; use select_data first when
+            only a subset is relevant. Supported output formats are CSV, TSV,
+            JSONL, NDJSON and Markdown based on output_path suffix.
             """
             return operations.aggregate_data_to_file(
                 output_path,
