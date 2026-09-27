@@ -266,6 +266,7 @@ id = "discover"
 config = "config-a.toml"
 prompt_file = "prompts/discover.md"
 workspace_access = "read"
+with_data = true
 output = "work/items.json"
 overwrite_output = true
 
@@ -314,8 +315,11 @@ id = "${item.id}"
     assert calls[0].config_file.name == "config-a.toml"
     assert calls[1].config_file.name == "config-b.toml"
     assert calls[0].workspace_access == "read"
+    assert calls[0].with_data is True
     assert calls[1].workspace_access == "write"
+    assert calls[1].with_data is False
     assert calls[2].workspace_access == "write"
+    assert calls[2].with_data is False
     assert calls[1].prompt == "Process one"
     assert calls[2].prompt == "Process two"
     assert (tmp_path / "work" / "one.md").read_text(encoding="utf-8") == "done"
@@ -738,6 +742,52 @@ workspace_access = "{access}"
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
     assert definition.steps[0].workspace_access == access
+
+
+def test_flow_accepts_with_data_and_defaults_to_false(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+with_data = true
+
+[[steps]]
+id = "two"
+config = "config.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    assert definition.steps[0].with_data is True
+    assert definition.steps[1].with_data is False
+
+
+def test_flow_rejects_non_boolean_with_data(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+with_data = "yes"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="with_data"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
 def test_flow_defaults_workspace_access_to_none(tmp_path: Path) -> None:
