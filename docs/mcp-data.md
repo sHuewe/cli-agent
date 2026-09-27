@@ -93,8 +93,9 @@ Inline-Code-Zelle. Der enthaltene Typ-/Wert-Payload wird URL-safe Base64
 kodiert (`cli-agent:data:v1:...`). Dadurch enthält die kanonische Kodierung
 keine Pipe-Delimiter, Backslashes, Backticks oder physischen Zeilenumbrüche.
 Leere bzw. numerisch aussehende Strings, Whitespace, Unicode, Pipes,
-Backslashes, Backticks, Zeilenumbrüche und präzise Dezimalwerte bleiben damit
-beim unveränderten Weiterreichen erhalten. Dasselbe Verfahren wird für
+Backslashes, Backticks, Zeilenumbrüche und weitere CommonMark-Inline-Syntax
+wie Hervorhebungen, Links, Autolinks und Entities bleiben damit beim
+unveränderten Weiterreichen erhalten. Dasselbe Verfahren wird für
 Markdown-Header mit syntaxrelevanten Zeichen verwendet. Normale unannotierte
 Zellen werden weiterhin heuristisch typisiert. Die zentrale Roundtrip-Invariante
 für vom Data-MCP erzeugte Tabellen lautet: ein unterstützter Skalarwert muss

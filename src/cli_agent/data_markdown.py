@@ -21,6 +21,7 @@ _SEPARATOR_CELL = re.compile(r"^:?-{3,}:?$")
 _TYPED_CELL_PREFIX = "cli-agent:data:v1:"
 _LEGACY_TYPED_STRING_PREFIX = "string:"
 _LEGACY_TYPED_DECIMAL_PREFIX = "decimal:"
+_MARKDOWN_INLINE_CONTROL_CHARS = frozenset("\\|`*_[]<>&")
 
 
 class MarkdownTableError(ValueError):
@@ -265,11 +266,20 @@ def _normalize_markdown_input(
     return _normalize_table_separator_widths(normalized)
 
 
+def _contains_markdown_inline_syntax(value: str) -> bool:
+    return any(
+        character in _MARKDOWN_INLINE_CONTROL_CHARS
+        for character in value
+    )
+
+
 def _string_requires_type_annotation(value: str) -> bool:
     if (
         value == ""
         or value != value.strip()
-        or any(character in value for character in "\\|\r\n")
+        or "\r" in value
+        or "\n" in value
+        or _contains_markdown_inline_syntax(value)
     ):
         return True
 
@@ -409,7 +419,11 @@ def _inline_scalar(token: Token) -> tuple[Any, bool]:
 
 
 def _markdown_header(value: str) -> str:
-    if any(character in value for character in "\\|`\r\n"):
+    if (
+        "\r" in value
+        or "\n" in value
+        or _contains_markdown_inline_syntax(value)
+    ):
         return _encode_typed_cell("h", value)
     return _markdown_scalar(value)
 
