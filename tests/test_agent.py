@@ -674,6 +674,76 @@ def test_agent_rejects_unknown_response_format(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        '```json\n{"ok":true}\n```',
+        '```JSON\n{"ok":true}\n```',
+        '```\n{"ok":true}\n```',
+        '  \n```json\n{"ok":true}\n```\n  ',
+    ],
+)
+def test_json_response_format_accepts_single_json_code_fence_without_repair(
+    tmp_path: Path,
+    answer: str,
+) -> None:
+    model = RecordingModel(
+        [{"role": "assistant", "content": answer}]
+    )
+    agent = CliAgent(
+        tmp_path,
+        model,
+        (),
+        response_format="json",
+    )
+    agent._exit_stack = SimpleNamespace()
+
+    result = asyncio.run(agent.ask("Antworte als JSON."))
+
+    assert result == '{"ok":true}'
+    assert len(model.calls) == 1
+    assert agent.history[-1] == {
+        "role": "assistant",
+        "content": '{"ok":true}',
+    }
+
+
+@pytest.mark.parametrize(
+    "invalid_answer",
+    [
+        'Ergebnis:\n\n```json\n{"ok":true}\n```',
+        '```javascript\n{"ok":true}\n```',
+        '```json\n{"ok":true}\n```\nextra',
+        '```json\n{"ok":true}\n```\n```json\n{"other":1}\n```',
+        '```json\n{invalid}\n```',
+        '```json\nNaN\n```',
+    ],
+)
+def test_json_response_format_does_not_overrepair_markdown(
+    tmp_path: Path,
+    invalid_answer: str,
+) -> None:
+    model = RecordingModel(
+        [
+            {"role": "assistant", "content": invalid_answer},
+            {"role": "assistant", "content": '{"ok":true}'},
+        ]
+    )
+    agent = CliAgent(
+        tmp_path,
+        model,
+        (),
+        response_format="json",
+    )
+    agent._exit_stack = SimpleNamespace()
+
+    result = asyncio.run(agent.ask("Antworte als JSON."))
+
+    assert result == '{"ok":true}'
+    assert len(model.calls) == 2
+    assert "Korrigiere die Antwort jetzt" in model.calls[1][0][-1]["content"]
+
+
 def test_json_response_repair_keeps_tools_and_tool_history(tmp_path: Path) -> None:
     model = RecordingModel(
         [

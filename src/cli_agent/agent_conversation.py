@@ -19,6 +19,10 @@ from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
 logger = logging.getLogger("cli_agent.agent_conversation")
 MAX_RESPONSE_FORMAT_REPAIRS = 2
+_JSON_CODE_FENCE = re.compile(
+    r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*)\r?\n```[ \t]*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _json_validation_error(answer: str) -> str | None:
@@ -30,6 +34,30 @@ def _json_validation_error(answer: str) -> str | None:
     except (json.JSONDecodeError, ValueError) as exc:
         return str(exc)
     return None
+
+
+def _normalize_json_response(answer: str) -> tuple[str, str | None]:
+    """Return valid JSON text, unwrapping only one exact Markdown code block.
+
+    Plain valid JSON is returned unchanged. If the complete response consists
+    only of a single fenced code block labelled ```json (case-insensitive) or
+    an unlabeled ``` block, its body is accepted only when that body itself is
+    valid JSON. No prose stripping or JSON repair is attempted.
+    """
+
+    error = _json_validation_error(answer)
+    if error is None:
+        return answer, None
+
+    fenced = _JSON_CODE_FENCE.fullmatch(answer.strip())
+    if fenced is None:
+        return answer, error
+
+    candidate = fenced.group("body").strip()
+    fenced_error = _json_validation_error(candidate)
+    if fenced_error is not None:
+        return answer, fenced_error
+    return candidate, None
 
 
 class ConversationMixin:
@@ -86,7 +114,7 @@ class ConversationMixin:
             run_state=main_run_state,
         )
         if getattr(self, "response_format", "text") == "json":
-            last_error = _json_validation_error(answer)
+            answer, last_error = _normalize_json_response(answer)
             repairs = 0
             while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
                 repairs += 1
@@ -115,7 +143,7 @@ class ConversationMixin:
                     phase="main",
                     run_state=main_run_state,
                 )
-                last_error = _json_validation_error(answer)
+                answer, last_error = _normalize_json_response(answer)
 
             if last_error is not None:
                 raise ValueError(

@@ -239,8 +239,17 @@ es gibt bewusst keine Resume-Checkpoints pro Conversation-Turn.
 
 `response_format` steuert das erwartete finale Antwortformat eines Schritts.
 Ohne Angabe gilt `"text"`. Mit `response_format = "json"` ergänzt der Agent
-eine entsprechende Systemanweisung, akzeptiert als finale Antwort nur
-syntaktisch gültiges JSON und fordert das Modell bei einem Formatfehler bis zu
+eine entsprechende Systemanweisung und verarbeitet als Ergebnis ausschließlich
+syntaktisch gültiges JSON. Liefert ein Modell trotz dieser Anweisung genau
+einen Markdown-Codeblock mit `json`-Kennzeichnung (Groß-/Kleinschreibung
+unabhängig) oder einen einzelnen unbeschrifteten Codeblock, wird ausschließlich
+der äußere Fence entfernt, sofern dessen unveränderter Inhalt bereits gültiges
+JSON ist. Der so entpackte JSON-Text wird als eigentliche Assistant-Antwort
+weiterverarbeitet und gegebenenfalls in `output` geschrieben. Einleitungstext,
+Nachtext, mehrere Codeblöcke, andere Codeblock-Sprachen oder inhaltlich
+fehlerhaftes JSON werden nicht automatisch repariert.
+
+Bei einem verbleibenden Formatfehler fordert der Agent das Modell bis zu
 zweimal zur Korrektur auf. Die Korrektur erfolgt im selben Agentenlauf mit
 derselben Conversation-Historie und denselben verfügbaren Tools. Das
 Tool-Aufruflimit gilt gemeinsam für Initialantwort und Korrekturversuche; auch
