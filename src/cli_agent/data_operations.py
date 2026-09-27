@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .data_calculator import CalculatorError, calculate_expression
+from .data_markdown import MarkdownTableError, extract_markdown_tables
 from .os_operations import Workspace, WorkspaceError
 
 DATA_SUFFIXES = frozenset({".csv", ".tsv", ".jsonl", ".ndjson"})
@@ -151,17 +152,88 @@ class DataOperations:
             )
         return value
 
+    @staticmethod
+    def extract_markdown_tables(markdown: str) -> str:
+        if not isinstance(markdown, str):
+            raise DataOperationError("markdown muss ein String sein.")
+        if len(markdown) > MAX_DATA_PAYLOAD_CHARS:
+            raise DataOperationError(
+                "Markdown überschreitet das Limit von "
+                f"{MAX_DATA_PAYLOAD_CHARS} Zeichen."
+            )
+        try:
+            tables = extract_markdown_tables(markdown)
+        except MarkdownTableError as exc:
+            raise DataOperationError(str(exc)) from exc
+        return json.dumps(
+            {"table_count": len(tables), "tables": tables},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    @staticmethod
+    def _read_table(table: dict[str, Any]) -> tuple[list[str], list[Record]]:
+        if not isinstance(table, dict):
+            raise DataOperationError("table muss ein Objekt sein.")
+        columns = table.get("columns")
+        raw_rows = table.get("rows")
+        if (
+            not isinstance(columns, list)
+            or not columns
+            or not all(isinstance(column, str) and column for column in columns)
+            or len(columns) != len(set(columns))
+        ):
+            raise DataOperationError(
+                "table.columns muss eine nicht-leere Liste eindeutiger "
+                "Spaltennamen sein."
+            )
+        if not isinstance(raw_rows, list):
+            raise DataOperationError("table.rows muss eine Liste sein.")
+        if len(raw_rows) > MAX_DATA_ROWS:
+            raise DataOperationError(
+                "Tabellendaten überschreiten das Zeilenlimit von "
+                f"{MAX_DATA_ROWS}."
+            )
+        rows: list[Record] = []
+        for index, raw_row in enumerate(raw_rows, start=1):
+            if not isinstance(raw_row, dict):
+                raise DataOperationError(
+                    f"table.rows Eintrag {index} muss ein Objekt sein."
+                )
+            extras = set(raw_row) - set(columns)
+            if extras:
+                raise DataOperationError(
+                    f"table.rows Eintrag {index} enthält unbekannte Spalten: "
+                    + ", ".join(sorted(str(value) for value in extras))
+                )
+            rows.append(
+                {
+                    column: _json_scalar(raw_row.get(column))
+                    for column in columns
+                }
+            )
+        return list(columns), rows
+
     def _read_records(
         self,
         path: str | None = None,
         *,
         data: str | None = None,
         data_format: str | None = None,
+        table: dict[str, Any] | None = None,
     ) -> tuple[list[str], list[Record]]:
-        if (path is None) == (data is None):
+        source_count = sum(source is not None for source in (path, data, table))
+        if source_count != 1:
             raise DataOperationError(
-                "Genau eine Datenquelle muss angegeben werden: path oder data."
+                "Genau eine Datenquelle muss angegeben werden: path, data oder table."
             )
+
+        if table is not None:
+            if data_format is not None:
+                raise DataOperationError(
+                    "data_format darf nicht zusammen mit table verwendet werden."
+                )
+            return self._read_table(table)
 
         if data is not None:
             if not isinstance(data, str):
@@ -659,6 +731,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
+        table: dict[str, Any] | None = None,
         sample_rows: int = 5,
     ) -> str:
         sample_rows = self._validate_limit(
@@ -670,6 +743,7 @@ class DataOperations:
             path,
             data=data,
             data_format=data_format,
+            table=table,
         )
         metadata = []
         for column in columns:
@@ -684,7 +758,13 @@ class DataOperations:
             )
         return json.dumps(
             {
-                "source": path if path is not None else f"inline:{data_format}",
+                "source": (
+                    path
+                    if path is not None
+                    else "table"
+                    if table is not None
+                    else f"inline:{data_format}"
+                ),
                 "row_count": len(rows),
                 "columns": metadata,
                 "sample": rows[:sample_rows],
@@ -699,6 +779,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
+        table: dict[str, Any] | None = None,
         columns: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
@@ -710,6 +791,7 @@ class DataOperations:
             path,
             data=data,
             data_format=data_format,
+            table=table,
         )
         selected_columns = self._require_columns(source_columns, columns)
         filtered = self._apply_filters(rows, source_columns, filters)
@@ -835,6 +917,7 @@ class DataOperations:
         *,
         data: str | None,
         data_format: str | None,
+        table: dict[str, Any] | None,
         group_by: list[str] | None,
         aggregations: list[dict[str, str]],
         filters: list[dict[str, Any]] | None,
@@ -845,6 +928,7 @@ class DataOperations:
             path,
             data=data,
             data_format=data_format,
+            table=table,
         )
         groups = (
             []
@@ -899,6 +983,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
+        table: dict[str, Any] | None = None,
         group_by: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
@@ -910,6 +995,7 @@ class DataOperations:
             path,
             data=data,
             data_format=data_format,
+            table=table,
             group_by=group_by,
             aggregations=aggregations,
             filters=filters,
@@ -929,6 +1015,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
+        table: dict[str, Any] | None = None,
         filters: list[dict[str, Any]] | None = None,
         limit: int = 50,
     ) -> str:
@@ -940,6 +1027,7 @@ class DataOperations:
             path,
             data=data,
             data_format=data_format,
+            table=table,
         )
         if column not in columns:
             raise DataOperationError(
@@ -964,6 +1052,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
+        table: dict[str, Any] | None = None,
         columns: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
@@ -973,6 +1062,7 @@ class DataOperations:
             input_path,
             data=data,
             data_format=data_format,
+            table=table,
         )
         selected_columns = self._require_columns(
             source_columns,
@@ -1010,6 +1100,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
+        table: dict[str, Any] | None = None,
         group_by: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
@@ -1019,6 +1110,7 @@ class DataOperations:
             input_path,
             data=data,
             data_format=data_format,
+            table=table,
             group_by=group_by,
             aggregations=aggregations,
             filters=filters,
