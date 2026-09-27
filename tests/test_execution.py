@@ -12,6 +12,7 @@ from cli_agent.execution import (
     ConversationRunOptions,
     ExecutionDependencies,
     OneShotRunOptions,
+    apply_data_override,
     apply_workspace_access_override,
     build_preapproval_callback,
     run_conversation,
@@ -667,3 +668,177 @@ def test_run_conversation_rejects_empty_or_blank_prompts(
                 )
             )
         )
+
+
+
+
+def test_data_server_access_is_derived_from_workspace_access() -> None:
+    none = apply_data_override(
+        _config(),
+        enabled=True,
+        workspace_access=None,
+    )
+    read = apply_data_override(
+        _config(),
+        enabled=True,
+        workspace_access="read",
+    )
+    write = apply_data_override(
+        _config(),
+        enabled=True,
+        workspace_access="write",
+    )
+
+    assert none.mcp_servers[0].name == "data"
+    assert none.mcp_servers[0].allow_write_files() is False
+    assert none.mcp_servers[0].args[-2:] == ("--access", "none")
+
+    assert read.mcp_servers[0].name == "data"
+    assert read.mcp_servers[0].allow_write_files() is False
+    assert read.mcp_servers[0].args[-2:] == ("--access", "read")
+
+    assert write.mcp_servers[0].name == "data"
+    assert write.mcp_servers[0].allow_write_files() is True
+    assert write.mcp_servers[0].args[-2:] == ("--access", "write")
+
+
+def test_data_override_is_noop_when_disabled() -> None:
+    config = _config()
+
+    result = apply_data_override(
+        config,
+        enabled=False,
+        workspace_access="write",
+    )
+
+    assert result is config
+
+
+def test_data_write_passes_workspace_protections_to_data_server(
+    tmp_path: Path,
+) -> None:
+    protected = (tmp_path / "private.csv").resolve()
+    mutation_protected = (tmp_path / "answer.csv").resolve()
+
+    config = apply_data_override(
+        _config(),
+        enabled=True,
+        workspace_access="write",
+        excluded_paths=(protected,),
+        mutation_protected_paths=(mutation_protected,),
+    )
+
+    server = config.mcp_servers[0]
+    assert server.name == "data"
+    assert server.allow_write_files() is True
+    assert server.literal_args == (
+        "--protected-path",
+        str(protected),
+        "--mutation-protected-path",
+        str(mutation_protected),
+    )
+
+
+def test_data_none_does_not_receive_workspace_protection_paths(
+    tmp_path: Path,
+) -> None:
+    protected = (tmp_path / "private.csv").resolve()
+
+    config = apply_data_override(
+        _config(),
+        enabled=True,
+        workspace_access=None,
+        excluded_paths=(protected,),
+    )
+
+    server = config.mcp_servers[0]
+    assert server.args[-2:] == ("--access", "none")
+    assert server.literal_args == ()
+
+
+def test_run_once_enables_payload_only_data_server_without_os_access(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        def __init__(self, _workspace, _model_client, servers, **_kwargs):
+            captured["servers"] = servers
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            return "usage" if prompt == "tokens" else "answer"
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+
+    asyncio.run(
+        run_once(
+            OneShotRunOptions(
+                workspace=tmp_path,
+                prompt="analyze",
+                with_data=True,
+            ),
+            dependencies=dependencies,
+        )
+    )
+
+    servers = captured["servers"]
+    assert len(servers) == 1
+    assert servers[0].name == "data"
+    assert servers[0].args[-2:] == ("--access", "none")
+    assert servers[0].allow_write_files() is False
+
+
+def test_run_once_combines_os_read_and_data_read(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAgent:
+        def __init__(self, _workspace, _model_client, servers, **_kwargs):
+            captured["servers"] = servers
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            return "usage" if prompt == "tokens" else "answer"
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+
+    asyncio.run(
+        run_once(
+            OneShotRunOptions(
+                workspace=tmp_path,
+                prompt="analyze",
+                workspace_access="read",
+                with_data=True,
+            ),
+            dependencies=dependencies,
+        )
+    )
+
+    servers = captured["servers"]
+    assert [server.name for server in servers] == ["os", "data"]
+    assert servers[0].args[-2:] == ("--access", "read")
+    assert servers[1].args[-2:] == ("--access", "read")

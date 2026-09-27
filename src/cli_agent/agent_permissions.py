@@ -7,5 +7,7 @@ WRITE_TOOLS = frozenset(
         "make_directory",
         "copy_file",
         "move_file",
+        "select_data_to_file",
+        "aggregate_data_to_file",
     }
 )

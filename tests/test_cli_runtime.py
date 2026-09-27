@@ -97,6 +97,23 @@ def test_approve_tool_call_normalizes_yes_and_no(monkeypatch, answer, expected) 
     assert asyncio.run(cli_module.approve_tool_call("tool", {})) is expected
 
 
+def test_parser_combines_data_with_os_access_modes() -> None:
+    payload_only = cli_module.build_parser().parse_args(["--with-data"])
+    read = cli_module.build_parser().parse_args(
+        ["--with-os-read", "--with-data"]
+    )
+    write = cli_module.build_parser().parse_args(
+        ["--with-os-write", "--with-data"]
+    )
+
+    assert payload_only.with_data is True
+    assert payload_only.os_access is None
+    assert read.with_data is True
+    assert read.os_access == "read"
+    assert write.with_data is True
+    assert write.os_access == "write"
+
+
 def test_invalid_os_access_mode_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unsupported OS MCP access mode"):
         cli_module._os_mcp_server_config("admin")

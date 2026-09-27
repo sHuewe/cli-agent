@@ -266,6 +266,7 @@ id = "discover"
 config = "config-a.toml"
 prompt_file = "prompts/discover.md"
 workspace_access = "read"
+with_data = true
 output = "work/items.json"
 overwrite_output = true
 
@@ -314,8 +315,11 @@ id = "${item.id}"
     assert calls[0].config_file.name == "config-a.toml"
     assert calls[1].config_file.name == "config-b.toml"
     assert calls[0].workspace_access == "read"
+    assert calls[0].with_data is True
     assert calls[1].workspace_access == "write"
+    assert calls[1].with_data is False
     assert calls[2].workspace_access == "write"
+    assert calls[2].with_data is False
     assert calls[1].prompt == "Process one"
     assert calls[2].prompt == "Process two"
     assert (tmp_path / "work" / "one.md").read_text(encoding="utf-8") == "done"
@@ -738,6 +742,52 @@ workspace_access = "{access}"
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
     assert definition.steps[0].workspace_access == access
+
+
+def test_flow_accepts_with_data_and_defaults_to_false(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+with_data = true
+
+[[steps]]
+id = "two"
+config = "config.toml"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    assert definition.steps[0].with_data is True
+    assert definition.steps[1].with_data is False
+
+
+def test_flow_rejects_non_boolean_with_data(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+with_data = "yes"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="with_data"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
 def test_flow_defaults_workspace_access_to_none(tmp_path: Path) -> None:
@@ -1420,6 +1470,31 @@ add_file_context = "context.txt"
     assert set(seen[0].mutation_protected_paths) == expected
     assert set(seen[1].mutation_protected_paths) == expected
 
+def test_validate_flow_accepts_missing_static_output_directories(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "one"
+config = "config.toml"
+prompt_file = "prompt.md"
+output = "states/match/result.json"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    validate_flow(definition, workspace=tmp_path)
+
+    assert not (tmp_path / "states").exists()
+
+
 def test_validate_flow_rejects_duplicate_static_output_without_overwrite(
     tmp_path: Path,
 ) -> None:
@@ -1461,10 +1536,6 @@ output = "./result.txt"
         (
             '{"items":[{"path":"ok.md"},{"path":"existing.md"}]}',
             "existiert bereits",
-        ),
-        (
-            '{"items":[{"path":"ok.md"},{"path":"missing/out.md"}]}',
-            "Output-Ordner existiert nicht",
         ),
     ],
 )
@@ -1516,6 +1587,63 @@ output = "${item.path}"
 
     assert len(calls) == 1
     assert calls[0].prompt == "discover"
+
+
+def test_flow_creates_missing_dynamic_output_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+config = "config.toml"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+config = "config.toml"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+response_format = "json"
+output = "states/${item.state}/players/${item.id}.json"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"state":"match-2026-09-27","id":"alice"}]}',
+                web_context_statuses=(),
+            )
+        answer = '{"ok":true}'
+        assert options.output is not None
+        options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    output = (
+        tmp_path
+        / "states"
+        / "match-2026-09-27"
+        / "players"
+        / "alice.json"
+    )
+    assert output.read_text(encoding="utf-8") == '{"ok":true}'
 
 
 def test_flow_response_format_defaults_to_text(tmp_path: Path) -> None:

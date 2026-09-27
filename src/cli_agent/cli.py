@@ -26,6 +26,8 @@ from .execution import (
     apply_model_override,
     build_preapproval_callback,
     apply_workspace_access_override,
+    apply_data_override,
+    data_mcp_server_config,
     os_mcp_server_config,
     run_once,
     resolve_excluded_paths,
@@ -37,6 +39,7 @@ from .prompt_template import PromptTemplate, parse_variable_assignments
 from .terminal_output import sanitize_terminal_text
 
 OS_MCP_SERVER_NAME = "os"
+DATA_MCP_SERVER_NAME = "data"
 REDACTED_CONFIG_VALUE = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"
 logger = logging.getLogger("cli_agent.cli")
 
@@ -117,15 +120,24 @@ def build_parser() -> argparse.ArgumentParser:
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
     parser.add_argument(
+        "--with-data",
+        action="store_true",
+        help=(
+            "Enable the built-in Data MCP server. Its workspace file access "
+            "follows --with-os-read/--with-os-write; without OS access it "
+            "accepts only inline data payloads."
+        ),
+    )
+    parser.add_argument(
         "--exclude-path",
         action="append",
         type=Path,
         default=[],
         metavar="PATH",
         help=(
-            "Hide one workspace-relative file or directory from the built-in "
-            "OS MCP server. The path cannot be read, listed, searched or "
-            "modified. Repeat for multiple paths."
+            "Hide one workspace-relative file or directory from enabled built-in "
+            "OS/Data MCP servers. The path cannot be read or modified through "
+            "those servers. Repeat for multiple paths."
         ),
     )
     parser.add_argument(
@@ -174,9 +186,23 @@ def _os_mcp_server_config(access: str) -> McpServerConfig:
     return os_mcp_server_config(access)
 
 
-def apply_mcp_cli_overrides(config: AppConfig, *, os_access: str | None) -> AppConfig:
-    return apply_workspace_access_override(
+def _data_mcp_server_config(access: str) -> McpServerConfig:
+    return data_mcp_server_config(access)
+
+
+def apply_mcp_cli_overrides(
+    config: AppConfig,
+    *,
+    os_access: str | None,
+    with_data: bool = False,
+) -> AppConfig:
+    config = apply_workspace_access_override(
         config,
+        workspace_access=os_access,
+    )
+    return apply_data_override(
+        config,
+        enabled=with_data,
         workspace_access=os_access,
     )
 
@@ -419,11 +445,20 @@ async def run(args: argparse.Namespace) -> None:
 
     excluded_paths = tuple(getattr(args, "exclude_path", ()) or ())
     if excluded_paths and args.os_access not in {"read", "write"}:
-        raise ValueError("--exclude-path benötigt --with-os-read oder --with-os-write.")
+        raise ValueError(
+            "--exclude-path benötigt --with-os-read oder --with-os-write."
+        )
+    resolved_excluded_paths = resolve_excluded_paths(workspace, excluded_paths)
     config = apply_workspace_access_override(
         config,
         workspace_access=args.os_access,
-        excluded_paths=resolve_excluded_paths(workspace, excluded_paths),
+        excluded_paths=resolved_excluded_paths,
+    )
+    config = apply_data_override(
+        config,
+        enabled=bool(getattr(args, "with_data", False)),
+        workspace_access=args.os_access,
+        excluded_paths=resolved_excluded_paths,
     )
 
     prompt_file_arg = getattr(args, "prompt_file", None)
@@ -543,6 +578,7 @@ async def run(args: argparse.Namespace) -> None:
                 config_file=args.config,
                 model=args.model,
                 workspace_access=args.os_access,
+                with_data=bool(getattr(args, "with_data", False)),
                 response_format=getattr(args, "response_format", "text"),
                 add_web_context=tuple(getattr(args, "add_web_context", ()) or ()),
                 approval_callback=approval_callback,

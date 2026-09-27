@@ -19,6 +19,16 @@ def _workspace(tmp_path):
     )
 
 
+def test_workspace_rejects_windows_root_relative_path(tmp_path: Path) -> None:
+    workspace = Workspace.from_directory(
+        tmp_path,
+        McpServerConfig(name="os"),
+    )
+
+    with pytest.raises(WorkspaceError, match="relativ"):
+        workspace.resolve_path(r"\\outside.txt", must_exist=False)
+
+
 def test_list_files_empty_sorted_and_relative(tmp_path):
     workspace = _workspace(tmp_path)
     assert workspace.list_files(".") == "(Ordner ist leer)"
