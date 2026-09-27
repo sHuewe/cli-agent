@@ -156,13 +156,22 @@ def _normalize_markdown_input(markdown: str) -> str:
 
     Reference contexts are serialized as JSON before they reach the model. A
     model may copy visible \\n escape sequences literally into a tool argument
-    instead of emitting real line breaks. Decode only newline escapes, and only
-    when the input contains no real line break at all. Other escape sequences
-    remain untouched data.
+    instead of emitting real line breaks. Always decode a literal newline when
+    it occurs between two pipe-table rows. If the whole payload contains no
+    real line break, retain the previous conservative fallback and decode its
+    newline escapes. Other escape sequences remain untouched data.
     """
 
     normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
-    if "\n" not in normalized and "\\n" in normalized:
+    had_real_newline = "\n" in normalized
+
+    normalized = re.sub(
+        r"(?<=\\|)\\\\r?\\\\n(?=\\s*\\|)",
+        "\n",
+        normalized,
+    )
+
+    if not had_real_newline and "\\n" in normalized:
         normalized = normalized.replace("\\r\\n", "\n")
         normalized = normalized.replace("\\n", "\n")
     return _normalize_table_separator_widths(normalized)
