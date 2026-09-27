@@ -378,6 +378,49 @@ def test_inline_json_rejects_nested_values() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("data_format", "data"),
+    [
+        ("json", '[{"value":NaN}]'),
+        ("json", '[{"value":Infinity}]'),
+        ("json", '[{"value":-Infinity}]'),
+        ("json", '[{"value":1e400}]'),
+        ("jsonl", '{"value":NaN}\n'),
+        ("jsonl", '{"value":Infinity}\n'),
+        ("jsonl", '{"value":-Infinity}\n'),
+        ("jsonl", '{"value":1e400}\n'),
+    ],
+)
+def test_inline_json_rejects_non_finite_numbers(
+    data_format: str,
+    data: str,
+) -> None:
+    with pytest.raises(DataOperationError, match="nicht-endliche Zahl"):
+        DataOperations(None).inspect_data(
+            data=data,
+            data_format=data_format,
+        )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"value":NaN}\n',
+        '{"value":Infinity}\n',
+        '{"value":-Infinity}\n',
+        '{"value":1e400}\n',
+    ],
+)
+def test_jsonl_file_rejects_non_finite_numbers(
+    tmp_path: Path,
+    content: str,
+) -> None:
+    (tmp_path / "bad.jsonl").write_text(content, encoding="utf-8")
+
+    with pytest.raises(DataOperationError, match="nicht-endliche Zahl"):
+        _operations(tmp_path).inspect_data("bad.jsonl")
+
+
 
 @pytest.mark.parametrize(
     ("expression", "expected"),
