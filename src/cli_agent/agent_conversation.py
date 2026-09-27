@@ -67,6 +67,10 @@ class ConversationMixin:
                 {"role": "user", "content": reference_context}
             )
         working_messages.append({"role": "user", "content": prompt})
+        # Keep the actual main-loop list available for local diagnostics such as
+        # the Web UI. The list is intentionally retained by reference while the
+        # run is active so tool/repair messages are reflected immediately.
+        self._last_working_messages = working_messages
 
         tools = self._model_tools()
         routes = self._tool_routes
@@ -128,6 +132,11 @@ class ConversationMixin:
         )
         self._dump_context(working_messages, phase="main")
         return answer
+
+    def working_messages_snapshot(self) -> list[dict[str, Any]]:
+        """Return a detached snapshot of the latest/current main-loop messages."""
+
+        return copy.deepcopy(getattr(self, "_last_working_messages", []))
 
     def _reference_context_payload(self, *, knowledge: str | None) -> dict[str, Any]:
         payload: dict[str, Any] = {}

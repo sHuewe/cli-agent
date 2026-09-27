@@ -215,6 +215,40 @@ Der Knowledge-Lauf erhält ausschließlich die beiden internen Read-only-Tools `
 
 **Gelöst:** Docker Compose und Python Validator wurden vollständig aus dem Core-Paket entfernt und in das separate Repository/Paket `cli-agent-mcp` ausgelagert. Der Core hat keine entsprechenden Entry Points oder direkte Docker-Abhängigkeit mehr. Wer diese optionalen MCPs installiert, muss sie separat prüfen und als konkretes stdio-Launchprofil in der Admin-Policy freigeben.
 
+### Optionale lokale Web-UI
+
+**Threat Model:** Eine Browser-UI für einen Agenten mit Workspace- und
+MCP-Fähigkeiten darf keine neue Remote-Steuerungsmöglichkeit schaffen. Bereits
+ein versehentliches Binden an alle Interfaces würde insbesondere bei
+`--with-os-write` die lokale Vertrauensgrenze grundlegend verändern.
+
+**Erster Entwurf:** Die Web-UI ist ein optionales Installations-Extra und wird
+nur mit `--with-web-ui` aktiviert. Der Uvicorn-Server bindet im Code fest an
+IPv4-Loopback `127.0.0.1`; Host, Share-/Tunnel-Modus und statische
+Workspace-Verzeichnisse sind nicht konfigurierbar. Der Browser erhält einen
+kryptographisch zufälligen Prozess-Token im URL-Fragment. Das Fragment wird
+nicht als HTTP-Request an den Server gesendet; JavaScript verwendet den Token
+anschließend ausschließlich zum Aufbau des lokalen WebSockets. Der Server
+akzeptiert den WebSocket nur bei passendem Token und exakt passendem
+localhost-Origin. Zusätzlich ist nur eine Browser-Verbindung und nur ein
+Agent-Prompt gleichzeitig zulässig.
+
+Die UI besitzt keine eigene Berechtigungslogik. Sie verwendet denselben
+`WebContextCliAgent` und dieselbe Admin-, Netzwerk-, MCP-, Workspace- und
+Sensitive-Path-Policy wie der Terminalmodus. `--approve-tool` bleibt eine
+explizite prozesslokale Vorabfreigabe. Andere zustimmungspflichtige Tool-Aufrufe
+laufen über denselben Approval-Callback-Vertrag; trennt sich der Browser während
+einer offenen Freigabe oder ist kein Browser verbunden, wird fail-closed mit
+`False` entschieden. Toolargumente werden mit derselben begrenzten
+Approval-Vorschau wie im Terminal angezeigt.
+
+Antworten und Toolargumente werden im Browser ausschließlich als Text gerendert,
+nicht als vom Modell geliefertes HTML. Die UI lädt keine externen Skripte,
+Styles, Fonts oder sonstigen Ressourcen. CSP, `frame-ancestors 'none'`,
+`X-Content-Type-Options`, `Referrer-Policy` und eine restriktive
+Permissions-Policy reduzieren die Browser-Angriffsfläche zusätzlich. Die
+Web-Dependencies werden nur über das Extra `cli-agent[web]` installiert.
+
 ### Dependency- und Regression-Risiko
 
 **Problem:** Unnötige direkte Abhängigkeiten vergrößern die Supply-Chain-Fläche; Security-Grenzen benötigen Regressionstests.
