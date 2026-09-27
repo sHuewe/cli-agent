@@ -541,3 +541,31 @@ def test_extract_markdown_tables_ignores_non_tables() -> None:
     )
 
     assert result == {"table_count": 0, "tables": []}
+
+
+
+def test_extract_markdown_tables_normalizes_literal_json_newlines() -> None:
+    markdown = (
+        "| A | B |\\n"
+        "|---|---|\\n"
+        "| 1 | 2 |"
+    )
+
+    result = json.loads(DataOperations(None).extract_markdown_tables(markdown))
+
+    assert result["table_count"] == 1
+    assert result["tables"][0]["rows"] == [{"A": "1", "B": "2"}]
+
+
+def test_extract_markdown_tables_preserves_other_backslash_escapes() -> None:
+    markdown = (
+        "| Path | Value |\\n"
+        "|---|---|\\n"
+        r"| C:\\temp | literal\\tvalue |"
+    )
+
+    result = json.loads(DataOperations(None).extract_markdown_tables(markdown))
+
+    row = result["tables"][0]["rows"][0]
+    assert row["Path"] == r"C:\temp"
+    assert row["Value"] == r"literal\tvalue"
