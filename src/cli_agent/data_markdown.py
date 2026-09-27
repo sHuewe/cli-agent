@@ -350,6 +350,8 @@ def _markdown_scalar(value: Any) -> str:
 def render_markdown_table(
     columns: list[str],
     rows: list[dict[str, Any]],
+    *,
+    preserve_scalar_types: bool = False,
 ) -> str:
     """Render a canonical Markdown pipe table with a fixed column count."""
 
@@ -380,6 +382,8 @@ def render_markdown_table(
         )
 
     table = "\n".join(lines)
+    if not preserve_scalar_types:
+        return table
     marker = _encode_scalar_overrides(columns, rows)
     return table if marker is None else marker + "\n" + table
 

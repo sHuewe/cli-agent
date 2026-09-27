@@ -252,10 +252,19 @@ class DataOperations:
                 rendered.append(f"## Table {table['index']}")
                 if table.get("context"):
                     rendered.append(f"Context: {table['context']}")
+                rows = list(table["rows"])
+                preserve_scalar_types = bool(
+                    table.get("preserved_string_cells")
+                ) or any(
+                    isinstance(value, Decimal)
+                    for row in rows
+                    for value in row.values()
+                )
                 rendered.append(
                     render_markdown_table(
                         list(table["columns"]),
-                        list(table["rows"]),
+                        rows,
+                        preserve_scalar_types=preserve_scalar_types,
                     )
                 )
             return "\n\n".join(rendered)
@@ -682,7 +691,12 @@ class DataOperations:
                     writer.writerows(rows)
             elif suffix in {".md", ".markdown"}:
                 file_path.write_text(
-                    render_markdown_table(columns, rows) + "\n",
+                    render_markdown_table(
+                        columns,
+                        rows,
+                        preserve_scalar_types=True,
+                    )
+                    + "\n",
                     encoding="utf-8",
                     newline="\n",
                 )
@@ -878,7 +892,11 @@ class DataOperations:
             + (" (truncated)" if total_rows > limit else "")
         )
         try:
-            table = render_markdown_table(columns, returned)
+            table = render_markdown_table(
+                columns,
+                returned,
+                preserve_scalar_types=True,
+            )
         except MarkdownTableError as exc:
             raise DataOperationError(str(exc)) from exc
         return prefix + "\n\n" + table
@@ -989,14 +1007,36 @@ class DataOperations:
                     f"Spalte: {column!r}"
                 )
 
-            if function == "sum" and all(
-                isinstance(value, int) and not isinstance(value, bool)
-                for value in present
-            ):
-                return sum(present)
-
             if not present:
                 return 0 if function == "sum" else None
+
+            integer_only = all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in present
+            )
+            if function == "sum" and integer_only:
+                return sum(present)
+
+            use_decimal = integer_only or any(
+                isinstance(value, Decimal)
+                for value in present
+            )
+            if not use_decimal:
+                numeric = [
+                    float(value)
+                    for value in present
+                ]
+                if function == "sum":
+                    return sum(numeric)
+                if function == "mean":
+                    return statistics.fmean(numeric)
+                if function == "median":
+                    return statistics.median(numeric)
+                return (
+                    statistics.stdev(numeric)
+                    if len(numeric) >= 2
+                    else None
+                )
 
             decimal_values = [
                 _decimal_value(value)

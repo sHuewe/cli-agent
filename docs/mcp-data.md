@@ -178,10 +178,12 @@ Unterstützte Funktionen:
 
 `count`, `sum`, `mean`, `min`, `max`, `median`, `nunique`, `std`.
 Reine Integer-Summen werden mit Python-Integer-Arithmetik ohne Float-Konvertierung
-berechnet. Für `mean`, `median`, `std` sowie gemischte numerische Summen
-wird intern `Decimal` mit einer an die Größenordnung der Werte angepassten
-Präzision verwendet; diese Dezimalwerte bleiben auch beim Markdown-Chaining und
-beim Schreiben von JSONL als numerische Werte präzise erhalten.
+berechnet. Für `mean`, `median` und `std` auf reinen Integer-Spalten sowie
+für Aggregationen, die bereits präzise Dezimalwerte enthalten, wird intern
+`Decimal` mit einer an die Größenordnung der Werte angepassten Präzision
+verwendet. Vorhandene Float-Spalten behalten aus Kompatibilitätsgründen ihre
+bisherige Float-Semantik. Präzise Dezimalwerte bleiben beim Markdown-Chaining
+und beim Schreiben von JSONL als numerische Werte erhalten.
 
 ## Write-Tools
 
