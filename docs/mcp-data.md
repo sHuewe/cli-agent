@@ -75,7 +75,12 @@ LLM-Kontext gelangen.
 ### Markdown-Tabellen
 
 Markdown ist das bevorzugte Inline-Format für tabellarische Referenzinhalte und
-für die Weitergabe tabellarischer Ergebnisse zwischen Data-Tools.
+für die Weitergabe tabellarischer Ergebnisse zwischen Data-Tools. Vom Data-MCP
+erzeugte Markdown-Tabellen enthalten bei Bedarf interne Typmetadaten. Dadurch
+bleiben insbesondere JSON-Strings wie `"001"`, `"true"` oder `"1e3"`,
+leere Strings und präzise Dezimalergebnisse beim unveränderten Weiterreichen
+zwischen Data-Tools erhalten. Normales Markdown ohne diese Metadaten wird
+weiterhin wie bisher heuristisch typisiert.
 
 `extract_markdown_tables(markdown)` nimmt ein vollständiges Markdown-Dokument
 entgegen und sucht darin selbstständig nach Pipe-Tabellen. Das LLM muss die
@@ -172,6 +177,11 @@ Eine Aggregation besteht aus `column`, `function` und optional `alias`:
 Unterstützte Funktionen:
 
 `count`, `sum`, `mean`, `min`, `max`, `median`, `nunique`, `std`.
+Reine Integer-Summen werden mit Python-Integer-Arithmetik ohne Float-Konvertierung
+berechnet. Für `mean`, `median`, `std` sowie gemischte numerische Summen
+wird intern `Decimal` mit einer an die Größenordnung der Werte angepassten
+Präzision verwendet; diese Dezimalwerte bleiben auch beim Markdown-Chaining und
+beim Schreiben von JSONL als numerische Werte präzise erhalten.
 
 ## Write-Tools
 

@@ -5,11 +5,16 @@ import json
 import math
 import statistics
 import io
+from decimal import Decimal, DecimalException, localcontext
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from .data_calculator import CalculatorError, calculate_expression
+from .data_calculator import (
+    DECIMAL_PRECISION,
+    CalculatorError,
+    calculate_expression,
+)
 from .data_markdown import (
     MarkdownTableError,
     extract_markdown_tables,
@@ -44,7 +49,7 @@ AGGREGATION_FUNCTIONS = frozenset(
     {"count", "sum", "mean", "min", "max", "median", "nunique", "std"}
 )
 
-Scalar = str | int | float | bool | None
+Scalar = str | int | float | Decimal | bool | None
 Record = dict[str, Scalar]
 
 
@@ -57,6 +62,8 @@ def _json_scalar(value: Any) -> Scalar:
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else None
+    if isinstance(value, Decimal):
+        return value if value.is_finite() else None
     raise DataOperationError(
         "Tabellarische Daten dürfen nur skalare JSON-Werte enthalten."
     )
@@ -96,6 +103,8 @@ def _dtype_name(values: list[Scalar]) -> str:
         if isinstance(value, int)
         else "float"
         if isinstance(value, float)
+        else "decimal"
+        if isinstance(value, Decimal)
         else "string"
         for value in present
     }
@@ -103,9 +112,78 @@ def _dtype_name(values: list[Scalar]) -> str:
         return "int"
     if kinds <= {"int", "float"}:
         return "float"
+    if kinds <= {"int", "float", "decimal"}:
+        return "decimal"
     if len(kinds) == 1:
         return next(iter(kinds))
     return "mixed"
+
+
+def _json_dumps_precise(value: Any, *, indent: int | None = None) -> str:
+    def render(current: Any, level: int) -> str:
+        if isinstance(current, Decimal):
+            if not current.is_finite():
+                raise ValueError("Decimal JSON values must be finite.")
+            return str(current)
+        if current is None or isinstance(current, (str, bool, int, float)):
+            return json.dumps(
+                current,
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+        if isinstance(current, (list, tuple)):
+            if not current:
+                return "[]"
+            rendered = [render(item, level + 1) for item in current]
+            if indent is None:
+                return "[" + ",".join(rendered) + "]"
+            padding = " " * (indent * (level + 1))
+            closing = " " * (indent * level)
+            return "[\n" + padding + (",\n" + padding).join(rendered) + "\n" + closing + "]"
+        if isinstance(current, dict):
+            if not all(isinstance(key, str) for key in current):
+                raise TypeError("JSON object keys must be strings.")
+            if not current:
+                return "{}"
+            separator = ":" if indent is None else ": "
+            rendered = [
+                json.dumps(key, ensure_ascii=False)
+                + separator
+                + render(item, level + 1)
+                for key, item in current.items()
+            ]
+            if indent is None:
+                return "{" + ",".join(rendered) + "}"
+            padding = " " * (indent * (level + 1))
+            closing = " " * (indent * level)
+            return "{\n" + padding + (",\n" + padding).join(rendered) + "\n" + closing + "}"
+        raise TypeError(f"Nicht JSON-serialisierbarer Wert: {type(current).__name__}")
+
+    return render(value, 0)
+
+
+def _decimal_value(value: int | float | Decimal) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, int):
+        return Decimal(value)
+    return Decimal(str(value))
+
+
+def _decimal_working_precision(values: list[Decimal]) -> int:
+    if not values:
+        return DECIMAL_PRECISION
+
+    highest_adjusted = max(
+        value.adjusted() if not value.is_zero() else 0
+        for value in values
+    )
+    lowest_exponent = min(
+        value.as_tuple().exponent
+        for value in values
+    )
+    span = max(1, highest_adjusted - lowest_exponent + 2)
+    return max(DECIMAL_PRECISION, span + DECIMAL_PRECISION)
 
 
 class DataOperations:
@@ -251,17 +329,23 @@ class DataOperations:
                 f"Markdown enthält keine Tabelle mit Index {table_index}; "
                 f"gefunden: {len(tables)}."
             )
-        columns, rows = cls._read_table(tables[table_index])
+        table = tables[table_index]
+        columns, rows = cls._read_table(table)
+        preserved_strings = {
+            tuple(cell)
+            for cell in table.get("preserved_string_cells", [])
+        }
         return columns, [
             {
                 column: (
-                    _infer_csv_scalar(value)
-                    if isinstance(value, str)
-                    else value
+                    value
+                    if (row_index, column_index) in preserved_strings
+                    or not isinstance(value, str)
+                    else _infer_csv_scalar(value)
                 )
-                for column, value in row.items()
+                for column_index, (column, value) in enumerate(row.items())
             }
-            for row in rows
+            for row_index, row in enumerate(rows)
         ]
 
     def _read_records(
@@ -609,13 +693,7 @@ class DataOperations:
                     newline="\n",
                 ) as handle:
                     for row in rows:
-                        handle.write(
-                            json.dumps(
-                                row,
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            )
-                        )
+                        handle.write(_json_dumps_precise(row))
                         handle.write("\n")
         except (OSError, csv.Error, TypeError, ValueError) as exc:
             raise DataOperationError(
@@ -836,7 +914,7 @@ class DataOperations:
                     "unique_count": len(set(values)),
                 }
             )
-        return json.dumps(
+        return _json_dumps_precise(
             {
                 "source": (
                     path
@@ -847,7 +925,6 @@ class DataOperations:
                 "columns": metadata,
                 "sample": rows[:sample_rows],
             },
-            ensure_ascii=False,
             indent=2,
         )
 
@@ -902,30 +979,53 @@ class DataOperations:
         if function == "nunique":
             return len(set(present))
         if function in {"sum", "mean", "median", "std"}:
-            numeric = [
-                float(value)
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float, Decimal))
                 for value in present
-                if isinstance(value, (int, float))
-                and not isinstance(value, bool)
-            ]
-            if len(numeric) != len(present):
+            ):
                 raise DataOperationError(
                     f"Aggregation {function!r} benötigt eine numerische "
                     f"Spalte: {column!r}"
                 )
-            if function == "sum":
-                return sum(numeric)
-            if not numeric:
-                return None
-            if function == "mean":
-                return statistics.fmean(numeric)
-            if function == "median":
-                return statistics.median(numeric)
-            return (
-                statistics.stdev(numeric)
-                if len(numeric) >= 2
-                else None
-            )
+
+            if function == "sum" and all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in present
+            ):
+                return sum(present)
+
+            if not present:
+                return 0 if function == "sum" else None
+
+            decimal_values = [
+                _decimal_value(value)
+                for value in present
+            ]
+            try:
+                with localcontext() as context:
+                    context.prec = _decimal_working_precision(decimal_values)
+                    if function == "sum":
+                        return sum(decimal_values, Decimal(0))
+                    if function == "mean":
+                        return statistics.mean(decimal_values)
+                    if function == "median":
+                        return statistics.median(decimal_values)
+                    return (
+                        statistics.stdev(decimal_values)
+                        if len(decimal_values) >= 2
+                        else None
+                    )
+            except (
+                DecimalException,
+                ArithmeticError,
+                ValueError,
+                OverflowError,
+            ) as exc:
+                raise DataOperationError(
+                    f"Aggregation {function!r} konnte für Spalte "
+                    f"{column!r} nicht präzise berechnet werden."
+                ) from exc
         if not present:
             return None
         try:

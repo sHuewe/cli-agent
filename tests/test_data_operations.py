@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -648,3 +649,121 @@ def test_markdown_file_can_be_written_and_reused(tmp_path: Path) -> None:
     result = json.loads(operations.inspect_data("derived.md"))
     assert result["row_count"] == 1
     assert result["sample"] == [{"a": 1, "b": 2}]
+
+
+
+def test_json_string_scalars_survive_markdown_chaining() -> None:
+    operations = DataOperations(None)
+    selected = operations.select_data(
+        data=json.dumps(
+            [
+                {"value": "001"},
+                {"value": "true"},
+                {"value": "1e3"},
+                {"value": ""},
+                {"value": "  spaced  "},
+                {"value": None},
+            ]
+        ),
+        data_format="json",
+    )
+
+    chained = json.loads(
+        operations.inspect_data(
+            data=selected,
+            data_format="markdown",
+            sample_rows=6,
+        )
+    )
+
+    assert [row["value"] for row in chained["sample"]] == [
+        "001",
+        "true",
+        "1e3",
+        "",
+        "  spaced  ",
+        None,
+    ]
+    assert chained["columns"][0]["dtype"] == "string"
+
+
+def test_normalizing_generated_markdown_keeps_scalar_overrides() -> None:
+    operations = DataOperations(None)
+    selected = operations.select_data(
+        data='[{"value":"001"},{"value":""},{"value":null}]',
+        data_format="json",
+    )
+
+    normalized = operations.extract_markdown_tables(selected)
+    chained = json.loads(
+        operations.inspect_data(
+            data=normalized,
+            data_format="markdown",
+            sample_rows=3,
+        )
+    )
+
+    assert [row["value"] for row in chained["sample"]] == [
+        "001",
+        "",
+        None,
+    ]
+
+
+def test_large_integer_sum_stays_exact() -> None:
+    operations = DataOperations(None)
+    result = operations.aggregate_data(
+        [{"column": "value", "function": "sum", "alias": "total"}],
+        data=(
+            '[{"value":9007199254740992},'
+            '{"value":1}]'
+        ),
+        data_format="json",
+    )
+
+    assert _markdown_rows(result) == [
+        {"total": 9007199254740993}
+    ]
+
+
+def test_large_integer_statistics_use_decimal_precision() -> None:
+    operations = DataOperations(None)
+    result = operations.aggregate_data(
+        [
+            {"column": "value", "function": "mean", "alias": "mean"},
+            {"column": "value", "function": "median", "alias": "median"},
+            {"column": "value", "function": "std", "alias": "std"},
+        ],
+        data=(
+            '[{"value":9007199254740992},'
+            '{"value":9007199254740993}]'
+        ),
+        data_format="json",
+    )
+
+    row = _markdown_rows(result)[0]
+    assert row["mean"] == Decimal("9007199254740992.5")
+    assert row["median"] == Decimal("9007199254740992.5")
+    assert isinstance(row["std"], Decimal)
+    assert str(row["std"]).startswith("0.7071067811865475244")
+
+
+def test_decimal_aggregate_jsonl_write_preserves_numeric_text(
+    tmp_path: Path,
+) -> None:
+    operations = _operations(tmp_path)
+    operations.aggregate_data_to_file(
+        "summary.jsonl",
+        [{"column": "value", "function": "mean", "alias": "mean"}],
+        data=(
+            '[{"value":9007199254740992},'
+            '{"value":9007199254740993}]'
+        ),
+        data_format="json",
+    )
+
+    assert (
+        tmp_path / "summary.jsonl"
+    ).read_text(encoding="utf-8").strip() == (
+        '{"mean":9007199254740992.5}'
+    )
