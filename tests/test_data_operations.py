@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from cli_agent.config import McpServerConfig
+from cli_agent.data_markdown import extract_markdown_tables as parse_markdown_tables
 from cli_agent.data_operations import (
     DataOperationError,
     DataOperations,
@@ -23,6 +24,21 @@ def _operations(tmp_path: Path, *, protected_paths=()) -> DataOperations:
         protected_paths=tuple(protected_paths),
     )
     return DataOperations(workspace)
+
+
+def _markdown_rows(markdown: str):
+    operations = DataOperations(None)
+    _columns, rows = operations._read_records(
+        data=markdown,
+        data_format="markdown",
+    )
+    return rows
+
+
+def _markdown_table(markdown: str):
+    tables = parse_markdown_tables(markdown)
+    assert len(tables) == 1
+    return tables[0]
 
 
 def _write_csv(tmp_path: Path) -> Path:
@@ -60,24 +76,20 @@ def test_select_data_filters_projects_sorts_and_reports_truncation(
 ) -> None:
     _write_csv(tmp_path)
 
-    result = json.loads(
-        _operations(tmp_path).select_data(
-            "sales.csv",
-            columns=["country", "revenue"],
-            filters=[
-                {"column": "country", "op": "eq", "value": "DE"},
-                {"column": "revenue", "op": "gt", "value": 10},
-            ],
-            sort_by=["revenue"],
-            descending=True,
-            limit=2,
-        )
+    result = _operations(tmp_path).select_data(
+        "sales.csv",
+        columns=["country", "revenue"],
+        filters=[
+            {"column": "country", "op": "eq", "value": "DE"},
+            {"column": "revenue", "op": "gt", "value": 10},
+        ],
+        sort_by=["revenue"],
+        descending=True,
+        limit=2,
     )
 
-    assert result["total_rows"] == 3
-    assert result["returned_rows"] == 2
-    assert result["truncated"] is True
-    assert result["rows"] == [
+    assert result.startswith("Rows: 2/3 (truncated)")
+    assert _markdown_rows(result) == [
         {"country": "DE", "revenue": 20},
         {"country": "DE", "revenue": 12},
     ]
@@ -86,15 +98,13 @@ def test_select_data_filters_projects_sorts_and_reports_truncation(
 def test_value_counts_supports_filters(tmp_path: Path) -> None:
     _write_csv(tmp_path)
 
-    result = json.loads(
-        _operations(tmp_path).value_counts(
-            "category",
-            "sales.csv",
-            filters=[{"column": "country", "op": "eq", "value": "DE"}],
-        )
+    result = _operations(tmp_path).value_counts(
+        "category",
+        "sales.csv",
+        filters=[{"column": "country", "op": "eq", "value": "DE"}],
     )
 
-    assert result["rows"] == [
+    assert _markdown_rows(result) == [
         {"value": "A", "count": 2},
         {"value": "B", "count": 1},
     ]
@@ -105,39 +115,35 @@ def test_aggregate_data_groups_and_computes_numeric_statistics(
 ) -> None:
     _write_csv(tmp_path)
 
-    result = json.loads(
-        _operations(tmp_path).aggregate_data(
-            [
-                {
-                    "column": "revenue",
-                    "function": "sum",
-                    "alias": "revenue_total",
-                },
-                {
-                    "column": "revenue",
-                    "function": "mean",
-                    "alias": "revenue_mean",
-                },
-                {
-                    "column": "category",
-                    "function": "count",
-                    "alias": "rows",
-                },
-            ],
-            "sales.csv",
-            group_by=["country"],
-            sort_by=["country"],
-        )
+    result = _operations(tmp_path).aggregate_data(
+        [
+            {
+                "column": "revenue",
+                "function": "sum",
+                "alias": "revenue_total",
+            },
+            {
+                "column": "revenue",
+                "function": "mean",
+                "alias": "revenue_mean",
+            },
+            {
+                "column": "category",
+                "function": "count",
+                "alias": "rows",
+            },
+        ],
+        "sales.csv",
+        group_by=["country"],
+        sort_by=["country"],
     )
 
-    assert result["rows"] == [
-        {
-            "country": "DE",
-            "revenue_total": 42.5,
-            "revenue_mean": pytest.approx(42.5 / 3),
-            "rows": 3,
-        },
-        {
+    rows = _markdown_rows(result)
+    assert rows[0]["country"] == "DE"
+    assert rows[0]["revenue_total"] == 42.5
+    assert rows[0]["revenue_mean"] == pytest.approx(42.5 / 3)
+    assert rows[0]["rows"] == 3
+    assert rows[1] == {
             "country": "FR",
             "revenue_total": 7.5,
             "revenue_mean": 7.5,
@@ -153,9 +159,9 @@ def test_jsonl_is_normalized_to_union_of_columns(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = json.loads(_operations(tmp_path).select_data("events.jsonl"))
+    result = _operations(tmp_path).select_data("events.jsonl")
 
-    assert result["rows"] == [
+    assert _markdown_rows(result) == [
         {"kind": "a", "value": 1, "extra": None},
         {"kind": "b", "value": None, "extra": True},
     ]
@@ -292,40 +298,34 @@ def test_csv_missing_trailing_field_is_null(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = json.loads(
-        _operations(tmp_path).select_data("incomplete.csv")
-    )
+    result = _operations(tmp_path).select_data("incomplete.csv")
 
-    assert result["rows"] == [{"a": 1, "b": None}]
+    assert _markdown_rows(result) == [{"a": 1, "b": None}]
 
 
 
 def test_inline_csv_works_without_workspace() -> None:
     operations = DataOperations(None)
 
-    result = json.loads(
-        operations.aggregate_data(
-            [{"column": "revenue", "function": "sum", "alias": "total"}],
-            data="country,revenue\nDE,10\nFR,7.5\n",
-            data_format="csv",
-        )
+    result = operations.aggregate_data(
+        [{"column": "revenue", "function": "sum", "alias": "total"}],
+        data="country,revenue\nDE,10\nFR,7.5\n",
+        data_format="csv",
     )
 
-    assert result["rows"] == [{"total": 17.5}]
+    assert _markdown_rows(result) == [{"total": 17.5}]
 
 
 def test_inline_json_array_works_without_workspace() -> None:
     operations = DataOperations(None)
 
-    result = json.loads(
-        operations.select_data(
-            data='[{"name":"A","value":2},{"name":"B","value":5}]',
-            data_format="json",
-            filters=[{"column": "value", "op": "gt", "value": 2}],
-        )
+    result = operations.select_data(
+        data='[{"name":"A","value":2},{"name":"B","value":5}]',
+        data_format="json",
+        filters=[{"column": "value", "op": "gt", "value": 2}],
     )
 
-    assert result["rows"] == [{"name": "B", "value": 5}]
+    assert _markdown_rows(result) == [{"name": "B", "value": 5}]
 
 
 def test_path_is_rejected_without_workspace_access() -> None:
@@ -437,7 +437,7 @@ def test_calculate_rejects_oversized_expression() -> None:
 
 
 
-def test_extract_markdown_tables_returns_canonical_table_objects() -> None:
+def test_extract_markdown_tables_returns_normalized_markdown() -> None:
     markdown = """Intro
 
 Spielbericht
@@ -448,15 +448,10 @@ Spielbericht
 
 Danach
 """
-    operations = DataOperations(None)
+    result = DataOperations(None).extract_markdown_tables(markdown)
 
-    result = json.loads(operations.extract_markdown_tables(markdown))
-
-    assert result["table_count"] == 1
-    table = result["tables"][0]
-    assert table["index"] == 0
-    assert table["context"] == "Spielbericht"
-    assert table["source_headers"] == ["", "Heim", "Gast", "Sätze", "Spiele"]
+    assert result.startswith("## Table 0\n\nContext: Spielbericht")
+    table = _markdown_table(result)
     assert table["columns"] == ["column_1", "Heim", "Gast", "Sätze", "Spiele"]
     assert table["row_count"] == 2
     assert table["rows"][0] == {
@@ -479,14 +474,15 @@ Zweite
 |---|---|
 | 1 | 2 |
 """
-    result = json.loads(DataOperations(None).extract_markdown_tables(markdown))
+    result = DataOperations(None).extract_markdown_tables(markdown)
+    tables = parse_markdown_tables(result)
 
-    assert result["table_count"] == 2
-    assert result["tables"][0]["columns"] == ["Name", "Name_2"]
-    assert result["tables"][1]["context"] == "Zweite"
+    assert len(tables) == 2
+    assert tables[0]["columns"] == ["Name", "Name_2"]
+    assert tables[1]["columns"] == ["x", "y"]
 
 
-def test_extracted_table_can_be_passed_to_existing_data_tools() -> None:
+def test_normalized_markdown_can_be_passed_to_existing_data_tools() -> None:
     markdown = """Spielbericht
 | | Heim | Gast | Sätze | Spiele |
 |---|---|---|---|---|
@@ -494,54 +490,54 @@ def test_extracted_table_can_be_passed_to_existing_data_tools() -> None:
 | 1-2 | A | D | 2:3 | 0:1 |
 """
     operations = DataOperations(None)
-    extracted = json.loads(operations.extract_markdown_tables(markdown))
-    table = extracted["tables"][0]
+    normalized = operations.extract_markdown_tables(markdown)
 
-    inspected = json.loads(operations.inspect_data(table=table))
-    selected = json.loads(
-        operations.select_data(
-            table=table,
-            filters=[{"column": "Spiele", "op": "eq", "value": "1:0"}],
+    inspected = json.loads(
+        operations.inspect_data(
+            data=normalized,
+            data_format="markdown",
+        )
+    )
+    selected = operations.select_data(
+        data=normalized,
+        data_format="markdown",
+        filters=[{"column": "Spiele", "op": "eq", "value": "1:0"}],
+    )
+
+    assert inspected["source"] == "inline:markdown"
+    assert inspected["row_count"] == 2
+    assert _markdown_rows(selected)[0]["column_1"] == "D1-D1"
+
+
+def test_markdown_table_index_selects_one_of_multiple_tables() -> None:
+    markdown = """One
+| a |
+|---|
+| 1 |
+
+Two
+| b |
+|---|
+| 2 |
+"""
+    result = json.loads(
+        DataOperations(None).inspect_data(
+            data=markdown,
+            data_format="markdown",
+            table_index=1,
         )
     )
 
-    assert inspected["source"] == "table"
-    assert inspected["row_count"] == 2
-    assert selected["total_rows"] == 1
-    assert selected["rows"][0]["column_1"] == "D1-D1"
-
-
-def test_table_source_is_mutually_exclusive_with_other_sources() -> None:
-    table = {"columns": ["a"], "rows": [{"a": 1}]}
-    operations = DataOperations(None)
-
-    with pytest.raises(DataOperationError, match="Genau eine Datenquelle"):
-        operations.inspect_data(data="a\n1\n", data_format="csv", table=table)
-    with pytest.raises(DataOperationError, match="Genau eine Datenquelle"):
-        operations.inspect_data()
-
-
-def test_table_source_rejects_unknown_row_columns() -> None:
-    operations = DataOperations(None)
-
-    with pytest.raises(DataOperationError, match="unbekannte Spalten"):
-        operations.inspect_data(
-            table={
-                "columns": ["a"],
-                "rows": [{"a": 1, "b": 2}],
-            }
-        )
+    assert result["row_count"] == 1
+    assert result["columns"][0]["name"] == "b"
 
 
 def test_extract_markdown_tables_ignores_non_tables() -> None:
-    result = json.loads(
-        DataOperations(None).extract_markdown_tables(
-            "Nur Text\n\n| keine | Tabelle |\n"
-        )
+    result = DataOperations(None).extract_markdown_tables(
+        "Nur Text\n\n| keine | Tabelle |\n"
     )
 
-    assert result == {"table_count": 0, "tables": []}
-
+    assert result == "No Markdown tables found."
 
 
 def test_extract_markdown_tables_normalizes_literal_json_newlines() -> None:
@@ -551,10 +547,24 @@ def test_extract_markdown_tables_normalizes_literal_json_newlines() -> None:
         "| 1 | 2 |"
     )
 
-    result = json.loads(DataOperations(None).extract_markdown_tables(markdown))
+    result = DataOperations(None).extract_markdown_tables(markdown)
 
-    assert result["table_count"] == 1
-    assert result["tables"][0]["rows"] == [{"A": "1", "B": "2"}]
+    assert _markdown_rows(result) == [{"A": 1, "B": 2}]
+
+
+def test_extract_markdown_tables_repairs_separator_width_only() -> None:
+    markdown = (
+        "| A | B | C |\n"
+        "|---|---|\n"
+        "| 1 | 2 | 3 |"
+    )
+
+    result = DataOperations(None).extract_markdown_tables(markdown)
+    table = _markdown_table(result)
+
+    assert table["columns"] == ["A", "B", "C"]
+    assert table["row_count"] == 1
+    assert _markdown_rows(result) == [{"A": 1, "B": 2, "C": 3}]
 
 
 def test_extract_markdown_tables_preserves_other_backslash_escapes() -> None:
@@ -564,8 +574,37 @@ def test_extract_markdown_tables_preserves_other_backslash_escapes() -> None:
         r"| C:\\temp | literal\\tvalue |"
     )
 
-    result = json.loads(DataOperations(None).extract_markdown_tables(markdown))
+    result = DataOperations(None).extract_markdown_tables(markdown)
+    rows = _markdown_rows(result)
 
-    row = result["tables"][0]["rows"][0]
-    assert row["Path"] == r"C:\temp"
-    assert row["Value"] == r"literal\tvalue"
+    assert rows[0]["Path"] == r"C:\temp"
+    assert rows[0]["Value"] == r"literal\tvalue"
+
+
+def test_select_data_result_is_normalized_markdown() -> None:
+    result = DataOperations(None).select_data(
+        data="| a | b |\n|---|---|\n| 1 | x |\n| 2 | y |",
+        data_format="markdown",
+        columns=["b", "a"],
+    )
+
+    assert result.startswith("Rows: 2/2")
+    table = _markdown_table(result)
+    assert table["columns"] == ["b", "a"]
+    assert len(table["source_headers"]) == len(table["columns"])
+
+
+def test_markdown_file_can_be_written_and_reused(tmp_path: Path) -> None:
+    operations = _operations(tmp_path)
+    status = json.loads(
+        operations.select_data_to_file(
+            "derived.md",
+            data="| a | b |\n|---|---|\n| 1 | 2 |",
+            data_format="markdown",
+        )
+    )
+
+    assert status["output_path"] == "derived.md"
+    result = json.loads(operations.inspect_data("derived.md"))
+    assert result["row_count"] == 1
+    assert result["sample"] == [{"a": 1, "b": 2}]
