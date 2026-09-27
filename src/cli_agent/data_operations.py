@@ -58,13 +58,27 @@ class DataOperationError(RuntimeError):
     """A tabular data operation could not be completed safely."""
 
 
+def _reject_json_constant(value: str) -> Any:
+    raise DataOperationError(
+        f"JSON enthält eine nicht-endliche Zahl: {value}."
+    )
+
+
 def _json_scalar(value: Any) -> Scalar:
     if value is None or isinstance(value, (str, bool, int)):
         return value
     if isinstance(value, float):
-        return value if math.isfinite(value) else None
+        if not math.isfinite(value):
+            raise DataOperationError(
+                "JSON enthält eine nicht-endliche Zahl."
+            )
+        return value
     if isinstance(value, Decimal):
-        return value if value.is_finite() else None
+        if not value.is_finite():
+            raise DataOperationError(
+                "JSON enthält eine nicht-endliche Zahl."
+            )
+        return value
     raise DataOperationError(
         "Tabellarische Daten dürfen nur skalare JSON-Werte enthalten."
     )
@@ -651,7 +665,7 @@ class DataOperations:
     @classmethod
     def _read_json_array(cls, data: str) -> tuple[list[str], list[Record]]:
         try:
-            raw = json.loads(data)
+            raw = json.loads(data, parse_constant=_reject_json_constant)
         except json.JSONDecodeError as exc:
             raise DataOperationError(
                 f"Ungültiges JSON: {exc.msg}"
@@ -673,7 +687,7 @@ class DataOperations:
                     f"{MAX_DATA_ROWS}."
                 )
             try:
-                raw_rows.append(json.loads(line))
+                raw_rows.append(json.loads(line, parse_constant=_reject_json_constant))
             except json.JSONDecodeError as exc:
                 raise DataOperationError(
                     f"Ungültiges JSON in Zeile {line_number}: {exc.msg}"
@@ -696,7 +710,7 @@ class DataOperations:
                             f"{MAX_DATA_ROWS}."
                         )
                     try:
-                        raw = json.loads(line)
+                        raw = json.loads(line, parse_constant=_reject_json_constant)
                     except json.JSONDecodeError as exc:
                         raise DataOperationError(
                             f"Ungültiges JSON in Zeile {line_number}: {exc.msg}"
