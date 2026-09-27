@@ -166,7 +166,7 @@ def _normalize_markdown_input(markdown: str) -> str:
     had_real_newline = "\n" in normalized
 
     normalized = re.sub(
-        r"(?<=\\|)\\\\r?\\\\n(?=\\s*\\|)",
+        r"(?<=\|)(?:\\r\\n|\\n)(?=\s*\|)",
         "\n",
         normalized,
     )
