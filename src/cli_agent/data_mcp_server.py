@@ -77,8 +77,8 @@ dataset already exists as a file. Otherwise prefer inline Markdown for tabular
 reference content."""
     else:
         source_guidance = """\
-Workspace file access is not available. Use inline data. Prefer Markdown for
-tabular reference content and for passing tabular results between tool calls."""
+Workspace file access is not available. Use inline data. Markdown is preferred
+for tabular reference content and for passing tabular results between tool calls."""
 
     return f"""\
 Use these tools for deterministic arithmetic and tabular data analysis. Prefer
