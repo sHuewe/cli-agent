@@ -1076,3 +1076,85 @@ def test_markdown_row_budget_applies_across_all_extracted_tables() -> None:
 
     with pytest.raises(MarkdownTableError, match="Zeilenlimit"):
         parse_markdown_tables(markdown, max_rows=2)
+
+
+
+def test_adjacent_tables_do_not_reemit_previous_table_as_context() -> None:
+    operations = DataOperations(None)
+    source = (
+        "| first |\n"
+        "|---|\n"
+        "| 1 |\n"
+        "\n"
+        "| second |\n"
+        "|---|\n"
+        "| 2 |\n"
+    )
+
+    normalized = operations.extract_markdown_tables(source)
+    tables = parse_markdown_tables(normalized)
+
+    assert len(tables) == 2
+    assert tables[0]["columns"] == ["first"]
+    assert tables[1]["columns"] == ["second"]
+
+    second = json.loads(
+        operations.inspect_data(
+            data=normalized,
+            data_format="markdown",
+            table_index=1,
+        )
+    )
+    assert second["sample"] == [{"second": 2}]
+
+
+@pytest.mark.parametrize(
+    ("data_format", "data"),
+    [
+        ("csv", " id ,value\n1,x\n"),
+        ("json", '[{" id ":1}]'),
+        ("jsonl", '{" id ":1}\n'),
+    ],
+)
+def test_inline_sources_reject_column_names_with_surrounding_whitespace(
+    data_format: str,
+    data: str,
+) -> None:
+    with pytest.raises(DataOperationError, match="Spaltennamen.*Leerzeichen"):
+        DataOperations(None).inspect_data(
+            data=data,
+            data_format=data_format,
+        )
+
+
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        ("bad.csv", " id ,value\n1,x\n"),
+        ("bad.jsonl", '{" id ":1}\n'),
+    ],
+)
+def test_file_sources_reject_column_names_with_surrounding_whitespace(
+    tmp_path: Path,
+    filename: str,
+    content: str,
+) -> None:
+    (tmp_path / filename).write_text(content, encoding="utf-8")
+
+    with pytest.raises(DataOperationError, match="Spaltennamen.*Leerzeichen"):
+        _operations(tmp_path).inspect_data(filename)
+
+
+def test_aggregation_alias_rejects_surrounding_whitespace() -> None:
+    with pytest.raises(DataOperationError, match="Spaltennamen.*Leerzeichen"):
+        DataOperations(None).aggregate_data(
+            [
+                {
+                    "column": "value",
+                    "function": "sum",
+                    "alias": " total ",
+                }
+            ],
+            data='[{"value":1}]',
+            data_format="json",
+        )

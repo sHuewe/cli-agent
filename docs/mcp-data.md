@@ -57,7 +57,11 @@ Objekte werden bewusst abgewiesen. Heterogene JSON-/JSONL-Datensätze bleiben
 intern sparse: fehlende Felder werden nicht für jede Zeile als zusätzliche
 `null`-Einträge materialisiert. Tabellarische Ausgaben behandeln fehlende
 Felder weiterhin wie `null`. CSV/TSV-Werte werden konservativ als `null`,
-Boolean, Integer, Float oder String interpretiert.
+Boolean, Integer, Float oder String interpretiert. Spaltennamen aus CSV/TSV und
+JSON/JSONL müssen nicht-leer sein und dürfen keine führenden oder
+nachgestellten Leerzeichen enthalten. Dasselbe gilt für explizite
+Aggregations-Aliase, damit erzeugte Spaltennamen beim Markdown-Chaining stabil
+bleiben.
 
 Eine Datendatei ist derzeit auf 100 MB und 1.000.000 Datensätze begrenzt.
 Inline-Payloads sind auf 2.000.000 Zeichen begrenzt. Für CSV/TSV wird das
@@ -96,6 +100,9 @@ heuristisch typisiert.
 entgegen und sucht darin selbstständig nach Pipe-Tabellen. Das LLM muss die
 Tabelle deshalb nicht vorher ausschneiden oder als JSON rekonstruieren. Das
 Ergebnis besteht wieder aus normalisierten Markdown-Tabellen in Quellreihenfolge.
+Unmittelbar vor einer Tabelle stehende Pipe-Zeilen werden nicht als
+beschreibender Kontext übernommen, damit Daten einer vorherigen Tabelle im
+normalisierten Ergebnis nicht versehentlich als zusätzliche Tabelle erscheinen.
 
 Bei der Normalisierung werden leere bzw. doppelte Header deterministisch in
 eindeutige Spaltennamen überführt. Außerdem werden eng begrenzte Syntaxdefekte

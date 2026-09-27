@@ -69,6 +69,12 @@ def _preceding_context(lines: list[str], start_line: int) -> str | None:
     if index < 0:
         return None
 
+    # A pipe row immediately before another table belongs to tabular data,
+    # not prose context. Re-emitting it could create a parseable extra table
+    # and shift downstream table_index values.
+    if _split_pipe_row(lines[index]) is not None:
+        return None
+
     block: list[str] = []
     total = 0
     while index >= 0 and lines[index].strip() and len(block) < 3:

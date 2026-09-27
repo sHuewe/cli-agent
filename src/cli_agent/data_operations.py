@@ -78,6 +78,20 @@ def _configure_csv_field_limit() -> None:
         csv.field_size_limit(MAX_CSV_FIELD_CHARS)
 
 
+def _validate_column_name(value: Any, *, source: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+    ):
+        raise DataOperationError(
+            f"{source} enthält einen ungültigen Spaltennamen. "
+            "Spaltennamen müssen nicht-leer sein und dürfen keine führenden "
+            "oder nachgestellten Leerzeichen enthalten."
+        )
+    return value
+
+
 def _infer_csv_scalar(value: str | None) -> Scalar:
     if value is None or value == "":
         return None
@@ -521,8 +535,11 @@ class DataOperations:
                 reader = csv.DictReader(handle, delimiter=delimiter)
                 if reader.fieldnames is None:
                     return [], []
-                columns = [str(name) for name in reader.fieldnames]
-                if any(not name for name in columns) or len(columns) != len(set(columns)):
+                columns = [
+                    _validate_column_name(name, source="CSV/TSV")
+                    for name in reader.fieldnames
+                ]
+                if len(columns) != len(set(columns)):
                     raise DataOperationError(
                         "CSV/TSV benötigt eindeutige, nicht-leere Spaltennamen."
                     )
@@ -568,8 +585,11 @@ class DataOperations:
             reader = csv.DictReader(io.StringIO(data), delimiter=delimiter)
             if reader.fieldnames is None:
                 return [], []
-            columns = [str(name) for name in reader.fieldnames]
-            if any(not name for name in columns) or len(columns) != len(set(columns)):
+            columns = [
+                _validate_column_name(name, source="CSV/TSV")
+                for name in reader.fieldnames
+            ]
+            if len(columns) != len(set(columns)):
                 raise DataOperationError(
                     "CSV/TSV benötigt eindeutige, nicht-leere Spaltennamen."
                 )
@@ -617,14 +637,14 @@ class DataOperations:
                 )
             record: Record = {}
             for raw_name, raw_value in raw.items():
-                if not isinstance(raw_name, str) or not raw_name:
-                    raise DataOperationError(
-                        f"JSON-Eintrag {index} enthält einen ungültigen Spaltennamen."
-                    )
-                if raw_name not in known_columns:
-                    known_columns.add(raw_name)
-                    columns.append(raw_name)
-                record[raw_name] = _json_scalar(raw_value)
+                column = _validate_column_name(
+                    raw_name,
+                    source=f"JSON-Eintrag {index}",
+                )
+                if column not in known_columns:
+                    known_columns.add(column)
+                    columns.append(column)
+                record[column] = _json_scalar(raw_value)
             rows.append(record)
         return columns, rows
 
@@ -687,15 +707,14 @@ class DataOperations:
                         )
                     record: Record = {}
                     for raw_name, raw_value in raw.items():
-                        if not isinstance(raw_name, str) or not raw_name:
-                            raise DataOperationError(
-                                "JSONL-Zeile "
-                                f"{line_number} enthält einen ungültigen Spaltennamen."
-                            )
-                        if raw_name not in known_columns:
-                            known_columns.add(raw_name)
-                            columns.append(raw_name)
-                        record[raw_name] = _json_scalar(raw_value)
+                        column = _validate_column_name(
+                            raw_name,
+                            source=f"JSONL-Zeile {line_number}",
+                        )
+                        if column not in known_columns:
+                            known_columns.add(column)
+                            columns.append(column)
+                        record[column] = _json_scalar(raw_value)
                     rows.append(record)
         except UnicodeDecodeError as exc:
             raise DataOperationError(
@@ -1214,10 +1233,10 @@ class DataOperations:
                 )
             if alias is None:
                 alias = f"{column}_{function}"
-            if not isinstance(alias, str) or not alias:
-                raise DataOperationError(
-                    "alias muss ein nicht-leerer String sein."
-                )
+            alias = _validate_column_name(
+                alias,
+                source="Aggregation-Alias",
+            )
             if alias in aliases:
                 raise DataOperationError(
                     f"Doppelter Ergebnis-Spaltenname: {alias!r}"
