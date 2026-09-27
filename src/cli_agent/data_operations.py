@@ -10,11 +10,15 @@ from pathlib import Path
 from typing import Any
 
 from .data_calculator import CalculatorError, calculate_expression
-from .data_markdown import MarkdownTableError, extract_markdown_tables
+from .data_markdown import (
+    MarkdownTableError,
+    extract_markdown_tables,
+    render_markdown_table,
+)
 from .os_operations import Workspace, WorkspaceError
 
-DATA_SUFFIXES = frozenset({".csv", ".tsv", ".jsonl", ".ndjson"})
-DATA_FORMATS = frozenset({"csv", "tsv", "json", "jsonl", "ndjson"})
+DATA_SUFFIXES = frozenset({".csv", ".tsv", ".jsonl", ".ndjson", ".md", ".markdown"})
+DATA_FORMATS = frozenset({"csv", "tsv", "json", "jsonl", "ndjson", "markdown"})
 MAX_DATA_FILE_BYTES = 100_000_000
 MAX_DATA_PAYLOAD_CHARS = 2_000_000
 MAX_DATA_ROWS = 1_000_000
@@ -136,7 +140,7 @@ class DataOperations:
         if suffix not in DATA_SUFFIXES:
             raise DataOperationError(
                 "Nicht unterstütztes Datenformat. Erlaubt sind .csv, .tsv, "
-                ".jsonl und .ndjson."
+                ".jsonl, .ndjson, .md und .markdown."
             )
         return suffix
 
@@ -163,13 +167,22 @@ class DataOperations:
             )
         try:
             tables = extract_markdown_tables(markdown)
+            if not tables:
+                return "No Markdown tables found."
+            rendered: list[str] = []
+            for table in tables:
+                rendered.append(f"## Table {table['index']}")
+                if table.get("context"):
+                    rendered.append(f"Context: {table['context']}")
+                rendered.append(
+                    render_markdown_table(
+                        list(table["columns"]),
+                        list(table["rows"]),
+                    )
+                )
+            return "\n\n".join(rendered)
         except MarkdownTableError as exc:
             raise DataOperationError(str(exc)) from exc
-        return json.dumps(
-            {"table_count": len(tables), "tables": tables},
-            ensure_ascii=False,
-            indent=2,
-        )
 
     @staticmethod
     def _read_table(table: dict[str, Any]) -> tuple[list[str], list[Record]]:
@@ -214,26 +227,45 @@ class DataOperations:
             )
         return list(columns), rows
 
+    @classmethod
+    def _read_markdown_text(
+        cls,
+        data: str,
+        *,
+        table_index: int,
+    ) -> tuple[list[str], list[Record]]:
+        if (
+            isinstance(table_index, bool)
+            or not isinstance(table_index, int)
+            or table_index < 0
+        ):
+            raise DataOperationError(
+                "table_index muss eine nicht-negative ganze Zahl sein."
+            )
+        try:
+            tables = extract_markdown_tables(data)
+        except MarkdownTableError as exc:
+            raise DataOperationError(str(exc)) from exc
+        if table_index >= len(tables):
+            raise DataOperationError(
+                f"Markdown enthält keine Tabelle mit Index {table_index}; "
+                f"gefunden: {len(tables)}."
+            )
+        return cls._read_table(tables[table_index])
+
     def _read_records(
         self,
         path: str | None = None,
         *,
         data: str | None = None,
         data_format: str | None = None,
-        table: dict[str, Any] | None = None,
+        table_index: int = 0,
     ) -> tuple[list[str], list[Record]]:
-        source_count = sum(source is not None for source in (path, data, table))
+        source_count = sum(source is not None for source in (path, data))
         if source_count != 1:
             raise DataOperationError(
-                "Genau eine Datenquelle muss angegeben werden: path, data oder table."
+                "Genau eine Datenquelle muss angegeben werden: path oder data."
             )
-
-        if table is not None:
-            if data_format is not None:
-                raise DataOperationError(
-                    "data_format darf nicht zusammen mit table verwendet werden."
-                )
-            return self._read_table(table)
 
         if data is not None:
             if not isinstance(data, str):
@@ -251,7 +283,16 @@ class DataOperations:
             if normalized_format not in DATA_FORMATS:
                 raise DataOperationError(
                     "Nicht unterstütztes Inline-Datenformat. Erlaubt sind "
-                    "csv, tsv, json, jsonl und ndjson."
+                    "csv, tsv, json, jsonl, ndjson und markdown."
+                )
+            if normalized_format == "markdown":
+                return self._read_markdown_text(
+                    data,
+                    table_index=table_index,
+                )
+            if table_index != 0:
+                raise DataOperationError(
+                    "table_index ist nur für Markdown-Daten zulässig."
                 )
             if normalized_format in {"csv", "tsv"}:
                 return self._read_delimited_text(
@@ -287,6 +328,27 @@ class DataOperations:
                 f"{MAX_DATA_FILE_BYTES} Bytes: {path!r}"
             )
 
+        if suffix in {".md", ".markdown"}:
+            try:
+                text = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError as exc:
+                raise DataOperationError(
+                    f"Datendatei ist nicht als UTF-8 lesbar: {file_path.name!r}"
+                ) from exc
+            except OSError as exc:
+                raise DataOperationError(
+                    f"Datendatei konnte nicht gelesen werden: "
+                    f"{file_path.name!r}: {exc}"
+                ) from exc
+            return self._read_markdown_text(
+                text,
+                table_index=table_index,
+            )
+
+        if table_index != 0:
+            raise DataOperationError(
+                "table_index ist nur für Markdown-Daten zulässig."
+            )
         if suffix in {".csv", ".tsv"}:
             return self._read_delimited(
                 file_path,
@@ -523,6 +585,12 @@ class DataOperations:
                     )
                     writer.writeheader()
                     writer.writerows(rows)
+            elif suffix in {".md", ".markdown"}:
+                file_path.write_text(
+                    render_markdown_table(columns, rows) + "\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
             else:
                 with file_path.open(
                     "w",
@@ -709,21 +777,22 @@ class DataOperations:
 
     @staticmethod
     def _result(
+        columns: list[str],
         rows: list[Record],
         *,
         total_rows: int,
         limit: int,
     ) -> str:
-        return json.dumps(
-            {
-                "rows": rows[:limit],
-                "total_rows": total_rows,
-                "returned_rows": min(total_rows, limit),
-                "truncated": total_rows > limit,
-            },
-            ensure_ascii=False,
-            indent=2,
+        returned = rows[:limit]
+        prefix = (
+            f"Rows: {len(returned)}/{total_rows}"
+            + (" (truncated)" if total_rows > limit else "")
         )
+        try:
+            table = render_markdown_table(columns, returned)
+        except MarkdownTableError as exc:
+            raise DataOperationError(str(exc)) from exc
+        return prefix + "\n\n" + table
 
     def inspect_data(
         self,
