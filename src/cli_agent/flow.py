@@ -1401,6 +1401,7 @@ def _prepare_flow_output(
         workspace,
         output,
         overwrite=step.overwrite_output,
+        allow_missing_parent=True,
     )
     return None
 
@@ -2197,6 +2198,7 @@ async def run_flow(
                         expected_fingerprint=expected_fingerprint,
                     )
                 else:
+                    output.parent.mkdir(parents=True, exist_ok=True)
                     prepare_output_target(
                         workspace,
                         output,
@@ -2297,6 +2299,7 @@ async def run_flow(
             else:
                 checkpoint = None
                 if output is not None and preflight_outputs is None:
+                    output.parent.mkdir(parents=True, exist_ok=True)
                     prepare_output_target(
                         workspace,
                         output,
