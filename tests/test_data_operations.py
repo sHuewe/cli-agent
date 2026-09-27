@@ -551,6 +551,35 @@ def test_extract_markdown_tables_normalizes_literal_json_newlines() -> None:
     assert _markdown_rows(result) == [{"A": 1, "B": 2}]
 
 
+def test_extract_markdown_tables_normalizes_mixed_real_and_literal_newlines() -> None:
+    markdown = (
+        "| A | B |\n"
+        "|---|---|\\n"
+        "| 1 | 2 |\\n"
+        "| 3 | 4 |"
+    )
+
+    result = DataOperations(None).extract_markdown_tables(markdown)
+
+    assert _markdown_rows(result) == [
+        {"A": 1, "B": 2},
+        {"A": 3, "B": 4},
+    ]
+
+
+def test_extract_markdown_tables_keeps_literal_newline_inside_cell() -> None:
+    markdown = (
+        "| A | B |\n"
+        "|---|---|\n"
+        r"| 1 | literal\nvalue |"
+    )
+
+    result = DataOperations(None).extract_markdown_tables(markdown)
+    rows = _markdown_rows(result)
+
+    assert rows[0]["B"] == r"literal\nvalue"
+
+
 def test_extract_markdown_tables_repairs_separator_width_only() -> None:
     markdown = (
         "| A | B | C |\n"
