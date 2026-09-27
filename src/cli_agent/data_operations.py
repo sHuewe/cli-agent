@@ -800,7 +800,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
-        table: dict[str, Any] | None = None,
+        table_index: int = 0,
         sample_rows: int = 5,
     ) -> str:
         sample_rows = self._validate_limit(
@@ -812,7 +812,7 @@ class DataOperations:
             path,
             data=data,
             data_format=data_format,
-            table=table,
+            table_index=table_index,
         )
         metadata = []
         for column in columns:
@@ -830,8 +830,6 @@ class DataOperations:
                 "source": (
                     path
                     if path is not None
-                    else "table"
-                    if table is not None
                     else f"inline:{data_format}"
                 ),
                 "row_count": len(rows),
@@ -848,7 +846,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
-        table: dict[str, Any] | None = None,
+        table_index: int = 0,
         columns: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
@@ -860,7 +858,7 @@ class DataOperations:
             path,
             data=data,
             data_format=data_format,
-            table=table,
+            table_index=table_index,
         )
         selected_columns = self._require_columns(source_columns, columns)
         filtered = self._apply_filters(rows, source_columns, filters)
@@ -875,6 +873,7 @@ class DataOperations:
             for row in ordered
         ]
         return self._result(
+            selected_columns,
             projected,
             total_rows=len(projected),
             limit=limit,
@@ -986,7 +985,7 @@ class DataOperations:
         *,
         data: str | None,
         data_format: str | None,
-        table: dict[str, Any] | None,
+        table_index: int,
         group_by: list[str] | None,
         aggregations: list[dict[str, str]],
         filters: list[dict[str, Any]] | None,
@@ -997,7 +996,7 @@ class DataOperations:
             path,
             data=data,
             data_format=data_format,
-            table=table,
+            table_index=table_index,
         )
         groups = (
             []
@@ -1052,7 +1051,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
-        table: dict[str, Any] | None = None,
+        table_index: int = 0,
         group_by: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
@@ -1060,11 +1059,11 @@ class DataOperations:
         limit: int = 200,
     ) -> str:
         limit = self._validate_limit(limit, maximum=MAX_RESULT_ROWS)
-        _, rows = self._aggregate_records(
+        result_columns, rows = self._aggregate_records(
             path,
             data=data,
             data_format=data_format,
-            table=table,
+            table_index=table_index,
             group_by=group_by,
             aggregations=aggregations,
             filters=filters,
@@ -1072,6 +1071,7 @@ class DataOperations:
             descending=descending,
         )
         return self._result(
+            result_columns,
             rows,
             total_rows=len(rows),
             limit=limit,
@@ -1084,7 +1084,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
-        table: dict[str, Any] | None = None,
+        table_index: int = 0,
         filters: list[dict[str, Any]] | None = None,
         limit: int = 50,
     ) -> str:
@@ -1096,7 +1096,7 @@ class DataOperations:
             path,
             data=data,
             data_format=data_format,
-            table=table,
+            table_index=table_index,
         )
         if column not in columns:
             raise DataOperationError(
@@ -1109,6 +1109,7 @@ class DataOperations:
             for value, count in counts.most_common()
         ]
         return self._result(
+            ["value", "count"],
             result_rows,
             total_rows=len(result_rows),
             limit=limit,
@@ -1121,7 +1122,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
-        table: dict[str, Any] | None = None,
+        table_index: int = 0,
         columns: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
@@ -1131,7 +1132,7 @@ class DataOperations:
             input_path,
             data=data,
             data_format=data_format,
-            table=table,
+            table_index=table_index,
         )
         selected_columns = self._require_columns(
             source_columns,
@@ -1169,7 +1170,7 @@ class DataOperations:
         *,
         data: str | None = None,
         data_format: str | None = None,
-        table: dict[str, Any] | None = None,
+        table_index: int = 0,
         group_by: list[str] | None = None,
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
@@ -1179,7 +1180,7 @@ class DataOperations:
             input_path,
             data=data,
             data_format=data_format,
-            table=table,
+            table_index=table_index,
             group_by=group_by,
             aggregations=aggregations,
             filters=filters,
