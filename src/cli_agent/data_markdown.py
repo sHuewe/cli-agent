@@ -76,7 +76,27 @@ def _preceding_context(lines: list[str], start_line: int) -> str | None:
 
 
 def _normalize_markdown_input(markdown: str) -> str:
-    \"\"\"Normalize JSON-copied line breaks before parsing Markdown.\n\n    Reference contexts are serialized as JSON before they reach the model. A\n    model may copy visible \\n escape sequences literally into a tool argument\n    instead of emitting real line breaks. Decode only newline escapes, and\n    only when the input contains no real line break at all. Other escape\n    sequences remain untouched data.\n    \"\"\"\n\n    normalized = markdown.replace(\"\\r\\n\", \"\\n\").replace(\"\\r\", \"\\n\")\n    if \"\\n\" not in normalized and \"\\\\n\" in normalized:\n        normalized = normalized.replace(\"\\\\r\\\\n\", \"\\n\")\n        normalized = normalized.replace(\"\\\\n\", \"\\n\")\n    return normalized\n\n\ndef extract_markdown_tables(markdown: str) -> list[dict[str, Any]]:\n    markdown = _normalize_markdown_input(markdown)\n    tokens = _MARKDOWN.parse(markdown)\n    lines = markdown.splitlines()\n    tables: list[dict[str, Any]] = []
+    """Normalize JSON-copied line breaks before parsing Markdown.
+
+    Reference contexts are serialized as JSON before they reach the model. A
+    model may copy visible \\n escape sequences literally into a tool argument
+    instead of emitting real line breaks. Decode only newline escapes, and only
+    when the input contains no real line break at all. Other escape sequences
+    remain untouched data.
+    """
+
+    normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
+    if "\n" not in normalized and "\\n" in normalized:
+        normalized = normalized.replace("\\r\\n", "\n")
+        normalized = normalized.replace("\\n", "\n")
+    return normalized
+
+
+def extract_markdown_tables(markdown: str) -> list[dict[str, Any]]:
+    markdown = _normalize_markdown_input(markdown)
+    tokens = _MARKDOWN.parse(markdown)
+    lines = markdown.splitlines()
+    tables: list[dict[str, Any]] = []
 
     index = 0
     while index < len(tokens):
