@@ -93,6 +93,7 @@ add_web_context = [
 output = "work/items.json"
 overwrite_output = true
 workspace_access = "read"
+with_data = true
 
 [[steps]]
 id = "process"
@@ -256,6 +257,14 @@ Timeouts und weitere Modellparameter bleiben aus der gewählten Config erhalten.
 Schritt explizit auf `none`, `read` oder `write` gesetzt. Ohne Angabe gilt
 `none`; damit kann eine Config nicht implizit Schreibzugriff auf den eingebauten
 Workspace-OS-MCP in einen Flow-Schritt hineintragen.
+
+Mit `with_data = true` aktiviert ein Flow-Schritt zusätzlich den eingebauten
+Data-MCP, analog zu `cli-agent --with-data`. Ohne Angabe ist Data-MCP
+deaktiviert. Der Data-MCP übernimmt die Dateirechte des Schritts aus
+`workspace_access`: bei `none` sind nur Inline-Daten erlaubt, bei `read`
+dürfen Workspace-Datendateien gelesen werden und bei `write` stehen zusätzlich
+die expliziten `*_to_file`-Werkzeuge zur Verfügung. Die Option ist statisch in
+der Flow-Datei festgelegt und kann nicht aus LLM-Output parametrisiert werden.
 
 `exclude_paths` kann sowohl global auf Flow-Ebene als auch pro Step gesetzt
 werden. Die Pfade werden relativ zum Workspace interpretiert. Globale und
