@@ -35,7 +35,8 @@ cli-agent --with-os-write --with-data
 
 Ohne `--with-os-read` bzw. `--with-os-write` wird für den Data-MCP gar keine
 `Workspace`-Instanz erzeugt. Die Read-Tools bleiben trotzdem verfügbar und
-können CSV/JSON-Daten direkt als Toolargument verarbeiten.
+können CSV/JSON-Daten direkt als Toolargument oder zuvor aus Markdown
+extrahierte Tabellenobjekte verarbeiten.
 
 Der Data-MCP ist ein Built-in. Seine Launchparameter werden vom Agenten erzeugt;
 der OS-Zugriffsmodus wird außerhalb der Modellkontrolle aus den CLI-Rechten
@@ -61,10 +62,50 @@ LLM-Kontext gelangen.
 | Tool | Funktion |
 | --- | --- |
 | `calculate(expression)` | Wertet einen begrenzten arithmetischen Ausdruck deterministisch mit Dezimalarithmetik aus. |
+| `extract_markdown_tables(markdown)` | Extrahiert alle Pipe-Tabellen aus einem vollständigen Markdown-Dokument in kanonische Tabellenobjekte. |
 | `inspect_data(path=..., ...)` / `inspect_data(data=..., data_format=..., ...)` | Liefert Zeilenzahl, Spalten, einfache Typinferenz, Null-/Unique-Zahlen und eine kleine Stichprobe. |
 | `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert höchstens 1.000 Zeilen. |
 | `value_counts(...)` | Zählt unterschiedliche Werte einer Spalte. |
 | `aggregate_data(...)` | Gruppiert und aggregiert Daten deterministisch. |
+
+### Markdown-Tabellen
+
+`extract_markdown_tables(markdown)` nimmt ein vollständiges Markdown-Dokument
+entgegen und sucht darin selbstständig nach GFM-artigen Pipe-Tabellen. Das LLM
+muss die Tabelle deshalb nicht vorher aus dem Web-/Dateikontext ausschneiden.
+
+Das Ergebnis enthält `table_count` und eine Liste kanonischer Tabellenobjekte.
+Jede Tabelle enthält unter anderem:
+
+```json
+{
+  "index": 0,
+  "context": "Spielbericht",
+  "source_headers": ["", "Heim", "Gast", "Sätze", "Spiele"],
+  "columns": ["column_1", "Heim", "Gast", "Sätze", "Spiele"],
+  "row_count": 2,
+  "rows": [
+    {
+      "column_1": "D1-D1",
+      "Heim": "A / B",
+      "Gast": "C / D",
+      "Sätze": "3:1",
+      "Spiele": "1:0"
+    }
+  ]
+}
+```
+
+Leere Spaltenüberschriften werden deterministisch als `column_N` benannt;
+doppelte Überschriften erhalten Suffixe wie `_2`. Die ursprünglichen Header
+bleiben in `source_headers` erhalten. Bis zu drei unmittelbar vorangehende
+nicht-leere Markdown-Zeilen werden als kurzer `context` mitgegeben.
+
+Ein solches Tabellenobjekt kann anschließend direkt als `table=...` an
+`inspect_data`, `select_data`, `value_counts` und `aggregate_data`
+übergeben werden. Auch die beiden Write-Tools akzeptieren bei aktiviertem
+Schreibzugriff ein Tabellenobjekt als Quelle. Für die tabellarischen Tools gilt
+damit: exakt eine Quelle aus `path`, `data + data_format` oder `table`.
 
 ### Calculator
 
