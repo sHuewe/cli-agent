@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import json
 import math
@@ -16,8 +18,9 @@ MAX_CONTEXT_CHARS = 500
 
 _MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("table")
 _SEPARATOR_CELL = re.compile(r"^:?-{3,}:?$")
-_TYPED_STRING_PREFIX = "string:"
-_TYPED_DECIMAL_PREFIX = "decimal:"
+_TYPED_CELL_PREFIX = "cli-agent:data:v1:"
+_LEGACY_TYPED_STRING_PREFIX = "string:"
+_LEGACY_TYPED_DECIMAL_PREFIX = "decimal:"
 
 
 class MarkdownTableError(ValueError):
@@ -298,12 +301,92 @@ def _markdown_code_span(content: str) -> str:
     return f"{fence}{content}{fence}"
 
 
+def _encode_typed_cell(kind: str, value: str) -> str:
+    """Encode a typed Markdown cell using only table-safe ASCII.
+
+    URL-safe base64 avoids every Markdown pipe-table delimiter/escape concern
+    (pipes, backslashes, backticks and physical newlines) and makes the
+    round-trip contract independent of CommonMark code-span whitespace rules.
+    """
+
+    payload = json.dumps(
+        [kind, value],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return _markdown_code_span(_TYPED_CELL_PREFIX + encoded)
+
+
+def _decode_typed_cell(token: Token) -> tuple[str, str] | None:
+    children = token.children or []
+    if len(children) != 1 or children[0].type != "code_inline":
+        return None
+
+    content = children[0].content
+    if not content.startswith(_TYPED_CELL_PREFIX):
+        return None
+
+    encoded = content[len(_TYPED_CELL_PREFIX):]
+    if not encoded:
+        return None
+    padding = "=" * (-len(encoded) % 4)
+    try:
+        raw = base64.b64decode(
+            encoded + padding,
+            altchars=b"-_",
+            validate=True,
+        )
+        payload = json.loads(raw.decode("utf-8"))
+    except (
+        binascii.Error,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ):
+        return None
+
+    if (
+        not isinstance(payload, list)
+        or len(payload) != 2
+        or not isinstance(payload[0], str)
+        or not isinstance(payload[1], str)
+    ):
+        return None
+    return payload[0], payload[1]
+
+
+def _inline_header(token: Token) -> str:
+    decoded = _decode_typed_cell(token)
+    if decoded is not None:
+        kind, value = decoded
+        if kind == "h":
+            return value
+    return _inline_text(token)
+
+
 def _inline_scalar(token: Token) -> tuple[Any, bool]:
+    decoded = _decode_typed_cell(token)
+    if decoded is not None:
+        kind, payload = decoded
+        if kind == "s":
+            return payload, True
+        if kind == "d":
+            try:
+                value = Decimal(payload)
+            except InvalidOperation:
+                pass
+            else:
+                if value.is_finite():
+                    return value, False
+
+    # Backwards-compatible reader for typed cells produced by earlier
+    # development revisions. New output always uses the versioned codec above.
     children = token.children or []
     if len(children) == 1 and children[0].type == "code_inline":
         content = children[0].content
-        if content.startswith(_TYPED_STRING_PREFIX):
-            payload = content[len(_TYPED_STRING_PREFIX):]
+        if content.startswith(_LEGACY_TYPED_STRING_PREFIX):
+            payload = content[len(_LEGACY_TYPED_STRING_PREFIX):]
             try:
                 value = json.loads(payload)
             except json.JSONDecodeError:
@@ -312,8 +395,8 @@ def _inline_scalar(token: Token) -> tuple[Any, bool]:
                 if isinstance(value, str):
                     return value, True
 
-        if content.startswith(_TYPED_DECIMAL_PREFIX):
-            payload = content[len(_TYPED_DECIMAL_PREFIX):]
+        if content.startswith(_LEGACY_TYPED_DECIMAL_PREFIX):
+            payload = content[len(_LEGACY_TYPED_DECIMAL_PREFIX):]
             try:
                 value = Decimal(payload)
             except InvalidOperation:
@@ -323,6 +406,12 @@ def _inline_scalar(token: Token) -> tuple[Any, bool]:
                     return value, False
 
     return _inline_text(token), False
+
+
+def _markdown_header(value: str) -> str:
+    if any(character in value for character in "\\|`\r\n"):
+        return _encode_typed_cell("h", value)
+    return _markdown_scalar(value)
 
 
 def _markdown_scalar(
@@ -338,21 +427,14 @@ def _markdown_scalar(
         and isinstance(value, str)
         and _string_requires_type_annotation(value)
     ):
-        payload = json.dumps(
-            value,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        return _markdown_code_span(_TYPED_STRING_PREFIX + payload)
+        return _encode_typed_cell("s", value)
 
     if preserve_scalar_type and isinstance(value, Decimal):
         if not value.is_finite():
             raise MarkdownTableError(
                 "Dezimalwerte in Markdown-Tabellen müssen endlich sein."
             )
-        return _markdown_code_span(
-            _TYPED_DECIMAL_PREFIX + str(value)
-        )
+        return _encode_typed_cell("d", str(value))
 
     if isinstance(value, bool):
         text = "true" if value else "false"
@@ -393,7 +475,7 @@ def render_markdown_table(
         )
 
     lines = [
-        "| " + " | ".join(_markdown_scalar(column) for column in columns) + " |",
+        "| " + " | ".join(_markdown_header(column) for column in columns) + " |",
         "|" + "|".join("---" for _ in columns) + "|",
     ]
     for row in rows:
@@ -473,7 +555,7 @@ def extract_markdown_tables(
                         current_cell_preserved_string,
                     ) = _inline_scalar(current)
                 else:
-                    current_cell = _inline_text(current)
+                    current_cell = _inline_header(current)
             elif current.type in {"th_close", "td_close"}:
                 if current_row is not None:
                     value = current_cell

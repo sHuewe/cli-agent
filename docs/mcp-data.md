@@ -88,13 +88,17 @@ damit große Quelldatensätze nicht ungefiltert in den LLM-Kontext gelangen.
 Markdown ist das bevorzugte Inline-Format für tabellarische Referenzinhalte und
 für die Weitergabe tabellarischer Ergebnisse zwischen Data-Tools. Wenn eine
 einfache Markdown-Schreibweise den Skalartyp nicht eindeutig erhalten könnte,
-verwendet der Data-MCP eine sichtbare Typannotation als Inline-Code-Zelle, zum
-Beispiel `string:"001"`, `string:"true"` oder `decimal:1.25`. Dadurch
-bleiben leere bzw. numerisch aussehende Strings und präzise Dezimalergebnisse
-beim unveränderten Weiterreichen erhalten, ohne versteckte Metadaten zu
-vertrauen, die von externem Markdown unabhängig vom sichtbaren Zellwert
-manipuliert werden könnten. Normale unannotierte Zellen werden weiterhin
-heuristisch typisiert.
+verwendet der Data-MCP eine sichtbare, versionierte Typannotation als
+Inline-Code-Zelle. Der enthaltene Typ-/Wert-Payload wird URL-safe Base64
+kodiert (`cli-agent:data:v1:...`). Dadurch enthält die kanonische Kodierung
+keine Pipe-Delimiter, Backslashes, Backticks oder physischen Zeilenumbrüche.
+Leere bzw. numerisch aussehende Strings, Whitespace, Unicode, Pipes,
+Backslashes, Backticks, Zeilenumbrüche und präzise Dezimalwerte bleiben damit
+beim unveränderten Weiterreichen erhalten. Dasselbe Verfahren wird für
+Markdown-Header mit syntaxrelevanten Zeichen verwendet. Normale unannotierte
+Zellen werden weiterhin heuristisch typisiert. Die zentrale Roundtrip-Invariante
+für vom Data-MCP erzeugte Tabellen lautet: ein unterstützter Skalarwert muss
+nach Rendern und erneutem Parsen exakt denselben Wert und Typ besitzen.
 
 `extract_markdown_tables(markdown)` nimmt ein vollständiges Markdown-Dokument
 entgegen und sucht darin selbstständig nach Pipe-Tabellen. Das LLM muss die

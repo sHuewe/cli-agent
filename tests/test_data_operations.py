@@ -799,9 +799,7 @@ def test_lossless_string_chaining_uses_visible_typed_cells() -> None:
         data_format="json",
     )
 
-    assert '`string:"001"`' in result
-    assert '`string:"true"`' in result
-    assert '`string:""`' in result
+    assert "cli-agent:data:v1:" in result
 
     chained = json.loads(
         operations.inspect_data(
@@ -1158,3 +1156,140 @@ def test_aggregation_alias_rejects_surrounding_whitespace() -> None:
             data='[{"value":1}]',
             data_format="json",
         )
+
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "001",
+        "true",
+        "1e3",
+        "  spaced  ",
+        "a|b",
+        r"C:\\temp\\file",
+        "tick`tick",
+        "``double``",
+        "line one\nline two",
+        "line one\r\nline two",
+        "Grüße ☃ 東京",
+        "cli-agent:data:v1:not-really-encoded",
+        "  a|b\\`c\nGrüße  ",
+    ],
+)
+def test_markdown_string_codec_round_trips_special_values(value: str) -> None:
+    operations = DataOperations(None)
+    source = json.dumps(
+        [{"value": value}],
+        ensure_ascii=False,
+    )
+
+    selected = operations.select_data(
+        data=source,
+        data_format="json",
+    )
+    parsed = json.loads(
+        operations.inspect_data(
+            data=selected,
+            data_format="markdown",
+        )
+    )
+
+    assert parsed["sample"] == [{"value": value}]
+
+
+def test_markdown_string_codec_round_trips_through_normalization() -> None:
+    operations = DataOperations(None)
+    expected = "  pipe|slash\\tick`newline\nGrüße  "
+    selected = operations.select_data(
+        data=json.dumps(
+            [{"value": expected}],
+            ensure_ascii=False,
+        ),
+        data_format="json",
+    )
+
+    normalized = operations.extract_markdown_tables(selected)
+    parsed = json.loads(
+        operations.inspect_data(
+            data=normalized,
+            data_format="markdown",
+        )
+    )
+
+    assert parsed["sample"] == [{"value": expected}]
+
+
+def test_markdown_string_codec_round_trips_through_file(
+    tmp_path: Path,
+) -> None:
+    operations = _operations(tmp_path)
+    expected = "a|b\\c`d\nü"
+    operations.select_data_to_file(
+        "roundtrip.md",
+        data=json.dumps(
+            [{"value": expected}],
+            ensure_ascii=False,
+        ),
+        data_format="json",
+    )
+
+    parsed = json.loads(operations.inspect_data("roundtrip.md"))
+
+    assert parsed["sample"] == [{"value": expected}]
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "a|b",
+        r"path\\name",
+        "tick`name",
+        "line\nbreak",
+        "Grüße_日本",
+    ],
+)
+def test_generated_markdown_headers_round_trip_special_characters(
+    column: str,
+) -> None:
+    operations = DataOperations(None)
+    selected = operations.select_data(
+        data=json.dumps(
+            [{column: "value"}],
+            ensure_ascii=False,
+        ),
+        data_format="json",
+    )
+
+    parsed = json.loads(
+        operations.inspect_data(
+            data=selected,
+            data_format="markdown",
+        )
+    )
+
+    assert [entry["name"] for entry in parsed["columns"]] == [column]
+    assert parsed["sample"] == [{column: "value"}]
+
+
+def test_markdown_decimal_codec_round_trips_exact_value() -> None:
+    operations = DataOperations(None)
+    result = operations.aggregate_data(
+        [
+            {
+                "column": "value",
+                "function": "mean",
+                "alias": "mean",
+            }
+        ],
+        data=(
+            '[{"value":9007199254740992},'
+            '{"value":9007199254740993}]'
+        ),
+        data_format="json",
+    )
+
+    row = _markdown_rows(result)
+
+    assert row == [{"mean": Decimal("9007199254740992.5")}]
