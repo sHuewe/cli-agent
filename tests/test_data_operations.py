@@ -144,12 +144,11 @@ def test_aggregate_data_groups_and_computes_numeric_statistics(
     assert rows[0]["revenue_mean"] == pytest.approx(42.5 / 3)
     assert rows[0]["rows"] == 3
     assert rows[1] == {
-            "country": "FR",
-            "revenue_total": 7.5,
-            "revenue_mean": 7.5,
-            "rows": 1,
-        },
-    ]
+        "country": "FR",
+        "revenue_total": 7.5,
+        "revenue_mean": 7.5,
+        "rows": 1,
+    }
 
 
 def test_jsonl_is_normalized_to_union_of_columns(tmp_path: Path) -> None:
