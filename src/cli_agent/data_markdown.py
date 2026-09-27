@@ -391,7 +391,10 @@ def extract_markdown_tables(markdown: str) -> list[dict[str, Any]]:
             elif current.type in {"th_close", "td_close"}:
                 if current_row is not None:
                     value = current_cell
-                    if isinstance(value, str):
+                    if (
+                        isinstance(value, str)
+                        and not current_cell_preserved_string
+                    ):
                         value = value.strip()
                     if (
                         current_cell_preserved_string
