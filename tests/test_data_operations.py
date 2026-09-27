@@ -567,6 +567,18 @@ def test_extract_markdown_tables_normalizes_mixed_real_and_literal_newlines() ->
     ]
 
 
+def test_extract_markdown_tables_normalizes_mixed_literal_crlf() -> None:
+    markdown = (
+        "| A | B |\n"
+        "|---|---|\\r\\n"
+        "| 1 | 2 |"
+    )
+
+    result = DataOperations(None).extract_markdown_tables(markdown)
+
+    assert _markdown_rows(result) == [{"A": 1, "B": 2}]
+
+
 def test_extract_markdown_tables_keeps_literal_newline_inside_cell() -> None:
     markdown = (
         "| A | B |\n"
