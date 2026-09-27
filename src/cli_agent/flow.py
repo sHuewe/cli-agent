@@ -84,6 +84,7 @@ class FlowStep:
     output: str | None
     overwrite_output: bool
     workspace_access: str
+    with_data: bool
     retry_policy: ModelRetryPolicy | None
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
@@ -475,6 +476,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "output",
         "overwrite_output",
         "workspace_access",
+        "with_data",
         "exclude_paths",
         "retry",
         "response_format",
@@ -650,6 +652,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "'none', 'read' oder 'write' sein."
             )
         workspace_access = str(workspace_access_value)
+
+        with_data = raw.get("with_data", False)
+        if not isinstance(with_data, bool):
+            raise ValueError(
+                f"steps[{index}].with_data muss boolesch sein."
+            )
+
         step_excluded_paths = _path_list(
             raw.get("exclude_paths"),
             field=f"steps[{index}].exclude_paths",
@@ -908,6 +917,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 output=output,
                 overwrite_output=overwrite_output,
                 workspace_access=workspace_access,
+                with_data=with_data,
                 retry_policy=retry_policy,
                 response_format=response_format,
                 approve_tools=approve_tools,
@@ -2387,6 +2397,7 @@ async def run_flow(
                         config_file=config_file,
                         model=step.model,
                         workspace_access=step.workspace_access,
+                        with_data=step.with_data,
                         retry_policy=step.retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
@@ -2408,6 +2419,7 @@ async def run_flow(
                         config_file=config_file,
                         model=step.model,
                         workspace_access=step.workspace_access,
+                        with_data=step.with_data,
                         retry_policy=step.retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
