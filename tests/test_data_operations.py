@@ -434,3 +434,110 @@ def test_calculate_rejects_excessive_power() -> None:
 def test_calculate_rejects_oversized_expression() -> None:
     with pytest.raises(DataOperationError, match="512"):
         DataOperations(None).calculate("1+" * 300 + "1")
+
+
+
+def test_extract_markdown_tables_returns_canonical_table_objects() -> None:
+    markdown = """Intro
+
+Spielbericht
+| | Heim | Gast | Sätze | Spiele |
+|---|---|---|---|---|
+| D1-D1 | A / B | C / D | 3:1 | 1:0 |
+| 1-2 | A | D | 2:3 | 0:1 |
+
+Danach
+"""
+    operations = DataOperations(None)
+
+    result = json.loads(operations.extract_markdown_tables(markdown))
+
+    assert result["table_count"] == 1
+    table = result["tables"][0]
+    assert table["index"] == 0
+    assert table["context"] == "Spielbericht"
+    assert table["source_headers"] == ["", "Heim", "Gast", "Sätze", "Spiele"]
+    assert table["columns"] == ["column_1", "Heim", "Gast", "Sätze", "Spiele"]
+    assert table["row_count"] == 2
+    assert table["rows"][0] == {
+        "column_1": "D1-D1",
+        "Heim": "A / B",
+        "Gast": "C / D",
+        "Sätze": "3:1",
+        "Spiele": "1:0",
+    }
+
+
+def test_extract_markdown_tables_handles_multiple_and_duplicate_headers() -> None:
+    markdown = """Erste
+| Name | Name |
+|---|---|
+| A | B |
+
+Zweite
+| x | y |
+|---|---|
+| 1 | 2 |
+"""
+    result = json.loads(DataOperations(None).extract_markdown_tables(markdown))
+
+    assert result["table_count"] == 2
+    assert result["tables"][0]["columns"] == ["Name", "Name_2"]
+    assert result["tables"][1]["context"] == "Zweite"
+
+
+def test_extracted_table_can_be_passed_to_existing_data_tools() -> None:
+    markdown = """Spielbericht
+| | Heim | Gast | Sätze | Spiele |
+|---|---|---|---|---|
+| D1-D1 | A / B | C / D | 3:1 | 1:0 |
+| 1-2 | A | D | 2:3 | 0:1 |
+"""
+    operations = DataOperations(None)
+    extracted = json.loads(operations.extract_markdown_tables(markdown))
+    table = extracted["tables"][0]
+
+    inspected = json.loads(operations.inspect_data(table=table))
+    selected = json.loads(
+        operations.select_data(
+            table=table,
+            filters=[{"column": "Spiele", "op": "eq", "value": "1:0"}],
+        )
+    )
+
+    assert inspected["source"] == "table"
+    assert inspected["row_count"] == 2
+    assert selected["total_rows"] == 1
+    assert selected["rows"][0]["column_1"] == "D1-D1"
+
+
+def test_table_source_is_mutually_exclusive_with_other_sources() -> None:
+    table = {"columns": ["a"], "rows": [{"a": 1}]}
+    operations = DataOperations(None)
+
+    with pytest.raises(DataOperationError, match="Genau eine Datenquelle"):
+        operations.inspect_data(data="a\n1\n", data_format="csv", table=table)
+    with pytest.raises(DataOperationError, match="Genau eine Datenquelle"):
+        operations.inspect_data()
+
+
+def test_table_source_rejects_unknown_row_columns() -> None:
+    operations = DataOperations(None)
+
+    with pytest.raises(DataOperationError, match="unbekannte Spalten"):
+        operations.inspect_data(
+            table={
+                "columns": ["a"],
+                "rows": [{"a": 1, "b": 2}],
+            }
+        )
+
+
+def test_extract_markdown_tables_ignores_non_tables() -> None:
+    result = json.loads(
+        DataOperations(None).extract_markdown_tables(
+            "Nur Text\n\n| keine | Tabelle |\n"
+        )
+    )
+
+    assert result == {"table_count": 0, "tables": []}
