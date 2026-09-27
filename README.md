@@ -348,16 +348,23 @@ cli-agent --with-os-write --with-data
 ```
 
 `--with-data` aktiviert immer die Data-Tools. Der OS-Modus bestimmt separat,
-ob diese Tools Workspace-Dateien verwenden dürfen: ohne OS-Flag akzeptieren sie
-nur direkt übergebene CSV/JSON-Daten; mit `--with-os-read` dürfen sie zusätzlich
-Datendateien im Workspace lesen; mit `--with-os-write` kommen die dedizierten
-Data-Write-Tools hinzu. Dadurch kann z. B. aus Web-Kontext extrahierter
-Tabelleninhalt ausgewertet werden, ohne dem Data-MCP Dateisystemzugriff zu geben.
+welche Dateifunktionen überhaupt im MCP-Schema erscheinen: ohne OS-Flag werden
+keine `path`-Parameter exponiert; mit `--with-os-read` dürfen Analyse-Tools
+zusätzlich Workspace-Dateien lesen; mit `--with-os-write` kommen die
+dedizierten Data-Write-Tools hinzu. Bei vorhandenem Dateizugriff werden Pfade
+bevorzugt, insbesondere für mehrstufige Transformationen mit Schreibzugriff.
 
-Der Data-MCP bietet außerdem einen deterministischen Calculator für
-nicht-triviale skalare Arithmetik sowie lokale Auswertungen von
-CSV/TSV/JSON/JSONL/NDJSON. Große lokale Rohdatensätze müssen bei Dateizugriff
-dadurch nicht vollständig in den LLM-Kontext geladen werden.
+Ohne passenden Dateipfad ist Markdown das bevorzugte Austauschformat. Der
+Data-MCP kann Markdown-Pipe-Tabellen normalisieren und die tabellarischen
+Ergebnisse von Auswahl-, Count- und Aggregationsoperationen wieder als
+normalisiertes Markdown liefern. Dadurch können Ergebnisse stateless zwischen
+Tool-Aufrufen weitergereicht werden, ohne Tabellen als große JSON-Objekte
+rekonstruieren zu müssen.
+
+Der Data-MCP bietet außerdem einen deterministischen Calculator sowie lokale
+Auswertungen von CSV/TSV/JSON/JSONL/NDJSON und Markdown. Große lokale
+Rohdatensätze müssen bei Dateizugriff dadurch nicht vollständig in den
+LLM-Kontext geladen werden.
 
 Details: [Workspace OS MCP](docs/mcp-os.md) und
 [Workspace Data MCP](docs/mcp-data.md).
