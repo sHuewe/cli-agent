@@ -251,7 +251,18 @@ class DataOperations:
                 f"Markdown enthält keine Tabelle mit Index {table_index}; "
                 f"gefunden: {len(tables)}."
             )
-        return cls._read_table(tables[table_index])
+        columns, rows = cls._read_table(tables[table_index])
+        return columns, [
+            {
+                column: (
+                    _infer_csv_scalar(value)
+                    if isinstance(value, str)
+                    else value
+                )
+                for column, value in row.items()
+            }
+            for row in rows
+        ]
 
     def _read_records(
         self,
