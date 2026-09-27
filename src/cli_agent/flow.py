@@ -152,6 +152,47 @@ def _workspace_path(
     return resolved
 
 
+def _ensure_output_parent_directory(workspace: Path, output: Path) -> None:
+    workspace = workspace.expanduser().resolve()
+    try:
+        relative_parent = output.parent.relative_to(workspace)
+    except ValueError as exc:
+        raise ValueError(
+            f"Output-Ordner muss innerhalb des festen Workspace liegen: {output.parent}"
+        ) from exc
+
+    current = workspace
+    for part in relative_parent.parts:
+        candidate = current / part
+        if path_entry_is_symlink_or_reparse(candidate):
+            raise ValueError(
+                f"Output-Ordner darf keinen Symlink oder Reparse Point enthalten: "
+                f"{candidate}"
+            )
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise ValueError(
+                f"Output-Ordner konnte nicht erstellt werden: {candidate}: {exc}"
+            ) from exc
+
+        if path_entry_is_symlink_or_reparse(candidate) or not candidate.is_dir():
+            raise ValueError(
+                f"Output-Ordner ist kein sicherer regulärer Ordner: {candidate}"
+            )
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(workspace)
+        except ValueError as exc:
+            raise ValueError(
+                f"Output-Ordner muss innerhalb des festen Workspace liegen: "
+                f"{candidate}"
+            ) from exc
+        current = resolved
+
+
 def _flow_source(workspace: Path, path: Path) -> Path:
     resolved = _workspace_path(
         workspace,
@@ -2198,7 +2239,7 @@ async def run_flow(
                         expected_fingerprint=expected_fingerprint,
                     )
                 else:
-                    output.parent.mkdir(parents=True, exist_ok=True)
+                    _ensure_output_parent_directory(workspace, output)
                     prepare_output_target(
                         workspace,
                         output,
@@ -2299,7 +2340,7 @@ async def run_flow(
             else:
                 checkpoint = None
                 if output is not None and preflight_outputs is None:
-                    output.parent.mkdir(parents=True, exist_ok=True)
+                    _ensure_output_parent_directory(workspace, output)
                     prepare_output_target(
                         workspace,
                         output,
