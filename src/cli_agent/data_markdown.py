@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from markdown_it import MarkdownIt
@@ -10,6 +11,7 @@ MAX_MARKDOWN_COLUMNS = 200
 MAX_CONTEXT_CHARS = 500
 
 _MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("table")
+_SEPARATOR_CELL = re.compile(r"^:?-{3,}:?$")
 
 
 class MarkdownTableError(ValueError):
@@ -75,8 +77,82 @@ def _preceding_context(lines: list[str], start_line: int) -> str | None:
     return "\n".join(reversed(block))
 
 
+def _ends_with_unescaped_pipe(value: str) -> bool:
+    if not value.endswith("|"):
+        return False
+    backslashes = 0
+    index = len(value) - 2
+    while index >= 0 and value[index] == "\\":
+        backslashes += 1
+        index -= 1
+    return backslashes % 2 == 0
+
+
+def _split_pipe_row(line: str) -> list[str] | None:
+    text = line.strip()
+    if "|" not in text:
+        return None
+    if text.startswith("|"):
+        text = text[1:]
+    if _ends_with_unescaped_pipe(text):
+        text = text[:-1]
+
+    cells: list[str] = []
+    current: list[str] = []
+    backslashes = 0
+    for character in text:
+        if character == "\\":
+            current.append(character)
+            backslashes += 1
+            continue
+        if character == "|" and backslashes % 2 == 0:
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+        backslashes = 0
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _normalize_table_separator_widths(markdown: str) -> str:
+    """Repair only missing cells in otherwise strict Markdown separators.
+
+    Some HTML extractors emit a pipe-table header and data rows with N cells,
+    but accidentally emit only N-1 separator cells. This helper repairs that
+    narrow syntax defect so a standards-compliant Markdown parser can recognize
+    the table. It never changes header or data-cell contents and never
+    interprets arbitrary input as a separator.
+    """
+
+    lines = markdown.splitlines()
+    for index in range(1, len(lines)):
+        separator_cells = _split_pipe_row(lines[index])
+        if (
+            separator_cells is None
+            or not separator_cells
+            or not all(_SEPARATOR_CELL.fullmatch(cell) for cell in separator_cells)
+        ):
+            continue
+
+        header_cells = _split_pipe_row(lines[index - 1])
+        if (
+            header_cells is None
+            or len(header_cells) <= len(separator_cells)
+            or len(header_cells) > MAX_MARKDOWN_COLUMNS
+        ):
+            continue
+
+        normalized_cells = separator_cells + [
+            "---"
+            for _ in range(len(header_cells) - len(separator_cells))
+        ]
+        lines[index] = "|" + "|".join(normalized_cells) + "|"
+    return "\n".join(lines)
+
+
 def _normalize_markdown_input(markdown: str) -> str:
-    """Normalize JSON-copied line breaks before parsing Markdown.
+    """Normalize transport artifacts before parsing Markdown tables.
 
     Reference contexts are serialized as JSON before they reach the model. A
     model may copy visible \\n escape sequences literally into a tool argument
@@ -89,7 +165,53 @@ def _normalize_markdown_input(markdown: str) -> str:
     if "\n" not in normalized and "\\n" in normalized:
         normalized = normalized.replace("\\r\\n", "\n")
         normalized = normalized.replace("\\n", "\n")
-    return normalized
+    return _normalize_table_separator_widths(normalized)
+
+
+def _markdown_scalar(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        text = "true" if value else "false"
+    else:
+        text = str(value)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\\", "\\\\").replace("|", "\\|")
+    return text.replace("\n", "\\n")
+
+
+def render_markdown_table(
+    columns: list[str],
+    rows: list[dict[str, Any]],
+) -> str:
+    """Render a canonical Markdown pipe table with a fixed column count."""
+
+    if not columns:
+        raise MarkdownTableError("Markdown-Tabelle benötigt mindestens eine Spalte.")
+    if len(columns) > MAX_MARKDOWN_COLUMNS:
+        raise MarkdownTableError(
+            "Markdown-Tabelle überschreitet das Spaltenlimit von "
+            f"{MAX_MARKDOWN_COLUMNS}."
+        )
+    if len(columns) != len(set(columns)) or any(
+        not isinstance(column, str) or not column
+        for column in columns
+    ):
+        raise MarkdownTableError(
+            "Markdown-Tabelle benötigt eindeutige, nicht-leere Spaltennamen."
+        )
+
+    lines = [
+        "| " + " | ".join(_markdown_scalar(column) for column in columns) + " |",
+        "|" + "|".join("---" for _ in columns) + "|",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(_markdown_scalar(row.get(column)) for column in columns)
+            + " |"
+        )
+    return "\n".join(lines)
 
 
 def extract_markdown_tables(markdown: str) -> list[dict[str, Any]]:
