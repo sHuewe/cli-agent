@@ -426,7 +426,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             f"Flow-Datei konnte nicht gelesen werden: {exc}"
         ) from exc
 
-    allowed_root = {"version", "steps", "exclude_paths", "vars", "retry"}
+    allowed_root = {
+        "version",
+        "config",
+        "model",
+        "steps",
+        "exclude_paths",
+        "vars",
+        "retry",
+    }
     unknown_root = set(values) - allowed_root
     if unknown_root:
         raise ValueError(
@@ -435,6 +443,19 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
     if values.get("version") != 1:
         raise ValueError("Flow-Datei benötigt version = 1.")
+
+    global_config_value = values.get("config")
+    global_config = (
+        Path(_string(global_config_value, field="config"))
+        if global_config_value is not None
+        else None
+    )
+    global_model_value = values.get("model")
+    global_model = (
+        _string(global_model_value, field="model")
+        if global_model_value is not None
+        else None
+    )
 
     allowed_retry = {
         "max_attempts",
@@ -651,7 +672,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
             )
             if config_value is not None
-            else None
+            else global_config
         )
         model_value = raw.get("model")
         model = (
@@ -660,7 +681,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 field=f"steps[{index}].model",
             )
             if model_value is not None
-            else None
+            else global_model
         )
 
         output_value = raw.get("output")
