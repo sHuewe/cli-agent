@@ -242,12 +242,18 @@ einer offenen Freigabe oder ist kein Browser verbunden, wird fail-closed mit
 `False` entschieden. Toolargumente werden mit derselben begrenzten
 Approval-Vorschau wie im Terminal angezeigt.
 
-Antworten und Toolargumente werden im Browser ausschließlich als Text gerendert,
-nicht als vom Modell geliefertes HTML. Die UI lädt keine externen Skripte,
-Styles, Fonts oder sonstigen Ressourcen. CSP, `frame-ancestors 'none'`,
-`X-Content-Type-Options`, `Referrer-Policy` und eine restriktive
-Permissions-Policy reduzieren die Browser-Angriffsfläche zusätzlich. Die
-Web-Dependencies werden nur über das Extra `cli-agent[web]` installiert.
+LLM-Antworten werden für die Web-UI serverseitig mit `markdown-it-py` aus
+Markdown in HTML gerendert. Raw-HTML aus der Modellantwort ist dabei deaktiviert
+(`html = false`) und wird escaped; automatische URL-Erkennung ist ebenfalls
+deaktiviert (`linkify = false`). Nur das so erzeugte HTML wird für
+Assistant-Nachrichten per `innerHTML` eingesetzt. Der unveränderte Antworttext
+bleibt parallel als `content` erhalten. Benutzer-, System- und Fehlermeldungen
+sowie Toolargumente werden weiterhin ausschließlich per `textContent` als Text
+gerendert. Die UI lädt keine externen Skripte, Styles, Fonts oder sonstigen
+Ressourcen. CSP, `frame-ancestors 'none'`, `X-Content-Type-Options`,
+`Referrer-Policy` und eine restriktive Permissions-Policy reduzieren die
+Browser-Angriffsfläche zusätzlich. Die Web-Dependencies werden nur über das
+Extra `cli-agent[web]` installiert.
 
 ### Dependency- und Regression-Risiko
 

@@ -11,6 +11,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from markdown_it import MarkdownIt
+
 from .approval_display import approval_arguments
 from .file_context import OutputTarget, is_local_agent_command
 from .local_commands import classify_local_command
@@ -19,6 +21,25 @@ from .terminal_output import sanitize_terminal_text
 WEB_UI_HOST = "127.0.0.1"
 MAX_PROMPT_BYTES = 512 * 1024
 MAX_WS_MESSAGE_BYTES = 1024 * 1024
+
+_MARKDOWN = (
+    MarkdownIt(
+        "commonmark",
+        {
+            "html": False,
+            "linkify": False,
+        },
+    )
+    .enable("table")
+    .enable("strikethrough")
+)
+
+
+def _render_markdown(text: str) -> str:
+    """Render trusted Markdown output while keeping raw HTML disabled."""
+
+    return _MARKDOWN.render(text)
+
 
 _WEB_EXTRA_ERROR = (
     "Die Web-UI ist nicht installiert. Installiere cli-agent mit dem optionalen "
@@ -266,7 +287,13 @@ class _WebUiSession:
         async with self._agent_lock:
             try:
                 answer = await self.agent.ask(prompt)
-                await self._send_event({"type": "answer", "content": answer})
+                await self._send_event(
+                    {
+                        "type": "answer",
+                        "content": answer,
+                        "html": _render_markdown(answer),
+                    }
+                )
                 if self.output_target is not None and not is_local_agent_command(prompt):
                     try:
                         self.output_target.write_text(answer)
@@ -583,6 +610,21 @@ h1 { margin: 0 0 4px; font-size: 1.35rem; }
 .message { max-width: 88%; padding: 11px 13px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message.user { align-self: flex-end; background: color-mix(in srgb, Highlight 18%, Canvas); }
 .message.assistant, .message.system { align-self: flex-start; background: color-mix(in srgb, CanvasText 8%, Canvas); }
+.message.assistant { white-space: normal; overflow-x: auto; }
+.message.assistant > :first-child { margin-top: 0; }
+.message.assistant > :last-child { margin-bottom: 0; }
+.message.assistant h1 { font-size: 1.35rem; }
+.message.assistant h2 { font-size: 1.2rem; }
+.message.assistant h3 { font-size: 1.08rem; }
+.message.assistant h1, .message.assistant h2, .message.assistant h3 { margin: 1em 0 .45em; }
+.message.assistant ul, .message.assistant ol { padding-left: 1.5rem; }
+.message.assistant li + li { margin-top: .2rem; }
+.message.assistant code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; }
+.message.assistant :not(pre) > code { padding: .1em .3em; border-radius: 4px; background: color-mix(in srgb, CanvasText 9%, Canvas); }
+.message.assistant pre { max-width: 100%; overflow: auto; white-space: pre; }
+.message.assistant blockquote { margin: .8em 0; padding-left: .9em; border-left: 3px solid color-mix(in srgb, CanvasText 28%, transparent); opacity: .9; }
+.message.assistant table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; }
+.message.assistant th, .message.assistant td { border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); padding: 6px 9px; text-align: left; }
 .message.error { align-self: flex-start; border: 1px solid #b42318; }
 .commands { display: flex; flex-wrap: wrap; gap: 8px; }
 .commands button { padding: 7px 10px; font-size: .9rem; }
@@ -666,10 +708,14 @@ APP_JS = """
     }
   };
 
-  function addMessage(kind, content) {
+  function addMessage(kind, content, renderedHtml = null) {
     const element = document.createElement("div");
     element.className = "message " + kind;
-    element.textContent = content;
+    if (kind === "assistant" && typeof renderedHtml === "string") {
+      element.innerHTML = renderedHtml;
+    } else {
+      element.textContent = content;
+    }
     chat.appendChild(element);
     element.scrollIntoView({ block: "end", behavior: "smooth" });
   }
@@ -823,7 +869,11 @@ APP_JS = """
       return;
     }
     if (payload.type === "answer") {
-      addMessage("assistant", String(payload.content || ""));
+      addMessage(
+        "assistant",
+        String(payload.content || ""),
+        typeof payload.html === "string" ? payload.html : null
+      );
       return;
     }
     if (payload.type === "error") {
