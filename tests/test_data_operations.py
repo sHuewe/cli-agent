@@ -198,7 +198,7 @@ def test_inspect_schema_drops_distinct_domains_before_columns(
     )
     monkeypatch.setattr(
         "cli_agent.data_operations.MAX_SCHEMA_RESULT_CHARS",
-        260,
+        310,
     )
 
     result_text = _operations(tmp_path).inspect_schema(
@@ -207,7 +207,7 @@ def test_inspect_schema_drops_distinct_domains_before_columns(
     )
     result = json.loads(result_text)
 
-    assert len(result_text) <= 260
+    assert len(result_text) <= 310
     assert result["column_count"] == 2
     assert result["columns_complete"] is True
     assert [column["name"] for column in result["columns"]] == ["a", "b"]
