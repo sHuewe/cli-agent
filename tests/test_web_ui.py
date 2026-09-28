@@ -167,11 +167,46 @@ def test_web_ui_answer_is_sent_before_output_write() -> None:
         return sent
 
     sent = asyncio.run(run())
-    assert sent[0] == {"type": "answer", "content": "successful answer"}
+    assert sent[0] == {
+        "type": "answer",
+        "content": "successful answer",
+        "html": "<p>successful answer</p>\n",
+    }
     assert sent[1]["type"] == "error"
     assert "write failed" in sent[1]["content"]
     assert sent[-1] == {"type": "busy", "value": False}
 
+
+
+def test_web_ui_markdown_renders_emphasis_lists_code_tables_and_escapes_html() -> None:
+    rendered = web_ui._render_markdown(
+        "# Title\n\n"
+        "**bold** and *italic*\n\n"
+        "* first\n"
+        "* second\n\n"
+        "`inline`\n\n"
+        "| A | B |\n"
+        "|---|---|\n"
+        "| 1 | 2 |\n\n"
+        "<script>alert(\'x\')</script>"
+    )
+
+    assert "<h1>Title</h1>" in rendered
+    assert "<strong>bold</strong>" in rendered
+    assert "<em>italic</em>" in rendered
+    assert "<ul>" in rendered
+    assert "<li>first</li>" in rendered
+    assert "<li>second</li>" in rendered
+    assert "<code>inline</code>" in rendered
+    assert "<table>" in rendered
+    assert "&lt;script&gt;" in rendered
+    assert "<script>" not in rendered
+
+
+def test_web_ui_only_uses_rendered_html_for_assistant_messages() -> None:
+    assert \'kind === "assistant" && typeof renderedHtml === "string"\' in web_ui.APP_JS
+    assert "element.innerHTML = renderedHtml" in web_ui.APP_JS
+    assert "element.textContent = content" in web_ui.APP_JS
 
 def test_web_ui_connection_lock_only_guards_active_sender_state() -> None:
     import inspect
@@ -232,7 +267,11 @@ def test_web_ui_prompt_result_is_buffered_across_disconnect() -> None:
 
     delivered = asyncio.run(run())
     assert delivered == [
-        {"type": "answer", "content": "answer after reconnect"},
+        {
+            "type": "answer",
+            "content": "answer after reconnect",
+            "html": "<p>answer after reconnect</p>\n",
+        },
         {"type": "busy", "value": False},
     ]
 
