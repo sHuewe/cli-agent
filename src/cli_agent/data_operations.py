@@ -1203,16 +1203,18 @@ class DataOperations:
 
         selected: list[dict[str, Any]] = []
         selected_texts: list[str] = []
+        used_chars = fixed_chars + 2
         for entry, entry_text in zip(
             minimal_metadata,
             minimal_texts,
             strict=True,
         ):
-            candidate_texts = selected_texts + [entry_text]
-            if result_chars(candidate_texts) > MAX_SCHEMA_RESULT_CHARS:
+            delta = len(entry_text) + (1 if selected_texts else 0)
+            if used_chars + delta > MAX_SCHEMA_RESULT_CHARS:
                 break
             selected.append(entry)
             selected_texts.append(entry_text)
+            used_chars += delta
 
         result = {
             "source": source,
