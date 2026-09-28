@@ -72,7 +72,7 @@ BASE_TOOLS = {
     "calculate",
     "extract_markdown_tables",
     "inspect_schema",
-    "inspect_data",
+    "preview_data",
     "select_data",
     "value_counts",
     "aggregate_data",
@@ -90,7 +90,7 @@ def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> Non
 
     assert set(server.tools) == BASE_TOOLS
     assert "path" not in inspect.signature(server.tools["inspect_schema"]).parameters
-    assert "path" not in inspect.signature(server.tools["inspect_data"]).parameters
+    assert "path" not in inspect.signature(server.tools["preview_data"]).parameters
     assert "path" not in inspect.signature(server.tools["select_data"]).parameters
     assert "path" not in inspect.signature(server.tools["value_counts"]).parameters
     assert "path" not in inspect.signature(server.tools["aggregate_data"]).parameters
@@ -100,7 +100,7 @@ def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> Non
     assert "Use select_data whenever a subset" in server.instructions
     assert "Dependent Data MCP calls must wait" in server.instructions
     assert "Use inspect_schema to discover column names" in server.instructions
-    assert "Do not use inspect_data as a substitute" in server.instructions
+    assert "Do not use preview_data as a substitute" in server.instructions
 
     assert (
         server.tools["select_data"](
@@ -138,7 +138,7 @@ def test_read_mode_exposes_path_but_not_write_tools(monkeypatch) -> None:
 
     assert set(server.tools) == BASE_TOOLS
     assert "path" in inspect.signature(server.tools["inspect_schema"]).parameters
-    assert "path" in inspect.signature(server.tools["inspect_data"]).parameters
+    assert "path" in inspect.signature(server.tools["preview_data"]).parameters
     assert "path" in inspect.signature(server.tools["select_data"]).parameters
     assert "input_path" not in inspect.signature(server.tools["select_data"]).parameters
     assert "Prefer a workspace path" in server.instructions
@@ -147,7 +147,7 @@ def test_read_mode_exposes_path_but_not_write_tools(monkeypatch) -> None:
         path="data.csv",
         distinct_values_limit=7,
     ) == "schema"
-    assert server.tools["inspect_data"](
+    assert server.tools["preview_data"](
         path="data.csv",
         sample_rows=3,
     ) == "inspected"
@@ -188,7 +188,7 @@ def test_write_mode_adds_file_tools_and_prefers_path_workflows(monkeypatch) -> N
         "select_data_to_file",
         "aggregate_data_to_file",
     }
-    assert "path" in inspect.signature(server.tools["inspect_data"]).parameters
+    assert "path" in inspect.signature(server.tools["preview_data"]).parameters
     assert "input_path" in inspect.signature(
         server.tools["select_data_to_file"]
     ).parameters
@@ -240,7 +240,7 @@ def test_inspection_tool_descriptions_separate_schema_from_rows(monkeypatch) -> 
     server = data_mcp_server.create_server(_operations(calls), access="read")
 
     schema_doc = (server.tools["inspect_schema"].__doc__ or "").lower()
-    preview_doc = (server.tools["inspect_data"].__doc__ or "").lower()
+    preview_doc = (server.tools["preview_data"].__doc__ or "").lower()
 
     assert "never returns dataset rows" in schema_doc
     assert "distinct_values_complete" in schema_doc
