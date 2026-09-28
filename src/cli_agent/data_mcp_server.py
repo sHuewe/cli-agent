@@ -210,9 +210,9 @@ def create_server(
             """
             Preview one inline tabular dataset with complete sample rows.
 
-            This tool returns schema metadata plus the first sample_rows complete
-            records. Use it only when relationships between columns in example
-            rows are genuinely needed. For schema discovery without rows, use
+            This tool returns schema metadata plus complete sample rows: the first
+            sample_rows records. Use it only when relationships between columns
+            in example rows are genuinely needed. For schema discovery without rows, use
             inspect_schema instead. For actual filtered rows, projections or
             ordering, use select_data.
 
@@ -372,9 +372,9 @@ def create_server(
             """
             Preview one tabular dataset from a workspace path or inline data.
 
-            This tool returns schema metadata plus the first sample_rows complete
-            records. Use it only when relationships between columns in example
-            rows are genuinely needed. For schema discovery without rows, use
+            This tool returns schema metadata plus complete sample rows: the first
+            sample_rows records. Use it only when relationships between columns
+            in example rows are genuinely needed. For schema discovery without rows, use
             inspect_schema instead. For actual filtered rows, projections or
             ordering, use select_data.
 
