@@ -187,7 +187,11 @@ def create_server(
             or oversized domains are omitted completely with
             distinct_values_complete=false; partial value lists are never
             returned. Set distinct_values_limit=0 to suppress distinct values
-            entirely.
+            entirely. The complete serialized schema result is also bounded.
+            Optional distinct values are omitted before column metadata; only if
+            necessary are columns truncated. column_count always reports the
+            actual total and columns_complete tells whether every column was
+            returned.
 
             Use this before constructing filters when you need to discover
             actual column names or low-cardinality value domains without
@@ -349,7 +353,11 @@ def create_server(
             or oversized domains are omitted completely with
             distinct_values_complete=false; partial value lists are never
             returned. Set distinct_values_limit=0 to suppress distinct values
-            entirely.
+            entirely. The complete serialized schema result is also bounded.
+            Optional distinct values are omitted before column metadata; only if
+            necessary are columns truncated. column_count always reports the
+            actual total and columns_complete tells whether every column was
+            returned.
 
             Prefer path when the dataset already exists in the workspace. Use
             this before constructing filters when you need actual column names
