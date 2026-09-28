@@ -1055,7 +1055,11 @@ class DataOperations:
                 "unique_count": len(unique),
             }
             if distinct_values_limit is not None:
-                if len(unique) <= distinct_values_limit:
+                if distinct_values_limit == 0:
+                    # Zero explicitly suppresses distinct values, including for
+                    # empty/header-only datasets whose unique domain is empty.
+                    entry["distinct_values_complete"] = False
+                elif len(unique) <= distinct_values_limit:
                     entry["distinct_values"] = list(unique.values())
                     entry["distinct_values_complete"] = True
                 else:
