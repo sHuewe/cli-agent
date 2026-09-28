@@ -33,6 +33,10 @@ DEFAULT_DISTINCT_VALUES_LIMIT = 20
 MAX_DISTINCT_VALUES_LIMIT = 100
 MAX_SCHEMA_DISTINCT_VALUE_CHARS = 100_000
 MAX_SCHEMA_DISTINCT_TOTAL_CHARS = 1_000_000
+# Keep schema results comfortably below the general 10M MCP tool-result guard.
+# This budget is applied to the complete serialized inspect_schema result, not
+# just to distinct-value payloads.
+MAX_SCHEMA_RESULT_CHARS = 8_000_000
 MAX_VALUE_COUNT_ROWS = 200
 MAX_DECIMAL_WORKING_PRECISION = 10_000
 FILTER_OPERATORS = frozenset(
@@ -1113,6 +1117,115 @@ class DataOperations:
             metadata.append(entry)
         return metadata
 
+    @staticmethod
+    def _bounded_schema_result(
+        *,
+        source: str,
+        row_count: int,
+        column_count: int,
+        metadata: list[dict[str, Any]],
+    ) -> str:
+        """Serialize schema metadata within the dedicated result budget.
+
+        Column metadata has priority over optional distinct-value domains. If
+        the complete result would be too large, distinct domains are omitted
+        first. Only if the metadata without domains still exceeds the budget is
+        the returned column list truncated. Truncation is explicit through
+        column_count and columns_complete.
+        """
+
+        def without_distinct_values(entry: dict[str, Any]) -> dict[str, Any]:
+            stripped = dict(entry)
+            if "distinct_values" in stripped:
+                stripped.pop("distinct_values")
+                stripped["distinct_values_complete"] = False
+            return stripped
+
+        minimal_metadata = [
+            without_distinct_values(entry)
+            for entry in metadata
+        ]
+        minimal_texts = [
+            _json_dumps_precise(entry)
+            for entry in minimal_metadata
+        ]
+
+        # Measure against the compact final wire representation. Use false for
+        # columns_complete while budgeting because it is one character longer
+        # than true and therefore a conservative fixed-overhead estimate.
+        empty_result = _json_dumps_precise(
+            {
+                "source": source,
+                "row_count": row_count,
+                "column_count": column_count,
+                "columns": [],
+                "columns_complete": False,
+            }
+        )
+        fixed_chars = len(empty_result) - 2  # exclude the empty [] payload
+
+        def result_chars(texts: list[str]) -> int:
+            return (
+                fixed_chars
+                + 2
+                + sum(len(text) for text in texts)
+                + max(0, len(texts) - 1)
+            )
+
+        if result_chars(minimal_texts) <= MAX_SCHEMA_RESULT_CHARS:
+            selected = list(minimal_metadata)
+            selected_texts = list(minimal_texts)
+            used_chars = result_chars(selected_texts)
+
+            # Add complete distinct domains only when they still fit after all
+            # columns' basic metadata has been reserved.
+            for index, entry in enumerate(metadata):
+                if "distinct_values" not in entry:
+                    continue
+                full_text = _json_dumps_precise(entry)
+                delta = len(full_text) - len(selected_texts[index])
+                if used_chars + delta <= MAX_SCHEMA_RESULT_CHARS:
+                    selected[index] = entry
+                    selected_texts[index] = full_text
+                    used_chars += delta
+
+            result = {
+                "source": source,
+                "row_count": row_count,
+                "column_count": column_count,
+                "columns": selected,
+                "columns_complete": True,
+            }
+            rendered = _json_dumps_precise(result)
+            if len(rendered) > MAX_SCHEMA_RESULT_CHARS:
+                raise AssertionError("Schema result budget calculation is inconsistent.")
+            return rendered
+
+        selected: list[dict[str, Any]] = []
+        selected_texts: list[str] = []
+        for entry, entry_text in zip(
+            minimal_metadata,
+            minimal_texts,
+            strict=True,
+        ):
+            candidate_texts = selected_texts + [entry_text]
+            if result_chars(candidate_texts) > MAX_SCHEMA_RESULT_CHARS:
+                break
+            selected.append(entry)
+            selected_texts.append(entry_text)
+
+        result = {
+            "source": source,
+            "row_count": row_count,
+            "column_count": column_count,
+            "columns": selected,
+            "columns_complete": len(selected) == column_count,
+        }
+        rendered = _json_dumps_precise(result)
+        if len(rendered) > MAX_SCHEMA_RESULT_CHARS:
+            raise AssertionError("Schema result budget calculation is inconsistent.")
+        return rendered
+
     def inspect_schema(
         self,
         path: str | None = None,
@@ -1139,17 +1252,16 @@ class DataOperations:
             rows,
             distinct_values_limit=distinct_values_limit,
         )
-        return _json_dumps_precise(
-            {
-                "source": (
-                    path
-                    if path is not None
-                    else f"inline:{data_format}"
-                ),
-                "row_count": len(rows),
-                "columns": metadata,
-            },
-            indent=2,
+        source = (
+            path
+            if path is not None
+            else f"inline:{data_format}"
+        )
+        return self._bounded_schema_result(
+            source=source,
+            row_count=len(rows),
+            column_count=len(columns),
+            metadata=metadata,
         )
 
     def inspect_data(
