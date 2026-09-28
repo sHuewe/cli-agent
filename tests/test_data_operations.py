@@ -75,6 +75,58 @@ def test_inspect_data_returns_schema_counts_and_bounded_sample(tmp_path: Path) -
     assert metadata["category"]["unique_count"] == 2
 
 
+def test_inspect_schema_returns_metadata_and_complete_low_cardinality_domains(
+    tmp_path: Path,
+) -> None:
+    _write_csv(tmp_path)
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "sales.csv",
+            distinct_values_limit=3,
+        )
+    )
+
+    assert result["row_count"] == 4
+    assert "sample" not in result
+    metadata = {entry["name"]: entry for entry in result["columns"]}
+
+    assert metadata["category"]["distinct_values"] == ["A", "B"]
+    assert metadata["category"]["distinct_values_complete"] is True
+    assert metadata["country"]["distinct_values"] == ["DE", "FR"]
+    assert metadata["country"]["distinct_values_complete"] is True
+
+    assert "distinct_values" not in metadata["revenue"]
+    assert metadata["revenue"]["distinct_values_complete"] is False
+
+
+def test_inspect_schema_can_suppress_distinct_values(tmp_path: Path) -> None:
+    _write_csv(tmp_path)
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "sales.csv",
+            distinct_values_limit=0,
+        )
+    )
+
+    for column in result["columns"]:
+        assert "distinct_values" not in column
+        assert column["distinct_values_complete"] is False
+
+
+def test_inspect_schema_rejects_invalid_distinct_values_limit(
+    tmp_path: Path,
+) -> None:
+    _write_csv(tmp_path)
+    operations = _operations(tmp_path)
+
+    with pytest.raises(DataOperationError, match="distinct_values_limit"):
+        operations.inspect_schema("sales.csv", distinct_values_limit=-1)
+    with pytest.raises(DataOperationError, match="distinct_values_limit"):
+        operations.inspect_schema("sales.csv", distinct_values_limit=101)
+
+
 def test_select_data_filters_projects_sorts_and_reports_truncation(
     tmp_path: Path,
 ) -> None:
