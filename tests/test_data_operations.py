@@ -135,6 +135,56 @@ def test_inspect_schema_zero_limit_suppresses_empty_domain(
         assert column["distinct_values_complete"] is False
 
 
+def test_inspect_schema_omits_distinct_values_when_one_value_is_too_large(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "large.csv"
+    huge = "x" * 100_001
+    path.write_text("value\n" + huge + "\n", encoding="utf-8")
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "large.csv",
+            distinct_values_limit=20,
+        )
+    )
+
+    column = result["columns"][0]
+    assert column["unique_count"] == 1
+    assert "distinct_values" not in column
+    assert column["distinct_values_complete"] is False
+
+
+def test_inspect_schema_omits_later_domains_when_total_budget_is_exceeded(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "domains.csv"
+    path.write_text(
+        "a,b\n"
+        "aaaa,bbbb\n"
+        "cccc,dddd\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cli_agent.data_operations.MAX_SCHEMA_DISTINCT_TOTAL_CHARS",
+        20,
+    )
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "domains.csv",
+            distinct_values_limit=20,
+        )
+    )
+
+    first, second = result["columns"]
+    assert first["distinct_values"] == ["aaaa", "cccc"]
+    assert first["distinct_values_complete"] is True
+    assert "distinct_values" not in second
+    assert second["distinct_values_complete"] is False
+
+
 def test_inspect_schema_rejects_invalid_distinct_values_limit(
     tmp_path: Path,
 ) -> None:
