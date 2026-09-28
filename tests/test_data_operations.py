@@ -1326,6 +1326,63 @@ def test_generated_markdown_headers_round_trip_special_characters(
     assert parsed["sample"] == [{column: "value"}]
 
 
+@pytest.mark.parametrize(
+    ("column", "rendered"),
+    [
+        ("column_1", "column\\_1"),
+        ("a|b", "a\\|b"),
+        (r"path\\name", r"path\\\\name"),
+        ("tick`name", "tick\\`name"),
+        ("*emphasis*", "\\*emphasis\\*"),
+        ("[label](target)", "\\[label\\](target)"),
+        ("<tag>", "\\<tag\\>"),
+        ("&entity;", "\\&entity;"),
+        ("Grüße_日本", "Grüße\\_日本"),
+    ],
+)
+def test_generated_markdown_headers_use_readable_escapes(
+    column: str,
+    rendered: str,
+) -> None:
+    operations = DataOperations(None)
+    selected = operations.select_data(
+        data=json.dumps([{column: "value"}], ensure_ascii=False),
+        data_format="json",
+    )
+
+    assert f"| {rendered} |" in selected
+    assert "cli-agent:data:v1:" not in selected
+
+
+def test_normalized_empty_header_is_rendered_as_readable_column_name() -> None:
+    normalized = DataOperations(None).extract_markdown_tables(
+        "| | Heim |\n"
+        "|---|---|\n"
+        "| D1-D1 | Laars, Martin |\n"
+    )
+
+    assert "| column\\_1 | Heim |" in normalized
+    assert "cli-agent:data:v1:" not in normalized
+
+
+def test_generated_markdown_header_with_newline_keeps_typed_codec() -> None:
+    column = "line\nbreak"
+    operations = DataOperations(None)
+    selected = operations.select_data(
+        data=json.dumps([{column: "value"}]),
+        data_format="json",
+    )
+
+    assert "cli-agent:data:v1:" in selected
+    parsed = json.loads(
+        operations.inspect_data(
+            data=selected,
+            data_format="markdown",
+        )
+    )
+    assert [entry["name"] for entry in parsed["columns"]] == [column]
+
+
 def test_markdown_decimal_codec_round_trips_exact_value() -> None:
     operations = DataOperations(None)
     result = operations.aggregate_data(

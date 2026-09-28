@@ -418,14 +418,23 @@ def _inline_scalar(token: Token) -> tuple[Any, bool]:
     return _inline_text(token), False
 
 
+def _escape_markdown_inline_text(value: str) -> str:
+    """Escape inline Markdown punctuation while keeping the text readable."""
+    return "".join(
+        f"\\{character}"
+        if character in _MARKDOWN_INLINE_CONTROL_CHARS
+        else character
+        for character in value
+    )
+
+
 def _markdown_header(value: str) -> str:
-    if (
-        "\r" in value
-        or "\n" in value
-        or _contains_markdown_inline_syntax(value)
-    ):
+    # Keep generated headers human- and LLM-readable whenever normal CommonMark
+    # escaping is sufficient. Physical newlines cannot be represented inside a
+    # pipe-table header without ambiguity, so retain the typed codec for them.
+    if "\r" in value or "\n" in value:
         return _encode_typed_cell("h", value)
-    return _markdown_scalar(value)
+    return _escape_markdown_inline_text(value)
 
 
 def _markdown_scalar(
