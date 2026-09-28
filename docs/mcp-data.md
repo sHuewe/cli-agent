@@ -78,7 +78,8 @@ damit große Quelldatensätze nicht ungefiltert in den LLM-Kontext gelangen.
 | --- | --- |
 | `calculate(expression)` | Wertet einen begrenzten arithmetischen Ausdruck deterministisch mit Dezimalarithmetik aus. |
 | `extract_markdown_tables(markdown)` | Extrahiert und normalisiert alle Pipe-Tabellen aus einem vollständigen Markdown-Dokument und gibt sie wieder als Markdown zurück. |
-| `inspect_data(path=..., ...)` / `inspect_data(data=..., data_format=..., ...)` | Liefert Zeilenzahl, Spalten, einfache Typinferenz, Null-/Unique-Zahlen und eine kleine Stichprobe. |
+| `inspect_schema(...)` | Liefert Schema-/Profil-Metadaten ohne Datensätze: Zeilenzahl, Spaltennamen, Typinferenz, Null-/Unique-Zahlen und bei niedriger Kardinalität die vollständige Distinct-Wertedomäne. |
+| `inspect_data(...)` | Liefert Schema-Metadaten plus eine bewusst begrenzte Vorschau vollständiger Zeilen. Für reine Schema-Erkundung ist `inspect_schema` vorzuziehen. |
 | `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert höchstens 1.000 Zeilen. |
 | `value_counts(...)` | Zählt unterschiedliche Werte einer Spalte. |
 | `aggregate_data(...)` | Gruppiert und aggregiert Daten deterministisch. |
@@ -143,6 +144,46 @@ Insbesondere mit `--with-os-write` sollen mehrstufige Transformationen nach
 Möglichkeit einmal über ein `*_to_file`-Tool persistiert und anschließend per
 `path` weiterverarbeitet werden. Ohne Schreibzugriff bleibt Markdown das
 bevorzugte stateless Austauschformat.
+
+### Schema-Erkundung und Datenvorschau
+
+`inspect_schema` ist für die Query-Planung gedacht und gibt **niemals
+vollständige Datensätze/Zeilen** zurück. Das Tool liest den Datensatz intern,
+um Metadaten zu bestimmen, exponiert an das Modell aber nur:
+
+- `row_count`,
+- pro Spalte `name`, `dtype`, `null_count` und `unique_count`,
+- optional eine vollständige `distinct_values`-Domäne bei niedriger
+  Kardinalität.
+
+Der Parameter `distinct_values_limit` ist standardmäßig 20 und auf 100
+begrenzt. Liegt die Anzahl unterschiedlicher Werte einer Spalte höchstens bei
+diesem Limit, wird die **vollständige** Wertedomäne zurückgegeben und
+`distinct_values_complete=true` gesetzt. Liegt die Kardinalität darüber,
+werden bewusst keine ersten/zufälligen Teilwerte ausgegeben;
+`distinct_values_complete=false` signalisiert, dass die Domäne nicht
+exponiert wurde. Mit `distinct_values_limit=0` lassen sich Distinct-Werte
+vollständig unterdrücken.
+
+Damit kann ein LLM beispielsweise tatsächliche Spaltennamen oder kleine
+Enum-artige Wertebereiche kennenlernen, bevor es einen Filter konstruiert,
+ohne Beziehungen zwischen verschiedenen Spalten aus Beispielzeilen zu sehen.
+Wenn Wertehäufigkeiten benötigt werden, ist `value_counts` das passende Tool.
+
+`inspect_data` hat bewusst einen anderen Vertrag: Es liefert zusätzlich die
+ersten `sample_rows` vollständigen Records und ist damit eine
+**Datenvorschau**. Es soll nur verwendet werden, wenn Beziehungen zwischen
+Spalten anhand einiger Beispielzeilen tatsächlich benötigt werden. Es ist
+weder die bevorzugte Schema-Erkundung noch ein Ersatz für eine gezielte
+`select_data`-Abfrage.
+
+Für Agenten gilt daher als typische Reihenfolge:
+
+1. `inspect_schema`, wenn Spalten oder kleine Wertedomänen noch unbekannt sind.
+2. `select_data`, sobald konkrete Datensätze/Spalten gefiltert oder projiziert
+   werden sollen.
+3. `value_counts`, wenn Häufigkeiten einzelner Werte benötigt werden.
+4. `inspect_data` nur bei echtem Bedarf an einer kleinen Row-Preview.
 
 ### Calculator
 
