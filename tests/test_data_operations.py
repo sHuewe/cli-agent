@@ -1366,7 +1366,25 @@ def test_normalized_empty_header_is_rendered_as_readable_column_name() -> None:
     assert "cli-agent:data:v1:" not in normalized
 
 
-@pytest.mark.parametrize("column", ["line\nbreak", "*a\x00", "plain\x00"])
+@pytest.mark.parametrize(
+    "column",
+    [
+        "line\nbreak",
+        "line\rbreak",
+        "line\vbreak",
+        "line\fbreak",
+        "line\x1cbreak",
+        "line\x1dbreak",
+        "line\x1ebreak",
+        "line\x85break",
+        "line\u2028break",
+        "line\u2029break",
+        "a\v*b",
+        "a\u2028*b",
+        "*a\x00",
+        "plain\x00",
+    ],
+)
 def test_generated_markdown_headers_requiring_codec_round_trip(
     column: str,
 ) -> None:
