@@ -159,11 +159,14 @@ um Metadaten zu bestimmen, exponiert an das Modell aber nur:
 Der Parameter `distinct_values_limit` ist standardmäßig 20 und auf 100
 begrenzt. Liegt die Anzahl unterschiedlicher Werte einer Spalte höchstens bei
 diesem Limit, wird die **vollständige** Wertedomäne zurückgegeben und
-`distinct_values_complete=true` gesetzt. Liegt die Kardinalität darüber,
-werden bewusst keine ersten/zufälligen Teilwerte ausgegeben;
-`distinct_values_complete=false` signalisiert, dass die Domäne nicht
-exponiert wurde. Mit `distinct_values_limit=0` lassen sich Distinct-Werte
-vollständig unterdrücken.
+`distinct_values_complete=true` gesetzt – sofern die Werte zusätzlich innerhalb
+der Größenbudgets für Schema-Ausgaben liegen. Einzelne sehr große Werte sowie
+Wertedomänen, die das kumulierte Distinct-Value-Budget überschreiten würden,
+werden nicht exponiert; in diesem Fall bleibt `distinct_values` aus und
+`distinct_values_complete=false`. Es werden niemals gekürzte oder partielle
+Distinct-Listen zurückgegeben. Liegt bereits die Kardinalität über dem Limit,
+gilt dasselbe Verhalten. Mit `distinct_values_limit=0` lassen sich
+Distinct-Werte vollständig unterdrücken.
 
 Damit kann ein LLM beispielsweise tatsächliche Spaltennamen oder kleine
 Enum-artige Wertebereiche kennenlernen, bevor es einen Filter konstruiert,
