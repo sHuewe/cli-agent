@@ -174,6 +174,14 @@ def test_flow_rejects_oversized_static_conversation_items(
     ("flow_text", "message"),
     [
         ("version = 1\nunknown = true", "Unbekannte Flow-Schlüssel"),
+        (
+            "version = 1\nconfig = 123\n[[steps]]\nid = \"one\"\nprompt_file = \"prompt.md\"",
+            "config muss ein nichtleerer String",
+        ),
+        (
+            "version = 1\nmodel = \"\"\n[[steps]]\nid = \"one\"\nprompt_file = \"prompt.md\"",
+            "model muss ein nichtleerer String",
+        ),
         ("version = 2\nsteps = []", "version = 1"),
         ("version = 1\nsteps = []", "mindestens einen"),
         (
@@ -493,6 +501,91 @@ add_file_context = "context.txt"
 
     with pytest.raises(ValueError, match="nicht gleichzeitig"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+def test_flow_inherits_global_config_and_model_and_allows_step_overrides(
+    tmp_path: Path,
+) -> None:
+    for name in ("one.md", "two.md", "three.md"):
+        (tmp_path / name).write_text("test", encoding="utf-8")
+    _write_config(tmp_path / "global.toml")
+    _write_config(tmp_path / "step.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+config = "global.toml"
+model = "global-model"
+
+[[steps]]
+id = "one"
+prompt_file = "one.md"
+
+[[steps]]
+id = "two"
+config = "step.toml"
+prompt_file = "two.md"
+
+[[steps]]
+id = "three"
+model = "step-model"
+prompt_file = "three.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+    assert definition.steps[0].config == Path("global.toml")
+    assert definition.steps[0].model == "global-model"
+    assert definition.steps[1].config == Path("step.toml")
+    assert definition.steps[1].model == "global-model"
+    assert definition.steps[2].config == Path("global.toml")
+    assert definition.steps[2].model == "step-model"
+
+
+def test_flow_passes_global_config_and_model_with_step_overrides_to_execution_core(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "one.md").write_text("one", encoding="utf-8")
+    (tmp_path / "two.md").write_text("two", encoding="utf-8")
+    _write_config(tmp_path / "global.toml")
+    _write_config(tmp_path / "step.toml")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+config = "global.toml"
+model = "global-model"
+
+[[steps]]
+id = "one"
+prompt_file = "one.md"
+
+[[steps]]
+id = "two"
+config = "step.toml"
+model = "step-model"
+prompt_file = "two.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="done", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.config_file for call in calls] == [
+        (tmp_path / "global.toml").resolve(),
+        (tmp_path / "step.toml").resolve(),
+    ]
+    assert [call.model for call in calls] == ["global-model", "step-model"]
+
 
 def test_flow_parses_model_and_retry_policy(tmp_path: Path) -> None:
     (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
