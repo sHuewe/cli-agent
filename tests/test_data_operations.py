@@ -185,6 +185,68 @@ def test_inspect_schema_omits_later_domains_when_total_budget_is_exceeded(
     assert second["distinct_values_complete"] is False
 
 
+def test_inspect_schema_drops_distinct_domains_before_columns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "schema.csv"
+    path.write_text(
+        "a,b\n"
+        "alpha,beta\n"
+        "gamma,delta\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cli_agent.data_operations.MAX_SCHEMA_RESULT_CHARS",
+        260,
+    )
+
+    result_text = _operations(tmp_path).inspect_schema(
+        "schema.csv",
+        distinct_values_limit=20,
+    )
+    result = json.loads(result_text)
+
+    assert len(result_text) <= 260
+    assert result["column_count"] == 2
+    assert result["columns_complete"] is True
+    assert [column["name"] for column in result["columns"]] == ["a", "b"]
+    assert all("distinct_values" not in column for column in result["columns"])
+    assert all(
+        column["distinct_values_complete"] is False
+        for column in result["columns"]
+    )
+
+
+def test_inspect_schema_truncates_columns_when_metadata_exceeds_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "wide.csv"
+    path.write_text(
+        "first_column,second_column,third_column\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cli_agent.data_operations.MAX_SCHEMA_RESULT_CHARS",
+        240,
+    )
+
+    result_text = _operations(tmp_path).inspect_schema(
+        "wide.csv",
+        distinct_values_limit=0,
+    )
+    result = json.loads(result_text)
+
+    assert len(result_text) <= 240
+    assert result["column_count"] == 3
+    assert result["columns_complete"] is False
+    assert 0 < len(result["columns"]) < 3
+    assert [column["name"] for column in result["columns"]] == [
+        "first_column",
+    ]
+
+
 def test_inspect_schema_rejects_invalid_distinct_values_limit(
     tmp_path: Path,
 ) -> None:
