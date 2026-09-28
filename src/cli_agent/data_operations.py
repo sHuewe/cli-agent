@@ -29,6 +29,8 @@ MAX_DATA_ROWS = 1_000_000
 MAX_CSV_FIELD_CHARS = MAX_DATA_FILE_BYTES
 MAX_RESULT_ROWS = 1_000
 MAX_SAMPLE_ROWS = 20
+DEFAULT_DISTINCT_VALUES_LIMIT = 20
+MAX_DISTINCT_VALUES_LIMIT = 100
 MAX_VALUE_COUNT_ROWS = 200
 MAX_DECIMAL_WORKING_PRECISION = 10_000
 FILTER_OPERATORS = frozenset(
@@ -302,6 +304,23 @@ class DataOperations:
         ):
             raise DataOperationError(
                 f"{name} muss zwischen 1 und {maximum} liegen."
+            )
+        return value
+
+    @staticmethod
+    def _validate_non_negative_limit(
+        value: int,
+        *,
+        maximum: int,
+        name: str,
+    ) -> int:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= maximum
+        ):
+            raise DataOperationError(
+                f"{name} muss zwischen 0 und {maximum} liegen."
             )
         return value
 
@@ -994,32 +1013,19 @@ class DataOperations:
             raise DataOperationError(str(exc)) from exc
         return prefix + "\n\n" + table
 
-    def inspect_data(
-        self,
-        path: str | None = None,
+    @staticmethod
+    def _column_metadata(
+        columns: list[str],
+        rows: list[Record],
         *,
-        data: str | None = None,
-        data_format: str | None = None,
-        table_index: int = 0,
-        sample_rows: int = 5,
-    ) -> str:
-        sample_rows = self._validate_limit(
-            sample_rows,
-            maximum=MAX_SAMPLE_ROWS,
-            name="sample_rows",
-        )
-        columns, rows = self._read_records(
-            path,
-            data=data,
-            data_format=data_format,
-            table_index=table_index,
-        )
+        distinct_values_limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         column_stats = {
             column: {
                 "present_count": 0,
                 "null_count": 0,
                 "values": [],
-                "unique": set(),
+                "unique": {},
             }
             for column in columns
         }
@@ -1031,23 +1037,95 @@ class DataOperations:
                     stats["null_count"] += 1
                 else:
                     stats["values"].append(value)
-                stats["unique"].add(_scalar_identity(value))
+                identity = _scalar_identity(value)
+                stats["unique"].setdefault(identity, value)
 
-        metadata = []
+        metadata: list[dict[str, Any]] = []
         for column in columns:
             stats = column_stats[column]
             missing_count = len(rows) - stats["present_count"]
             unique = stats["unique"]
             if missing_count:
-                unique.add(_scalar_identity(None))
-            metadata.append(
-                {
-                    "name": column,
-                    "dtype": _dtype_name(stats["values"]),
-                    "null_count": stats["null_count"] + missing_count,
-                    "unique_count": len(unique),
-                }
-            )
+                unique.setdefault(_scalar_identity(None), None)
+
+            entry: dict[str, Any] = {
+                "name": column,
+                "dtype": _dtype_name(stats["values"]),
+                "null_count": stats["null_count"] + missing_count,
+                "unique_count": len(unique),
+            }
+            if distinct_values_limit is not None:
+                if len(unique) <= distinct_values_limit:
+                    entry["distinct_values"] = list(unique.values())
+                    entry["distinct_values_complete"] = True
+                else:
+                    # Never return a partial domain: it is too easy for a model
+                    # to mistake a truncated list for the complete set.
+                    entry["distinct_values_complete"] = False
+            metadata.append(entry)
+        return metadata
+
+    def inspect_schema(
+        self,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        table_index: int = 0,
+        distinct_values_limit: int = DEFAULT_DISTINCT_VALUES_LIMIT,
+    ) -> str:
+        """Return schema/profile metadata without exposing any dataset rows."""
+        distinct_values_limit = self._validate_non_negative_limit(
+            distinct_values_limit,
+            maximum=MAX_DISTINCT_VALUES_LIMIT,
+            name="distinct_values_limit",
+        )
+        columns, rows = self._read_records(
+            path,
+            data=data,
+            data_format=data_format,
+            table_index=table_index,
+        )
+        metadata = self._column_metadata(
+            columns,
+            rows,
+            distinct_values_limit=distinct_values_limit,
+        )
+        return _json_dumps_precise(
+            {
+                "source": (
+                    path
+                    if path is not None
+                    else f"inline:{data_format}"
+                ),
+                "row_count": len(rows),
+                "columns": metadata,
+            },
+            indent=2,
+        )
+
+    def inspect_data(
+        self,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        table_index: int = 0,
+        sample_rows: int = 5,
+    ) -> str:
+        """Return schema metadata plus a bounded preview of complete rows."""
+        sample_rows = self._validate_limit(
+            sample_rows,
+            maximum=MAX_SAMPLE_ROWS,
+            name="sample_rows",
+        )
+        columns, rows = self._read_records(
+            path,
+            data=data,
+            data_format=data_format,
+            table_index=table_index,
+        )
+        metadata = self._column_metadata(columns, rows)
         return _json_dumps_precise(
             {
                 "source": (
