@@ -115,6 +115,26 @@ def test_inspect_schema_can_suppress_distinct_values(tmp_path: Path) -> None:
         assert column["distinct_values_complete"] is False
 
 
+def test_inspect_schema_zero_limit_suppresses_empty_domain(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "empty.csv"
+    path.write_text("name,kind\n", encoding="utf-8")
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "empty.csv",
+            distinct_values_limit=0,
+        )
+    )
+
+    assert result["row_count"] == 0
+    for column in result["columns"]:
+        assert column["unique_count"] == 0
+        assert "distinct_values" not in column
+        assert column["distinct_values_complete"] is False
+
+
 def test_inspect_schema_rejects_invalid_distinct_values_limit(
     tmp_path: Path,
 ) -> None:
