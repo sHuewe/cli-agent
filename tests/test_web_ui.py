@@ -204,9 +204,10 @@ def test_web_ui_markdown_renders_emphasis_lists_code_tables_and_escapes_html() -
 
 
 def test_web_ui_only_uses_rendered_html_for_assistant_messages() -> None:
-    assert \'kind === "assistant" && typeof renderedHtml === "string"\' in web_ui.APP_JS
+    assert 'kind === "assistant" && typeof renderedHtml === "string"' in web_ui.APP_JS
     assert "element.innerHTML = renderedHtml" in web_ui.APP_JS
     assert "element.textContent = content" in web_ui.APP_JS
+
 
 def test_web_ui_connection_lock_only_guards_active_sender_state() -> None:
     import inspect
