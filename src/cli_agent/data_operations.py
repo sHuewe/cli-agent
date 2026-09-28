@@ -31,6 +31,8 @@ MAX_RESULT_ROWS = 1_000
 MAX_SAMPLE_ROWS = 20
 DEFAULT_DISTINCT_VALUES_LIMIT = 20
 MAX_DISTINCT_VALUES_LIMIT = 100
+MAX_SCHEMA_DISTINCT_VALUE_CHARS = 100_000
+MAX_SCHEMA_DISTINCT_TOTAL_CHARS = 1_000_000
 MAX_VALUE_COUNT_ROWS = 200
 MAX_DECIMAL_WORKING_PRECISION = 10_000
 FILTER_OPERATORS = frozenset(
@@ -227,6 +229,22 @@ def _json_dumps_precise(value: Any, *, indent: int | None = None) -> str:
         raise TypeError(f"Nicht JSON-serialisierbarer Wert: {type(current).__name__}")
 
     return render(value, 0)
+
+
+def _json_scalar_char_count(value: Scalar) -> int:
+    """Return the serialized JSON character count for one scalar value."""
+
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("Decimal JSON values must be finite.")
+        return len(str(value))
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    )
 
 
 def _decimal_value(value: int | float | Decimal) -> Decimal:
@@ -1041,6 +1059,7 @@ class DataOperations:
                 stats["unique"].setdefault(identity, value)
 
         metadata: list[dict[str, Any]] = []
+        distinct_chars_used = 0
         for column in columns:
             stats = column_stats[column]
             missing_count = len(rows) - stats["present_count"]
@@ -1060,8 +1079,33 @@ class DataOperations:
                     # empty/header-only datasets whose unique domain is empty.
                     entry["distinct_values_complete"] = False
                 elif len(unique) <= distinct_values_limit:
-                    entry["distinct_values"] = list(unique.values())
-                    entry["distinct_values_complete"] = True
+                    distinct_values = list(unique.values())
+                    serialized_sizes = [
+                        _json_scalar_char_count(value)
+                        for value in distinct_values
+                    ]
+                    domain_chars = (
+                        2
+                        + sum(serialized_sizes)
+                        + max(0, len(serialized_sizes) - 1)
+                    )
+                    value_too_large = any(
+                        size > MAX_SCHEMA_DISTINCT_VALUE_CHARS
+                        for size in serialized_sizes
+                    )
+                    total_too_large = (
+                        distinct_chars_used + domain_chars
+                        > MAX_SCHEMA_DISTINCT_TOTAL_CHARS
+                    )
+                    if not value_too_large and not total_too_large:
+                        entry["distinct_values"] = distinct_values
+                        entry["distinct_values_complete"] = True
+                        distinct_chars_used += domain_chars
+                    else:
+                        # Never return a partial domain. Size-bounded omission
+                        # keeps schema inspection below normal MCP result limits
+                        # even for low-cardinality columns with huge values.
+                        entry["distinct_values_complete"] = False
                 else:
                     # Never return a partial domain: it is too easy for a model
                     # to mistake a truncated list for the complete set.
