@@ -431,8 +431,9 @@ def _escape_markdown_inline_text(value: str) -> str:
 def _markdown_header(value: str) -> str:
     # Keep generated headers human- and LLM-readable whenever normal CommonMark
     # escaping is sufficient. Physical newlines cannot be represented inside a
-    # pipe-table header without ambiguity, so retain the typed codec for them.
-    if "\r" in value or "\n" in value:
+    # pipe-table header without ambiguity, and CommonMark normalizes NUL to the
+    # replacement character, so retain the typed codec for those values.
+    if "\r" in value or "\n" in value or "\x00" in value:
         return _encode_typed_cell("h", value)
     return _escape_markdown_inline_text(value)
 

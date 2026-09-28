@@ -1300,6 +1300,7 @@ def test_markdown_string_codec_round_trips_through_file(
         "<tag>",
         "&entity;",
         "line\nbreak",
+        "*a\x00",
         "Grüße_日本",
     ],
 )
@@ -1365,8 +1366,10 @@ def test_normalized_empty_header_is_rendered_as_readable_column_name() -> None:
     assert "cli-agent:data:v1:" not in normalized
 
 
-def test_generated_markdown_header_with_newline_keeps_typed_codec() -> None:
-    column = "line\nbreak"
+@pytest.mark.parametrize("column", ["line\nbreak", "*a\x00", "plain\x00"])
+def test_generated_markdown_headers_requiring_codec_round_trip(
+    column: str,
+) -> None:
     operations = DataOperations(None)
     selected = operations.select_data(
         data=json.dumps([{column: "value"}]),
