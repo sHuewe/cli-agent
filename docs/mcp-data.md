@@ -168,6 +168,17 @@ Distinct-Listen zurückgegeben. Liegt bereits die Kardinalität über dem Limit,
 gilt dasselbe Verhalten. Mit `distinct_values_limit=0` lassen sich
 Distinct-Werte vollständig unterdrücken.
 
+Zusätzlich besitzt `inspect_schema` ein eigenes Gesamtbudget für das vollständig
+serialisierte Ergebnis. Reicht dieses Budget nicht aus, werden zuerst optionale
+`distinct_values` weggelassen, damit möglichst alle Spaltenmetadaten erhalten
+bleiben. Falls selbst die reinen Spaltenmetadaten zu groß wären, wird die
+Spaltenliste gekürzt. In diesem Fall enthält die Antwort weiterhin
+`column_count` mit der tatsächlichen Gesamtzahl und
+`columns_complete=false`. Bei vollständiger Ausgabe ist
+`columns_complete=true`. Die Ausgabe wird kompakt als JSON serialisiert, damit
+das Schema-Budget möglichst für Nutzdaten statt Formatierungs-Whitespace
+verwendet wird.
+
 Damit kann ein LLM beispielsweise tatsächliche Spaltennamen oder kleine
 Enum-artige Wertebereiche kennenlernen, bevor es einen Filter konstruiert,
 ohne Beziehungen zwischen verschiedenen Spalten aus Beispielzeilen zu sehen.
