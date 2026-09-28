@@ -182,10 +182,12 @@ def create_server(
             each column, name, dtype, null_count and unique_count. When a
             column's complete distinct-value domain contains at most
             distinct_values_limit values, that full domain is returned as
-            distinct_values with distinct_values_complete=true. For higher
-            cardinality columns, no partial values are returned and
-            distinct_values_complete=false. Set distinct_values_limit=0 to
-            suppress distinct values entirely.
+            distinct_values with distinct_values_complete=true, provided it
+            also fits the schema distinct-value size budgets. Higher-cardinality
+            or oversized domains are omitted completely with
+            distinct_values_complete=false; partial value lists are never
+            returned. Set distinct_values_limit=0 to suppress distinct values
+            entirely.
 
             Use this before constructing filters when you need to discover
             actual column names or low-cardinality value domains without
@@ -342,10 +344,12 @@ def create_server(
             each column, name, dtype, null_count and unique_count. When a
             column's complete distinct-value domain contains at most
             distinct_values_limit values, that full domain is returned as
-            distinct_values with distinct_values_complete=true. For higher
-            cardinality columns, no partial values are returned and
-            distinct_values_complete=false. Set distinct_values_limit=0 to
-            suppress distinct values entirely.
+            distinct_values with distinct_values_complete=true, provided it
+            also fits the schema distinct-value size budgets. Higher-cardinality
+            or oversized domains are omitted completely with
+            distinct_values_complete=false; partial value lists are never
+            returned. Set distinct_values_limit=0 to suppress distinct values
+            entirely.
 
             Prefer path when the dataset already exists in the workspace. Use
             this before constructing filters when you need actual column names
