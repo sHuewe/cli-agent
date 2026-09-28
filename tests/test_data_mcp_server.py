@@ -39,6 +39,9 @@ def _operations(calls):
         extract_markdown_tables=lambda markdown: (
             calls.append(("extract_markdown_tables", markdown)) or "tables"
         ),
+        inspect_schema=lambda path=None, **kwargs: (
+            calls.append(("schema", path, kwargs)) or "schema"
+        ),
         inspect_data=lambda path=None, **kwargs: (
             calls.append(("inspect", path, kwargs)) or "inspected"
         ),
@@ -68,6 +71,7 @@ def _operations(calls):
 BASE_TOOLS = {
     "calculate",
     "extract_markdown_tables",
+    "inspect_schema",
     "inspect_data",
     "select_data",
     "value_counts",
@@ -85,6 +89,7 @@ def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> Non
     )
 
     assert set(server.tools) == BASE_TOOLS
+    assert "path" not in inspect.signature(server.tools["inspect_schema"]).parameters
     assert "path" not in inspect.signature(server.tools["inspect_data"]).parameters
     assert "path" not in inspect.signature(server.tools["select_data"]).parameters
     assert "path" not in inspect.signature(server.tools["value_counts"]).parameters
@@ -94,6 +99,8 @@ def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> Non
     assert "use only\nnormalized tabular output returned by Data MCP tools" in server.instructions
     assert "Use select_data whenever a subset" in server.instructions
     assert "Dependent Data MCP calls must wait" in server.instructions
+    assert "Use inspect_schema to discover column names" in server.instructions
+    assert "Do not use inspect_data as a substitute" in server.instructions
 
     assert (
         server.tools["select_data"](
@@ -130,16 +137,31 @@ def test_read_mode_exposes_path_but_not_write_tools(monkeypatch) -> None:
     )
 
     assert set(server.tools) == BASE_TOOLS
+    assert "path" in inspect.signature(server.tools["inspect_schema"]).parameters
     assert "path" in inspect.signature(server.tools["inspect_data"]).parameters
     assert "path" in inspect.signature(server.tools["select_data"]).parameters
     assert "input_path" not in inspect.signature(server.tools["select_data"]).parameters
     assert "Prefer a workspace path" in server.instructions
 
+    assert server.tools["inspect_schema"](
+        path="data.csv",
+        distinct_values_limit=7,
+    ) == "schema"
     assert server.tools["inspect_data"](
         path="data.csv",
         sample_rows=3,
     ) == "inspected"
     assert calls == [
+        (
+            "schema",
+            "data.csv",
+            {
+                "data": None,
+                "data_format": None,
+                "table_index": 0,
+                "distinct_values_limit": 7,
+            },
+        ),
         (
             "inspect",
             "data.csv",
@@ -210,6 +232,22 @@ def test_extract_tool_description_and_result_are_markdown_oriented(monkeypatch) 
     assert calls == [
         ("extract_markdown_tables", "| a |\n|---|\n| 1 |")
     ]
+
+
+def test_inspection_tool_descriptions_separate_schema_from_rows(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(_operations(calls), access="read")
+
+    schema_doc = (server.tools["inspect_schema"].__doc__ or "").lower()
+    preview_doc = (server.tools["inspect_data"].__doc__ or "").lower()
+
+    assert "never returns dataset rows" in schema_doc
+    assert "distinct_values_complete" in schema_doc
+    assert "select_data" in schema_doc
+    assert "complete sample rows" in preview_doc
+    assert "inspect_schema" in preview_doc
+    assert "select_data" in preview_doc
 
 
 def test_select_data_exposes_structured_filter_schema(monkeypatch) -> None:
