@@ -78,6 +78,9 @@ müssen weiterhin innerhalb des festen Workspace liegen.
 ```toml
 version = 1
 
+config = "config.toml"
+model = "qwen3.5:9b"
+
 [retry]
 max_attempts = 3
 initial_delay_seconds = 1
@@ -86,8 +89,6 @@ max_delay_seconds = 10
 
 [[steps]]
 id = "discover"
-config = "config-discover.toml"
-model = "qwen3.5:9b"
 prompt_file = "prompts/discover.md"
 add_file_context = ["manual.txt", "architecture.md"]
 add_web_context = [
@@ -101,6 +102,7 @@ with_data = true
 [[steps]]
 id = "process"
 config = "config-process.toml"
+model = "larger-model"
 prompt_file = "prompts/process.md"
 foreach = "steps.discover.output.items"
 output = "result/${item.id}.md"
@@ -262,13 +264,24 @@ JSON-Struktur, Feldnamen und fachlichen Inhalte müssen weiterhin im Prompt
 beschrieben werden. `output = ...` bleibt davon unabhängig und steuert nur,
 ob die finale Antwort zusätzlich in eine Datei geschrieben wird.
 
-`config` ist optional. Ohne Angabe wird dieselbe Default-Konfiguration verwendet,
-die auch `cli-agent` nutzt. Mit `model` kann ein Schritt zusätzlich nur den
-Modellnamen dieser Config überschreiben; Provider, `base_url`, Credentials,
-Timeouts und weitere Modellparameter bleiben aus der gewählten Config erhalten. `workspace_access` ist davon getrennt und wird pro
-Schritt explizit auf `none`, `read` oder `write` gesetzt. Ohne Angabe gilt
-`none`; damit kann eine Config nicht implizit Schreibzugriff auf den eingebauten
-Workspace-OS-MCP in einen Flow-Schritt hineintragen.
+`config` und `model` können sowohl global auf Flow-Ebene als auch pro Step
+gesetzt werden. Globale Werte gelten als Default für alle Steps; ein im Step
+gesetzter Wert überschreibt den jeweiligen globalen Wert unabhängig vom anderen.
+So kann eine gemeinsame Config und ein gemeinsames Modell zentral angegeben
+werden, während einzelne Steps bei Bedarf nur `config`, nur `model` oder
+beides überschreiben.
+
+Ohne globale oder step-spezifische `config` wird dieselbe
+Default-Konfiguration verwendet, die auch `cli-agent` nutzt. `model`
+überschreibt jeweils nur den Modellnamen der gewählten Config; Provider,
+`base_url`, Credentials, Timeouts und weitere Modellparameter bleiben aus der
+Config erhalten. Relative globale und step-spezifische `config`-Pfade werden
+jeweils relativ zum Ordner der `flow.toml` aufgelöst.
+
+`workspace_access` ist davon getrennt und wird pro Schritt explizit auf
+`none`, `read` oder `write` gesetzt. Ohne Angabe gilt `none`; damit kann
+eine Config nicht implizit Schreibzugriff auf den eingebauten Workspace-OS-MCP in
+einen Flow-Schritt hineintragen.
 
 Mit `with_data = true` aktiviert ein Flow-Schritt zusätzlich den eingebauten
 Data-MCP, analog zu `cli-agent --with-data`. Ohne Angabe ist Data-MCP
