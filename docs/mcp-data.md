@@ -79,7 +79,7 @@ damit große Quelldatensätze nicht ungefiltert in den LLM-Kontext gelangen.
 | `calculate(expression)` | Wertet einen begrenzten arithmetischen Ausdruck deterministisch mit Dezimalarithmetik aus. |
 | `extract_markdown_tables(markdown)` | Extrahiert und normalisiert alle Pipe-Tabellen aus einem vollständigen Markdown-Dokument und gibt sie wieder als Markdown zurück. |
 | `inspect_schema(...)` | Liefert Schema-/Profil-Metadaten ohne Datensätze: Zeilenzahl, Spaltennamen, Typinferenz, Null-/Unique-Zahlen und bei niedriger Kardinalität die vollständige Distinct-Wertedomäne. |
-| `inspect_data(...)` | Liefert Schema-Metadaten plus eine bewusst begrenzte Vorschau vollständiger Zeilen. Für reine Schema-Erkundung ist `inspect_schema` vorzuziehen. |
+| `preview_data(...)` | Liefert Schema-Metadaten plus eine bewusst begrenzte Vorschau vollständiger Zeilen. Für reine Schema-Erkundung ist `inspect_schema` vorzuziehen. |
 | `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert höchstens 1.000 Zeilen. |
 | `value_counts(...)` | Zählt unterschiedliche Werte einer Spalte. |
 | `aggregate_data(...)` | Gruppiert und aggregiert Daten deterministisch. |
@@ -170,7 +170,7 @@ Enum-artige Wertebereiche kennenlernen, bevor es einen Filter konstruiert,
 ohne Beziehungen zwischen verschiedenen Spalten aus Beispielzeilen zu sehen.
 Wenn Wertehäufigkeiten benötigt werden, ist `value_counts` das passende Tool.
 
-`inspect_data` hat bewusst einen anderen Vertrag: Es liefert zusätzlich die
+`preview_data` hat bewusst einen anderen Vertrag: Es liefert zusätzlich die
 ersten `sample_rows` vollständigen Records und ist damit eine
 **Datenvorschau**. Es soll nur verwendet werden, wenn Beziehungen zwischen
 Spalten anhand einiger Beispielzeilen tatsächlich benötigt werden. Es ist
@@ -183,7 +183,7 @@ Für Agenten gilt daher als typische Reihenfolge:
 2. `select_data`, sobald konkrete Datensätze/Spalten gefiltert oder projiziert
    werden sollen.
 3. `value_counts`, wenn Häufigkeiten einzelner Werte benötigt werden.
-4. `inspect_data` nur bei echtem Bedarf an einer kleinen Row-Preview.
+4. `preview_data` nur bei echtem Bedarf an einer kleinen Row-Preview.
 
 ### Calculator
 
