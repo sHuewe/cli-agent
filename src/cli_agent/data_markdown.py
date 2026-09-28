@@ -22,9 +22,6 @@ _TYPED_CELL_PREFIX = "cli-agent:data:v1:"
 _LEGACY_TYPED_STRING_PREFIX = "string:"
 _LEGACY_TYPED_DECIMAL_PREFIX = "decimal:"
 _MARKDOWN_INLINE_CONTROL_CHARS = frozenset("\\|`*_[]<>&")
-_SPLITLINES_SEPARATORS = frozenset(
-    "\\n\\r\\v\\f\\x1c\\x1d\\x1e\\x85\\u2028\\u2029"
-)
 
 
 class MarkdownTableError(ValueError):
@@ -437,10 +434,7 @@ def _markdown_header(value: str) -> str:
     # would be treated as a physical line boundary by our Markdown normalization
     # pipeline. CommonMark also normalizes NUL to the replacement character.
     # Preserve those values with the typed codec instead.
-    if "\x00" in value or any(
-        character in _SPLITLINES_SEPARATORS
-        for character in value
-    ):
+    if "\x00" in value or value.splitlines(keepends=True) != [value]:
         return _encode_typed_cell("h", value)
     return _escape_markdown_inline_text(value)
 
