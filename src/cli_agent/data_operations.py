@@ -29,6 +29,14 @@ MAX_DATA_ROWS = 1_000_000
 MAX_CSV_FIELD_CHARS = MAX_DATA_FILE_BYTES
 MAX_RESULT_ROWS = 1_000
 MAX_SAMPLE_ROWS = 20
+DEFAULT_DISTINCT_VALUES_LIMIT = 20
+MAX_DISTINCT_VALUES_LIMIT = 100
+MAX_SCHEMA_DISTINCT_VALUE_CHARS = 100_000
+MAX_SCHEMA_DISTINCT_TOTAL_CHARS = 1_000_000
+# Keep schema results comfortably below the general 10M MCP tool-result guard.
+# This budget is applied to the complete serialized inspect_schema result, not
+# just to distinct-value payloads.
+MAX_SCHEMA_RESULT_CHARS = 8_000_000
 MAX_VALUE_COUNT_ROWS = 200
 MAX_DECIMAL_WORKING_PRECISION = 10_000
 FILTER_OPERATORS = frozenset(
@@ -227,6 +235,22 @@ def _json_dumps_precise(value: Any, *, indent: int | None = None) -> str:
     return render(value, 0)
 
 
+def _json_scalar_char_count(value: Scalar) -> int:
+    """Return the serialized JSON character count for one scalar value."""
+
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("Decimal JSON values must be finite.")
+        return len(str(value))
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    )
+
+
 def _decimal_value(value: int | float | Decimal) -> Decimal:
     if isinstance(value, Decimal):
         return value
@@ -302,6 +326,23 @@ class DataOperations:
         ):
             raise DataOperationError(
                 f"{name} muss zwischen 1 und {maximum} liegen."
+            )
+        return value
+
+    @staticmethod
+    def _validate_non_negative_limit(
+        value: int,
+        *,
+        maximum: int,
+        name: str,
+    ) -> int:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= maximum
+        ):
+            raise DataOperationError(
+                f"{name} muss zwischen 0 und {maximum} liegen."
             )
         return value
 
@@ -994,32 +1035,19 @@ class DataOperations:
             raise DataOperationError(str(exc)) from exc
         return prefix + "\n\n" + table
 
-    def inspect_data(
-        self,
-        path: str | None = None,
+    @staticmethod
+    def _column_metadata(
+        columns: list[str],
+        rows: list[Record],
         *,
-        data: str | None = None,
-        data_format: str | None = None,
-        table_index: int = 0,
-        sample_rows: int = 5,
-    ) -> str:
-        sample_rows = self._validate_limit(
-            sample_rows,
-            maximum=MAX_SAMPLE_ROWS,
-            name="sample_rows",
-        )
-        columns, rows = self._read_records(
-            path,
-            data=data,
-            data_format=data_format,
-            table_index=table_index,
-        )
+        distinct_values_limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         column_stats = {
             column: {
                 "present_count": 0,
                 "null_count": 0,
                 "values": [],
-                "unique": set(),
+                "unique": {},
             }
             for column in columns
         }
@@ -1031,23 +1059,235 @@ class DataOperations:
                     stats["null_count"] += 1
                 else:
                     stats["values"].append(value)
-                stats["unique"].add(_scalar_identity(value))
+                identity = _scalar_identity(value)
+                stats["unique"].setdefault(identity, value)
 
-        metadata = []
+        metadata: list[dict[str, Any]] = []
+        distinct_chars_used = 0
         for column in columns:
             stats = column_stats[column]
             missing_count = len(rows) - stats["present_count"]
             unique = stats["unique"]
             if missing_count:
-                unique.add(_scalar_identity(None))
-            metadata.append(
-                {
-                    "name": column,
-                    "dtype": _dtype_name(stats["values"]),
-                    "null_count": stats["null_count"] + missing_count,
-                    "unique_count": len(unique),
-                }
+                unique.setdefault(_scalar_identity(None), None)
+
+            entry: dict[str, Any] = {
+                "name": column,
+                "dtype": _dtype_name(stats["values"]),
+                "null_count": stats["null_count"] + missing_count,
+                "unique_count": len(unique),
+            }
+            if distinct_values_limit is not None:
+                if distinct_values_limit == 0:
+                    # Zero explicitly suppresses distinct values, including for
+                    # empty/header-only datasets whose unique domain is empty.
+                    entry["distinct_values_complete"] = False
+                elif len(unique) <= distinct_values_limit:
+                    distinct_values = list(unique.values())
+                    serialized_sizes = [
+                        _json_scalar_char_count(value)
+                        for value in distinct_values
+                    ]
+                    domain_chars = (
+                        2
+                        + sum(serialized_sizes)
+                        + max(0, len(serialized_sizes) - 1)
+                    )
+                    value_too_large = any(
+                        size > MAX_SCHEMA_DISTINCT_VALUE_CHARS
+                        for size in serialized_sizes
+                    )
+                    total_too_large = (
+                        distinct_chars_used + domain_chars
+                        > MAX_SCHEMA_DISTINCT_TOTAL_CHARS
+                    )
+                    if not value_too_large and not total_too_large:
+                        entry["distinct_values"] = distinct_values
+                        entry["distinct_values_complete"] = True
+                        distinct_chars_used += domain_chars
+                    else:
+                        # Never return a partial domain. Size-bounded omission
+                        # keeps schema inspection below normal MCP result limits
+                        # even for low-cardinality columns with huge values.
+                        entry["distinct_values_complete"] = False
+                else:
+                    # Never return a partial domain: it is too easy for a model
+                    # to mistake a truncated list for the complete set.
+                    entry["distinct_values_complete"] = False
+            metadata.append(entry)
+        return metadata
+
+    @staticmethod
+    def _bounded_schema_result(
+        *,
+        source: str,
+        row_count: int,
+        column_count: int,
+        metadata: list[dict[str, Any]],
+    ) -> str:
+        """Serialize schema metadata within the dedicated result budget.
+
+        Column metadata has priority over optional distinct-value domains. If
+        the complete result would be too large, distinct domains are omitted
+        first. Only if the metadata without domains still exceeds the budget is
+        the returned column list truncated. Truncation is explicit through
+        column_count and columns_complete.
+        """
+
+        def without_distinct_values(entry: dict[str, Any]) -> dict[str, Any]:
+            stripped = dict(entry)
+            if "distinct_values" in stripped:
+                stripped.pop("distinct_values")
+                stripped["distinct_values_complete"] = False
+            return stripped
+
+        minimal_metadata = [
+            without_distinct_values(entry)
+            for entry in metadata
+        ]
+        minimal_texts = [
+            _json_dumps_precise(entry)
+            for entry in minimal_metadata
+        ]
+
+        # Measure against the compact final wire representation. Use false for
+        # columns_complete while budgeting because it is one character longer
+        # than true and therefore a conservative fixed-overhead estimate.
+        empty_result = _json_dumps_precise(
+            {
+                "source": source,
+                "row_count": row_count,
+                "column_count": column_count,
+                "columns": [],
+                "columns_complete": False,
+            }
+        )
+        fixed_chars = len(empty_result) - 2  # exclude the empty [] payload
+
+        def result_chars(texts: list[str]) -> int:
+            return (
+                fixed_chars
+                + 2
+                + sum(len(text) for text in texts)
+                + max(0, len(texts) - 1)
             )
+
+        if result_chars(minimal_texts) <= MAX_SCHEMA_RESULT_CHARS:
+            selected = list(minimal_metadata)
+            selected_texts = list(minimal_texts)
+            used_chars = result_chars(selected_texts)
+
+            # Add complete distinct domains only when they still fit after all
+            # columns' basic metadata has been reserved.
+            for index, entry in enumerate(metadata):
+                if "distinct_values" not in entry:
+                    continue
+                full_text = _json_dumps_precise(entry)
+                delta = len(full_text) - len(selected_texts[index])
+                if used_chars + delta <= MAX_SCHEMA_RESULT_CHARS:
+                    selected[index] = entry
+                    selected_texts[index] = full_text
+                    used_chars += delta
+
+            result = {
+                "source": source,
+                "row_count": row_count,
+                "column_count": column_count,
+                "columns": selected,
+                "columns_complete": True,
+            }
+            rendered = _json_dumps_precise(result)
+            if len(rendered) > MAX_SCHEMA_RESULT_CHARS:
+                raise AssertionError("Schema result budget calculation is inconsistent.")
+            return rendered
+
+        selected: list[dict[str, Any]] = []
+        selected_texts: list[str] = []
+        used_chars = fixed_chars + 2
+        for entry, entry_text in zip(
+            minimal_metadata,
+            minimal_texts,
+            strict=True,
+        ):
+            delta = len(entry_text) + (1 if selected_texts else 0)
+            if used_chars + delta > MAX_SCHEMA_RESULT_CHARS:
+                break
+            selected.append(entry)
+            selected_texts.append(entry_text)
+            used_chars += delta
+
+        result = {
+            "source": source,
+            "row_count": row_count,
+            "column_count": column_count,
+            "columns": selected,
+            "columns_complete": len(selected) == column_count,
+        }
+        rendered = _json_dumps_precise(result)
+        if len(rendered) > MAX_SCHEMA_RESULT_CHARS:
+            raise AssertionError("Schema result budget calculation is inconsistent.")
+        return rendered
+
+    def inspect_schema(
+        self,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        table_index: int = 0,
+        distinct_values_limit: int = DEFAULT_DISTINCT_VALUES_LIMIT,
+    ) -> str:
+        """Return schema/profile metadata without exposing any dataset rows."""
+        distinct_values_limit = self._validate_non_negative_limit(
+            distinct_values_limit,
+            maximum=MAX_DISTINCT_VALUES_LIMIT,
+            name="distinct_values_limit",
+        )
+        columns, rows = self._read_records(
+            path,
+            data=data,
+            data_format=data_format,
+            table_index=table_index,
+        )
+        metadata = self._column_metadata(
+            columns,
+            rows,
+            distinct_values_limit=distinct_values_limit,
+        )
+        source = (
+            path
+            if path is not None
+            else f"inline:{data_format}"
+        )
+        return self._bounded_schema_result(
+            source=source,
+            row_count=len(rows),
+            column_count=len(columns),
+            metadata=metadata,
+        )
+
+    def inspect_data(
+        self,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        table_index: int = 0,
+        sample_rows: int = 5,
+    ) -> str:
+        """Return schema metadata plus a bounded preview of complete rows."""
+        sample_rows = self._validate_limit(
+            sample_rows,
+            maximum=MAX_SAMPLE_ROWS,
+            name="sample_rows",
+        )
+        columns, rows = self._read_records(
+            path,
+            data=data,
+            data_format=data_format,
+            table_index=table_index,
+        )
+        metadata = self._column_metadata(columns, rows)
         return _json_dumps_precise(
             {
                 "source": (

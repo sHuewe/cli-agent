@@ -75,6 +75,190 @@ def test_inspect_data_returns_schema_counts_and_bounded_sample(tmp_path: Path) -
     assert metadata["category"]["unique_count"] == 2
 
 
+def test_inspect_schema_returns_metadata_and_complete_low_cardinality_domains(
+    tmp_path: Path,
+) -> None:
+    _write_csv(tmp_path)
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "sales.csv",
+            distinct_values_limit=3,
+        )
+    )
+
+    assert result["row_count"] == 4
+    assert "sample" not in result
+    metadata = {entry["name"]: entry for entry in result["columns"]}
+
+    assert metadata["category"]["distinct_values"] == ["A", "B"]
+    assert metadata["category"]["distinct_values_complete"] is True
+    assert metadata["country"]["distinct_values"] == ["DE", "FR"]
+    assert metadata["country"]["distinct_values_complete"] is True
+
+    assert "distinct_values" not in metadata["revenue"]
+    assert metadata["revenue"]["distinct_values_complete"] is False
+
+
+def test_inspect_schema_can_suppress_distinct_values(tmp_path: Path) -> None:
+    _write_csv(tmp_path)
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "sales.csv",
+            distinct_values_limit=0,
+        )
+    )
+
+    for column in result["columns"]:
+        assert "distinct_values" not in column
+        assert column["distinct_values_complete"] is False
+
+
+def test_inspect_schema_zero_limit_suppresses_empty_domain(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "empty.csv"
+    path.write_text("name,kind\n", encoding="utf-8")
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "empty.csv",
+            distinct_values_limit=0,
+        )
+    )
+
+    assert result["row_count"] == 0
+    for column in result["columns"]:
+        assert column["unique_count"] == 0
+        assert "distinct_values" not in column
+        assert column["distinct_values_complete"] is False
+
+
+def test_inspect_schema_omits_distinct_values_when_one_value_is_too_large(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "large.csv"
+    huge = "x" * 100_001
+    path.write_text("value\n" + huge + "\n", encoding="utf-8")
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "large.csv",
+            distinct_values_limit=20,
+        )
+    )
+
+    column = result["columns"][0]
+    assert column["unique_count"] == 1
+    assert "distinct_values" not in column
+    assert column["distinct_values_complete"] is False
+
+
+def test_inspect_schema_omits_later_domains_when_total_budget_is_exceeded(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "domains.csv"
+    path.write_text(
+        "a,b\n"
+        "aaaa,bbbb\n"
+        "cccc,dddd\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cli_agent.data_operations.MAX_SCHEMA_DISTINCT_TOTAL_CHARS",
+        20,
+    )
+
+    result = json.loads(
+        _operations(tmp_path).inspect_schema(
+            "domains.csv",
+            distinct_values_limit=20,
+        )
+    )
+
+    first, second = result["columns"]
+    assert first["distinct_values"] == ["aaaa", "cccc"]
+    assert first["distinct_values_complete"] is True
+    assert "distinct_values" not in second
+    assert second["distinct_values_complete"] is False
+
+
+def test_inspect_schema_drops_distinct_domains_before_columns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "schema.csv"
+    path.write_text(
+        "a,b\n"
+        "alpha,beta\n"
+        "gamma,delta\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cli_agent.data_operations.MAX_SCHEMA_RESULT_CHARS",
+        310,
+    )
+
+    result_text = _operations(tmp_path).inspect_schema(
+        "schema.csv",
+        distinct_values_limit=20,
+    )
+    result = json.loads(result_text)
+
+    assert len(result_text) <= 310
+    assert result["column_count"] == 2
+    assert result["columns_complete"] is True
+    assert [column["name"] for column in result["columns"]] == ["a", "b"]
+    assert all("distinct_values" not in column for column in result["columns"])
+    assert all(
+        column["distinct_values_complete"] is False
+        for column in result["columns"]
+    )
+
+
+def test_inspect_schema_truncates_columns_when_metadata_exceeds_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "wide.csv"
+    path.write_text(
+        "first_column,second_column,third_column\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cli_agent.data_operations.MAX_SCHEMA_RESULT_CHARS",
+        240,
+    )
+
+    result_text = _operations(tmp_path).inspect_schema(
+        "wide.csv",
+        distinct_values_limit=0,
+    )
+    result = json.loads(result_text)
+
+    assert len(result_text) <= 240
+    assert result["column_count"] == 3
+    assert result["columns_complete"] is False
+    assert 0 < len(result["columns"]) < 3
+    assert [column["name"] for column in result["columns"]] == [
+        "first_column",
+    ]
+
+
+def test_inspect_schema_rejects_invalid_distinct_values_limit(
+    tmp_path: Path,
+) -> None:
+    _write_csv(tmp_path)
+    operations = _operations(tmp_path)
+
+    with pytest.raises(DataOperationError, match="distinct_values_limit"):
+        operations.inspect_schema("sales.csv", distinct_values_limit=-1)
+    with pytest.raises(DataOperationError, match="distinct_values_limit"):
+        operations.inspect_schema("sales.csv", distinct_values_limit=101)
+
+
 def test_select_data_filters_projects_sorts_and_reports_truncation(
     tmp_path: Path,
 ) -> None:
