@@ -363,11 +363,16 @@ def test_web_ui_header_is_sticky() -> None:
     assert "header { position: sticky; top: 0;" in web_ui.APP_CSS
 
 
-def test_web_ui_renders_working_messages_view() -> None:
-    assert 'id="show-working-messages"' in web_ui.INDEX_HTML
-    assert 'id="working-messages-dialog"' in web_ui.INDEX_HTML
+def test_web_ui_renders_working_context_tabs() -> None:
+    assert 'id="show-working-context"' in web_ui.INDEX_HTML
+    assert '>LLM Context</button>' in web_ui.INDEX_HTML
+    assert 'id="working-context-dialog"' in web_ui.INDEX_HTML
+    assert 'id="context-tab-messages"' in web_ui.INDEX_HTML
+    assert 'id="context-tab-tools"' in web_ui.INDEX_HTML
     assert 'id="working-messages-json"' in web_ui.INDEX_HTML
-    assert 'type: "working_messages"' in web_ui.APP_JS
+    assert 'id="working-tools-json"' in web_ui.INDEX_HTML
+    assert 'type: "working_context"' in web_ui.APP_JS
+    assert 'payload.type === "working_context"' in web_ui.APP_JS
 
 
 def test_working_messages_snapshot_is_detached() -> None:
@@ -386,3 +391,30 @@ def test_working_messages_snapshot_is_detached() -> None:
     assert agent._last_working_messages == [
         {"role": "user", "content": {"value": ["original"]}}
     ]
+
+
+def test_working_tools_snapshot_is_detached() -> None:
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Dummy(ConversationMixin):
+        pass
+
+    agent = Dummy()
+    agent._last_working_tools = [
+        {"type": "function", "function": {"name": "demo", "parameters": {"type": "object"}}}
+    ]
+    snapshot = agent.working_tools_snapshot()
+    snapshot[0]["function"]["parameters"]["type"] = "array"
+
+    assert agent._last_working_tools == [
+        {"type": "function", "function": {"name": "demo", "parameters": {"type": "object"}}}
+    ]
+
+
+def test_working_tools_snapshot_defaults_to_empty_list() -> None:
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Dummy(ConversationMixin):
+        pass
+
+    assert Dummy().working_tools_snapshot() == []
