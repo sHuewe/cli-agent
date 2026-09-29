@@ -552,6 +552,19 @@ der vollständige Platzhalter `${previous_output}` gleich `null`. Bei
 Details zu Run-Start-Snapshot, Sicherheit und den Voraussetzungen für
 `foreach` stehen unter [Multi-Step-Flows](docs/flow.md#initialzustand-laden-und-weiterbearbeiten).
 
+Flows können außerdem statisch komponiert werden. Ein Subflow-Step verwendet
+`flow = "pfad/zum/child.toml"` und übergibt ausschließlich explizite Werte aus
+`[steps.input]`. Der Child deklariert seine erlaubten `inputs = [...]` und
+einen öffentlichen Rückgabewert über
+`result = "steps.<id>.output[.<feld>]"`. Parent-Variablen und interne
+Parent-Steps werden nicht vererbt; im Child stehen nur die expliziten Werte als
+`${input.<name>}` zur Verfügung. Aus Sicht des Parents ist das Child-Result
+der normale `steps.<subflow-step>.output`. Subflows können auch mit
+`foreach` kombiniert werden; Pfad, Workspace und Capabilities bleiben dabei
+statisch bzw. durch die Child-Definition festgelegt. Zyklen, übermäßige
+Verschachtelung und unbeschränkte Step-Vervielfachung werden durch die
+Flow-Engine begrenzt.
+
 Outputs vorheriger Flow-Schritte können direkt als Prompt-Variablen
 weitergereicht werden. Mit `${steps.<id>.output.<feld>}` lassen sich Felder
 eines JSON-Outputs lesen; `${steps.<id>.output}` übernimmt den vollständigen
