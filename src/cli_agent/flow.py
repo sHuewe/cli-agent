@@ -2803,11 +2803,12 @@ async def _run_flow_internal(
     assert claimed_outputs is not None
     assert reserved_inputs is not None
 
-    run_start_snapshot = _snapshot_initial_flow_state(
-        flow,
-        workspace=workspace,
-        flow_input=flow_input,
-    )
+    assert context.run_start_snapshots is not None
+    run_start_snapshot = context.run_start_snapshots.get(flow_key)
+    if run_start_snapshot is None:
+        raise RuntimeError(
+            f"Run-Start-Snapshot für Flow {flow.source} fehlt."
+        )
     initial_checkpoint_fingerprints = (
         run_start_snapshot.checkpoint_fingerprints
     )
@@ -2819,6 +2820,7 @@ async def _run_flow_internal(
         dict.fromkeys(
             (
                 *reserved_inputs.values(),
+                *context.run_start_checkpoint_paths,
                 *initial_checkpoint_paths,
             )
         )
@@ -3267,11 +3269,13 @@ async def run_flow(
     workspace = workspace.expanduser().resolve()
     deps = dependencies or ExecutionDependencies()
     cache = {_filesystem_path_key(flow.source): flow}
+    validation_budget = _SubflowTraversalBudget()
     validate_flow(
         flow,
         workspace=workspace,
         config_loader=deps.load_config,
         _cache=cache,
+        _budget=validation_budget,
     )
     if flow.inputs:
         raise ValueError(
@@ -3283,12 +3287,22 @@ async def run_flow(
         flow,
         workspace=workspace,
         cache=cache,
+        budget=_SubflowTraversalBudget(),
+    )
+    run_start_snapshots, run_start_checkpoint_paths = (
+        _capture_run_start_snapshots(
+            cache,
+            workspace=workspace,
+            root_flow=flow,
+        )
     )
     context = _FlowExecutionContext(
         dependencies=deps,
         approval_callback=approval_callback,
         reserved_inputs=reserved_inputs,
         flow_cache=cache,
+        run_start_snapshots=run_start_snapshots,
+        run_start_checkpoint_paths=run_start_checkpoint_paths,
     )
     await _run_flow_internal(
         flow,
