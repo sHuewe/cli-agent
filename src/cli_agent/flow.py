@@ -2910,16 +2910,20 @@ def _preflight_concrete_invocation_outputs(
     reserved_inputs: dict[str, Path],
     claimed_outputs: dict[str, str],
     namespace: str,
+    run_start_snapshots: dict[str, _RunStartSnapshot],
+    budget: _SubflowTraversalBudget,
     call_stack: tuple[str, ...] = (),
 ) -> None:
     """Preflight outputs that are concrete before an invocation starts.
 
-    This intentionally checks only outputs whose paths can be determined
-    without executing an LLM step. Dynamic foreach descendants whose source
-    is produced during the invocation are preflighted later, immediately
-    after their item list becomes available and before their first iteration.
+    Static outputs are always checked. Foreach outputs are additionally
+    checked when their source can be reconstructed from the immutable
+    overall run-start snapshot for this concrete invocation. Descendants
+    whose source is first produced during the current run remain deferred
+    until that source becomes available.
     """
 
+    budget.consume(purpose="Preflight")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
         raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
@@ -2932,18 +2936,41 @@ def _preflight_concrete_invocation_outputs(
         flow,
         workspace=workspace,
     )
+    snapshot = run_start_snapshots.get(namespace)
+    available_outputs = (
+        snapshot.available_outputs
+        if snapshot is not None
+        else {}
+    )
+    output_json = snapshot.output_json if snapshot is not None else {}
 
     for step in flow.steps:
         if step.flow is not None:
-            if step.foreach is not None:
-                # The concrete foreach batch is checked by the caller once
-                # its source output is available.
-                continue
+            if step.foreach is None:
+                items = [None]
+                iteration_ids: list[str | None] = [None]
+            else:
+                match = _FOREACH.fullmatch(step.foreach)
+                assert match is not None
+                source_id = match.group(1)
+                if source_id not in available_outputs:
+                    continue
+                items = _foreach_items(
+                    step,
+                    outputs=available_outputs,
+                )
+                iteration_ids = _iteration_ids(
+                    step,
+                    items=items,
+                    flow_input=flow_input,
+                )
+
             if not _subflow_inputs_resolvable_at_run_start(
                 step,
-                available_outputs={},
+                available_outputs=available_outputs,
             ):
                 continue
+
             child = _load_subflow_definition(
                 step,
                 parent_flow=flow,
@@ -2951,59 +2978,108 @@ def _preflight_concrete_invocation_outputs(
                 cache=cache,
             )
             _validate_subflow_interface(step, child)
-            child_input = _render_subflow_inputs(
+            for item, iteration_id in zip(items, iteration_ids):
+                child_input = _render_subflow_inputs(
+                    step,
+                    item=item,
+                    iteration_id=iteration_id,
+                    outputs=available_outputs,
+                    output_json=output_json,
+                    flow_input=flow_input,
+                )
+                child_namespace = _child_invocation_namespace(
+                    namespace,
+                    step,
+                    iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
+                )
+                _preflight_concrete_invocation_outputs(
+                    child,
+                    workspace=workspace,
+                    cache=cache,
+                    flow_input=child_input,
+                    reserved_inputs=reserved_inputs,
+                    claimed_outputs=claimed_outputs,
+                    namespace=child_namespace,
+                    run_start_snapshots=run_start_snapshots,
+                    budget=budget,
+                    call_stack=next_stack,
+                )
+            continue
+
+        if step.output is None:
+            continue
+
+        if step.foreach is None:
+            outputs_to_claim = [
+                (
+                    _output_for_iteration(
+                        step,
+                        workspace=workspace,
+                        item=None,
+                        flow_input=flow_input,
+                    ),
+                    None,
+                )
+            ]
+        else:
+            match = _FOREACH.fullmatch(step.foreach)
+            assert match is not None
+            source_id = match.group(1)
+            if source_id not in available_outputs:
+                continue
+            items = _foreach_items(
                 step,
-                item=None,
-                iteration_id=None,
-                outputs={},
-                output_json={},
+                outputs=available_outputs,
+            )
+            iteration_ids = _iteration_ids(
+                step,
+                items=items,
                 flow_input=flow_input,
             )
-            child_namespace = _child_invocation_namespace(
-                namespace,
-                step,
-                iteration_id=None,
-                case_colliding_step_ids=case_colliding_step_ids,
-            )
-            _preflight_concrete_invocation_outputs(
-                child,
-                workspace=workspace,
-                cache=cache,
-                flow_input=child_input,
-                reserved_inputs=reserved_inputs,
-                claimed_outputs=claimed_outputs,
-                namespace=child_namespace,
-                call_stack=next_stack,
-            )
-            continue
+            outputs_to_claim = [
+                (
+                    _output_for_iteration(
+                        step,
+                        workspace=workspace,
+                        item=item,
+                        iteration_id=iteration_id,
+                        flow_input=flow_input,
+                    ),
+                    iteration_id,
+                )
+                for item, iteration_id in zip(items, iteration_ids)
+            ]
+            output_keys = [
+                _filesystem_path_key(output)
+                for output, _iteration_id in outputs_to_claim
+                if output is not None
+            ]
+            if len(output_keys) != len(set(output_keys)):
+                raise ValueError(
+                    f"Schritt {step.step_id!r} erzeugt für mehrere "
+                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                )
 
-        if step.foreach is not None or step.output is None:
-            continue
-
-        output = _output_for_iteration(
-            step,
-            workspace=workspace,
-            item=None,
-            flow_input=flow_input,
-        )
-        assert output is not None
-        key = _filesystem_path_key(output)
-        reserved_input = reserved_inputs.get(key)
-        if reserved_input is not None:
-            raise ValueError(
-                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                "mit einer reservierten Flow-Eingabe: "
-                f"{reserved_input}"
+        for output, iteration_id in outputs_to_claim:
+            assert output is not None
+            key = _filesystem_path_key(output)
+            reserved_input = reserved_inputs.get(key)
+            if reserved_input is not None:
+                raise ValueError(
+                    f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                    "mit einer reservierten Flow-Eingabe: "
+                    f"{reserved_input}"
+                )
+            _claim_output(
+                claimed_outputs,
+                path=output,
+                owner=namespace + _output_owner(
+                    step,
+                    iteration_id=iteration_id,
+                ),
+                allow_replace=step.overwrite_output,
             )
-        _claim_output(
-            claimed_outputs,
-            path=output,
-            owner=namespace + _output_owner(
-                step,
-                iteration_id=None,
-            ),
-            allow_replace=step.overwrite_output,
-        )
 
 
 async def _run_flow_internal(
@@ -3127,6 +3203,8 @@ async def _run_flow_internal(
                     iteration_id=iteration_id,
                     case_colliding_step_ids=case_colliding_step_ids,
                 )
+                assert context.run_start_snapshots is not None
+                assert context.preflight_budget is not None
                 _preflight_concrete_invocation_outputs(
                     child,
                     workspace=workspace,
@@ -3135,6 +3213,8 @@ async def _run_flow_internal(
                     reserved_inputs=reserved_inputs,
                     claimed_outputs=batch_claims,
                     namespace=child_namespace,
+                    run_start_snapshots=context.run_start_snapshots,
+                    budget=context.preflight_budget,
                     call_stack=next_stack,
                 )
 
