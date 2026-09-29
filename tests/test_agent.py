@@ -1346,3 +1346,29 @@ def test_okf_runtime_toggle_requires_configuration(tmp_path: Path) -> None:
     assert agent.okf_status_snapshot()["enabled"] is False
     assert agent.set_okf_enabled(enabled=True) is True
     assert agent.okf_status_snapshot()["enabled"] is True
+
+
+
+def test_history_reset_rewrites_and_removes_dump_diagnostics(tmp_path: Path) -> None:
+    agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
+    agent.history = [{"role": "user", "content": "old"}]
+
+    dump_directory = tmp_path / ".cli-agent"
+    diagnostic_files = (
+        "main_working_messages.json",
+        "main_system_prompt.json",
+        "knowledge_working_messages.json",
+        "knowledge_system_prompt.json",
+        "knowledge_last_model_message.json",
+        "knowledge_selection_fallback.json",
+    )
+    agent._write_dump_json("history.json", agent.history)
+    for filename in diagnostic_files:
+        agent._write_dump_json(filename, {"old": True})
+
+    agent.reset_history()
+
+    assert json.loads(
+        (dump_directory / "history.json").read_text(encoding="utf-8")
+    ) == []
+    assert all(not (dump_directory / filename).exists() for filename in diagnostic_files)
