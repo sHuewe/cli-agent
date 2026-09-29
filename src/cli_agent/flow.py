@@ -1884,14 +1884,25 @@ def _snapshot_initial_flow_state(
         paths[_filesystem_path_key(output)] = output
 
     for step in flow.steps:
+        if step.flow is not None:
+            continue
+
         if step.foreach is None:
             if step.output is None:
+                continue
+            if (
+                flow_input is None
+                and _INPUT_EXPR.search(step.output) is not None
+            ):
+                # The concrete output path depends on a child input that is
+                # unavailable before parent execution. Never discover such a
+                # checkpoint later in the same run.
                 continue
             output = _output_for_iteration(
                 step,
                 workspace=workspace,
                 item=None,
-                flow_input=flow_input,
+                flow_input=flow_input or {},
             )
             assert output is not None
 
@@ -1929,13 +1940,19 @@ def _snapshot_initial_flow_state(
             step,
             items=items,
         )
+        if (
+            flow_input is None
+            and step.output is not None
+            and _INPUT_EXPR.search(step.output) is not None
+        ):
+            continue
         outputs = [
             _output_for_iteration(
                 step,
                 workspace=workspace,
                 item=item,
                 iteration_id=iteration_id,
-                flow_input=flow_input,
+                flow_input=flow_input or {},
             )
             for item, iteration_id in zip(items, iteration_ids)
         ]
@@ -1999,6 +2016,32 @@ def _snapshot_initial_flow_state(
         checkpoint_paths=tuple(paths.values()),
         previous_output_fingerprints=previous_output_fingerprints,
     )
+
+
+def _capture_run_start_snapshots(
+    flows: dict[str, FlowDefinition],
+    *,
+    workspace: Path,
+    root_flow: FlowDefinition,
+) -> tuple[
+    dict[str, _RunStartSnapshot],
+    tuple[Path, ...],
+]:
+    snapshots: dict[str, _RunStartSnapshot] = {}
+    protected_paths: dict[str, Path] = {}
+    root_key = _filesystem_path_key(root_flow.source)
+
+    for key, candidate in flows.items():
+        snapshot = _snapshot_initial_flow_state(
+            candidate,
+            workspace=workspace,
+            flow_input={} if key == root_key else None,
+        )
+        snapshots[key] = snapshot
+        for path in snapshot.checkpoint_paths:
+            protected_paths[_filesystem_path_key(path)] = path
+
+    return snapshots, tuple(protected_paths.values())
 
 
 def _snapshot_initial_checkpoints(
