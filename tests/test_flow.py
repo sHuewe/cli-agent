@@ -5965,3 +5965,182 @@ flow = "leaf.toml"
 
     with pytest.raises(ValueError, match="Expansionslimit"):
         validate_flow(definition, workspace=tmp_path)
+
+
+
+def test_subflow_foreach_resumes_input_derived_checkpoint_when_source_is_known_at_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text(
+        "process {{var:id}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "work").mkdir()
+    (tmp_path / "plan.json").write_text(
+        '{"items":[{"id":"one"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "work" / "one.json").write_text(
+        '{"status":"existing"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "work/${input.item.id}.json"
+overwrite_output = false
+
+[steps.vars]
+id = "${input.item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+output = "plan.json"
+overwrite_output = false
+
+[[steps]]
+id = "process"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        raise AssertionError("run-start child checkpoint must skip the model")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []
+
+
+def test_dynamic_subflow_foreach_does_not_adopt_preexisting_unknown_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work" / "one.json").write_text(
+        '{"stale":true}',
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "work/${input.item.id}.json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "process"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("unknown child invocation must not adopt stale checkpoint")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == ["discover"]
+
+
+def test_validation_rejects_static_output_collision_across_subflow_calls(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+output = "shared.txt"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "first"
+flow = "child.toml"
+
+[[steps]]
+id = "second"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="geplanten Output"):
+        validate_flow(definition, workspace=tmp_path)
