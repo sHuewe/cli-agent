@@ -224,7 +224,10 @@ def test_web_ui_concurrent_prompt_rejection_releases_browser_busy_state() -> Non
     import inspect
 
     source = inspect.getsource(web_ui._WebUiSession.websocket)
-    concurrent = source.split("if self._busy():", 1)[1].split(
+    command_section = source.split('if kind == "command":', 1)[1].split(
+        'if kind != "message":', 1
+    )[0]
+    concurrent = command_section.split("if self._busy():", 1)[1].split(
         "continue", 1
     )[0]
     assert 'await sender({"type": "busy", "value": False})' in concurrent
