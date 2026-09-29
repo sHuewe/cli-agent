@@ -647,6 +647,7 @@ INDEX_HTML = """<!doctype html>
         <div id="session-meta" class="meta">Verbindung wird hergestellt …</div>
       </div>
       <div class="header-actions">
+        <button id="reset-history" class="secondary" type="button">History zurücksetzen</button>
         <button id="show-working-context" class="secondary" type="button">LLM Context</button>
         <button id="quit" class="secondary" type="button">Sitzung beenden</button>
       </div>
@@ -669,7 +670,7 @@ INDEX_HTML = """<!doctype html>
     <div class="dialog-header">
       <div>
         <h2>LLM Context</h2>
-        <div class="meta">Aktueller bzw. letzter Main-Loop, nur lesend.</div>
+        <div class="meta">Messages des letzten Main-Loops sowie aktuell wirksame Tools und Referenzkontexte.</div>
       </div>
       <div class="dialog-actions">
         <button id="refresh-working-context" class="secondary" type="button">Aktualisieren</button>
@@ -679,12 +680,17 @@ INDEX_HTML = """<!doctype html>
     <div class="context-tabs" role="tablist" aria-label="LLM Context">
       <button id="context-tab-messages" class="secondary active" type="button" role="tab" aria-selected="true" aria-controls="context-panel-messages">Messages</button>
       <button id="context-tab-tools" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-tools">Tools</button>
+      <button id="context-tab-contexts" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-contexts">Context</button>
     </div>
     <div id="context-panel-messages" class="context-panel" role="tabpanel" aria-labelledby="context-tab-messages">
       <pre id="working-messages-json">[]</pre>
     </div>
     <div id="context-panel-tools" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-tools">
-      <pre id="working-tools-json">[]</pre>
+      <div id="working-tools-list" class="state-list"></div>
+    </div>
+    <div id="context-panel-contexts" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-contexts">
+      <div id="okf-state"></div>
+      <div id="working-contexts-list" class="state-list"></div>
     </div>
   </dialog>
   <dialog id="approval">
@@ -748,6 +754,14 @@ pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: an
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .working-context-dialog { width: min(1100px, calc(100vw - 32px)); }
 .working-context-dialog pre { min-height: 55vh; max-height: 72vh; }
+.state-list { display: flex; flex-direction: column; gap: 10px; }
+.state-row { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(260px, 2fr) auto; gap: 12px; align-items: start; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 9px; }
+.state-name { font-weight: 650; overflow-wrap: anywhere; }
+.state-description { opacity: .78; white-space: pre-wrap; overflow-wrap: anywhere; }
+.state-source { opacity: .7; font-size: .85rem; overflow-wrap: anywhere; }
+.state-content { max-height: 16rem; overflow: auto; white-space: pre-wrap; margin-top: 6px; padding: 8px; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); }
+.state-row button { min-width: 92px; padding: 7px 10px; }
+#okf-state { margin-bottom: 12px; }
 .context-tabs { display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent); padding-bottom: 8px; }
 .context-tabs button.active { background: Highlight; color: HighlightText; border-color: transparent; }
 .context-panel.hidden { display: none; }
@@ -758,6 +772,7 @@ pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: an
   .shell { padding: 14px; }
   form { grid-template-columns: 1fr; }
   .message { max-width: 96%; }
+  .state-row { grid-template-columns: 1fr; }
 }
 """
 
