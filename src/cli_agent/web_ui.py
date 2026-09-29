@@ -283,6 +283,30 @@ class _WebUiSession:
     async def next_prompt(self) -> str:
         return await self._prompt_queue.get()
 
+    def _working_context_payload(self) -> dict[str, Any]:
+        contexts_snapshot = (
+            self.agent.context_states_snapshot()
+            if hasattr(self.agent, "context_states_snapshot")
+            else []
+        )
+        okf_snapshot = (
+            self.agent.okf_status_snapshot()
+            if hasattr(self.agent, "okf_status_snapshot")
+            else {"configured": False, "enabled": False, "available": False}
+        )
+        tool_states = (
+            self.agent.tool_states_snapshot()
+            if hasattr(self.agent, "tool_states_snapshot")
+            else []
+        )
+        return {
+            "type": "working_context",
+            "messages": self.agent.working_messages_snapshot(),
+            "tools": tool_states,
+            "contexts": contexts_snapshot,
+            "okf": okf_snapshot,
+        }
+
     async def _handle_prompt(self, prompt: str) -> None:
         async with self._agent_lock:
             try:
@@ -394,15 +418,87 @@ class _WebUiSession:
                     continue
 
                 if kind == "working_context":
-                    messages = self.agent.working_messages_snapshot()
-                    tools_snapshot = self.agent.working_tools_snapshot()
-                    await sender(
-                        {
-                            "type": "working_context",
-                            "messages": messages,
-                            "tools": tools_snapshot,
-                        }
-                    )
+                    await sender(self._working_context_payload())
+                    continue
+
+                if kind == "reset_history":
+                    if self._busy():
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": "Die History kann während einer laufenden Anfrage nicht zurückgesetzt werden.",
+                            }
+                        )
+                        continue
+                    self.approval_broker.deny_all()
+                    self.agent.reset_history()
+                    await sender({"type": "history_reset"})
+                    await sender(self._working_context_payload())
+                    continue
+
+                if kind == "tool_toggle":
+                    if self._busy():
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": "Tools können während einer laufenden Anfrage nicht geändert werden.",
+                            }
+                        )
+                        continue
+                    tool_name = payload.get("name")
+                    enabled = payload.get("enabled")
+                    if not isinstance(tool_name, str) or not isinstance(enabled, bool):
+                        await sender({"type": "error", "content": "Ungültige Tool-Umschaltung."})
+                        continue
+                    try:
+                        self.agent.set_tool_enabled(tool_name, enabled=enabled)
+                    except ValueError as exc:
+                        await sender({"type": "error", "content": str(exc)})
+                        continue
+                    await sender(self._working_context_payload())
+                    continue
+
+                if kind == "context_toggle":
+                    if self._busy():
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": "Context kann während einer laufenden Anfrage nicht geändert werden.",
+                            }
+                        )
+                        continue
+                    context_id = payload.get("id")
+                    enabled = payload.get("enabled")
+                    if not isinstance(context_id, str) or not isinstance(enabled, bool):
+                        await sender({"type": "error", "content": "Ungültige Context-Umschaltung."})
+                        continue
+                    try:
+                        self.agent.set_context_enabled(context_id, enabled=enabled)
+                    except ValueError as exc:
+                        await sender({"type": "error", "content": str(exc)})
+                        continue
+                    await sender(self._working_context_payload())
+                    continue
+
+                if kind == "okf_toggle":
+                    if self._busy():
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": "OKF kann während einer laufenden Anfrage nicht geändert werden.",
+                            }
+                        )
+                        continue
+                    enabled = payload.get("enabled")
+                    if not isinstance(enabled, bool):
+                        await sender({"type": "error", "content": "Ungültige OKF-Umschaltung."})
+                        continue
+                    try:
+                        self.agent.set_okf_enabled(enabled=enabled)
+                    except ValueError as exc:
+                        await sender({"type": "error", "content": str(exc)})
+                        continue
+                    await sender(self._working_context_payload())
                     continue
 
                 if kind == "quit":
