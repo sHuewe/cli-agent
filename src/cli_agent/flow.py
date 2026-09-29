@@ -128,15 +128,12 @@ class _FlowExecutionContext:
     approval_callback: ApprovalCallback | None
     executed_steps: int = 0
     claimed_outputs: dict[str, str] | None = None
-    created_output_keys: set[str] | None = None
     reserved_inputs: dict[str, Path] | None = None
     flow_cache: dict[str, FlowDefinition] | None = None
 
     def __post_init__(self) -> None:
         if self.claimed_outputs is None:
             self.claimed_outputs = {}
-        if self.created_output_keys is None:
-            self.created_output_keys = set()
         if self.reserved_inputs is None:
             self.reserved_inputs = {}
         if self.flow_cache is None:
@@ -2011,7 +2008,12 @@ def _serialize_foreach_iteration(
     answer_is_json: bool | None = None,
 ) -> str:
     value: Any = answer
-    if answer_is_json if answer_is_json is not None else step.response_format == "json":
+    should_parse_json = (
+        answer_is_json
+        if answer_is_json is not None
+        else step.response_format == "json"
+    )
+    if should_parse_json:
         value = _parse_structured_output(
             answer,
             step_id=step.step_id,
