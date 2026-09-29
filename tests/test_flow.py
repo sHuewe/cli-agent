@@ -5646,3 +5646,164 @@ flow = "${item.flow}"
 
     with pytest.raises(ValueError, match="statischer Pfad"):
         load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+
+
+def test_parent_exclusions_apply_inside_subflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+exclude_paths = ["child-private"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+workspace_access = "read"
+exclude_paths = ["step-private"]
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+exclude_paths = ["parent-private"]
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[0].excluded_paths == (
+        Path("parent-private"),
+        Path("child-private"),
+        Path("step-private"),
+    )
+
+
+def test_whole_json_step_output_is_typed_when_passed_to_subflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("{{var:id}}", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["payload"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+
+[steps.vars]
+id = "${input.payload.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+
+[steps.input]
+payload = "${steps.discover.output}"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"id":"typed"}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["discover", "typed"]
+
+
+def test_global_subflow_execution_budget_is_shared(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(flow_module, "MAX_FLOW_EXECUTIONS", 2)
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "children"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+
+[steps.input]
+item = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[1,2]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="global.*Limit"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
