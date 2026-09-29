@@ -22,10 +22,11 @@ Er:
 2. erzeugt mit `uv sync --frozen` eine Runtime-Umgebung ohne Dev-Extras,
 3. baut mit `uv build --no-sources` Wheel und Source Distribution,
 4. installiert das erzeugte Wheel testweise,
-5. prüft, dass eine Source Distribution erzeugt wurde,
-6. erzeugt eine CycloneDX-SBOM aus der gelockten Runtime-Umgebung,
-7. erzeugt SHA-256-Prüfsummen und
-8. lädt die Dateien als GitHub-Actions-Artefakt hoch.
+5. installiert das erzeugte Wheel zusätzlich isoliert mit dem optionalen `web`-Extra und prüft den Start der Web-UI-Abhängigkeiten,
+6. prüft, dass eine Source Distribution erzeugt wurde,
+7. erzeugt eine CycloneDX-SBOM aus der gelockten Runtime-Umgebung,
+8. erzeugt SHA-256-Prüfsummen und
+9. lädt die Dateien als GitHub-Actions-Artefakt hoch.
 
 Das Build-Backend `hatchling` ist im `pyproject.toml` auf eine exakte Version gepinnt. Damit wird auch dieser Teil des Paketbaus nicht bei jedem Lauf auf eine andere kompatible Version aufgelöst.
 
