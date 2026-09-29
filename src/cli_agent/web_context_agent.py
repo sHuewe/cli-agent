@@ -237,7 +237,12 @@ class WebContextCliAgent(CliAgent):
                     "kind": "web",
                     "label": context.title or redact_url_for_display(context.final_url),
                     "source": redact_url_for_display(context.final_url),
-                    "content": context.content,
+                    "content": (
+                        context.content
+                        if len(context.content) <= 20_000
+                        else context.content[:20_000] + "\n\n[… Context-Vorschau gekürzt …]"
+                    ),
+                    "content_chars": len(context.content),
                     "enabled": context.requested_url not in self._disabled_web_context_urls,
                 }
             )
