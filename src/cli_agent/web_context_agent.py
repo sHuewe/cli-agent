@@ -151,6 +151,10 @@ class WebContextCliAgent(CliAgent):
                 elif usage is not None:
                     self._last_knowledge_usage = usage
 
+    def reset_history(self) -> None:
+        super().reset_history()
+        self._reset_last_usage()
+
     async def ask(self, prompt: str) -> str:
         if self._exit_stack is None:
             raise RuntimeError("Der Agent wurde noch nicht gestartet.")
