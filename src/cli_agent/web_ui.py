@@ -785,17 +785,22 @@ APP_JS = """
   const prompt = document.getElementById("prompt");
   const send = document.getElementById("send");
   const quit = document.getElementById("quit");
+  const resetHistory = document.getElementById("reset-history");
   const meta = document.getElementById("session-meta");
   const showWorkingContext = document.getElementById("show-working-context");
   const workingContextDialog = document.getElementById("working-context-dialog");
   const workingMessagesJson = document.getElementById("working-messages-json");
-  const workingToolsJson = document.getElementById("working-tools-json");
+  const workingToolsList = document.getElementById("working-tools-list");
+  const workingContextsList = document.getElementById("working-contexts-list");
+  const okfState = document.getElementById("okf-state");
   const refreshWorkingContext = document.getElementById("refresh-working-context");
   const closeWorkingContext = document.getElementById("close-working-context");
   const contextTabMessages = document.getElementById("context-tab-messages");
   const contextTabTools = document.getElementById("context-tab-tools");
+  const contextTabContexts = document.getElementById("context-tab-contexts");
   const contextPanelMessages = document.getElementById("context-panel-messages");
   const contextPanelTools = document.getElementById("context-panel-tools");
+  const contextPanelContexts = document.getElementById("context-panel-contexts");
   const commandButtons = Array.from(
     document.querySelectorAll("button[data-command]")
   );
@@ -856,6 +861,7 @@ APP_JS = """
     prompt.disabled = busy;
     send.disabled = busy || disconnected;
     showWorkingContext.disabled = disconnected;
+    resetHistory.disabled = busy || disconnected;
 
   for (const button of commandButtons) {
       button.disabled = busy || disconnected;
@@ -904,19 +910,146 @@ APP_JS = """
 
   function setContextTab(tab) {
     const showMessages = tab === "messages";
+    const showTools = tab === "tools";
+    const showContexts = tab === "contexts";
     contextTabMessages.classList.toggle("active", showMessages);
-    contextTabTools.classList.toggle("active", !showMessages);
+    contextTabTools.classList.toggle("active", showTools);
+    contextTabContexts.classList.toggle("active", showContexts);
     contextTabMessages.setAttribute("aria-selected", String(showMessages));
-    contextTabTools.setAttribute("aria-selected", String(!showMessages));
+    contextTabTools.setAttribute("aria-selected", String(showTools));
+    contextTabContexts.setAttribute("aria-selected", String(showContexts));
     contextPanelMessages.classList.toggle("hidden", !showMessages);
-    contextPanelTools.classList.toggle("hidden", showMessages);
+    contextPanelTools.classList.toggle("hidden", !showTools);
+    contextPanelContexts.classList.toggle("hidden", !showContexts);
+  }
+
+  function stateToggleButton(label, enabled, onClick, disabled = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = enabled ? "secondary" : "";
+    button.textContent = enabled ? "Disable" : "Enable";
+    button.title = label;
+    button.disabled = disabled || busy;
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function renderTools(tools) {
+    workingToolsList.replaceChildren();
+    if (!tools.length) {
+      const empty = document.createElement("div");
+      empty.className = "meta";
+      empty.textContent = "Keine MCP-Tools verfügbar.";
+      workingToolsList.appendChild(empty);
+      return;
+    }
+    for (const tool of tools) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = String(tool.name || "");
+      const description = document.createElement("div");
+      description.className = "state-description";
+      description.textContent = String(tool.description || "");
+      const serverEnabled = tool.server_enabled !== false;
+      const enabled = Boolean(tool.enabled);
+      const button = stateToggleButton(
+        name.textContent,
+        enabled,
+        () => socket.send(JSON.stringify({
+          type: "tool_toggle",
+          name: tool.name,
+          enabled: !enabled
+        })),
+        !serverEnabled
+      );
+      if (!serverEnabled) {
+        button.title = "MCP-Server ist deaktiviert.";
+      }
+      row.append(name, description, button);
+      workingToolsList.appendChild(row);
+    }
+  }
+
+  function renderContexts(contexts, okf) {
+    workingContextsList.replaceChildren();
+    okfState.replaceChildren();
+
+    if (okf && okf.configured) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = "OKF Knowledge";
+      const description = document.createElement("div");
+      description.className = "state-description";
+      description.textContent = okf.available
+        ? "Konfigurierter Knowledge-Lauf vor der Hauptanfrage."
+        : "Konfiguriert, aber aktuell nicht verfügbar.";
+      const enabled = Boolean(okf.enabled);
+      const button = stateToggleButton(
+        "OKF Knowledge",
+        enabled,
+        () => socket.send(JSON.stringify({
+          type: "okf_toggle",
+          enabled: !enabled
+        })),
+        !okf.available
+      );
+      row.append(name, description, button);
+      okfState.appendChild(row);
+    }
+
+    if (!contexts.length) {
+      const empty = document.createElement("div");
+      empty.className = "meta";
+      empty.textContent = "Keine Datei- oder Web-Kontexte vorhanden.";
+      workingContextsList.appendChild(empty);
+      return;
+    }
+
+    for (const context of contexts) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const heading = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = String(context.label || context.source || "");
+      const source = document.createElement("div");
+      source.className = "state-source";
+      source.textContent = (context.kind === "file" ? "Datei: " : "Web: ") +
+        String(context.source || "");
+      heading.append(name, source);
+
+      const body = document.createElement("div");
+      body.className = "state-description";
+      const content = document.createElement("div");
+      content.className = "state-content";
+      content.textContent = String(context.content || "");
+      body.appendChild(content);
+
+      const enabled = Boolean(context.enabled);
+      const button = stateToggleButton(
+        name.textContent,
+        enabled,
+        () => socket.send(JSON.stringify({
+          type: "context_toggle",
+          id: context.id,
+          enabled: !enabled
+        }))
+      );
+      row.append(heading, body, button);
+      workingContextsList.appendChild(row);
+    }
   }
 
   function requestWorkingContext() {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       const message = "Web-UI-Verbindung ist nicht aktiv.";
       workingMessagesJson.textContent = message;
-      workingToolsJson.textContent = message;
+      workingToolsList.textContent = message;
+      workingContextsList.textContent = message;
       return;
     }
     socket.send(JSON.stringify({ type: "working_context" }));
@@ -1010,11 +1143,18 @@ APP_JS = """
     if (payload.type === "working_context") {
       const messages = Array.isArray(payload.messages) ? payload.messages : [];
       const tools = Array.isArray(payload.tools) ? payload.tools : [];
+      const contexts = Array.isArray(payload.contexts) ? payload.contexts : [];
       workingMessagesJson.textContent = JSON.stringify(messages, null, 2);
-      workingToolsJson.textContent = JSON.stringify(tools, null, 2);
+      renderTools(tools);
+      renderContexts(contexts, payload.okf || {});
       if (!workingContextDialog.open) {
         workingContextDialog.showModal();
       }
+      return;
+    }
+    if (payload.type === "history_reset") {
+      chat.replaceChildren();
+      addMessage("system", "History wurde zurückgesetzt.");
       return;
     }
     if (payload.type === "approval_required") {
@@ -1036,7 +1176,9 @@ APP_JS = """
 
   showWorkingContext.addEventListener("click", () => {
     workingMessagesJson.textContent = "Wird geladen …";
-    workingToolsJson.textContent = "Wird geladen …";
+    workingToolsList.textContent = "Wird geladen …";
+    workingContextsList.textContent = "Wird geladen …";
+    okfState.replaceChildren();
     setContextTab("messages");
     if (!workingContextDialog.open) {
       workingContextDialog.showModal();
@@ -1046,7 +1188,9 @@ APP_JS = """
 
   refreshWorkingContext.addEventListener("click", () => {
     workingMessagesJson.textContent = "Wird geladen …";
-    workingToolsJson.textContent = "Wird geladen …";
+    workingToolsList.textContent = "Wird geladen …";
+    workingContextsList.textContent = "Wird geladen …";
+    okfState.replaceChildren();
     requestWorkingContext();
   });
 
@@ -1056,6 +1200,17 @@ APP_JS = """
 
   contextTabMessages.addEventListener("click", () => setContextTab("messages"));
   contextTabTools.addEventListener("click", () => setContextTab("tools"));
+  contextTabContexts.addEventListener("click", () => setContextTab("contexts"));
+
+  resetHistory.addEventListener("click", () => {
+    if (busy || !socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (!window.confirm("Conversation-History wirklich zurücksetzen?")) {
+      return;
+    }
+    socket.send(JSON.stringify({ type: "reset_history" }));
+  });
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
