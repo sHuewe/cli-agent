@@ -1152,6 +1152,7 @@ APP_JS = """
       return;
     }
     if (payload.type === "history_reset") {
+      resetPendingCommand();
       chat.replaceChildren();
       addMessage("system", "History wurde zurückgesetzt.");
       return;
