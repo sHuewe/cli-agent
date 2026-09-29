@@ -6246,3 +6246,81 @@ flow = "child.toml"
 
     with pytest.raises(ValueError, match="reservierten Flow-Eingabe"):
         validate_flow(definition, workspace=tmp_path)
+
+
+
+def test_subflow_decimal_result_preserves_json_number_in_foreach(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "aggregate.md").write_text(
+        "{{var:results}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output.score"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "score"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+
+[[steps]]
+id = "aggregate"
+prompt_file = "aggregate.md"
+
+[steps.vars]
+results = "${steps.score.output}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            answer = '{"items":[{"id":"one"},{"id":"two"}]}'
+        elif options.prompt == "child":
+            answer = '{"score":1.5}'
+        else:
+            answer = "done"
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    aggregate = json.loads(calls[-1].prompt)
+    assert aggregate == {
+        "iterations": [
+            {"id": "one", "output": 1.5},
+            {"id": "two", "output": 1.5},
+        ]
+    }
