@@ -67,11 +67,8 @@ class ConversationMixin:
         empty_history: list[dict[str, Any]] = []
         dumped_history_json: str | None = None
         if getattr(self, "dump_llm_context", False):
-            # Persist/clean diagnostics before mutating in-memory session state.
-            # If a dump file is locked or otherwise unwritable, callers can
-            # report the failure while the visible conversation remains intact.
-            self._write_dump_json("history.json", empty_history)
-            for filename in (
+            diagnostic_files = (
+                "history.json",
                 "main_working_messages.json",
                 "main_system_prompt.json",
                 "knowledge_working_messages.json",
@@ -80,8 +77,44 @@ class ConversationMixin:
                 "knowledge_selection.json",
                 "knowledge_result.json",
                 "knowledge_selection_fallback.json",
-            ):
-                self._remove_dump_value(filename)
+            )
+            original_dump_values: dict[str, bytes | None] = {}
+            for filename in diagnostic_files:
+                path = self._safe_dump_path(filename)
+                try:
+                    original_dump_values[filename] = path.read_bytes()
+                except FileNotFoundError:
+                    original_dump_values[filename] = None
+
+            try:
+                self._write_dump_json("history.json", empty_history)
+                for filename in diagnostic_files[1:]:
+                    self._remove_dump_value(filename)
+            except Exception as exc:
+                restore_errors: list[str] = []
+                for filename, original in original_dump_values.items():
+                    try:
+                        path = self._safe_dump_path(filename)
+                        if original is None:
+                            try:
+                                path.unlink()
+                            except FileNotFoundError:
+                                pass
+                        else:
+                            path.write_bytes(original)
+                    except Exception as restore_exc:
+                        restore_errors.append(
+                            f"{filename}: {type(restore_exc).__name__}: {restore_exc}"
+                        )
+                if restore_errors:
+                    raise RuntimeError(
+                        "History-Reset fehlgeschlagen und die bisherigen "
+                        "LLM-Context-Dumps konnten nicht vollständig "
+                        "wiederhergestellt werden: "
+                        + "; ".join(restore_errors)
+                    ) from exc
+                raise
+
             dumped_history_json = json.dumps(
                 empty_history,
                 ensure_ascii=False,
