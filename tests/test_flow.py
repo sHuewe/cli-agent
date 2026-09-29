@@ -5418,3 +5418,1118 @@ prompt_file = "prompt.md"
 
     assert len(calls) == 1
     assert calls[0].prompt.startswith("Erkläre den Befehl add_web_context")
+
+
+
+def test_subflow_foreach_returns_explicit_child_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text(
+        "process {{var:id}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "aggregate.md").write_text(
+        "{{var:items}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output.result"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "work/${input.item.id}.json"
+overwrite_output = true
+
+[steps.vars]
+id = "${input.item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "process"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+
+[[steps]]
+id = "aggregate"
+prompt_file = "aggregate.md"
+
+[steps.vars]
+items = "${steps.process.output}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            answer = '{"items":[{"id":"a"},{"id":"b"}]}'
+        elif options.prompt == "process a":
+            answer = '{"result":{"id":"a","status":"ok"}}'
+        elif options.prompt == "process b":
+            answer = '{"result":{"id":"b","status":"ok"}}'
+        else:
+            answer = "done"
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls[:3]] == [
+        "discover",
+        "process a",
+        "process b",
+    ]
+    assert calls[1].output == (tmp_path / "work" / "a.json").resolve()
+    assert calls[2].output == (tmp_path / "work" / "b.json").resolve()
+
+    aggregate = json.loads(calls[3].prompt)
+    assert aggregate == {
+        "iterations": [
+            {"id": "a", "output": {"id": "a", "status": "ok"}},
+            {"id": "b", "output": {"id": "b", "status": "ok"}},
+        ]
+    }
+
+
+def test_subflow_inputs_are_explicit_and_not_inherited(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "child.md").write_text("{{var:value}}", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["value"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+
+[steps.vars]
+value = "${input.value}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[vars]
+value = "parent-global"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+
+[steps.input]
+wrong = "explicit"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="fehlend: value.*unbekannt: wrong"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+def test_invoked_subflow_requires_result_contract(tmp_path: Path) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="root-level result"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+def test_subflow_cycle_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "a.toml").write_text(
+        """
+version = 1
+result = "steps.b.output"
+
+[[steps]]
+id = "b"
+flow = "b.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "b.toml").write_text(
+        """
+version = 1
+result = "steps.a.output"
+
+[[steps]]
+id = "a"
+flow = "a.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "a.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="Zyklischer Subflow"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+def test_flow_with_declared_inputs_cannot_run_directly(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("{{var:value}}", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["value"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "prompt.md"
+
+[steps.vars]
+value = "${input.value}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "child.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="nicht direkt"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+
+def test_subflow_path_must_be_static(tmp_path: Path) -> None:
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "child"
+flow = "${item.flow}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="statischer Pfad"):
+        load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+
+
+def test_parent_exclusions_apply_inside_subflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+exclude_paths = ["child-private"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+workspace_access = "read"
+exclude_paths = ["step-private"]
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+exclude_paths = ["parent-private"]
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls[0].excluded_paths == (
+        Path("parent-private"),
+        Path("child-private"),
+        Path("step-private"),
+    )
+
+
+def test_whole_json_step_output_is_typed_when_passed_to_subflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("{{var:id}}", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["payload"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+
+[steps.vars]
+id = "${input.payload.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+
+[steps.input]
+payload = "${steps.discover.output}"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"id":"typed"}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["discover", "typed"]
+
+
+def test_global_subflow_execution_budget_is_shared(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(flow_module, "MAX_FLOW_EXECUTIONS", 2)
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "children"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+
+[steps.input]
+item = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[1,2]}',
+                web_context_statuses=(),
+            )
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="global.*Limit"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+
+
+def test_subflow_does_not_accept_checkpoint_created_after_overall_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "parent.md").write_text("parent", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "child-result.json"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "prepare"
+prompt_file = "parent.md"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "parent":
+            (tmp_path / "child-result.json").write_text(
+                '{"from":"parent"}',
+                encoding="utf-8",
+            )
+            return SimpleNamespace(answer="prepared", web_context_statuses=())
+        return SimpleNamespace(
+            answer='{"from":"child"}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == ["parent"]
+
+
+def test_subflow_previous_output_ignores_file_created_after_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "parent.md").write_text("parent", encoding="utf-8")
+    (tmp_path / "child.md").write_text(
+        "{{var:previous}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "child-result.json"
+overwrite_output = true
+
+[steps.vars]
+previous = "${previous_output}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "prepare"
+prompt_file = "parent.md"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "parent":
+            (tmp_path / "child-result.json").write_text(
+                '{"late":true}',
+                encoding="utf-8",
+            )
+            return SimpleNamespace(answer="prepared", web_context_statuses=())
+        return SimpleNamespace(
+            answer='{"fresh":true}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == ["parent", "null"]
+
+
+def test_recursive_subflow_validation_has_expansion_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(flow_module, "MAX_SUBFLOW_GRAPH_EXPANSIONS", 2)
+    (tmp_path / "leaf.md").write_text("leaf", encoding="utf-8")
+    (tmp_path / "leaf.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "leaf.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "first"
+flow = "leaf.toml"
+
+[[steps]]
+id = "second"
+flow = "leaf.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="Expansionslimit"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+
+def test_subflow_foreach_resumes_input_derived_checkpoint_when_source_is_known_at_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text(
+        "process {{var:id}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "work").mkdir()
+    (tmp_path / "plan.json").write_text(
+        '{"items":[{"id":"one"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "work" / "one.json").write_text(
+        '{"status":"existing"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "work/${input.item.id}.json"
+overwrite_output = false
+
+[steps.vars]
+id = "${input.item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+output = "plan.json"
+overwrite_output = false
+
+[[steps]]
+id = "process"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        raise AssertionError("run-start child checkpoint must skip the model")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []
+
+
+def test_dynamic_subflow_foreach_does_not_adopt_preexisting_unknown_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work" / "one.json").write_text(
+        '{"stale":true}',
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "work/${input.item.id}.json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "process"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("unknown child invocation must not adopt stale checkpoint")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == ["discover"]
+
+
+def test_validation_rejects_static_output_collision_across_subflow_calls(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+output = "shared.txt"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "first"
+flow = "child.toml"
+
+[[steps]]
+id = "second"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="geplanten Output"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+
+def test_foreach_subflow_preflights_all_child_outputs_before_first_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+output = "shared.txt"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "children"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"},{"id":"two"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("child must not run before batch preflight succeeds")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="bereits von"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == ["discover"]
+    assert not (tmp_path / "shared.txt").exists()
+
+
+def test_validation_checks_child_outputs_against_parent_reserved_inputs(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "parent.md").write_text("parent", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+output = "parent.md"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "parent"
+prompt_file = "parent.md"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="reservierten Flow-Eingabe"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+
+def test_subflow_decimal_result_preserves_json_number_in_foreach(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "aggregate.md").write_text(
+        "{{var:results}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output.score"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "score"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+
+[[steps]]
+id = "aggregate"
+prompt_file = "aggregate.md"
+
+[steps.vars]
+results = "${steps.score.output}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            answer = '{"items":[{"id":"one"},{"id":"two"}]}'
+        elif options.prompt == "child":
+            answer = '{"score":1.5}'
+        else:
+            answer = "done"
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    aggregate = json.loads(calls[-1].prompt)
+    assert aggregate == {
+        "iterations": [
+            {"id": "one", "output": 1.5},
+            {"id": "two", "output": 1.5},
+        ]
+    }
+
+
+
+def test_subflow_dump_prefix_disambiguates_case_colliding_parent_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+config = "config.toml"
+prompt_file = "child.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "Build"
+flow = "child.toml"
+
+[[steps]]
+id = "build"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module,
+        "_filesystem_is_case_insensitive",
+        lambda _path: True,
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    prefixes = [call.dump_file_prefix for call in calls]
+    assert prefixes[0].startswith("Build.case-")
+    assert prefixes[1].startswith("build.case-")
+    assert prefixes[0].endswith(".once.work")
+    assert prefixes[1].endswith(".once.work")
+    assert prefixes[0].casefold() != prefixes[1].casefold()
+
+
+
+def test_subflow_iteration_id_renders_explicit_flow_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["prefix"]
+result = "steps.work.output"
+
+[[steps]]
+id = "plan"
+prompt_file = "plan.md"
+response_format = "json"
+
+[[steps]]
+id = "work"
+prompt_file = "work.md"
+foreach = "steps.plan.output.items"
+iteration_id = "${input.prefix}-${item.id}"
+output = "results/${iteration.id}.json"
+response_format = "json"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+
+[steps.input]
+prefix = "pre"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "plan":
+            answer = '{"items":[{"id":"one"}]}'
+        else:
+            answer = '{"status":"ok"}'
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["plan", "work"]
+    assert calls[1].output == (tmp_path / "results" / "pre-one.json").resolve()
+
+
+def test_parent_foreach_preflights_checkpoint_known_nested_foreach_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "outer.md").write_text("outer", encoding="utf-8")
+    (tmp_path / "inner-plan.md").write_text("inner plan", encoding="utf-8")
+    (tmp_path / "inner-work.md").write_text("inner work", encoding="utf-8")
+    (tmp_path / "plans").mkdir()
+    (tmp_path / "outer.json").write_text(
+        '{"items":[{"id":"A"},{"id":"B"}]}',
+        encoding="utf-8",
+    )
+    for outer_id in ("A", "B"):
+        (tmp_path / "plans" / f"{outer_id}.json").write_text(
+            '{"items":[{"id":"shared"}]}',
+            encoding="utf-8",
+        )
+
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["outer"]
+result = "steps.inner.output"
+
+[[steps]]
+id = "inner_plan"
+prompt_file = "inner-plan.md"
+response_format = "json"
+output = "plans/${input.outer.id}.json"
+overwrite_output = false
+
+[[steps]]
+id = "inner"
+prompt_file = "inner-work.md"
+foreach = "steps.inner_plan.output.items"
+iteration_id = "${item.id}"
+output = "results/${iteration.id}.json"
+response_format = "json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "outer"
+prompt_file = "outer.md"
+response_format = "json"
+output = "outer.json"
+overwrite_output = false
+
+[[steps]]
+id = "children"
+flow = "child.toml"
+foreach = "steps.outer.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+outer = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        raise AssertionError(
+            "nested checkpoint-known foreach collision must fail before model work"
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="bereits von"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []
+    assert not (tmp_path / "results" / "shared.json").exists()

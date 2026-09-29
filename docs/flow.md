@@ -115,6 +115,125 @@ id = "${item.id}"
 title = "${item.title}"
 ```
 
+### Subflows und explizite Flow-Schnittstellen
+
+Ein Step kann statt eines direkten Agentenlaufs einen anderen Flow aufrufen.
+Der Pfad des Child-Flows ist statisch und wird relativ zum Ordner des
+aufrufenden Flows aufgelöst:
+
+```toml
+[[steps]]
+id = "process"
+flow = "flows/process-item.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+```
+
+Ein als Child verwendeter Flow deklariert seine öffentliche Schnittstelle
+explizit. `inputs` nennt die erlaubten Eingaben, `result` bestimmt den
+einzigen Rückgabewert:
+
+```toml
+version = 1
+inputs = ["item"]
+result = "steps.review.output"
+
+[[steps]]
+id = "analyse"
+prompt_file = "prompts/analyse.md"
+
+[steps.vars]
+id = "${input.item.id}"
+
+[[steps]]
+id = "review"
+prompt_file = "prompts/review.md"
+response_format = "json"
+
+[steps.vars]
+analysis = "${steps.analyse.output}"
+```
+
+Der aufrufende Flow sieht keine internen Child-Steps. Aus seiner Sicht ist der
+Subflow ein normaler Step: Das deklarierte Child-`result` wird als
+`steps.process.output` veröffentlicht. Bei `foreach` entsteht wie bei
+anderen Steps der bestehende `iterations`-Aggregate-Output; JSON-Ergebnisse
+des Child-Flows bleiben darin als strukturierte JSON-Werte erhalten.
+
+Inputs werden **nicht vererbt**. Ebenso werden weder Parent-`vars` noch
+Parent-Step-Outputs automatisch im Child sichtbar. Daten gelangen ausschließlich
+über `[steps.input]` in den Child und stehen dort über
+`${input.<name>}` zur Verfügung. Die Menge der übergebenen Namen muss exakt
+der Child-Deklaration `inputs = [...]` entsprechen. Ein Flow mit deklarierten
+Inputs kann deshalb nicht direkt mit `cli-agent-flow run` ausgeführt werden;
+er benötigt einen aufrufenden Flow.
+
+`result` ist kein eigener Step. Es ist ein Flow-level Verweis auf
+`steps.<id>.output` oder ein Feld eines JSON-Outputs, zum Beispiel:
+
+```toml
+result = "steps.review.output.result"
+```
+
+Ein normal direkt gestarteter Top-Level-Flow benötigt kein `result`. Sobald
+ein Flow als Child verwendet wird, ist `result` dagegen verpflichtend.
+
+Child-Flows laufen im selben Prozess und immer im **gleichen festen
+Workspace** wie der Parent. Der Child kann den Workspace nicht überschreiben.
+Parent-`exclude_paths` werden als Restriktion in alle Child-Flows
+weitergereicht; ein Child kann sie nicht wieder freigeben. Flow-Datei,
+Prompt-/Context-Dateien und workspace-lokale Config-Dateien aller statisch
+referenzierten Child-Flows werden außerdem gemeinsam als geschützte
+Flow-Eingaben behandelt.
+
+Subflow-Pfade dürfen nicht aus LLM-, `foreach`- oder Input-Daten erzeugt
+werden. Damit kann dynamischer Inhalt zwar bestimmen, **welche Daten** ein
+statisch festgelegter Child-Flow erhält, aber nicht, **welcher Flow** oder
+welche Capabilities ausgeführt werden.
+
+Die Validierung folgt Subflow-Referenzen rekursiv. Zyklen werden abgewiesen,
+die Verschachtelungstiefe ist begrenzt und zusätzlich gilt ein globales Budget
+für ausgeführte Step-Iterationen über den gesamten Flow-Baum. Dadurch können
+verschachtelte `foreach`-/Subflow-Kombinationen nicht unbeschränkt
+multiplizieren.
+
+Child-interne JSON-Checkpoints behalten ihre normale Semantik. Der Subflow-Step
+selbst erzeugt in dieser ersten Version keinen zusätzlichen Parent-Checkpoint;
+für Resume sollten die relevanten Child-Steps daher wie gewohnt
+`response_format = "json"` und einen eindeutigen `output` verwenden.
+Output-Pfade in Child-Flows dürfen explizite Inputs verwenden, etwa
+`output = "work/${input.item.id}.json"`; die resultierenden Pfade werden
+weiterhin gegen die Workspace-Grenze und reservierte Flow-Eingaben geprüft.
+
+Für Resume zählt der Zustand zu Beginn des **gesamten** Flow-Laufs. Ist die
+konkrete Child-Invocation bereits daraus rekonstruierbar, werden ihre Inputs
+aufgelöst und ihre Checkpoints ebenfalls am Run-Start erfasst. Das gilt
+insbesondere, wenn die `foreach`-Quelle selbst aus einem vorhandenen
+JSON-Checkpoint stammt:
+
+```text
+Run-Start:
+  plan.json -> items = [a, b]
+  work/a.json vorhanden
+  work/b.json fehlt
+
+Ausführung:
+  plan       -> Checkpoint
+  child(a)   -> Checkpoint
+  child(b)   -> wird ausgeführt
+```
+
+Entstehen die `foreach`-Elemente dagegen erst durch einen neuen LLM-Aufruf im
+aktuellen Lauf, werden die Child-Invocations ganz normal danach erzeugt und
+ausgeführt. Bereits vorhandene oder während des Laufs entstandene Dateien
+werden für solche erst später bekannten Invocations **nicht nachträglich** als
+Run-Start-Checkpoints bzw. `previous_output` übernommen. Damit schränkt die
+Run-Start-Regel dynamische `foreach`-Flows nicht ein, verhindert aber, dass
+Laufzeit-Seiteneffekte versehentlich als Resume-Zustand interpretiert werden.
+
 ### Outputs vorheriger Schritte in Variablen
 
 Ein späterer Step kann den Output eines bereits abgeschlossenen Steps direkt in

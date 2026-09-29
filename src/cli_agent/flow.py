@@ -41,6 +41,9 @@ MAX_FLOW_STEPS = 100
 MAX_FOREACH_ITEMS = 1000
 MAX_FLOW_FILE_BYTES = 1_000_000
 MAX_STRUCTURED_OUTPUT_BYTES = 10_000_000
+MAX_SUBFLOW_DEPTH = 8
+MAX_FLOW_EXECUTIONS = 10_000
+MAX_SUBFLOW_GRAPH_EXPANSIONS = 10_000
 
 _STEP_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
 _ITEM_EXPR = re.compile(
@@ -55,6 +58,10 @@ _PREVIOUS_OUTPUT_EXPR = re.compile(
     r"\$\{previous_output(?:\.([A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
+_INPUT_EXPR = re.compile(
+    r"\$\{input(?:\.([A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
+)
 _DYNAMIC_VALUE_EXPR = re.compile(
     r"\$\{(?:(?P<iteration>iteration\.id)"
     r"|item(?:\.(?P<item_path>[A-Za-z_][A-Za-z0-9_-]*"
@@ -62,6 +69,8 @@ _DYNAMIC_VALUE_EXPR = re.compile(
     r"|conversation\.item(?:\.(?P<conversation_path>[A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
     r"|previous_output(?:\.(?P<previous_output_path>[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
+    r"|input(?:\.(?P<input_path>[A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
     r"|steps\.(?P<step_output_id>[A-Za-z_][A-Za-z0-9_-]*)\.output"
     r"(?:\.(?P<step_output_path>[A-Za-z_][A-Za-z0-9_-]*"
@@ -79,7 +88,9 @@ class FlowStep:
     step_id: str
     config: Path | None
     model: str | None
-    prompt_file: Path
+    prompt_file: Path | None
+    flow: Path | None
+    flow_input: dict[str, Any]
     context_files: tuple[Path, ...]
     add_web_context: tuple[str, ...]
     output: str | None
@@ -103,6 +114,52 @@ class FlowDefinition:
     source: Path
     steps: tuple[FlowStep, ...]
     excluded_paths: tuple[Path, ...] = ()
+    inputs: tuple[str, ...] = ()
+    result: str | None = None
+
+
+@dataclass(frozen=True)
+class _FlowResultValue:
+    text: str
+    is_json: bool
+
+
+@dataclass
+class _FlowExecutionContext:
+    dependencies: ExecutionDependencies
+    approval_callback: ApprovalCallback | None
+    executed_steps: int = 0
+    claimed_outputs: dict[str, str] | None = None
+    reserved_inputs: dict[str, Path] | None = None
+    flow_cache: dict[str, FlowDefinition] | None = None
+    run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
+    run_start_checkpoint_paths: tuple[Path, ...] = ()
+    preflight_budget: "_SubflowTraversalBudget" | None = None
+
+    def __post_init__(self) -> None:
+        if self.claimed_outputs is None:
+            self.claimed_outputs = {}
+        if self.reserved_inputs is None:
+            self.reserved_inputs = {}
+        if self.flow_cache is None:
+            self.flow_cache = {}
+        if self.run_start_snapshots is None:
+            self.run_start_snapshots = {}
+        if self.preflight_budget is None:
+            self.preflight_budget = _SubflowTraversalBudget()
+
+
+@dataclass
+class _SubflowTraversalBudget:
+    expanded_nodes: int = 0
+
+    def consume(self, *, purpose: str) -> None:
+        self.expanded_nodes += 1
+        if self.expanded_nodes > MAX_SUBFLOW_GRAPH_EXPANSIONS:
+            raise ValueError(
+                f"Subflow-{purpose} überschreitet das Expansionslimit von "
+                f"{MAX_SUBFLOW_GRAPH_EXPANSIONS} Flow-Knoten."
+            )
 
 
 def _reject_parent_reference(path: Path, *, purpose: str) -> None:
@@ -297,6 +354,24 @@ def _dump_prefix_for_iteration(
     return f"{prefix}.case-{digest}"
 
 
+def _resolve_subflow_path(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow_dir: Path,
+) -> Path:
+    if step.flow is None:
+        raise ValueError(f"Schritt {step.step_id!r} ist kein Subflow-Schritt.")
+    path = step.flow.expanduser()
+    candidate = path if path.is_absolute() else flow_dir / path
+    return _workspace_path(
+        workspace,
+        candidate,
+        purpose=f"Subflow-Datei von Schritt {step.step_id!r}",
+        must_exist=True,
+    )
+
+
 def _workspace_local_config_path(
     step: FlowStep,
     *,
@@ -325,6 +400,15 @@ def _reserved_flow_input_paths(
         _filesystem_path_key(flow.source): flow.source,
     }
     for step in flow.steps:
+        if step.flow is not None:
+            subflow_path = _resolve_subflow_path(
+                step,
+                workspace=workspace,
+                flow_dir=flow_dir,
+            )
+            reserved[_filesystem_path_key(subflow_path)] = subflow_path
+            continue
+
         if step.workspace_access in {"read", "write"}:
             resolve_excluded_paths(
                 workspace,
@@ -338,6 +422,7 @@ def _reserved_flow_input_paths(
                 ),
             )
 
+        assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
             step.prompt_file,
@@ -377,6 +462,46 @@ def _string(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} muss ein nichtleerer String sein.")
     return value
+
+
+def _iter_string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(_iter_string_values(item))
+        return result
+    if isinstance(value, dict):
+        result: list[str] = []
+        for item in value.values():
+            result.extend(_iter_string_values(item))
+        return result
+    if isinstance(value, (bool, int, float)):
+        return []
+    raise ValueError(
+        "Subflow-Input unterstützt nur TOML-Strings, Zahlen, boolesche Werte, "
+        "Listen und Tabellen."
+    )
+
+
+def _validate_input_references(
+    values: list[str],
+    *,
+    declared_inputs: tuple[str, ...],
+    field: str,
+) -> None:
+    declared = set(declared_inputs)
+    for value in values:
+        for match in _INPUT_EXPR.finditer(value):
+            path = match.group(1)
+            if path is None:
+                continue
+            root = path.split(".", 1)[0]
+            if root not in declared:
+                raise ValueError(
+                    f"{field} referenziert nicht deklarierten Flow-Input {root!r}."
+                )
 
 
 def _path_list(value: Any, *, field: str) -> tuple[Path, ...]:
@@ -435,6 +560,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "exclude_paths",
         "vars",
         "retry",
+        "inputs",
+        "result",
     }
     unknown_root = set(values) - allowed_root
     if unknown_root:
@@ -444,6 +571,30 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
     if values.get("version") != 1:
         raise ValueError("Flow-Datei benötigt version = 1.")
+
+    raw_inputs = values.get("inputs", [])
+    if (
+        not isinstance(raw_inputs, list)
+        or not all(isinstance(value, str) and value.strip() for value in raw_inputs)
+    ):
+        raise ValueError("inputs muss eine Liste nichtleerer Namen sein.")
+    inputs = tuple(value.strip() for value in raw_inputs)
+    if len(inputs) != len(set(inputs)):
+        raise ValueError("inputs darf keine doppelten Namen enthalten.")
+    for name in inputs:
+        if _STEP_ID.fullmatch(name) is None:
+            raise ValueError(
+                f"Ungültiger Flow-Input {name!r}; erlaubt sind ASCII-Buchstaben, "
+                "Ziffern, '_' und '-' und der Name muss mit einem Buchstaben "
+                "oder '_' beginnen."
+            )
+
+    result_value = values.get("result")
+    result_selector = (
+        _string(result_value, field="result")
+        if result_value is not None
+        else None
+    )
 
     global_config_value = values.get("config")
     global_config = (
@@ -549,6 +700,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "conversation_items",
         "conversation_final_prompt_file",
         "iteration_id",
+        "flow",
+        "input",
     }
 
     for index, raw in enumerate(raw_steps, start=1):
@@ -576,12 +729,63 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             raise ValueError(f"Doppelte Step-ID: {step_id!r}.")
         known_ids.add(step_id)
 
-        prompt_file = Path(
-            _string(
-                raw.get("prompt_file"),
-                field=f"steps[{index}].prompt_file",
-            )
+        flow_value = raw.get("flow")
+        child_flow = (
+            Path(_string(flow_value, field=f"steps[{index}].flow"))
+            if flow_value is not None
+            else None
         )
+        if child_flow is not None and _DYNAMIC_VALUE_EXPR.search(str(child_flow)):
+            raise ValueError(
+                f"steps[{index}].flow muss ein statischer Pfad sein und darf "
+                "keine dynamischen Flow-Platzhalter enthalten."
+            )
+        prompt_value = raw.get("prompt_file")
+        if child_flow is not None and prompt_value is not None:
+            raise ValueError(
+                f"steps[{index}] darf nicht gleichzeitig flow und prompt_file setzen."
+            )
+        if child_flow is None and prompt_value is None:
+            raise ValueError(
+                f"steps[{index}] benötigt prompt_file oder flow."
+            )
+        prompt_file = (
+            Path(_string(prompt_value, field=f"steps[{index}].prompt_file"))
+            if prompt_value is not None
+            else None
+        )
+
+        raw_flow_input = raw.get("input", {})
+        if not isinstance(raw_flow_input, dict):
+            raise ValueError(f"steps[{index}].input muss eine Tabelle sein.")
+        flow_input: dict[str, Any] = {}
+        for name, value in raw_flow_input.items():
+            if not isinstance(name, str) or _STEP_ID.fullmatch(name) is None:
+                raise ValueError(
+                    f"Ungültiger Input-Name {name!r} in steps[{index}].input."
+                )
+            flow_input[name] = value
+
+        if child_flow is not None:
+            regular_only = {
+                "config", "model", "prompt_file", "context_file",
+                "add_file_context", "add_web_context", "output",
+                "overwrite_output", "workspace_access", "with_data",
+                "exclude_paths", "retry", "response_format",
+                "approve_tools", "vars", "conversation_items",
+                "conversation_final_prompt_file",
+            }
+            conflicting = sorted(regular_only & set(raw))
+            if conflicting:
+                raise ValueError(
+                    f"Subflow-Schritt {step_id!r} darf diese Schlüssel nicht setzen: "
+                    + ", ".join(conflicting)
+                )
+        elif raw_flow_input:
+            raise ValueError(
+                f"steps[{index}].input ist nur zusammen mit flow erlaubt."
+            )
+
         context_value = raw.get("context_file")
         add_file_context_value = raw.get("add_file_context")
         if context_value is not None and add_file_context_value is not None:
@@ -815,14 +1019,38 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
             variables[name] = value
 
-        for value in variables.values():
+        input_reference_values = list(variables.values())
+        if output is not None:
+            input_reference_values.append(output)
+        _validate_input_references(
+            input_reference_values,
+            declared_inputs=inputs,
+            field=f"steps[{index}]",
+        )
+        flow_input_strings = _iter_string_values(flow_input)
+        _validate_input_references(
+            flow_input_strings,
+            declared_inputs=inputs,
+            field=f"steps[{index}].input",
+        )
+        if any(
+            _PREVIOUS_OUTPUT_EXPR.search(value)
+            or _CONVERSATION_ITEM_EXPR.search(value)
+            for value in flow_input_strings
+        ):
+            raise ValueError(
+                f"steps[{index}].input darf previous_output und "
+                "conversation.item nicht verwenden."
+            )
+
+        for value in [*variables.values(), *flow_input_strings]:
             for match in _DYNAMIC_VALUE_EXPR.finditer(value):
                 source_id = match.group("step_output_id")
                 if source_id is None:
                     continue
                 if source_id not in known_ids or source_id == step_id:
                     raise ValueError(
-                        f"steps[{index}].vars darf nur Output eines vorherigen "
+                        f"steps[{index}] darf nur Output eines vorherigen "
                         f"Schritts referenzieren: {source_id!r}."
                     )
 
@@ -920,6 +1148,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 f"steps[{index}].iteration_id darf nicht "
                 "'${iteration.id}' verwenden."
             )
+        if iteration_id is not None:
+            _validate_input_references(
+                [iteration_id],
+                declared_inputs=inputs,
+                field=f"steps[{index}].iteration_id",
+            )
         if foreach is not None:
             match = _FOREACH.fullmatch(foreach)
             if match is None:
@@ -934,7 +1168,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     f"vorherigen Schritt verweisen: {source_id!r}."
                 )
         else:
-            dynamic_values = list(variables.values())
+            dynamic_values = [*variables.values(), *flow_input_strings]
             if output is not None:
                 dynamic_values.append(output)
             if any(
@@ -975,6 +1209,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 config=config,
                 model=model,
                 prompt_file=prompt_file,
+                flow=child_flow,
+                flow_input=flow_input,
                 context_files=context_files,
                 add_web_context=add_web_context,
                 output=output,
@@ -994,10 +1230,24 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         )
 
+    if result_selector is not None:
+        match = _FOREACH.fullmatch(result_selector)
+        if match is None:
+            raise ValueError(
+                "result muss auf steps.<id>.output[.<pfad>] verweisen."
+            )
+        source_id = match.group(1)
+        if source_id not in known_ids:
+            raise ValueError(
+                f"result verweist auf unbekannten Schritt {source_id!r}."
+            )
+
     return FlowDefinition(
         source=source,
         steps=tuple(steps),
         excluded_paths=excluded_paths,
+        inputs=inputs,
+        result=result_selector,
     )
 
 
@@ -1116,6 +1366,84 @@ def _render_iteration_text(
     return _render_item_text(rendered, item)
 
 
+def _render_input_text(
+    template: str,
+    flow_input: dict[str, Any],
+) -> str:
+    def replace(match: re.Match[str]) -> str:
+        value = _lookup(
+            flow_input,
+            match.group(1),
+            label="Flow-Input",
+        )
+        if isinstance(value, (dict, list)):
+            return _json_dumps_preserving_numbers(value)
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    return _INPUT_EXPR.sub(replace, template)
+
+
+def _dynamic_value(
+    match: re.Match[str],
+    *,
+    item: Any,
+    iteration_id: str | None,
+    conversation_item: Any,
+    previous_output: Any,
+    outputs: dict[str, str],
+    flow_input: dict[str, Any],
+) -> Any:
+    if match.group("iteration") is not None:
+        if iteration_id is None:
+            raise ValueError("${iteration.id} ist ohne foreach nicht verfügbar.")
+        return iteration_id
+    if match.group("item_path") is not None or match.group(0).startswith("${item"):
+        return _lookup(
+            item,
+            match.group("item_path"),
+            label="foreach-Element",
+        )
+    if match.group(0).startswith("${previous_output"):
+        return _lookup(
+            previous_output,
+            match.group("previous_output_path"),
+            label="previous_output",
+        )
+    if match.group("input_path") is not None or match.group(0).startswith("${input"):
+        return _lookup(
+            flow_input,
+            match.group("input_path"),
+            label="Flow-Input",
+        )
+    if match.group("step_output_id") is not None:
+        source_id = match.group("step_output_id")
+        if source_id not in outputs:
+            raise ValueError(
+                f"Output von Schritt {source_id!r} ist noch nicht verfügbar."
+            )
+        path = match.group("step_output_path")
+        if path is None:
+            return outputs[source_id]
+        parsed = _parse_structured_output(
+            outputs[source_id],
+            step_id=source_id,
+        )
+        return _lookup(
+            parsed,
+            path,
+            label=f"Output von Schritt {source_id!r}",
+        )
+    return _lookup(
+        conversation_item,
+        match.group("conversation_path"),
+        label="Conversation-Element",
+    )
+
+
 def _render_dynamic_text(
     template: str,
     *,
@@ -1124,49 +1452,19 @@ def _render_dynamic_text(
     conversation_item: Any,
     previous_output: Any,
     outputs: dict[str, str],
+    flow_input: dict[str, Any],
 ) -> str:
     def replace(match: re.Match[str]) -> str:
+        value = _dynamic_value(
+            match,
+            item=item,
+            iteration_id=iteration_id,
+            conversation_item=conversation_item,
+            previous_output=previous_output,
+            outputs=outputs,
+            flow_input=flow_input,
+        )
         is_previous_output = match.group(0).startswith("${previous_output")
-        if match.group("iteration") is not None:
-            if iteration_id is None:
-                raise ValueError("${iteration.id} ist ohne foreach nicht verfügbar.")
-            value: Any = iteration_id
-        elif match.group("item_path") is not None or match.group(0).startswith("${item"):
-            value = _lookup(
-                item,
-                match.group("item_path"),
-                label="foreach-Element",
-            )
-        elif is_previous_output:
-            value = _lookup(
-                previous_output,
-                match.group("previous_output_path"),
-                label="previous_output",
-            )
-        elif match.group("step_output_id") is not None:
-            source_id = match.group("step_output_id")
-            if source_id not in outputs:
-                raise ValueError(
-                    f"Output von Schritt {source_id!r} ist noch nicht verfügbar."
-                )
-            path = match.group("step_output_path")
-            if path is None:
-                return outputs[source_id]
-            parsed = _parse_structured_output(
-                outputs[source_id],
-                step_id=source_id,
-            )
-            value = _lookup(
-                parsed,
-                path,
-                label=f"Output von Schritt {source_id!r}",
-            )
-        else:
-            value = _lookup(
-                conversation_item,
-                match.group("conversation_path"),
-                label="Conversation-Element",
-            )
         if (
             is_previous_output
             and match.group("previous_output_path") is None
@@ -1181,6 +1479,74 @@ def _render_dynamic_text(
         return str(value)
 
     return _DYNAMIC_VALUE_EXPR.sub(replace, template)
+
+
+def _render_flow_input_value(
+    value: Any,
+    *,
+    item: Any,
+    iteration_id: str | None,
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+    flow_input: dict[str, Any],
+) -> Any:
+    if isinstance(value, str):
+        full = _DYNAMIC_VALUE_EXPR.fullmatch(value)
+        if full is not None:
+            rendered_value = _dynamic_value(
+                full,
+                item=item,
+                iteration_id=iteration_id,
+                conversation_item=None,
+                previous_output=None,
+                outputs=outputs,
+                flow_input=flow_input,
+            )
+            source_id = full.group("step_output_id")
+            if (
+                source_id is not None
+                and full.group("step_output_path") is None
+                and output_json.get(source_id, False)
+            ):
+                return _parse_structured_output(
+                    outputs[source_id],
+                    step_id=source_id,
+                )
+            return rendered_value
+        return _render_dynamic_text(
+            value,
+            item=item,
+            iteration_id=iteration_id,
+            conversation_item=None,
+            previous_output=None,
+            outputs=outputs,
+            flow_input=flow_input,
+        )
+    if isinstance(value, list):
+        return [
+            _render_flow_input_value(
+                item_value,
+                item=item,
+                iteration_id=iteration_id,
+                outputs=outputs,
+                output_json=output_json,
+                flow_input=flow_input,
+            )
+            for item_value in value
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _render_flow_input_value(
+                item_value,
+                item=item,
+                iteration_id=iteration_id,
+                outputs=outputs,
+                output_json=output_json,
+                flow_input=flow_input,
+            )
+            for key, item_value in value.items()
+        }
+    return value
 
 
 def _conversation_items_for_iteration(
@@ -1241,6 +1607,7 @@ def _iteration_ids(
     step: FlowStep,
     *,
     items: list[Any],
+    flow_input: dict[str, Any] | None = None,
 ) -> list[str | None]:
     if step.foreach is None:
         return [None]
@@ -1248,8 +1615,12 @@ def _iteration_ids(
         return [str(index) for index in range(1, len(items) + 1)]
 
     bases: list[str] = []
+    rendered_template = _render_input_text(
+        step.iteration_id,
+        flow_input or {},
+    )
     for item in items:
-        base = _render_item_text(step.iteration_id, item).strip()
+        base = _render_item_text(rendered_template, item).strip()
         if not base or _ITERATION_ID.fullmatch(base) is None:
             raise ValueError(
                 f"Schritt {step.step_id!r} erzeugt eine ungültige iteration_id "
@@ -1474,6 +1845,8 @@ class _RunStartSnapshot:
     checkpoint_fingerprints: dict[tuple[str, str], bytes]
     checkpoint_paths: tuple[Path, ...]
     previous_output_fingerprints: dict[tuple[str, str], bytes | None]
+    available_outputs: dict[str, str]
+    output_json: dict[str, bool]
 
 
 def _uses_previous_output(step: FlowStep) -> bool:
@@ -1483,29 +1856,81 @@ def _uses_previous_output(step: FlowStep) -> bool:
     )
 
 
-def _snapshot_initial_flow_state(
+def _subflow_inputs_resolvable_at_run_start(
+    step: FlowStep,
+    *,
+    available_outputs: dict[str, str],
+) -> bool:
+    for value in _iter_string_values(step.flow_input):
+        for match in _DYNAMIC_VALUE_EXPR.finditer(value):
+            source_id = match.group("step_output_id")
+            if source_id is not None and source_id not in available_outputs:
+                return False
+    return True
+
+
+def _child_invocation_namespace(
+    parent_namespace: str,
+    step: FlowStep,
+    *,
+    iteration_id: str | None,
+    case_colliding_step_ids: frozenset[str],
+) -> str:
+    suffix = str(iteration_id) if iteration_id is not None else "once"
+    step_segment = step.step_id
+    if step.step_id in case_colliding_step_ids:
+        digest = hashlib.sha256(
+            step.step_id.encode("utf-8")
+        ).hexdigest()[:16]
+        step_segment = f"{step_segment}.case-{digest}"
+    return f"{parent_namespace}{step_segment}.{suffix}."
+
+def _capture_run_start_invocation(
     flow: FlowDefinition,
     *,
     workspace: Path,
-) -> _RunStartSnapshot:
+    cache: dict[str, FlowDefinition],
+    flow_input: dict[str, Any],
+    namespace: str,
+    snapshots: dict[str, _RunStartSnapshot],
+    protected_paths: dict[str, Path],
+    budget: _SubflowTraversalBudget,
+    call_stack: tuple[str, ...] = (),
+) -> _FlowResultValue | None:
+    budget.consume(purpose="Run-Start-Planung")
+    flow_key = _filesystem_path_key(flow.source)
+    if flow_key in call_stack:
+        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+    if len(call_stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+
+    next_stack = (*call_stack, flow_key)
     fingerprints: dict[tuple[str, str], bytes] = {}
-    paths: dict[str, Path] = {}
+    checkpoint_paths: dict[str, Path] = {}
     previous_output_fingerprints: dict[
         tuple[str, str],
         bytes | None,
     ] = {}
     available_outputs: dict[str, str] = {}
+    output_json: dict[str, bool] = {}
+    case_colliding_step_ids = _case_colliding_step_ids(
+        flow,
+        workspace=workspace,
+    )
 
     def remember_checkpoint(
         step: FlowStep,
         output: Path,
         checkpoint: str,
     ) -> None:
-        path_key = _filesystem_path_key(output)
         fingerprints[_checkpoint_snapshot_key(step, output)] = (
             _checkpoint_fingerprint(checkpoint)
         )
-        paths[path_key] = output
+        key = _filesystem_path_key(output)
+        checkpoint_paths[key] = output
+        protected_paths[key] = output
 
     def remember_previous_output(
         step: FlowStep,
@@ -1521,9 +1946,107 @@ def _snapshot_initial_flow_state(
             previous_output_fingerprints[key] = None
             return
         previous_output_fingerprints[key] = _checkpoint_fingerprint(text)
-        paths[_filesystem_path_key(output)] = output
+        path_key = _filesystem_path_key(output)
+        checkpoint_paths[path_key] = output
+        protected_paths[path_key] = output
 
     for step in flow.steps:
+        if step.flow is not None:
+            if step.foreach is None:
+                items = [None]
+                iteration_ids: list[str | None] = [None]
+            else:
+                match = _FOREACH.fullmatch(step.foreach)
+                assert match is not None
+                source_id = match.group(1)
+                if source_id not in available_outputs:
+                    continue
+                items = _foreach_items(
+                    step,
+                    outputs=available_outputs,
+                )
+                iteration_ids = _iteration_ids(
+                    step,
+                    items=items,
+                    flow_input=flow_input,
+                )
+
+            if not _subflow_inputs_resolvable_at_run_start(
+                step,
+                available_outputs=available_outputs,
+            ):
+                continue
+
+            child = _load_subflow_definition(
+                step,
+                parent_flow=flow,
+                workspace=workspace,
+                cache=cache,
+            )
+            _validate_subflow_interface(step, child)
+
+            child_results: list[tuple[str, _FlowResultValue]] = []
+            complete = True
+            for item, iteration_id in zip(items, iteration_ids):
+                child_input = _render_subflow_inputs(
+                    step,
+                    item=item,
+                    iteration_id=iteration_id,
+                    outputs=available_outputs,
+                    output_json=output_json,
+                    flow_input=flow_input,
+                )
+                child_namespace = _child_invocation_namespace(
+                    namespace,
+                    step,
+                    iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
+                )
+                child_result = _capture_run_start_invocation(
+                    child,
+                    workspace=workspace,
+                    cache=cache,
+                    flow_input=child_input,
+                    namespace=child_namespace,
+                    snapshots=snapshots,
+                    protected_paths=protected_paths,
+                    budget=budget,
+                    call_stack=next_stack,
+                )
+                if child_result is None:
+                    complete = False
+                    continue
+                child_results.append(
+                    (
+                        str(iteration_id) if iteration_id is not None else "once",
+                        child_result,
+                    )
+                )
+
+            if not complete:
+                continue
+            if step.foreach is None:
+                if child_results:
+                    result = child_results[0][1]
+                    available_outputs[step.step_id] = result.text
+                    output_json[step.step_id] = result.is_json
+                continue
+
+            parts: list[str] = []
+            payload_bytes = 0
+            for iteration_id, result in child_results:
+                payload_bytes = _append_foreach_iteration(
+                    step,
+                    parts=parts,
+                    payload_bytes=payload_bytes,
+                    iteration_id=iteration_id,
+                    answer=result.text,
+                    answer_is_json=result.is_json,
+                )
+            available_outputs[step.step_id] = _finish_foreach_output(parts)
+            output_json[step.step_id] = True
+            continue
+
         if step.foreach is None:
             if step.output is None:
                 continue
@@ -1531,6 +2054,7 @@ def _snapshot_initial_flow_state(
                 step,
                 workspace=workspace,
                 item=None,
+                flow_input=flow_input,
             )
             assert output is not None
 
@@ -1545,6 +2069,7 @@ def _snapshot_initial_flow_state(
             if checkpoint is not None:
                 remember_checkpoint(step, output, checkpoint)
                 available_outputs[step.step_id] = checkpoint
+                output_json[step.step_id] = True
             continue
 
         match = _FOREACH.fullmatch(step.foreach)
@@ -1567,6 +2092,7 @@ def _snapshot_initial_flow_state(
         iteration_ids = _iteration_ids(
             step,
             items=items,
+            flow_input=flow_input,
         )
         outputs = [
             _output_for_iteration(
@@ -1574,6 +2100,7 @@ def _snapshot_initial_flow_state(
                 workspace=workspace,
                 item=item,
                 iteration_id=iteration_id,
+                flow_input=flow_input,
             )
             for item, iteration_id in zip(items, iteration_ids)
         ]
@@ -1596,6 +2123,7 @@ def _snapshot_initial_flow_state(
 
         if not items:
             available_outputs[step.step_id] = _finish_foreach_output([])
+            output_json[step.step_id] = True
             continue
 
         if (
@@ -1631,27 +2159,53 @@ def _snapshot_initial_flow_state(
 
         if complete:
             available_outputs[step.step_id] = _finish_foreach_output(parts)
+            output_json[step.step_id] = True
 
-    return _RunStartSnapshot(
+    snapshot = _RunStartSnapshot(
         checkpoint_fingerprints=fingerprints,
-        checkpoint_paths=tuple(paths.values()),
+        checkpoint_paths=tuple(checkpoint_paths.values()),
         previous_output_fingerprints=previous_output_fingerprints,
+        available_outputs=dict(available_outputs),
+        output_json=dict(output_json),
+    )
+    snapshots[namespace] = snapshot
+
+    if flow.result is None:
+        return None
+    match = _FOREACH.fullmatch(flow.result)
+    assert match is not None
+    source_id = match.group(1)
+    if source_id not in available_outputs:
+        return None
+    return _flow_result_value(
+        flow,
+        available_outputs,
+        output_json,
     )
 
 
-def _snapshot_initial_checkpoints(
-    flow: FlowDefinition,
+def _capture_run_start_snapshots(
     *,
     workspace: Path,
-) -> tuple[dict[tuple[str, str], bytes], tuple[Path, ...]]:
-    snapshot = _snapshot_initial_flow_state(
-        flow,
+    root_flow: FlowDefinition,
+    cache: dict[str, FlowDefinition],
+) -> tuple[
+    dict[str, _RunStartSnapshot],
+    tuple[Path, ...],
+]:
+    snapshots: dict[str, _RunStartSnapshot] = {}
+    protected_paths: dict[str, Path] = {}
+    _capture_run_start_invocation(
+        root_flow,
         workspace=workspace,
+        cache=cache,
+        flow_input={},
+        namespace="",
+        snapshots=snapshots,
+        protected_paths=protected_paths,
+        budget=_SubflowTraversalBudget(),
     )
-    return (
-        snapshot.checkpoint_fingerprints,
-        snapshot.checkpoint_paths,
-    )
+    return snapshots, tuple(protected_paths.values())
 
 
 _FOREACH_AGGREGATE_PREFIX = '{"iterations":['
@@ -1663,9 +2217,15 @@ def _serialize_foreach_iteration(
     *,
     iteration_id: str,
     answer: str,
+    answer_is_json: bool | None = None,
 ) -> str:
     value: Any = answer
-    if step.response_format == "json":
+    should_parse_json = (
+        answer_is_json
+        if answer_is_json is not None
+        else step.response_format == "json"
+    )
+    if should_parse_json:
         value = _parse_structured_output(
             answer,
             step_id=step.step_id,
@@ -1685,11 +2245,13 @@ def _append_foreach_iteration(
     payload_bytes: int,
     iteration_id: str,
     answer: str,
+    answer_is_json: bool | None = None,
 ) -> int:
     fragment = _serialize_foreach_iteration(
         step,
         iteration_id=iteration_id,
         answer=answer,
+        answer_is_json=answer_is_json,
     )
     fragment_bytes = len(fragment.encode("utf-8"))
     separator_bytes = 1 if parts else 0
@@ -1780,6 +2342,7 @@ def _render_prompt_file(
     conversation_item: Any,
     previous_output: Any,
     outputs: dict[str, str],
+    flow_input: dict[str, Any],
     final_prompt: bool = False,
 ) -> str:
     prompt_path = _workspace_path(
@@ -1817,6 +2380,7 @@ def _render_prompt_file(
             conversation_item=conversation_item,
             previous_output=previous_output,
             outputs=outputs,
+            flow_input=flow_input,
         )
     rendered = template.render(values)
     if not rendered or rendered.isspace():
@@ -1840,7 +2404,9 @@ def _prompt_for_iteration(
     conversation_item: Any = None,
     previous_output: Any = None,
     outputs: dict[str, str] | None = None,
+    flow_input: dict[str, Any] | None = None,
 ) -> str:
+    assert step.prompt_file is not None
     return _render_prompt_file(
         step,
         workspace=workspace,
@@ -1850,6 +2416,7 @@ def _prompt_for_iteration(
         conversation_item=conversation_item,
         previous_output=previous_output,
         outputs=outputs or {},
+        flow_input=flow_input or {},
     )
 
 
@@ -1861,6 +2428,7 @@ def _conversation_prompts_for_iteration(
     item: Any,
     iteration_id: str | None,
     previous_output: Any,
+    flow_input: dict[str, Any],
 ) -> tuple[str, ...] | None:
     conversation_items = _conversation_items_for_iteration(
         step,
@@ -1878,6 +2446,7 @@ def _conversation_prompts_for_iteration(
             conversation_item=conversation_item,
             previous_output=previous_output,
             outputs=outputs,
+            flow_input=flow_input,
         )
         for conversation_item in conversation_items
     ]
@@ -1892,6 +2461,7 @@ def _conversation_prompts_for_iteration(
                 conversation_item=None,
                 previous_output=previous_output,
                 outputs=outputs,
+                flow_input=flow_input,
                 final_prompt=True,
             )
         )
@@ -1920,6 +2490,7 @@ def _output_for_iteration(
     workspace: Path,
     item: Any,
     iteration_id: str | None = None,
+    flow_input: dict[str, Any] | None = None,
 ) -> Path | None:
     if step.output is None:
         return None
@@ -1933,6 +2504,7 @@ def _output_for_iteration(
         if step.foreach is not None
         else step.output
     )
+    rendered = _render_input_text(rendered, flow_input or {})
     path = Path(rendered)
     return _workspace_path(
         workspace,
@@ -1942,19 +2514,232 @@ def _output_for_iteration(
     )
 
 
+def _load_subflow_definition(
+    step: FlowStep,
+    *,
+    parent_flow: FlowDefinition,
+    workspace: Path,
+    cache: dict[str, FlowDefinition],
+) -> FlowDefinition:
+    path = _resolve_subflow_path(
+        step,
+        workspace=workspace,
+        flow_dir=parent_flow.source.parent,
+    )
+    key = _filesystem_path_key(path)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    child = load_flow(path, workspace=workspace)
+    cache[key] = child
+    return child
+
+
+def _validate_subflow_interface(
+    step: FlowStep,
+    child: FlowDefinition,
+) -> None:
+    if child.result is None:
+        raise ValueError(
+            f"Subflow {child.source} benötigt ein root-level result, "
+            f"weil er von Schritt {step.step_id!r} aufgerufen wird."
+        )
+    expected = set(child.inputs)
+    provided = set(step.flow_input)
+    missing = sorted(expected - provided)
+    unknown = sorted(provided - expected)
+    if missing or unknown:
+        parts: list[str] = []
+        if missing:
+            parts.append("fehlend: " + ", ".join(missing))
+        if unknown:
+            parts.append("unbekannt: " + ", ".join(unknown))
+        raise ValueError(
+            f"Inputs für Subflow-Schritt {step.step_id!r} stimmen nicht mit "
+            f"{child.source} überein ({'; '.join(parts)})."
+        )
+
+
+def _collect_reserved_flow_input_paths(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    cache: dict[str, FlowDefinition],
+    stack: tuple[str, ...] = (),
+    budget: _SubflowTraversalBudget | None = None,
+) -> dict[str, Path]:
+    traversal_budget = budget or _SubflowTraversalBudget()
+    traversal_budget.consume(purpose="Eingabe-Validierung")
+    key = _filesystem_path_key(flow.source)
+    if key in stack:
+        chain = " -> ".join((*stack, key))
+        raise ValueError(f"Zyklischer Subflow-Aufruf erkannt: {chain}")
+    if len(stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+
+    reserved = _reserved_flow_input_paths(flow, workspace=workspace)
+    next_stack = (*stack, key)
+    for step in flow.steps:
+        if step.flow is None:
+            continue
+        child = _load_subflow_definition(
+            step,
+            parent_flow=flow,
+            workspace=workspace,
+            cache=cache,
+        )
+        _validate_subflow_interface(step, child)
+        reserved.update(
+            _collect_reserved_flow_input_paths(
+                child,
+                workspace=workspace,
+                cache=cache,
+                stack=next_stack,
+                budget=traversal_budget,
+            )
+        )
+    return reserved
+
+
+def _flow_result_value(
+    flow: FlowDefinition,
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+) -> _FlowResultValue | None:
+    if flow.result is None:
+        return None
+    match = _FOREACH.fullmatch(flow.result)
+    assert match is not None
+    source_id, path = match.groups()
+    if source_id not in outputs:
+        raise ValueError(
+            f"Result-Quelle {source_id!r} von Flow {flow.source} "
+            "besitzt keinen verfügbaren Output."
+        )
+    text = outputs[source_id]
+    if path is None:
+        return _FlowResultValue(
+            text=text,
+            is_json=output_json.get(source_id, False),
+        )
+    parsed = _parse_structured_output(text, step_id=source_id)
+    value = _lookup(
+        parsed,
+        path,
+        label=f"Result von Flow {flow.source}",
+    )
+    is_json = isinstance(value, _JsonNumber) or not isinstance(value, str)
+    return _FlowResultValue(
+        text=_json_dumps_preserving_numbers(value)
+        if isinstance(value, (dict, list, bool, int, float, _JsonNumber))
+        or value is None
+        else str(value),
+        is_json=is_json,
+    )
+
+
+def _render_subflow_inputs(
+    step: FlowStep,
+    *,
+    item: Any,
+    iteration_id: str | None,
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+    flow_input: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        name: _render_flow_input_value(
+            value,
+            item=item,
+            iteration_id=iteration_id,
+            outputs=outputs,
+            output_json=output_json,
+            flow_input=flow_input,
+        )
+        for name, value in step.flow_input.items()
+    }
+
+
 def validate_flow(
     flow: FlowDefinition,
     *,
     workspace: Path,
     config_loader: Callable[[Path | None], AppConfig] = load_config,
+    _cache: dict[str, FlowDefinition] | None = None,
+    _stack: tuple[str, ...] = (),
+    _inherited_excluded_paths: tuple[Path, ...] = (),
+    _budget: _SubflowTraversalBudget | None = None,
+    _planned_static_outputs: dict[str, str] | None = None,
+    _all_reserved_inputs: dict[str, Path] | None = None,
 ) -> None:
     workspace = workspace.expanduser().resolve()
+    traversal_budget = _budget or _SubflowTraversalBudget()
+    traversal_budget.consume(purpose="Validierung")
+    cache = _cache if _cache is not None else {}
+    planned_static_outputs = (
+        _planned_static_outputs
+        if _planned_static_outputs is not None
+        else {}
+    )
+    flow_key = _filesystem_path_key(flow.source)
+    if flow_key in _stack:
+        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+    if len(_stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+    stack = (*_stack, flow_key)
+    cache.setdefault(flow_key, flow)
+    all_reserved_inputs = _all_reserved_inputs
+    if all_reserved_inputs is None:
+        all_reserved_inputs = _collect_reserved_flow_input_paths(
+            flow,
+            workspace=workspace,
+            cache=cache,
+            budget=traversal_budget,
+        )
     flow_dir = flow.source.parent
-    resolve_excluded_paths(workspace, flow.excluded_paths)
+    effective_flow_excluded_paths = tuple(
+        dict.fromkeys((*_inherited_excluded_paths, *flow.excluded_paths))
+    )
+    resolve_excluded_paths(workspace, effective_flow_excluded_paths)
     produced: set[str] = set()
-    planned_static_outputs: dict[str, str] = {}
 
     for step in flow.steps:
+        if step.flow is not None:
+            child = _load_subflow_definition(
+                step,
+                parent_flow=flow,
+                workspace=workspace,
+                cache=cache,
+            )
+            _validate_subflow_interface(step, child)
+            validate_flow(
+                child,
+                workspace=workspace,
+                config_loader=config_loader,
+                _cache=cache,
+                _stack=stack,
+                _inherited_excluded_paths=effective_flow_excluded_paths,
+                _budget=traversal_budget,
+                _planned_static_outputs=planned_static_outputs,
+                _all_reserved_inputs=all_reserved_inputs,
+            )
+            if step.foreach is not None:
+                match = _FOREACH.fullmatch(step.foreach)
+                assert match is not None
+                source_id = match.group(1)
+                if source_id not in produced:
+                    raise ValueError(
+                        f"foreach-Quelle {source_id!r} ist nicht vor "
+                        f"Schritt {step.step_id!r} verfügbar."
+                    )
+            produced.add(step.step_id)
+            continue
+
+        assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
             step.prompt_file,
@@ -2060,19 +2845,30 @@ def validate_flow(
                 f"ist ungültig: {exc}"
             ) from exc
 
-        if step.foreach is None and step.output is not None:
+        if (
+            step.foreach is None
+            and step.output is not None
+            and _INPUT_EXPR.search(step.output) is None
+        ):
             static_output = _output_for_iteration(
                 step,
                 workspace=workspace,
                 item=None,
             )
             assert static_output is not None
+            static_output_key = _filesystem_path_key(static_output)
+            reserved_input = all_reserved_inputs.get(static_output_key)
+            if reserved_input is not None:
+                raise ValueError(
+                    f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                    "mit einer reservierten Flow-Eingabe: "
+                    f"{reserved_input}"
+                )
             _prepare_flow_output(
                 step,
                 workspace=workspace,
                 output=static_output,
             )
-            static_output_key = _filesystem_path_key(static_output)
             previous_writer = planned_static_outputs.get(static_output_key)
             if previous_writer is not None and not step.overwrite_output:
                 raise ValueError(
@@ -2080,7 +2876,9 @@ def validate_flow(
                     f"mit dem geplanten Output von Schritt {previous_writer!r}; "
                     "der spätere Schritt erlaubt kein Überschreiben."
                 )
-            planned_static_outputs[static_output_key] = step.step_id
+            planned_static_outputs[static_output_key] = (
+                f"{flow.source.name}:{step.step_id}"
+            )
 
         if step.foreach is not None:
             match = _FOREACH.fullmatch(step.foreach)
@@ -2104,55 +2902,243 @@ def validate_flow(
 
         produced.add(step.step_id)
 
-    reserved_inputs = _reserved_flow_input_paths(
-        flow,
-        workspace=workspace,
-    )
-    for step in flow.steps:
-        if step.foreach is not None or step.output is None:
-            continue
-        static_output = _output_for_iteration(
-            step,
-            workspace=workspace,
-            item=None,
-        )
-        assert static_output is not None
-        reserved_input = reserved_inputs.get(
-            _filesystem_path_key(static_output)
-        )
-        if reserved_input is not None:
-            raise ValueError(
-                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                "mit einer reservierten Flow-Eingabe: "
-                f"{reserved_input}"
-            )
-
-
-async def run_flow(
+def _preflight_concrete_invocation_outputs(
     flow: FlowDefinition,
     *,
     workspace: Path,
-    dependencies: ExecutionDependencies | None = None,
-    approval_callback: ApprovalCallback | None = None,
+    cache: dict[str, FlowDefinition],
+    flow_input: dict[str, Any],
+    reserved_inputs: dict[str, Path],
+    claimed_outputs: dict[str, str],
+    namespace: str,
+    run_start_snapshots: dict[str, _RunStartSnapshot],
+    budget: _SubflowTraversalBudget,
+    call_stack: tuple[str, ...] = (),
 ) -> None:
-    workspace = workspace.expanduser().resolve()
-    deps = dependencies or ExecutionDependencies()
-    validate_flow(
+    """Preflight outputs that are concrete before an invocation starts.
+
+    Static outputs are always checked. Foreach outputs are additionally
+    checked when their source can be reconstructed from the immutable
+    overall run-start snapshot for this concrete invocation. Descendants
+    whose source is first produced during the current run remain deferred
+    until that source becomes available.
+    """
+
+    budget.consume(purpose="Preflight")
+    flow_key = _filesystem_path_key(flow.source)
+    if flow_key in call_stack:
+        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+    if len(call_stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+    next_stack = (*call_stack, flow_key)
+    case_colliding_step_ids = _case_colliding_step_ids(
         flow,
         workspace=workspace,
-        config_loader=deps.load_config,
     )
+    snapshot = run_start_snapshots.get(namespace)
+    available_outputs = (
+        snapshot.available_outputs
+        if snapshot is not None
+        else {}
+    )
+    output_json = snapshot.output_json if snapshot is not None else {}
+
+    for step in flow.steps:
+        if step.flow is not None:
+            if step.foreach is None:
+                items = [None]
+                iteration_ids: list[str | None] = [None]
+            else:
+                match = _FOREACH.fullmatch(step.foreach)
+                assert match is not None
+                source_id = match.group(1)
+                if source_id not in available_outputs:
+                    continue
+                items = _foreach_items(
+                    step,
+                    outputs=available_outputs,
+                )
+                iteration_ids = _iteration_ids(
+                    step,
+                    items=items,
+                    flow_input=flow_input,
+                )
+
+            if not _subflow_inputs_resolvable_at_run_start(
+                step,
+                available_outputs=available_outputs,
+            ):
+                continue
+
+            child = _load_subflow_definition(
+                step,
+                parent_flow=flow,
+                workspace=workspace,
+                cache=cache,
+            )
+            _validate_subflow_interface(step, child)
+            for item, iteration_id in zip(items, iteration_ids):
+                child_input = _render_subflow_inputs(
+                    step,
+                    item=item,
+                    iteration_id=iteration_id,
+                    outputs=available_outputs,
+                    output_json=output_json,
+                    flow_input=flow_input,
+                )
+                child_namespace = _child_invocation_namespace(
+                    namespace,
+                    step,
+                    iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
+                )
+                _preflight_concrete_invocation_outputs(
+                    child,
+                    workspace=workspace,
+                    cache=cache,
+                    flow_input=child_input,
+                    reserved_inputs=reserved_inputs,
+                    claimed_outputs=claimed_outputs,
+                    namespace=child_namespace,
+                    run_start_snapshots=run_start_snapshots,
+                    budget=budget,
+                    call_stack=next_stack,
+                )
+            continue
+
+        if step.output is None:
+            continue
+
+        if step.foreach is None:
+            outputs_to_claim = [
+                (
+                    _output_for_iteration(
+                        step,
+                        workspace=workspace,
+                        item=None,
+                        flow_input=flow_input,
+                    ),
+                    None,
+                )
+            ]
+        else:
+            match = _FOREACH.fullmatch(step.foreach)
+            assert match is not None
+            source_id = match.group(1)
+            if source_id not in available_outputs:
+                continue
+            items = _foreach_items(
+                step,
+                outputs=available_outputs,
+            )
+            iteration_ids = _iteration_ids(
+                step,
+                items=items,
+                flow_input=flow_input,
+            )
+            outputs_to_claim = [
+                (
+                    _output_for_iteration(
+                        step,
+                        workspace=workspace,
+                        item=item,
+                        iteration_id=iteration_id,
+                        flow_input=flow_input,
+                    ),
+                    iteration_id,
+                )
+                for item, iteration_id in zip(items, iteration_ids)
+            ]
+            output_keys = [
+                _filesystem_path_key(output)
+                for output, _iteration_id in outputs_to_claim
+                if output is not None
+            ]
+            if len(output_keys) != len(set(output_keys)):
+                raise ValueError(
+                    f"Schritt {step.step_id!r} erzeugt für mehrere "
+                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                )
+
+        for output, iteration_id in outputs_to_claim:
+            assert output is not None
+            key = _filesystem_path_key(output)
+            reserved_input = reserved_inputs.get(key)
+            if reserved_input is not None:
+                raise ValueError(
+                    f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                    "mit einer reservierten Flow-Eingabe: "
+                    f"{reserved_input}"
+                )
+            _claim_output(
+                claimed_outputs,
+                path=output,
+                owner=namespace + _output_owner(
+                    step,
+                    iteration_id=iteration_id,
+                ),
+                allow_replace=step.overwrite_output,
+            )
+
+
+async def _run_flow_internal(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    call_stack: tuple[str, ...],
+    namespace: str,
+    inherited_excluded_paths: tuple[Path, ...],
+) -> _FlowResultValue | None:
+    flow_key = _filesystem_path_key(flow.source)
+    if flow_key in call_stack:
+        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+    if len(call_stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+
+    expected_inputs = set(flow.inputs)
+    provided_inputs = set(flow_input)
+    if expected_inputs != provided_inputs:
+        missing = sorted(expected_inputs - provided_inputs)
+        unknown = sorted(provided_inputs - expected_inputs)
+        parts: list[str] = []
+        if missing:
+            parts.append("fehlend: " + ", ".join(missing))
+        if unknown:
+            parts.append("unbekannt: " + ", ".join(unknown))
+        raise ValueError(
+            f"Flow-Inputs für {flow.source} stimmen nicht mit der Deklaration "
+            f"überein ({'; '.join(parts)})."
+        )
+
+    next_stack = (*call_stack, flow_key)
     flow_dir = flow.source.parent
+    effective_flow_excluded_paths = tuple(
+        dict.fromkeys((*inherited_excluded_paths, *flow.excluded_paths))
+    )
     outputs: dict[str, str] = {}
-    claimed_outputs: dict[str, str] = {}
-    reserved_inputs = _reserved_flow_input_paths(
-        flow,
-        workspace=workspace,
-    )
-    run_start_snapshot = _snapshot_initial_flow_state(
-        flow,
-        workspace=workspace,
-    )
+    output_json: dict[str, bool] = {}
+    claimed_outputs = context.claimed_outputs
+    reserved_inputs = context.reserved_inputs
+    assert claimed_outputs is not None
+    assert reserved_inputs is not None
+
+    assert context.run_start_snapshots is not None
+    run_start_snapshot = context.run_start_snapshots.get(namespace)
+    invocation_known_at_run_start = run_start_snapshot is not None
+    if run_start_snapshot is None:
+        run_start_snapshot = _RunStartSnapshot(
+            checkpoint_fingerprints={},
+            checkpoint_paths=(),
+            previous_output_fingerprints={},
+            available_outputs={},
+            output_json={},
+        )
     initial_checkpoint_fingerprints = (
         run_start_snapshot.checkpoint_fingerprints
     )
@@ -2164,6 +3150,7 @@ async def run_flow(
         dict.fromkeys(
             (
                 *reserved_inputs.values(),
+                *context.run_start_checkpoint_paths,
                 *initial_checkpoint_paths,
             )
         )
@@ -2181,17 +3168,69 @@ async def run_flow(
         iteration_ids = _iteration_ids(
             step,
             items=items,
+            flow_input=flow_input,
         )
 
         preflight_outputs: list[Path | None] | None = None
         preflight_checkpoint_fingerprints: list[bytes | None] | None = None
-        if step.foreach is not None and step.output is not None:
+
+        if step.flow is not None:
+            assert context.flow_cache is not None
+            child = _load_subflow_definition(
+                step,
+                parent_flow=flow,
+                workspace=workspace,
+                cache=context.flow_cache,
+            )
+            _validate_subflow_interface(step, child)
+
+            # Preflight the complete concrete subflow batch before the first
+            # child starts. Use a copy so execution still performs the real
+            # claims, while collisions across siblings/foreach items are
+            # detected without any model/tool side effects.
+            batch_claims = dict(claimed_outputs)
+            for item, iteration_id in zip(items, iteration_ids):
+                child_input = _render_subflow_inputs(
+                    step,
+                    item=item,
+                    iteration_id=iteration_id,
+                    outputs=outputs,
+                    output_json=output_json,
+                    flow_input=flow_input,
+                )
+                child_namespace = _child_invocation_namespace(
+                    namespace,
+                    step,
+                    iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
+                )
+                assert context.run_start_snapshots is not None
+                assert context.preflight_budget is not None
+                _preflight_concrete_invocation_outputs(
+                    child,
+                    workspace=workspace,
+                    cache=context.flow_cache,
+                    flow_input=child_input,
+                    reserved_inputs=reserved_inputs,
+                    claimed_outputs=batch_claims,
+                    namespace=child_namespace,
+                    run_start_snapshots=context.run_start_snapshots,
+                    budget=context.preflight_budget,
+                    call_stack=next_stack,
+                )
+
+        if (
+            step.flow is None
+            and step.foreach is not None
+            and step.output is not None
+        ):
             preflight_outputs = [
                 _output_for_iteration(
                     step,
                     workspace=workspace,
                     item=item,
                     iteration_id=iteration_id,
+                    flow_input=flow_input,
                 )
                 for item, iteration_id in zip(items, iteration_ids)
             ]
@@ -2240,7 +3279,7 @@ async def run_flow(
                 _claim_output(
                     claimed_outputs,
                     path=output,
-                    owner=_output_owner(
+                    owner=namespace + _output_owner(
                         step,
                         iteration_id=iteration_id,
                     ),
@@ -2271,17 +3310,18 @@ async def run_flow(
                     expected_fingerprint
                 )
 
-        iteration_answers: list[str] = []
+        iteration_answers: list[tuple[str, bool]] = []
         foreach_parts: list[str] = []
         foreach_payload_bytes = 0
 
         def record_iteration_answer(
             answer: str,
+            answer_is_json: bool,
             iteration_id: str | None,
         ) -> None:
             nonlocal foreach_payload_bytes
             if step.foreach is None:
-                iteration_answers.append(answer)
+                iteration_answers.append((answer, answer_is_json))
                 return
             assert iteration_id is not None
             foreach_payload_bytes = _append_foreach_iteration(
@@ -2290,25 +3330,77 @@ async def run_flow(
                 payload_bytes=foreach_payload_bytes,
                 iteration_id=iteration_id,
                 answer=answer,
+                answer_is_json=answer_is_json,
             )
 
         for index, (item, iteration_id) in enumerate(
             zip(items, iteration_ids),
             start=1,
         ):
+            context.executed_steps += 1
+            if context.executed_steps > MAX_FLOW_EXECUTIONS:
+                raise ValueError(
+                    f"Flow-Ausführung überschreitet das globale Limit von "
+                    f"{MAX_FLOW_EXECUTIONS} Step-Iterationen."
+                )
+
             suffix = (
                 f" [{index}/{len(items)}; id={iteration_id}]"
                 if step.foreach is not None
                 else ""
             )
+            display_name = namespace + step.step_id
             print(
                 sanitize_terminal_text(
-                    f"Flow-Schritt {step.step_id}{suffix}",
+                    f"Flow-Schritt {display_name}{suffix}",
                     multiline=False,
                     escape_invisible_formatting=True,
                     escape_literal_backslashes=True,
                 )
             )
+
+            if step.flow is not None:
+                assert context.flow_cache is not None
+                child = _load_subflow_definition(
+                    step,
+                    parent_flow=flow,
+                    workspace=workspace,
+                    cache=context.flow_cache,
+                )
+                _validate_subflow_interface(step, child)
+                child_input = _render_subflow_inputs(
+                    step,
+                    item=item,
+                    iteration_id=iteration_id,
+                    outputs=outputs,
+                    output_json=output_json,
+                    flow_input=flow_input,
+                )
+                child_namespace = _child_invocation_namespace(
+                    namespace,
+                    step,
+                    iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
+                )
+                child_result = await _run_flow_internal(
+                    child,
+                    workspace=workspace,
+                    context=context,
+                    flow_input=child_input,
+                    call_stack=next_stack,
+                    namespace=child_namespace,
+                    inherited_excluded_paths=effective_flow_excluded_paths,
+                )
+                if child_result is None:
+                    raise ValueError(
+                        f"Subflow {child.source} besitzt kein Ergebnis."
+                    )
+                record_iteration_answer(
+                    child_result.text,
+                    child_result.is_json,
+                    iteration_id,
+                )
+                continue
 
             output = (
                 preflight_outputs[index - 1]
@@ -2318,6 +3410,7 @@ async def run_flow(
                     workspace=workspace,
                     item=item,
                     iteration_id=iteration_id,
+                    flow_input=flow_input,
                 )
             )
             if output is not None:
@@ -2334,7 +3427,7 @@ async def run_flow(
                     _claim_output(
                         claimed_outputs,
                         path=output,
-                        owner=_output_owner(
+                        owner=namespace + _output_owner(
                             step,
                             iteration_id=iteration_id,
                         ),
@@ -2372,7 +3465,7 @@ async def run_flow(
             if checkpoint is not None:
                 print(
                     sanitize_terminal_text(
-                        f"Flow-Schritt {step.step_id}{suffix}: "
+                        f"Flow-Schritt {display_name}{suffix}: "
                         f"vorhandenen JSON-Checkpoint verwendet: {output}",
                         multiline=False,
                         escape_invisible_formatting=True,
@@ -2381,17 +3474,24 @@ async def run_flow(
                 )
                 record_iteration_answer(
                     checkpoint,
+                    True,
                     iteration_id,
                 )
                 continue
 
             try:
-                previous_output = _previous_output_from_snapshot(
-                    step,
-                    workspace=workspace,
-                    output=output,
-                    fingerprints=initial_previous_output_fingerprints,
-                )
+                if (
+                    not invocation_known_at_run_start
+                    and _uses_previous_output(step)
+                ):
+                    previous_output = None
+                else:
+                    previous_output = _previous_output_from_snapshot(
+                        step,
+                        workspace=workspace,
+                        output=output,
+                        fingerprints=initial_previous_output_fingerprints,
+                    )
             except ValueError as exc:
                 if step.foreach is not None and _uses_previous_output(step):
                     raise ValueError(
@@ -2414,13 +3514,13 @@ async def run_flow(
             )
             callback = build_preapproval_callback(
                 step.approve_tools,
-                fallback=approval_callback,
+                fallback=context.approval_callback,
             )
             excluded_paths = (
                 tuple(
                     dict.fromkeys(
                         (
-                            *flow.excluded_paths,
+                            *effective_flow_excluded_paths,
                             *step.excluded_paths,
                         )
                     )
@@ -2428,7 +3528,7 @@ async def run_flow(
                 if step.workspace_access in {"read", "write"}
                 else ()
             )
-            dump_file_prefix = _dump_prefix_for_iteration(
+            local_dump_prefix = _dump_prefix_for_iteration(
                 step,
                 index=index,
                 case_colliding_step_ids=case_colliding_step_ids,
@@ -2438,6 +3538,11 @@ async def run_flow(
                     else None
                 ),
             )
+            dump_file_prefix = (
+                namespace.replace("/", ".") + local_dump_prefix
+                if namespace
+                else local_dump_prefix
+            )
 
             conversation_prompts = _conversation_prompts_for_iteration(
                 step,
@@ -2446,6 +3551,7 @@ async def run_flow(
                 item=item,
                 iteration_id=iteration_id,
                 previous_output=previous_output,
+                flow_input=flow_input,
             )
             if conversation_prompts is None:
                 prompt = _prompt_for_iteration(
@@ -2455,6 +3561,7 @@ async def run_flow(
                     iteration_id=iteration_id,
                     previous_output=previous_output,
                     outputs=outputs,
+                    flow_input=flow_input,
                 )
                 result = await run_once(
                     OneShotRunOptions(
@@ -2475,7 +3582,7 @@ async def run_flow(
                         excluded_paths=excluded_paths,
                         dump_file_prefix=dump_file_prefix,
                     ),
-                    dependencies=deps,
+                    dependencies=context.dependencies,
                 )
             else:
                 result = await run_conversation(
@@ -2497,10 +3604,11 @@ async def run_flow(
                         excluded_paths=excluded_paths,
                         dump_file_prefix=dump_file_prefix,
                     ),
-                    dependencies=deps,
+                    dependencies=context.dependencies,
                 )
             record_iteration_answer(
                 result.answer,
+                step.response_format == "json",
                 iteration_id,
             )
             for status in getattr(result, "web_context_statuses", ()):
@@ -2520,11 +3628,75 @@ async def run_flow(
 
         if step.foreach is None:
             assert len(iteration_answers) == 1
-            outputs[step.step_id] = iteration_answers[0]
+            outputs[step.step_id] = iteration_answers[0][0]
+            output_json[step.step_id] = iteration_answers[0][1]
         else:
             outputs[step.step_id] = _finish_foreach_output(
                 foreach_parts
             )
+            output_json[step.step_id] = True
+
+    return _flow_result_value(
+        flow,
+        outputs,
+        output_json,
+    )
+
+
+async def run_flow(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    dependencies: ExecutionDependencies | None = None,
+    approval_callback: ApprovalCallback | None = None,
+) -> None:
+    workspace = workspace.expanduser().resolve()
+    deps = dependencies or ExecutionDependencies()
+    cache = {_filesystem_path_key(flow.source): flow}
+    validation_budget = _SubflowTraversalBudget()
+    validate_flow(
+        flow,
+        workspace=workspace,
+        config_loader=deps.load_config,
+        _cache=cache,
+        _budget=validation_budget,
+    )
+    if flow.inputs:
+        raise ValueError(
+            f"Flow {flow.source} deklariert Inputs und kann nicht direkt ohne "
+            "aufrufenden Flow ausgeführt werden: "
+            + ", ".join(flow.inputs)
+        )
+    reserved_inputs = _collect_reserved_flow_input_paths(
+        flow,
+        workspace=workspace,
+        cache=cache,
+        budget=_SubflowTraversalBudget(),
+    )
+    run_start_snapshots, run_start_checkpoint_paths = (
+        _capture_run_start_snapshots(
+            workspace=workspace,
+            root_flow=flow,
+            cache=cache,
+        )
+    )
+    context = _FlowExecutionContext(
+        dependencies=deps,
+        approval_callback=approval_callback,
+        reserved_inputs=reserved_inputs,
+        flow_cache=cache,
+        run_start_snapshots=run_start_snapshots,
+        run_start_checkpoint_paths=run_start_checkpoint_paths,
+    )
+    await _run_flow_internal(
+        flow,
+        workspace=workspace,
+        context=context,
+        flow_input={},
+        call_stack=(),
+        namespace="",
+        inherited_excluded_paths=(),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
