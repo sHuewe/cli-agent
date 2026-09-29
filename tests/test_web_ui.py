@@ -369,8 +369,11 @@ def test_web_ui_renders_working_context_tabs() -> None:
     assert 'id="working-context-dialog"' in web_ui.INDEX_HTML
     assert 'id="context-tab-messages"' in web_ui.INDEX_HTML
     assert 'id="context-tab-tools"' in web_ui.INDEX_HTML
+    assert 'id="context-tab-contexts"' in web_ui.INDEX_HTML
     assert 'id="working-messages-json"' in web_ui.INDEX_HTML
-    assert 'id="working-tools-json"' in web_ui.INDEX_HTML
+    assert 'id="working-tools-list"' in web_ui.INDEX_HTML
+    assert 'id="working-contexts-list"' in web_ui.INDEX_HTML
+    assert 'id="reset-history"' in web_ui.INDEX_HTML
     assert 'type: "working_context"' in web_ui.APP_JS
     assert 'payload.type === "working_context"' in web_ui.APP_JS
 
@@ -380,8 +383,31 @@ def test_web_ui_working_context_includes_messages_and_tools() -> None:
         def working_messages_snapshot(self):
             return [{"role": "user", "content": "hello"}]
 
-        def working_tools_snapshot(self):
-            return [{"type": "function", "function": {"name": "demo"}}]
+        def tool_states_snapshot(self):
+            return [
+                {
+                    "server": "demo",
+                    "name": "demo__read",
+                    "description": "read data",
+                    "server_enabled": True,
+                    "enabled": True,
+                }
+            ]
+
+        def context_states_snapshot(self):
+            return [
+                {
+                    "id": "file:0",
+                    "kind": "file",
+                    "label": "context.txt",
+                    "source": "context.txt",
+                    "content": "reference",
+                    "enabled": True,
+                }
+            ]
+
+        def okf_status_snapshot(self):
+            return {"configured": True, "enabled": True, "available": True}
 
     class WebSocket:
         query_params = {"token": "secret"}
@@ -428,7 +454,26 @@ def test_web_ui_working_context_includes_messages_and_tools() -> None:
     assert {
         "type": "working_context",
         "messages": [{"role": "user", "content": "hello"}],
-        "tools": [{"type": "function", "function": {"name": "demo"}}],
+        "tools": [
+            {
+                "server": "demo",
+                "name": "demo__read",
+                "description": "read data",
+                "server_enabled": True,
+                "enabled": True,
+            }
+        ],
+        "contexts": [
+            {
+                "id": "file:0",
+                "kind": "file",
+                "label": "context.txt",
+                "source": "context.txt",
+                "content": "reference",
+                "enabled": True,
+            }
+        ],
+        "okf": {"configured": True, "enabled": True, "available": True},
     } in sent
 
 
@@ -475,3 +520,31 @@ def test_working_tools_snapshot_defaults_to_empty_list() -> None:
         pass
 
     assert Dummy().working_tools_snapshot() == []
+
+
+
+def test_history_reset_clears_conversation_diagnostics() -> None:
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Dummy(ConversationMixin):
+        pass
+
+    agent = Dummy()
+    agent.history = [{"role": "user", "content": "old"}]
+    agent._last_working_messages = [{"role": "user", "content": "old"}]
+    agent._last_working_tools = [{"type": "function"}]
+    agent._dumped_history_json = "old"
+
+    agent.reset_history()
+
+    assert agent.history == []
+    assert agent.working_messages_snapshot() == []
+    assert agent.working_tools_snapshot() == []
+    assert agent._dumped_history_json is None
+
+
+def test_web_ui_contains_runtime_toggle_protocol() -> None:
+    for event_type in ("reset_history", "tool_toggle", "context_toggle", "okf_toggle"):
+        assert f'type: "{event_type}"' in web_ui.APP_JS
+    assert "renderTools(tools)" in web_ui.APP_JS
+    assert "renderContexts(contexts, payload.okf || {})" in web_ui.APP_JS
