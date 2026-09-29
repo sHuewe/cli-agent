@@ -995,10 +995,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
             variables[name] = value
 
+        input_reference_values = list(variables.values())
+        if output is not None:
+            input_reference_values.append(output)
         _validate_input_references(
-            list(variables.values()),
+            input_reference_values,
             declared_inputs=inputs,
-            field=f"steps[{index}].vars",
+            field=f"steps[{index}]",
         )
         flow_input_strings = _iter_string_values(flow_input)
         _validate_input_references(
