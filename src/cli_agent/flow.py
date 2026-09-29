@@ -473,6 +473,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "exclude_paths",
         "vars",
         "retry",
+        "inputs",
+        "result",
     }
     unknown_root = set(values) - allowed_root
     if unknown_root:
@@ -482,6 +484,30 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
     if values.get("version") != 1:
         raise ValueError("Flow-Datei benötigt version = 1.")
+
+    raw_inputs = values.get("inputs", [])
+    if (
+        not isinstance(raw_inputs, list)
+        or not all(isinstance(value, str) and value.strip() for value in raw_inputs)
+    ):
+        raise ValueError("inputs muss eine Liste nichtleerer Namen sein.")
+    inputs = tuple(value.strip() for value in raw_inputs)
+    if len(inputs) != len(set(inputs)):
+        raise ValueError("inputs darf keine doppelten Namen enthalten.")
+    for name in inputs:
+        if _STEP_ID.fullmatch(name) is None:
+            raise ValueError(
+                f"Ungültiger Flow-Input {name!r}; erlaubt sind ASCII-Buchstaben, "
+                "Ziffern, '_' und '-' und der Name muss mit einem Buchstaben "
+                "oder '_' beginnen."
+            )
+
+    result_value = values.get("result")
+    result_selector = (
+        _string(result_value, field="result")
+        if result_value is not None
+        else None
+    )
 
     global_config_value = values.get("config")
     global_config = (
@@ -587,6 +613,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "conversation_items",
         "conversation_final_prompt_file",
         "iteration_id",
+        "flow",
+        "input",
     }
 
     for index, raw in enumerate(raw_steps, start=1):
@@ -614,12 +642,58 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             raise ValueError(f"Doppelte Step-ID: {step_id!r}.")
         known_ids.add(step_id)
 
-        prompt_file = Path(
-            _string(
-                raw.get("prompt_file"),
-                field=f"steps[{index}].prompt_file",
-            )
+        flow_value = raw.get("flow")
+        child_flow = (
+            Path(_string(flow_value, field=f"steps[{index}].flow"))
+            if flow_value is not None
+            else None
         )
+        prompt_value = raw.get("prompt_file")
+        if child_flow is not None and prompt_value is not None:
+            raise ValueError(
+                f"steps[{index}] darf nicht gleichzeitig flow und prompt_file setzen."
+            )
+        if child_flow is None and prompt_value is None:
+            raise ValueError(
+                f"steps[{index}] benötigt prompt_file oder flow."
+            )
+        prompt_file = (
+            Path(_string(prompt_value, field=f"steps[{index}].prompt_file"))
+            if prompt_value is not None
+            else None
+        )
+
+        raw_flow_input = raw.get("input", {})
+        if not isinstance(raw_flow_input, dict):
+            raise ValueError(f"steps[{index}].input muss eine Tabelle sein.")
+        flow_input: dict[str, Any] = {}
+        for name, value in raw_flow_input.items():
+            if not isinstance(name, str) or _STEP_ID.fullmatch(name) is None:
+                raise ValueError(
+                    f"Ungültiger Input-Name {name!r} in steps[{index}].input."
+                )
+            flow_input[name] = value
+
+        if child_flow is not None:
+            regular_only = {
+                "config", "model", "prompt_file", "context_file",
+                "add_file_context", "add_web_context", "output",
+                "overwrite_output", "workspace_access", "with_data",
+                "exclude_paths", "retry", "response_format",
+                "approve_tools", "vars", "conversation_items",
+                "conversation_final_prompt_file",
+            }
+            conflicting = sorted(regular_only & set(raw))
+            if conflicting:
+                raise ValueError(
+                    f"Subflow-Schritt {step_id!r} darf diese Schlüssel nicht setzen: "
+                    + ", ".join(conflicting)
+                )
+        elif raw_flow_input:
+            raise ValueError(
+                f"steps[{index}].input ist nur zusammen mit flow erlaubt."
+            )
+
         context_value = raw.get("context_file")
         add_file_context_value = raw.get("add_file_context")
         if context_value is not None and add_file_context_value is not None:
@@ -1013,6 +1087,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 config=config,
                 model=model,
                 prompt_file=prompt_file,
+                flow=child_flow,
+                flow_input=flow_input,
                 context_files=context_files,
                 add_web_context=add_web_context,
                 output=output,
@@ -1032,10 +1108,24 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         )
 
+    if result_selector is not None:
+        match = _FOREACH.fullmatch(result_selector)
+        if match is None:
+            raise ValueError(
+                "result muss auf steps.<id>.output[.<pfad>] verweisen."
+            )
+        source_id = match.group(1)
+        if source_id not in known_ids:
+            raise ValueError(
+                f"result verweist auf unbekannten Schritt {source_id!r}."
+            )
+
     return FlowDefinition(
         source=source,
         steps=tuple(steps),
         excluded_paths=excluded_paths,
+        inputs=inputs,
+        result=result_selector,
     )
 
 
