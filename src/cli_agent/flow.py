@@ -335,6 +335,24 @@ def _dump_prefix_for_iteration(
     return f"{prefix}.case-{digest}"
 
 
+def _resolve_subflow_path(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow_dir: Path,
+) -> Path:
+    if step.flow is None:
+        raise ValueError(f"Schritt {step.step_id!r} ist kein Subflow-Schritt.")
+    path = step.flow.expanduser()
+    candidate = path if path.is_absolute() else flow_dir / path
+    return _workspace_path(
+        workspace,
+        candidate,
+        purpose=f"Subflow-Datei von Schritt {step.step_id!r}",
+        must_exist=True,
+    )
+
+
 def _workspace_local_config_path(
     step: FlowStep,
     *,
@@ -363,6 +381,15 @@ def _reserved_flow_input_paths(
         _filesystem_path_key(flow.source): flow.source,
     }
     for step in flow.steps:
+        if step.flow is not None:
+            subflow_path = _resolve_subflow_path(
+                step,
+                workspace=workspace,
+                flow_dir=flow_dir,
+            )
+            reserved[_filesystem_path_key(subflow_path)] = subflow_path
+            continue
+
         if step.workspace_access in {"read", "write"}:
             resolve_excluded_paths(
                 workspace,
@@ -376,6 +403,7 @@ def _reserved_flow_input_paths(
                 ),
             )
 
+        assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
             step.prompt_file,
