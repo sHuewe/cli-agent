@@ -1980,9 +1980,10 @@ def _serialize_foreach_iteration(
     *,
     iteration_id: str,
     answer: str,
+    answer_is_json: bool | None = None,
 ) -> str:
     value: Any = answer
-    if step.response_format == "json":
+    if answer_is_json if answer_is_json is not None else step.response_format == "json":
         value = _parse_structured_output(
             answer,
             step_id=step.step_id,
@@ -2002,11 +2003,13 @@ def _append_foreach_iteration(
     payload_bytes: int,
     iteration_id: str,
     answer: str,
+    answer_is_json: bool | None = None,
 ) -> int:
     fragment = _serialize_foreach_iteration(
         step,
         iteration_id=iteration_id,
         answer=answer,
+        answer_is_json=answer_is_json,
     )
     fragment_bytes = len(fragment.encode("utf-8"))
     separator_bytes = 1 if parts else 0
