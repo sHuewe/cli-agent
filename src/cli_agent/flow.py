@@ -2239,6 +2239,147 @@ def _output_for_iteration(
     )
 
 
+def _load_subflow_definition(
+    step: FlowStep,
+    *,
+    parent_flow: FlowDefinition,
+    workspace: Path,
+    cache: dict[str, FlowDefinition],
+) -> FlowDefinition:
+    path = _resolve_subflow_path(
+        step,
+        workspace=workspace,
+        flow_dir=parent_flow.source.parent,
+    )
+    key = _filesystem_path_key(path)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    child = load_flow(path, workspace=workspace)
+    cache[key] = child
+    return child
+
+
+def _validate_subflow_interface(
+    step: FlowStep,
+    child: FlowDefinition,
+) -> None:
+    if child.result is None:
+        raise ValueError(
+            f"Subflow {child.source} benötigt ein root-level result, "
+            f"weil er von Schritt {step.step_id!r} aufgerufen wird."
+        )
+    expected = set(child.inputs)
+    provided = set(step.flow_input)
+    missing = sorted(expected - provided)
+    unknown = sorted(provided - expected)
+    if missing or unknown:
+        parts: list[str] = []
+        if missing:
+            parts.append("fehlend: " + ", ".join(missing))
+        if unknown:
+            parts.append("unbekannt: " + ", ".join(unknown))
+        raise ValueError(
+            f"Inputs für Subflow-Schritt {step.step_id!r} stimmen nicht mit "
+            f"{child.source} überein ({'; '.join(parts)})."
+        )
+
+
+def _collect_reserved_flow_input_paths(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    cache: dict[str, FlowDefinition],
+    stack: tuple[str, ...] = (),
+) -> dict[str, Path]:
+    key = _filesystem_path_key(flow.source)
+    if key in stack:
+        chain = " -> ".join((*stack, key))
+        raise ValueError(f"Zyklischer Subflow-Aufruf erkannt: {chain}")
+    if len(stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+
+    reserved = _reserved_flow_input_paths(flow, workspace=workspace)
+    next_stack = (*stack, key)
+    for step in flow.steps:
+        if step.flow is None:
+            continue
+        child = _load_subflow_definition(
+            step,
+            parent_flow=flow,
+            workspace=workspace,
+            cache=cache,
+        )
+        _validate_subflow_interface(step, child)
+        reserved.update(
+            _collect_reserved_flow_input_paths(
+                child,
+                workspace=workspace,
+                cache=cache,
+                stack=next_stack,
+            )
+        )
+    return reserved
+
+
+def _flow_result_value(
+    flow: FlowDefinition,
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+) -> _FlowResultValue | None:
+    if flow.result is None:
+        return None
+    match = _FOREACH.fullmatch(flow.result)
+    assert match is not None
+    source_id, path = match.groups()
+    if source_id not in outputs:
+        raise ValueError(
+            f"Result-Quelle {source_id!r} von Flow {flow.source} "
+            "besitzt keinen verfügbaren Output."
+        )
+    text = outputs[source_id]
+    if path is None:
+        return _FlowResultValue(
+            text=text,
+            is_json=output_json.get(source_id, False),
+        )
+    parsed = _parse_structured_output(text, step_id=source_id)
+    value = _lookup(
+        parsed,
+        path,
+        label=f"Result von Flow {flow.source}",
+    )
+    return _FlowResultValue(
+        text=_json_dumps_preserving_numbers(value)
+        if isinstance(value, (dict, list, bool, int, float, _JsonNumber))
+        or value is None
+        else str(value),
+        is_json=not isinstance(value, str),
+    )
+
+
+def _render_subflow_inputs(
+    step: FlowStep,
+    *,
+    item: Any,
+    iteration_id: str | None,
+    outputs: dict[str, str],
+    flow_input: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        name: _render_flow_input_value(
+            value,
+            item=item,
+            iteration_id=iteration_id,
+            outputs=outputs,
+            flow_input=flow_input,
+        )
+        for name, value in step.flow_input.items()
+    }
+
+
 def validate_flow(
     flow: FlowDefinition,
     *,
