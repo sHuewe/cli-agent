@@ -2418,7 +2418,10 @@ def _collect_reserved_flow_input_paths(
     workspace: Path,
     cache: dict[str, FlowDefinition],
     stack: tuple[str, ...] = (),
+    budget: _SubflowTraversalBudget | None = None,
 ) -> dict[str, Path]:
+    traversal_budget = budget or _SubflowTraversalBudget()
+    traversal_budget.consume(purpose="Eingabe-Validierung")
     key = _filesystem_path_key(flow.source)
     if key in stack:
         chain = " -> ".join((*stack, key))
@@ -2446,6 +2449,7 @@ def _collect_reserved_flow_input_paths(
                 workspace=workspace,
                 cache=cache,
                 stack=next_stack,
+                budget=traversal_budget,
             )
         )
     return reserved
@@ -2517,8 +2521,11 @@ def validate_flow(
     _cache: dict[str, FlowDefinition] | None = None,
     _stack: tuple[str, ...] = (),
     _inherited_excluded_paths: tuple[Path, ...] = (),
+    _budget: _SubflowTraversalBudget | None = None,
 ) -> None:
     workspace = workspace.expanduser().resolve()
+    traversal_budget = _budget or _SubflowTraversalBudget()
+    traversal_budget.consume(purpose="Validierung")
     cache = _cache if _cache is not None else {}
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in _stack:
@@ -2553,6 +2560,7 @@ def validate_flow(
                 _cache=cache,
                 _stack=stack,
                 _inherited_excluded_paths=effective_flow_excluded_paths,
+                _budget=traversal_budget,
             )
             if step.foreach is not None:
                 match = _FOREACH.fullmatch(step.foreach)
@@ -2724,6 +2732,7 @@ def validate_flow(
         flow,
         workspace=workspace,
         cache=cache,
+        budget=traversal_budget,
     )
     for step in flow.steps:
         if (
