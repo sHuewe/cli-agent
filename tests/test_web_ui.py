@@ -375,6 +375,63 @@ def test_web_ui_renders_working_context_tabs() -> None:
     assert 'payload.type === "working_context"' in web_ui.APP_JS
 
 
+def test_web_ui_working_context_includes_messages_and_tools() -> None:
+    class Agent:
+        def working_messages_snapshot(self):
+            return [{"role": "user", "content": "hello"}]
+
+        def working_tools_snapshot(self):
+            return [{"type": "function", "function": {"name": "demo"}}]
+
+    class WebSocket:
+        query_params = {"token": "secret"}
+        headers = {"origin": "http://127.0.0.1:12345"}
+
+        def __init__(self):
+            self.sent = []
+            self.received = False
+
+        async def accept(self):
+            return None
+
+        async def close(self, *, code):
+            raise AssertionError(f"unexpected close: {code}")
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def receive_json(self):
+            if self.received:
+                raise RuntimeError("disconnect")
+            self.received = True
+            return {"type": "working_context"}
+
+    async def run():
+        broker = web_ui.WebUiApprovalBroker()
+        session = web_ui._WebUiSession(
+            agent=Agent(),
+            approval_broker=broker,
+            token="secret",
+            expected_origin="http://127.0.0.1:12345",
+            workspace=Path("."),
+            model="model",
+            mcp_servers=(),
+            output_target=None,
+            initial_messages=(),
+            debug=False,
+        )
+        websocket = WebSocket()
+        await session.websocket(websocket)
+        return websocket.sent
+
+    sent = asyncio.run(run())
+    assert {
+        "type": "working_context",
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{"type": "function", "function": {"name": "demo"}}],
+    } in sent
+
+
 def test_working_messages_snapshot_is_detached() -> None:
     from cli_agent.agent_conversation import ConversationMixin
 
