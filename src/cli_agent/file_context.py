@@ -142,7 +142,12 @@ class ContextFileCliAgent(WebContextCliAgent):
                 "kind": "file",
                 "label": context.relative_path,
                 "source": context.relative_path,
-                "content": context.content,
+                "content": (
+                    context.content
+                    if len(context.content) <= 20_000
+                    else context.content[:20_000] + "\n\n[… Context-Vorschau gekürzt …]"
+                ),
+                "content_chars": len(context.content),
                 "enabled": context.relative_path not in self._disabled_file_context_paths,
             }
             for index, context in enumerate(self._file_contexts)
