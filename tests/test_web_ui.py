@@ -559,3 +559,83 @@ def test_web_ui_runtime_toggle_buttons_follow_busy_state() -> None:
     assert 'button.dataset.runtimeToggle = "true"' in web_ui.APP_JS
     assert 'button.dataset.permanentlyDisabled = String(Boolean(disabled))' in web_ui.APP_JS
     assert 'button.disabled = busy || disconnected || permanentlyDisabled' in web_ui.APP_JS
+
+
+
+def test_web_ui_history_reset_failure_returns_error_without_disconnect() -> None:
+    class Agent:
+        def reset_history(self):
+            raise PermissionError("dump locked")
+
+        def working_messages_snapshot(self):
+            return [{"role": "user", "content": "old"}]
+
+        def tool_states_snapshot(self):
+            return []
+
+        def context_states_snapshot(self):
+            return []
+
+        def okf_status_snapshot(self):
+            return {"configured": False, "enabled": False, "available": False}
+
+    class WebSocket:
+        query_params = {"token": "secret"}
+        headers = {"origin": "http://127.0.0.1:12345"}
+
+        def __init__(self):
+            self.sent = []
+            self.messages = iter(
+                [
+                    {"type": "reset_history"},
+                    {"type": "working_context"},
+                ]
+            )
+
+        async def accept(self):
+            return None
+
+        async def close(self, *, code):
+            raise AssertionError(f"unexpected close: {code}")
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def receive_json(self):
+            try:
+                return next(self.messages)
+            except StopIteration as exc:
+                raise RuntimeError("disconnect") from exc
+
+    async def run():
+        broker = web_ui.WebUiApprovalBroker()
+        session = web_ui._WebUiSession(
+            agent=Agent(),
+            approval_broker=broker,
+            token="secret",
+            expected_origin="http://127.0.0.1:12345",
+            workspace=Path("."),
+            model="model",
+            mcp_servers=(),
+            output_target=None,
+            initial_messages=(),
+            debug=False,
+        )
+        websocket = WebSocket()
+        await session.websocket(websocket)
+        return websocket.sent
+
+    sent = asyncio.run(run())
+
+    assert any(
+        event.get("type") == "error" and "dump locked" in event.get("content", "")
+        for event in sent
+    )
+    assert {"type": "history_reset"} not in sent
+    assert {
+        "type": "working_context",
+        "messages": [{"role": "user", "content": "old"}],
+        "tools": [],
+        "contexts": [],
+        "okf": {"configured": False, "enabled": False, "available": False},
+    } in sent
