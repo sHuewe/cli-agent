@@ -64,27 +64,34 @@ class ConversationMixin:
     def reset_history(self) -> None:
         """Forget conversation turns while preserving configured runtime context."""
 
-        self.history.clear()
-        self._last_working_messages = []
-        self._last_working_tools = []
-        self._dumped_history_json = None
-
+        empty_history: list[dict[str, Any]] = []
+        dumped_history_json: str | None = None
         if getattr(self, "dump_llm_context", False):
-            self._write_dump_json("history.json", self.history)
-            self._dumped_history_json = json.dumps(
-                self.history,
-                ensure_ascii=False,
-                indent=2,
-            )
+            # Persist/clean diagnostics before mutating in-memory session state.
+            # If a dump file is locked or otherwise unwritable, callers can
+            # report the failure while the visible conversation remains intact.
+            self._write_dump_json("history.json", empty_history)
             for filename in (
                 "main_working_messages.json",
                 "main_system_prompt.json",
                 "knowledge_working_messages.json",
                 "knowledge_system_prompt.json",
                 "knowledge_last_model_message.json",
+                "knowledge_selection.json",
+                "knowledge_result.json",
                 "knowledge_selection_fallback.json",
             ):
                 self._remove_dump_value(filename)
+            dumped_history_json = json.dumps(
+                empty_history,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        self.history.clear()
+        self._last_working_messages = []
+        self._last_working_tools = []
+        self._dumped_history_json = dumped_history_json
 
         logger.info("conversation_history_reset")
 
