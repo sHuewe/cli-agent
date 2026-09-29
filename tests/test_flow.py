@@ -6144,3 +6144,105 @@ flow = "child.toml"
 
     with pytest.raises(ValueError, match="geplanten Output"):
         validate_flow(definition, workspace=tmp_path)
+
+
+
+def test_foreach_subflow_preflights_all_child_outputs_before_first_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+output = "shared.txt"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "children"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"},{"id":"two"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("child must not run before batch preflight succeeds")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="bereits von"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == ["discover"]
+    assert not (tmp_path / "shared.txt").exists()
+
+
+def test_validation_checks_child_outputs_against_parent_reserved_inputs(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "parent.md").write_text("parent", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+output = "parent.md"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "parent"
+prompt_file = "parent.md"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="reservierten Flow-Eingabe"):
+        validate_flow(definition, workspace=tmp_path)
