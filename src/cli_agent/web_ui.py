@@ -1167,9 +1167,6 @@ APP_JS = """
       workingMessagesJson.textContent = JSON.stringify(messages, null, 2);
       renderTools(tools);
       renderContexts(contexts, payload.okf || {});
-      if (!workingContextDialog.open) {
-        workingContextDialog.showModal();
-      }
       return;
     }
     if (payload.type === "history_reset") {
