@@ -5409,3 +5409,240 @@ prompt_file = "prompt.md"
 
     assert len(calls) == 1
     assert calls[0].prompt.startswith("Erkläre den Befehl add_web_context")
+
+
+
+def test_subflow_foreach_returns_explicit_child_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "child.md").write_text(
+        "process {{var:id}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "aggregate.md").write_text(
+        "{{var:items}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["item"]
+result = "steps.work.output.result"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "work/${input.item.id}.json"
+overwrite_output = true
+
+[steps.vars]
+id = "${input.item.id}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+response_format = "json"
+
+[[steps]]
+id = "process"
+flow = "child.toml"
+foreach = "steps.discover.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+
+[[steps]]
+id = "aggregate"
+prompt_file = "aggregate.md"
+
+[steps.vars]
+items = "${steps.process.output}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "discover":
+            answer = '{"items":[{"id":"a"},{"id":"b"}]}'
+        elif options.prompt == "process a":
+            answer = '{"result":{"id":"a","status":"ok"}}'
+        elif options.prompt == "process b":
+            answer = '{"result":{"id":"b","status":"ok"}}'
+        else:
+            answer = "done"
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls[:3]] == [
+        "discover",
+        "process a",
+        "process b",
+    ]
+    assert calls[1].output == (tmp_path / "work" / "a.json").resolve()
+    assert calls[2].output == (tmp_path / "work" / "b.json").resolve()
+
+    aggregate = json.loads(calls[3].prompt)
+    assert aggregate == {
+        "iterations": [
+            {"id": "a", "output": {"id": "a", "status": "ok"}},
+            {"id": "b", "output": {"id": "b", "status": "ok"}},
+        ]
+    }
+
+
+def test_subflow_inputs_are_explicit_and_not_inherited(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "child.md").write_text("{{var:value}}", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["value"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+
+[steps.vars]
+value = "${input.value}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[vars]
+value = "parent-global"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+
+[steps.input]
+wrong = "explicit"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="fehlend: value.*unbekannt: wrong"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+def test_invoked_subflow_requires_result_contract(tmp_path: Path) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="root-level result"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+def test_subflow_cycle_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "a.toml").write_text(
+        """
+version = 1
+result = "steps.b.output"
+
+[[steps]]
+id = "b"
+flow = "b.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "b.toml").write_text(
+        """
+version = 1
+result = "steps.a.output"
+
+[[steps]]
+id = "a"
+flow = "a.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "a.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="Zyklischer Subflow"):
+        validate_flow(definition, workspace=tmp_path)
+
+
+def test_flow_with_declared_inputs_cannot_run_directly(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("{{var:value}}", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["value"]
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "prompt.md"
+
+[steps.vars]
+value = "${input.value}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "child.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="nicht direkt"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+
+def test_subflow_path_must_be_static(tmp_path: Path) -> None:
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "child"
+flow = "${item.flow}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="statischer Pfad"):
+        load_flow(tmp_path / "parent.toml", workspace=tmp_path)
