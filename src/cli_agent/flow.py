@@ -1324,6 +1324,27 @@ def _render_iteration_text(
     return _render_item_text(rendered, item)
 
 
+def _render_input_text(
+    template: str,
+    flow_input: dict[str, Any],
+) -> str:
+    def replace(match: re.Match[str]) -> str:
+        value = _lookup(
+            flow_input,
+            match.group(1),
+            label="Flow-Input",
+        )
+        if isinstance(value, (dict, list)):
+            return _json_dumps_preserving_numbers(value)
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    return _INPUT_EXPR.sub(replace, template)
+
+
 def _dynamic_value(
     match: re.Match[str],
     *,
@@ -2217,6 +2238,7 @@ def _output_for_iteration(
     workspace: Path,
     item: Any,
     iteration_id: str | None = None,
+    flow_input: dict[str, Any] | None = None,
 ) -> Path | None:
     if step.output is None:
         return None
@@ -2230,6 +2252,7 @@ def _output_for_iteration(
         if step.foreach is not None
         else step.output
     )
+    rendered = _render_input_text(rendered, flow_input or {})
     path = Path(rendered)
     return _workspace_path(
         workspace,
