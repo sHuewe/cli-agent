@@ -42,6 +42,7 @@ MAX_FLOW_FILE_BYTES = 1_000_000
 MAX_STRUCTURED_OUTPUT_BYTES = 10_000_000
 MAX_SUBFLOW_DEPTH = 8
 MAX_FLOW_EXECUTIONS = 10_000
+MAX_SUBFLOW_GRAPH_EXPANSIONS = 10_000
 
 _STEP_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
 _ITEM_EXPR = re.compile(
@@ -130,6 +131,9 @@ class _FlowExecutionContext:
     claimed_outputs: dict[str, str] | None = None
     reserved_inputs: dict[str, Path] | None = None
     flow_cache: dict[str, FlowDefinition] | None = None
+    run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
+    generic_run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
+    run_start_checkpoint_paths: tuple[Path, ...] = ()
 
     def __post_init__(self) -> None:
         if self.claimed_outputs is None:
@@ -138,6 +142,23 @@ class _FlowExecutionContext:
             self.reserved_inputs = {}
         if self.flow_cache is None:
             self.flow_cache = {}
+        if self.run_start_snapshots is None:
+            self.run_start_snapshots = {}
+        if self.generic_run_start_snapshots is None:
+            self.generic_run_start_snapshots = {}
+
+
+@dataclass
+class _SubflowTraversalBudget:
+    expanded_nodes: int = 0
+
+    def consume(self, *, purpose: str) -> None:
+        self.expanded_nodes += 1
+        if self.expanded_nodes > MAX_SUBFLOW_GRAPH_EXPANSIONS:
+            raise ValueError(
+                f"Subflow-{purpose} überschreitet das Expansionslimit von "
+                f"{MAX_SUBFLOW_GRAPH_EXPANSIONS} Flow-Knoten."
+            )
 
 
 def _reject_parent_reference(path: Path, *, purpose: str) -> None:
