@@ -3112,10 +3112,13 @@ async def _run_flow_internal(
     assert reserved_inputs is not None
 
     assert context.run_start_snapshots is not None
-    run_start_snapshot = context.run_start_snapshots.get(flow_key)
+    run_start_snapshot = context.run_start_snapshots.get(namespace)
+    invocation_known_at_run_start = run_start_snapshot is not None
     if run_start_snapshot is None:
-        raise RuntimeError(
-            f"Run-Start-Snapshot für Flow {flow.source} fehlt."
+        run_start_snapshot = _RunStartSnapshot(
+            checkpoint_fingerprints={},
+            checkpoint_paths=(),
+            previous_output_fingerprints={},
         )
     initial_checkpoint_fingerprints = (
         run_start_snapshot.checkpoint_fingerprints
@@ -3410,12 +3413,18 @@ async def _run_flow_internal(
                 continue
 
             try:
-                previous_output = _previous_output_from_snapshot(
-                    step,
-                    workspace=workspace,
-                    output=output,
-                    fingerprints=initial_previous_output_fingerprints,
-                )
+                if (
+                    not invocation_known_at_run_start
+                    and _uses_previous_output(step)
+                ):
+                    previous_output = None
+                else:
+                    previous_output = _previous_output_from_snapshot(
+                        step,
+                        workspace=workspace,
+                        output=output,
+                        fingerprints=initial_previous_output_fingerprints,
+                    )
             except ValueError as exc:
                 if step.foreach is not None and _uses_previous_output(step):
                     raise ValueError(
@@ -3599,9 +3608,9 @@ async def run_flow(
     )
     run_start_snapshots, run_start_checkpoint_paths = (
         _capture_run_start_snapshots(
-            cache,
             workspace=workspace,
             root_flow=flow,
+            cache=cache,
         )
     )
     context = _FlowExecutionContext(
