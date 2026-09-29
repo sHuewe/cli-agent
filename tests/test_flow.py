@@ -6381,3 +6381,146 @@ flow = "child.toml"
     assert prefixes[0].endswith(".once.work")
     assert prefixes[1].endswith(".once.work")
     assert prefixes[0].casefold() != prefixes[1].casefold()
+
+
+
+def test_subflow_iteration_id_renders_explicit_flow_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "plan.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["prefix"]
+result = "steps.work.output"
+
+[[steps]]
+id = "plan"
+prompt_file = "plan.md"
+response_format = "json"
+
+[[steps]]
+id = "work"
+prompt_file = "work.md"
+foreach = "steps.plan.output.items"
+iteration_id = "${input.prefix}-${item.id}"
+output = "results/${iteration.id}.json"
+response_format = "json"
+overwrite_output = true
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+
+[steps.input]
+prefix = "pre"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        if options.prompt == "plan":
+            answer = '{"items":[{"id":"one"}]}'
+        else:
+            answer = '{"status":"ok"}'
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["plan", "work"]
+    assert calls[1].output == (tmp_path / "results" / "pre-one.json").resolve()
+
+
+def test_parent_foreach_preflights_checkpoint_known_nested_foreach_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "outer.md").write_text("outer", encoding="utf-8")
+    (tmp_path / "inner-plan.md").write_text("inner plan", encoding="utf-8")
+    (tmp_path / "inner-work.md").write_text("inner work", encoding="utf-8")
+    (tmp_path / "plans").mkdir()
+    (tmp_path / "outer.json").write_text(
+        '{"items":[{"id":"A"},{"id":"B"}]}',
+        encoding="utf-8",
+    )
+    for outer_id in ("A", "B"):
+        (tmp_path / "plans" / f"{outer_id}.json").write_text(
+            '{"items":[{"id":"shared"}]}',
+            encoding="utf-8",
+        )
+
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+inputs = ["outer"]
+result = "steps.inner.output"
+
+[[steps]]
+id = "inner_plan"
+prompt_file = "inner-plan.md"
+response_format = "json"
+output = "plans/${input.outer.id}.json"
+overwrite_output = false
+
+[[steps]]
+id = "inner"
+prompt_file = "inner-work.md"
+foreach = "steps.inner_plan.output.items"
+iteration_id = "${item.id}"
+output = "results/${iteration.id}.json"
+response_format = "json"
+overwrite_output = false
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "outer"
+prompt_file = "outer.md"
+response_format = "json"
+output = "outer.json"
+overwrite_output = false
+
+[[steps]]
+id = "children"
+flow = "child.toml"
+foreach = "steps.outer.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+outer = "${item}"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        raise AssertionError(
+            "nested checkpoint-known foreach collision must fail before model work"
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="bereits von"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == []
+    assert not (tmp_path / "results" / "shared.json").exists()
