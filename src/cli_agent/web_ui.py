@@ -994,8 +994,7 @@ APP_JS = """
         () => socket.send(JSON.stringify({
           type: "okf_toggle",
           enabled: !enabled
-        })),
-        !okf.available
+        }))
       );
       row.append(name, description, button);
       okfState.appendChild(row);
