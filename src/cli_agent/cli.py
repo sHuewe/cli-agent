@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .admin_config import AdminConfig, default_admin_config_file, load_admin_config
 from .agent import CliAgent
 from .approval_display import approval_arguments as _approval_arguments
@@ -102,6 +103,11 @@ def build_approval_callback(preapproved_tools: Iterable[str]) -> Callable[[str, 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cli-agent", description="General local agent using configurable MCP servers")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     parser.add_argument("prompt", nargs="*", help="Optional one-shot prompt; omit it for interactive mode")
     parser.add_argument("--workspace", type=Path, default=Path.cwd(), help="Fixed workspace directory (default: current directory)")
     parser.add_argument("--config", type=Path, default=None, help=f"Configuration file (default: {default_config_file()})")
