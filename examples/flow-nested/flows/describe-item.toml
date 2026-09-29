@@ -1,0 +1,15 @@
+version = 1
+inputs = ["item"]
+result = "steps.describe.output"
+
+[[steps]]
+id = "describe"
+prompt_file = "prompts/describe-item.md"
+response_format = "json"
+output = "results/${input.item.id}.json"
+overwrite_output = true
+
+[steps.vars]
+id = "${input.item.id}"
+name = "${input.item.name}"
+color = "${input.item.color}"
