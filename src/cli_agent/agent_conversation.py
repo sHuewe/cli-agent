@@ -61,6 +61,15 @@ def _normalize_json_response(answer: str) -> tuple[str, str | None]:
 
 
 class ConversationMixin:
+    def reset_history(self) -> None:
+        """Forget conversation turns while preserving configured runtime context."""
+
+        self.history.clear()
+        self._last_working_messages = []
+        self._last_working_tools = []
+        self._dumped_history_json = None
+        logger.info("conversation_history_reset")
+
     async def ask(self, prompt: str) -> str:
         if self._exit_stack is None:
             raise RuntimeError("Der Agent wurde noch nicht gestartet.")
@@ -68,11 +77,18 @@ class ConversationMixin:
         command = re.fullmatch(r"(enable|disable)\s+(\S+)", prompt.strip())
         if command:
             action, server_name = command.groups()
+            enabled = action == "enable"
+            if server_name.casefold() == "okf" and self._okf_options is not None:
+                changed = self.set_okf_enabled(enabled=enabled)
+                state = "aktiviert" if enabled else "deaktiviert"
+                suffix = "" if changed else " (war bereits so)"
+                return f"OKF-Knowledge-Lauf {state}{suffix}."
+
             changed = await self.set_server_enabled(
                 server_name,
-                enabled=action == "enable",
+                enabled=enabled,
             )
-            state = "aktiviert" if action == "enable" else "deaktiviert"
+            state = "aktiviert" if enabled else "deaktiviert"
             suffix = "" if changed else " (war bereits so)"
             return f"MCP-Server {server_name} {state}{suffix}."
 
@@ -227,7 +243,7 @@ class ConversationMixin:
 
     async def _collect_knowledge(self, prompt: str) -> str | None:
         options = self._okf_options
-        if options is None:
+        if options is None or not getattr(self, "_okf_enabled", True):
             return None
         if self._knowledge_session is None:
             if options.required:
