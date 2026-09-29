@@ -299,6 +299,15 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             return
         self._write_dump_json(filename, value)
 
+    def _remove_dump_value(self, filename: str) -> None:
+        if not self.dump_llm_context:
+            return
+        path = self._safe_dump_path(filename)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
     def _resolve_stdio_value(self, value: str) -> str:
         return (
             value.replace("{python}", sys.executable)
