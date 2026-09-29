@@ -716,6 +716,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if flow_value is not None
             else None
         )
+        if child_flow is not None and _DYNAMIC_VALUE_EXPR.search(str(child_flow)):
+            raise ValueError(
+                f"steps[{index}].flow muss ein statischer Pfad sein und darf "
+                "keine dynamischen Flow-Platzhalter enthalten."
+            )
         prompt_value = raw.get("prompt_file")
         if child_flow is not None and prompt_value is not None:
             raise ValueError(
@@ -1009,6 +1014,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             declared_inputs=inputs,
             field=f"steps[{index}].input",
         )
+        if any(
+            _PREVIOUS_OUTPUT_EXPR.search(value)
+            or _CONVERSATION_ITEM_EXPR.search(value)
+            for value in flow_input_strings
+        ):
+            raise ValueError(
+                f"steps[{index}].input darf previous_output und "
+                "conversation.item nicht verwenden."
+            )
 
         for value in [*variables.values(), *flow_input_strings]:
             for match in _DYNAMIC_VALUE_EXPR.finditer(value):
