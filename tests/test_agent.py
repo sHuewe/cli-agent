@@ -1377,7 +1377,7 @@ def test_history_reset_rewrites_and_removes_dump_diagnostics(tmp_path: Path) -> 
 
 
 
-def test_history_reset_keeps_in_memory_history_if_dump_cleanup_fails(
+def test_history_reset_restores_persisted_and_in_memory_state_if_cleanup_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1387,10 +1387,30 @@ def test_history_reset_keeps_in_memory_history_if_dump_cleanup_fails(
     agent._last_working_tools = [{"type": "function"}]
     agent._dumped_history_json = "old"
 
-    def fail_remove(_filename: str) -> None:
-        raise PermissionError("locked")
+    diagnostic_files = (
+        "history.json",
+        "main_working_messages.json",
+        "main_system_prompt.json",
+    )
+    agent._write_dump_json("history.json", agent.history)
+    agent._write_dump_json("main_working_messages.json", {"old": "messages"})
+    agent._write_dump_json("main_system_prompt.json", {"old": "system"})
+    before = {
+        filename: agent._safe_dump_path(filename).read_bytes()
+        for filename in diagnostic_files
+    }
 
-    monkeypatch.setattr(agent, "_remove_dump_value", fail_remove)
+    original_remove = agent._remove_dump_value
+    calls = 0
+
+    def fail_after_one_remove(filename: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise PermissionError("locked")
+        original_remove(filename)
+
+    monkeypatch.setattr(agent, "_remove_dump_value", fail_after_one_remove)
 
     with pytest.raises(PermissionError, match="locked"):
         agent.reset_history()
@@ -1399,3 +1419,7 @@ def test_history_reset_keeps_in_memory_history_if_dump_cleanup_fails(
     assert agent._last_working_messages == [{"role": "user", "content": "old"}]
     assert agent._last_working_tools == [{"type": "function"}]
     assert agent._dumped_history_json == "old"
+    assert {
+        filename: agent._safe_dump_path(filename).read_bytes()
+        for filename in diagnostic_files
+    } == before
