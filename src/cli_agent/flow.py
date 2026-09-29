@@ -2015,29 +2015,340 @@ def _snapshot_initial_flow_state(
     )
 
 
+def _subflow_inputs_resolvable_at_run_start(
+    step: FlowStep,
+    *,
+    available_outputs: dict[str, str],
+) -> bool:
+    for value in _iter_string_values(step.flow_input):
+        for match in _DYNAMIC_VALUE_EXPR.finditer(value):
+            source_id = match.group("step_output_id")
+            if source_id is not None and source_id not in available_outputs:
+                return False
+    return True
+
+
+def _child_invocation_namespace(
+    parent_namespace: str,
+    step: FlowStep,
+    *,
+    iteration_id: str | None,
+) -> str:
+    suffix = str(iteration_id) if iteration_id is not None else "once"
+    return f"{parent_namespace}{step.step_id}.{suffix}."
+
+
+def _capture_run_start_invocation(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    cache: dict[str, FlowDefinition],
+    flow_input: dict[str, Any],
+    namespace: str,
+    snapshots: dict[str, _RunStartSnapshot],
+    protected_paths: dict[str, Path],
+    budget: _SubflowTraversalBudget,
+    call_stack: tuple[str, ...] = (),
+) -> _FlowResultValue | None:
+    budget.consume(purpose="Run-Start-Planung")
+    flow_key = _filesystem_path_key(flow.source)
+    if flow_key in call_stack:
+        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+    if len(call_stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+
+    next_stack = (*call_stack, flow_key)
+    fingerprints: dict[tuple[str, str], bytes] = {}
+    checkpoint_paths: dict[str, Path] = {}
+    previous_output_fingerprints: dict[
+        tuple[str, str],
+        bytes | None,
+    ] = {}
+    available_outputs: dict[str, str] = {}
+    output_json: dict[str, bool] = {}
+
+    def remember_checkpoint(
+        step: FlowStep,
+        output: Path,
+        checkpoint: str,
+    ) -> None:
+        fingerprints[_checkpoint_snapshot_key(step, output)] = (
+            _checkpoint_fingerprint(checkpoint)
+        )
+        key = _filesystem_path_key(output)
+        checkpoint_paths[key] = output
+        protected_paths[key] = output
+
+    def remember_previous_output(
+        step: FlowStep,
+        output: Path,
+    ) -> None:
+        key = _checkpoint_snapshot_key(step, output)
+        text = _existing_json_output(
+            step,
+            workspace=workspace,
+            output=output,
+        )
+        if text is None:
+            previous_output_fingerprints[key] = None
+            return
+        previous_output_fingerprints[key] = _checkpoint_fingerprint(text)
+        path_key = _filesystem_path_key(output)
+        checkpoint_paths[path_key] = output
+        protected_paths[path_key] = output
+
+    for step in flow.steps:
+        if step.flow is not None:
+            if step.foreach is None:
+                items = [None]
+                iteration_ids: list[str | None] = [None]
+            else:
+                match = _FOREACH.fullmatch(step.foreach)
+                assert match is not None
+                source_id = match.group(1)
+                if source_id not in available_outputs:
+                    continue
+                items = _foreach_items(
+                    step,
+                    outputs=available_outputs,
+                )
+                iteration_ids = _iteration_ids(
+                    step,
+                    items=items,
+                )
+
+            if not _subflow_inputs_resolvable_at_run_start(
+                step,
+                available_outputs=available_outputs,
+            ):
+                continue
+
+            child = _load_subflow_definition(
+                step,
+                parent_flow=flow,
+                workspace=workspace,
+                cache=cache,
+            )
+            _validate_subflow_interface(step, child)
+
+            child_results: list[tuple[str, _FlowResultValue]] = []
+            complete = True
+            for item, iteration_id in zip(items, iteration_ids):
+                child_input = _render_subflow_inputs(
+                    step,
+                    item=item,
+                    iteration_id=iteration_id,
+                    outputs=available_outputs,
+                    output_json=output_json,
+                    flow_input=flow_input,
+                )
+                child_namespace = _child_invocation_namespace(
+                    namespace,
+                    step,
+                    iteration_id=iteration_id,
+                )
+                child_result = _capture_run_start_invocation(
+                    child,
+                    workspace=workspace,
+                    cache=cache,
+                    flow_input=child_input,
+                    namespace=child_namespace,
+                    snapshots=snapshots,
+                    protected_paths=protected_paths,
+                    budget=budget,
+                    call_stack=next_stack,
+                )
+                if child_result is None:
+                    complete = False
+                    continue
+                child_results.append(
+                    (
+                        str(iteration_id) if iteration_id is not None else "once",
+                        child_result,
+                    )
+                )
+
+            if not complete:
+                continue
+            if step.foreach is None:
+                if child_results:
+                    result = child_results[0][1]
+                    available_outputs[step.step_id] = result.text
+                    output_json[step.step_id] = result.is_json
+                continue
+
+            parts: list[str] = []
+            payload_bytes = 0
+            for iteration_id, result in child_results:
+                payload_bytes = _append_foreach_iteration(
+                    step,
+                    parts=parts,
+                    payload_bytes=payload_bytes,
+                    iteration_id=iteration_id,
+                    answer=result.text,
+                    answer_is_json=result.is_json,
+                )
+            available_outputs[step.step_id] = _finish_foreach_output(parts)
+            output_json[step.step_id] = True
+            continue
+
+        if step.foreach is None:
+            if step.output is None:
+                continue
+            output = _output_for_iteration(
+                step,
+                workspace=workspace,
+                item=None,
+                flow_input=flow_input,
+            )
+            assert output is not None
+
+            if _uses_previous_output(step):
+                remember_previous_output(step, output)
+
+            checkpoint = _existing_json_checkpoint(
+                step,
+                workspace=workspace,
+                output=output,
+            )
+            if checkpoint is not None:
+                remember_checkpoint(step, output, checkpoint)
+                available_outputs[step.step_id] = checkpoint
+                output_json[step.step_id] = True
+            continue
+
+        match = _FOREACH.fullmatch(step.foreach)
+        assert match is not None
+        source_id = match.group(1)
+        if source_id not in available_outputs:
+            if _uses_previous_output(step):
+                raise ValueError(
+                    f"previous_output von foreach-Schritt {step.step_id!r} "
+                    "kann beim Run-Start nicht bestimmt werden, weil seine "
+                    f"Quelle {source_id!r} nicht vollständig aus "
+                    "Run-Start-Checkpoints rekonstruierbar ist."
+                )
+            continue
+
+        items = _foreach_items(
+            step,
+            outputs=available_outputs,
+        )
+        iteration_ids = _iteration_ids(
+            step,
+            items=items,
+        )
+        outputs = [
+            _output_for_iteration(
+                step,
+                workspace=workspace,
+                item=item,
+                iteration_id=iteration_id,
+                flow_input=flow_input,
+            )
+            for item, iteration_id in zip(items, iteration_ids)
+        ]
+
+        output_keys = [
+            _filesystem_path_key(output)
+            for output in outputs
+            if output is not None
+        ]
+        if len(output_keys) != len(set(output_keys)):
+            raise ValueError(
+                f"Schritt {step.step_id!r} erzeugt für mehrere "
+                "foreach-Elemente nicht eindeutige Output-Pfade."
+            )
+
+        if _uses_previous_output(step):
+            for output in outputs:
+                assert output is not None
+                remember_previous_output(step, output)
+
+        if not items:
+            available_outputs[step.step_id] = _finish_foreach_output([])
+            output_json[step.step_id] = True
+            continue
+
+        if (
+            step.output is None
+            or step.overwrite_output
+            or step.response_format != "json"
+        ):
+            continue
+
+        parts: list[str] = []
+        payload_bytes = 0
+        complete = True
+        for iteration_id, output in zip(iteration_ids, outputs):
+            assert iteration_id is not None
+            assert output is not None
+            checkpoint = _existing_json_checkpoint(
+                step,
+                workspace=workspace,
+                output=output,
+            )
+            if checkpoint is None:
+                complete = False
+                continue
+            remember_checkpoint(step, output, checkpoint)
+            if complete:
+                payload_bytes = _append_foreach_iteration(
+                    step,
+                    parts=parts,
+                    payload_bytes=payload_bytes,
+                    iteration_id=iteration_id,
+                    answer=checkpoint,
+                )
+
+        if complete:
+            available_outputs[step.step_id] = _finish_foreach_output(parts)
+            output_json[step.step_id] = True
+
+    snapshot = _RunStartSnapshot(
+        checkpoint_fingerprints=fingerprints,
+        checkpoint_paths=tuple(checkpoint_paths.values()),
+        previous_output_fingerprints=previous_output_fingerprints,
+    )
+    snapshots[namespace] = snapshot
+
+    if flow.result is None:
+        return None
+    match = _FOREACH.fullmatch(flow.result)
+    assert match is not None
+    source_id = match.group(1)
+    if source_id not in available_outputs:
+        return None
+    return _flow_result_value(
+        flow,
+        available_outputs,
+        output_json,
+    )
+
+
 def _capture_run_start_snapshots(
-    flows: dict[str, FlowDefinition],
     *,
     workspace: Path,
     root_flow: FlowDefinition,
+    cache: dict[str, FlowDefinition],
 ) -> tuple[
     dict[str, _RunStartSnapshot],
     tuple[Path, ...],
 ]:
     snapshots: dict[str, _RunStartSnapshot] = {}
     protected_paths: dict[str, Path] = {}
-    root_key = _filesystem_path_key(root_flow.source)
-
-    for key, candidate in flows.items():
-        snapshot = _snapshot_initial_flow_state(
-            candidate,
-            workspace=workspace,
-            flow_input={} if key == root_key else None,
-        )
-        snapshots[key] = snapshot
-        for path in snapshot.checkpoint_paths:
-            protected_paths[_filesystem_path_key(path)] = path
-
+    _capture_run_start_invocation(
+        root_flow,
+        workspace=workspace,
+        cache=cache,
+        flow_input={},
+        namespace="",
+        snapshots=snapshots,
+        protected_paths=protected_paths,
+        budget=_SubflowTraversalBudget(),
+    )
     return snapshots, tuple(protected_paths.values())
 
 
