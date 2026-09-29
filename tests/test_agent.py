@@ -1285,3 +1285,64 @@ def test_long_dump_prefixes_with_same_start_remain_distinct(
     assert first != second
     assert len(first.encode("utf-8")) <= 240
     assert len(second.encode("utf-8")) <= 240
+
+
+
+def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+    agent._active_servers.add("demo")
+    agent._server_tools["demo"] = [
+        {
+            "type": "function",
+            "function": {
+                "name": "demo__read",
+                "description": "Read demo data",
+                "parameters": {"type": "object"},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "demo__write",
+                "description": "Write demo data",
+                "parameters": {"type": "object"},
+            },
+        },
+    ]
+
+    assert [tool["function"]["name"] for tool in agent._model_tools()] == [
+        "demo__read",
+        "demo__write",
+    ]
+    assert agent.set_tool_enabled("demo__write", enabled=False) is True
+    assert [tool["function"]["name"] for tool in agent._model_tools()] == [
+        "demo__read"
+    ]
+
+    states = {item["name"]: item for item in agent.tool_states_snapshot()}
+    assert states["demo__read"]["enabled"] is True
+    assert states["demo__write"]["enabled"] is False
+    assert states["demo__write"]["description"] == "Write demo data"
+
+    assert agent.set_tool_enabled("demo__write", enabled=True) is True
+    assert len(agent._model_tools()) == 2
+
+
+def test_unknown_tool_cannot_be_toggled(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+
+    with pytest.raises(ValueError, match="Unbekanntes MCP-Tool"):
+        agent.set_tool_enabled("missing__tool", enabled=False)
+
+
+def test_okf_runtime_toggle_requires_configuration(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+    with pytest.raises(ValueError, match="OKF ist nicht konfiguriert"):
+        agent.set_okf_enabled(enabled=False)
+
+    agent._okf_options = SimpleNamespace()
+    agent._okf_enabled = True
+    assert agent.set_okf_enabled(enabled=False) is True
+    assert agent.okf_status_snapshot()["enabled"] is False
+    assert agent.set_okf_enabled(enabled=True) is True
+    assert agent.okf_status_snapshot()["enabled"] is True
