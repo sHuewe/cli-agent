@@ -1800,6 +1800,7 @@ def _snapshot_initial_flow_state(
     flow: FlowDefinition,
     *,
     workspace: Path,
+    flow_input: dict[str, Any] | None = None,
 ) -> _RunStartSnapshot:
     fingerprints: dict[tuple[str, str], bytes] = {}
     paths: dict[str, Path] = {}
@@ -1844,6 +1845,7 @@ def _snapshot_initial_flow_state(
                 step,
                 workspace=workspace,
                 item=None,
+                flow_input=flow_input,
             )
             assert output is not None
 
@@ -1887,6 +1889,7 @@ def _snapshot_initial_flow_state(
                 workspace=workspace,
                 item=item,
                 iteration_id=iteration_id,
+                flow_input=flow_input,
             )
             for item, iteration_id in zip(items, iteration_ids)
         ]
@@ -1960,6 +1963,7 @@ def _snapshot_initial_checkpoints(
     snapshot = _snapshot_initial_flow_state(
         flow,
         workspace=workspace,
+        flow_input={},
     )
     return (
         snapshot.checkpoint_fingerprints,
