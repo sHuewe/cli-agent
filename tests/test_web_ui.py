@@ -551,3 +551,11 @@ def test_web_ui_contains_runtime_toggle_protocol() -> None:
         assert f'type: "{event_type}"' in web_ui.APP_JS
     assert "renderTools(tools)" in web_ui.APP_JS
     assert "renderContexts(contexts, payload.okf || {})" in web_ui.APP_JS
+
+
+
+def test_web_ui_runtime_toggle_buttons_follow_busy_state() -> None:
+    assert 'button[data-runtime-toggle]' in web_ui.APP_JS
+    assert 'button.dataset.runtimeToggle = "true"' in web_ui.APP_JS
+    assert 'button.dataset.permanentlyDisabled = String(Boolean(disabled))' in web_ui.APP_JS
+    assert 'button.disabled = busy || disconnected || permanentlyDisabled' in web_ui.APP_JS
