@@ -2571,7 +2571,11 @@ def validate_flow(
                 f"ist ungültig: {exc}"
             ) from exc
 
-        if step.foreach is None and step.output is not None:
+        if (
+            step.foreach is None
+            and step.output is not None
+            and _INPUT_EXPR.search(step.output) is None
+        ):
             static_output = _output_for_iteration(
                 step,
                 workspace=workspace,
@@ -2621,7 +2625,11 @@ def validate_flow(
         cache=cache,
     )
     for step in flow.steps:
-        if step.foreach is not None or step.output is None:
+        if (
+            step.foreach is not None
+            or step.output is None
+            or _INPUT_EXPR.search(step.output) is not None
+        ):
             continue
         static_output = _output_for_iteration(
             step,
