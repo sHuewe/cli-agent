@@ -967,14 +967,26 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
             variables[name] = value
 
-        for value in variables.values():
+        _validate_input_references(
+            list(variables.values()),
+            declared_inputs=inputs,
+            field=f"steps[{index}].vars",
+        )
+        flow_input_strings = _iter_string_values(flow_input)
+        _validate_input_references(
+            flow_input_strings,
+            declared_inputs=inputs,
+            field=f"steps[{index}].input",
+        )
+
+        for value in [*variables.values(), *flow_input_strings]:
             for match in _DYNAMIC_VALUE_EXPR.finditer(value):
                 source_id = match.group("step_output_id")
                 if source_id is None:
                     continue
                 if source_id not in known_ids or source_id == step_id:
                     raise ValueError(
-                        f"steps[{index}].vars darf nur Output eines vorherigen "
+                        f"steps[{index}] darf nur Output eines vorherigen "
                         f"Schritts referenzieren: {source_id!r}."
                     )
 
@@ -1086,7 +1098,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     f"vorherigen Schritt verweisen: {source_id!r}."
                 )
         else:
-            dynamic_values = list(variables.values())
+            dynamic_values = [*variables.values(), *flow_input_strings]
             if output is not None:
                 dynamic_values.append(output)
             if any(
