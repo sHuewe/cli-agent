@@ -2427,6 +2427,7 @@ def _render_subflow_inputs(
     item: Any,
     iteration_id: str | None,
     outputs: dict[str, str],
+    output_json: dict[str, bool],
     flow_input: dict[str, Any],
 ) -> dict[str, Any]:
     return {
@@ -2435,6 +2436,7 @@ def _render_subflow_inputs(
             item=item,
             iteration_id=iteration_id,
             outputs=outputs,
+            output_json=output_json,
             flow_input=flow_input,
         )
         for name, value in step.flow_input.items()
@@ -2917,6 +2919,7 @@ async def _run_flow_internal(
                     item=item,
                     iteration_id=iteration_id,
                     outputs=outputs,
+                    output_json=output_json,
                     flow_input=flow_input,
                 )
                 child_suffix = (
