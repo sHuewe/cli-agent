@@ -68,6 +68,24 @@ class ConversationMixin:
         self._last_working_messages = []
         self._last_working_tools = []
         self._dumped_history_json = None
+
+        if getattr(self, "dump_llm_context", False):
+            self._write_dump_json("history.json", self.history)
+            self._dumped_history_json = json.dumps(
+                self.history,
+                ensure_ascii=False,
+                indent=2,
+            )
+            for filename in (
+                "main_working_messages.json",
+                "main_system_prompt.json",
+                "knowledge_working_messages.json",
+                "knowledge_system_prompt.json",
+                "knowledge_last_model_message.json",
+                "knowledge_selection_fallback.json",
+            ):
+                self._remove_dump_value(filename)
+
         logger.info("conversation_history_reset")
 
     async def ask(self, prompt: str) -> str:
