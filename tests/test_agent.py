@@ -1360,6 +1360,8 @@ def test_history_reset_rewrites_and_removes_dump_diagnostics(tmp_path: Path) -> 
         "knowledge_working_messages.json",
         "knowledge_system_prompt.json",
         "knowledge_last_model_message.json",
+        "knowledge_selection.json",
+        "knowledge_result.json",
         "knowledge_selection_fallback.json",
     )
     agent._write_dump_json("history.json", agent.history)
@@ -1372,3 +1374,28 @@ def test_history_reset_rewrites_and_removes_dump_diagnostics(tmp_path: Path) -> 
         (dump_directory / "history.json").read_text(encoding="utf-8")
     ) == []
     assert all(not (dump_directory / filename).exists() for filename in diagnostic_files)
+
+
+
+def test_history_reset_keeps_in_memory_history_if_dump_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
+    agent.history = [{"role": "user", "content": "old"}]
+    agent._last_working_messages = [{"role": "user", "content": "old"}]
+    agent._last_working_tools = [{"type": "function"}]
+    agent._dumped_history_json = "old"
+
+    def fail_remove(_filename: str) -> None:
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(agent, "_remove_dump_value", fail_remove)
+
+    with pytest.raises(PermissionError, match="locked"):
+        agent.reset_history()
+
+    assert agent.history == [{"role": "user", "content": "old"}]
+    assert agent._last_working_messages == [{"role": "user", "content": "old"}]
+    assert agent._last_working_tools == [{"type": "function"}]
+    assert agent._dumped_history_json == "old"
