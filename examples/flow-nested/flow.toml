@@ -1,0 +1,27 @@
+version = 1
+
+[[steps]]
+id = "extract"
+prompt_file = "prompts/extract-items.md"
+add_file_context = "context/items.md"
+response_format = "json"
+output = "items.json"
+overwrite_output = true
+
+[[steps]]
+id = "describe_items"
+flow = "flows/describe-item.toml"
+foreach = "steps.extract.output.items"
+iteration_id = "${item.id}"
+
+[steps.input]
+item = "${item}"
+
+[[steps]]
+id = "summary"
+prompt_file = "prompts/create-summary.md"
+output = "summary.md"
+overwrite_output = true
+
+[steps.vars]
+results = "${steps.describe_items.output}"
