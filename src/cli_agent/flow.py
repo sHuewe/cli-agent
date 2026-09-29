@@ -133,6 +133,7 @@ class _FlowExecutionContext:
     flow_cache: dict[str, FlowDefinition] | None = None
     run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
     run_start_checkpoint_paths: tuple[Path, ...] = ()
+    preflight_budget: "_SubflowTraversalBudget" | None = None
 
     def __post_init__(self) -> None:
         if self.claimed_outputs is None:
@@ -143,6 +144,8 @@ class _FlowExecutionContext:
             self.flow_cache = {}
         if self.run_start_snapshots is None:
             self.run_start_snapshots = {}
+        if self.preflight_budget is None:
+            self.preflight_budget = _SubflowTraversalBudget()
 
 
 @dataclass
@@ -1144,6 +1147,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 f"steps[{index}].iteration_id darf nicht "
                 "'${iteration.id}' verwenden."
             )
+        if iteration_id is not None:
+            _validate_input_references(
+                [iteration_id],
+                declared_inputs=inputs,
+                field=f"steps[{index}].iteration_id",
+            )
         if foreach is not None:
             match = _FOREACH.fullmatch(foreach)
             if match is None:
@@ -1597,6 +1606,7 @@ def _iteration_ids(
     step: FlowStep,
     *,
     items: list[Any],
+    flow_input: dict[str, Any] | None = None,
 ) -> list[str | None]:
     if step.foreach is None:
         return [None]
@@ -1604,8 +1614,12 @@ def _iteration_ids(
         return [str(index) for index in range(1, len(items) + 1)]
 
     bases: list[str] = []
+    rendered_template = _render_input_text(
+        step.iteration_id,
+        flow_input or {},
+    )
     for item in items:
-        base = _render_item_text(step.iteration_id, item).strip()
+        base = _render_item_text(rendered_template, item).strip()
         if not base or _ITERATION_ID.fullmatch(base) is None:
             raise ValueError(
                 f"Schritt {step.step_id!r} erzeugt eine ungültige iteration_id "
@@ -1830,6 +1844,8 @@ class _RunStartSnapshot:
     checkpoint_fingerprints: dict[tuple[str, str], bytes]
     checkpoint_paths: tuple[Path, ...]
     previous_output_fingerprints: dict[tuple[str, str], bytes | None]
+    available_outputs: dict[str, str]
+    output_json: dict[str, bool]
 
 
 def _uses_previous_output(step: FlowStep) -> bool:
@@ -1951,6 +1967,7 @@ def _capture_run_start_invocation(
                 iteration_ids = _iteration_ids(
                     step,
                     items=items,
+                    flow_input=flow_input,
                 )
 
             if not _subflow_inputs_resolvable_at_run_start(
@@ -2074,6 +2091,7 @@ def _capture_run_start_invocation(
         iteration_ids = _iteration_ids(
             step,
             items=items,
+            flow_input=flow_input,
         )
         outputs = [
             _output_for_iteration(
@@ -2146,6 +2164,8 @@ def _capture_run_start_invocation(
         checkpoint_fingerprints=fingerprints,
         checkpoint_paths=tuple(checkpoint_paths.values()),
         previous_output_fingerprints=previous_output_fingerprints,
+        available_outputs=dict(available_outputs),
+        output_json=dict(output_json),
     )
     snapshots[namespace] = snapshot
 
@@ -3039,6 +3059,8 @@ async def _run_flow_internal(
             checkpoint_fingerprints={},
             checkpoint_paths=(),
             previous_output_fingerprints={},
+            available_outputs={},
+            output_json={},
         )
     initial_checkpoint_fingerprints = (
         run_start_snapshot.checkpoint_fingerprints
@@ -3069,6 +3091,7 @@ async def _run_flow_internal(
         iteration_ids = _iteration_ids(
             step,
             items=items,
+            flow_input=flow_input,
         )
 
         preflight_outputs: list[Path | None] | None = None
