@@ -2385,14 +2385,54 @@ def validate_flow(
     *,
     workspace: Path,
     config_loader: Callable[[Path | None], AppConfig] = load_config,
+    _cache: dict[str, FlowDefinition] | None = None,
+    _stack: tuple[str, ...] = (),
 ) -> None:
     workspace = workspace.expanduser().resolve()
+    cache = _cache if _cache is not None else {}
+    flow_key = _filesystem_path_key(flow.source)
+    if flow_key in _stack:
+        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+    if len(_stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+    stack = (*_stack, flow_key)
+    cache.setdefault(flow_key, flow)
     flow_dir = flow.source.parent
     resolve_excluded_paths(workspace, flow.excluded_paths)
     produced: set[str] = set()
     planned_static_outputs: dict[str, str] = {}
 
     for step in flow.steps:
+        if step.flow is not None:
+            child = _load_subflow_definition(
+                step,
+                parent_flow=flow,
+                workspace=workspace,
+                cache=cache,
+            )
+            _validate_subflow_interface(step, child)
+            validate_flow(
+                child,
+                workspace=workspace,
+                config_loader=config_loader,
+                _cache=cache,
+                _stack=stack,
+            )
+            if step.foreach is not None:
+                match = _FOREACH.fullmatch(step.foreach)
+                assert match is not None
+                source_id = match.group(1)
+                if source_id not in produced:
+                    raise ValueError(
+                        f"foreach-Quelle {source_id!r} ist nicht vor "
+                        f"Schritt {step.step_id!r} verfügbar."
+                    )
+            produced.add(step.step_id)
+            continue
+
+        assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
             step.prompt_file,
@@ -2542,9 +2582,10 @@ def validate_flow(
 
         produced.add(step.step_id)
 
-    reserved_inputs = _reserved_flow_input_paths(
+    reserved_inputs = _collect_reserved_flow_input_paths(
         flow,
         workspace=workspace,
+        cache=cache,
     )
     for step in flow.steps:
         if step.foreach is not None or step.output is None:
