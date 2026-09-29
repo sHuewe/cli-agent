@@ -6324,3 +6324,60 @@ results = "${steps.score.output}"
             {"id": "two", "output": 1.5},
         ]
     }
+
+
+
+def test_subflow_dump_prefix_disambiguates_case_colliding_parent_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    _write_config(tmp_path / "config.toml")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+config = "config.toml"
+prompt_file = "child.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "Build"
+flow = "child.toml"
+
+[[steps]]
+id = "build"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module,
+        "_filesystem_is_case_insensitive",
+        lambda _path: True,
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    prefixes = [call.dump_file_prefix for call in calls]
+    assert prefixes[0].startswith("Build.case-")
+    assert prefixes[1].startswith("build.case-")
+    assert prefixes[0].endswith(".once.work")
+    assert prefixes[1].endswith(".once.work")
+    assert prefixes[0].casefold() != prefixes[1].casefold()
