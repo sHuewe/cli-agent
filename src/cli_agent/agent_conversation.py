@@ -101,6 +101,9 @@ class ConversationMixin:
         self._last_working_messages = working_messages
 
         tools = self._model_tools()
+        # Keep the exact tool definitions used for the current/last main-loop
+        # request available for local diagnostics such as the Web UI.
+        self._last_working_tools = tools
         routes = self._tool_routes
         enabled_server_names = set(self._active_servers)
         main_run_state = ModelLoopRunState()
@@ -165,6 +168,11 @@ class ConversationMixin:
         """Return a detached snapshot of the latest/current main-loop messages."""
 
         return copy.deepcopy(getattr(self, "_last_working_messages", []))
+
+    def working_tools_snapshot(self) -> list[dict[str, Any]]:
+        """Return the exact tool definitions used by the latest/current main loop."""
+
+        return copy.deepcopy(getattr(self, "_last_working_tools", []))
 
     def _reference_context_payload(self, *, knowledge: str | None) -> dict[str, Any]:
         payload: dict[str, Any] = {}

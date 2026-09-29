@@ -393,12 +393,14 @@ class _WebUiSession:
                         )
                     continue
 
-                if kind == "working_messages":
-                    snapshot = self.agent.working_messages_snapshot()
+                if kind == "working_context":
+                    messages = self.agent.working_messages_snapshot()
+                    tools_snapshot = self.agent.working_tools_snapshot()
                     await sender(
                         {
-                            "type": "working_messages",
-                            "messages": snapshot,
+                            "type": "working_context",
+                            "messages": messages,
+                            "tools": tools_snapshot,
                         }
                     )
                     continue
@@ -549,7 +551,7 @@ INDEX_HTML = """<!doctype html>
         <div id="session-meta" class="meta">Verbindung wird hergestellt …</div>
       </div>
       <div class="header-actions">
-        <button id="show-working-messages" class="secondary" type="button">Working Messages</button>
+        <button id="show-working-context" class="secondary" type="button">LLM Context</button>
         <button id="quit" class="secondary" type="button">Sitzung beenden</button>
       </div>
     </header>
@@ -567,18 +569,27 @@ INDEX_HTML = """<!doctype html>
       <button id="send" type="submit">Senden</button>
     </form>
   </main>
-  <dialog id="working-messages-dialog" class="working-messages-dialog">
+  <dialog id="working-context-dialog" class="working-context-dialog">
     <div class="dialog-header">
       <div>
-        <h2>Working Messages</h2>
+        <h2>LLM Context</h2>
         <div class="meta">Aktueller bzw. letzter Main-Loop, nur lesend.</div>
       </div>
       <div class="dialog-actions">
-        <button id="refresh-working-messages" class="secondary" type="button">Aktualisieren</button>
-        <button id="close-working-messages" class="secondary" type="button">Schließen</button>
+        <button id="refresh-working-context" class="secondary" type="button">Aktualisieren</button>
+        <button id="close-working-context" class="secondary" type="button">Schließen</button>
       </div>
     </div>
-    <pre id="working-messages-json">[]</pre>
+    <div class="context-tabs" role="tablist" aria-label="LLM Context">
+      <button id="context-tab-messages" class="secondary active" type="button" role="tab" aria-selected="true" aria-controls="context-panel-messages">Messages</button>
+      <button id="context-tab-tools" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-tools">Tools</button>
+    </div>
+    <div id="context-panel-messages" class="context-panel" role="tabpanel" aria-labelledby="context-tab-messages">
+      <pre id="working-messages-json">[]</pre>
+    </div>
+    <div id="context-panel-tools" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-tools">
+      <pre id="working-tools-json">[]</pre>
+    </div>
   </dialog>
   <dialog id="approval">
     <h2>Tool-Freigabe erforderlich</h2>
@@ -639,8 +650,11 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .tool { font-weight: 650; margin-bottom: 10px; overflow-wrap: anywhere; }
 pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: color-mix(in srgb, CanvasText 8%, Canvas); border-radius: 8px; }
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.working-messages-dialog { width: min(1100px, calc(100vw - 32px)); }
-.working-messages-dialog pre { min-height: 55vh; max-height: 72vh; }
+.working-context-dialog { width: min(1100px, calc(100vw - 32px)); }
+.working-context-dialog pre { min-height: 55vh; max-height: 72vh; }
+.context-tabs { display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent); padding-bottom: 8px; }
+.context-tabs button.active { background: Highlight; color: HighlightText; border-color: transparent; }
+.context-panel.hidden { display: none; }
 .dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
 .dialog-header h2 { margin: 0 0 4px; }
 .dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
@@ -661,11 +675,16 @@ APP_JS = """
   const send = document.getElementById("send");
   const quit = document.getElementById("quit");
   const meta = document.getElementById("session-meta");
-  const showWorkingMessages = document.getElementById("show-working-messages");
-  const workingMessagesDialog = document.getElementById("working-messages-dialog");
+  const showWorkingContext = document.getElementById("show-working-context");
+  const workingContextDialog = document.getElementById("working-context-dialog");
   const workingMessagesJson = document.getElementById("working-messages-json");
-  const refreshWorkingMessages = document.getElementById("refresh-working-messages");
-  const closeWorkingMessages = document.getElementById("close-working-messages");
+  const workingToolsJson = document.getElementById("working-tools-json");
+  const refreshWorkingContext = document.getElementById("refresh-working-context");
+  const closeWorkingContext = document.getElementById("close-working-context");
+  const contextTabMessages = document.getElementById("context-tab-messages");
+  const contextTabTools = document.getElementById("context-tab-tools");
+  const contextPanelMessages = document.getElementById("context-panel-messages");
+  const contextPanelTools = document.getElementById("context-panel-tools");
   const commandButtons = Array.from(
     document.querySelectorAll("button[data-command]")
   );
@@ -725,22 +744,7 @@ APP_JS = """
     const disconnected = !socket || socket.readyState !== WebSocket.OPEN;
     prompt.disabled = busy;
     send.disabled = busy || disconnected;
-    showWorkingMessages.addEventListener("click", () => {
-    workingMessagesJson.textContent = "Wird geladen …";
-    if (!workingMessagesDialog.open) {
-      workingMessagesDialog.showModal();
-    }
-    requestWorkingMessages();
-  });
-
-  refreshWorkingMessages.addEventListener("click", () => {
-    workingMessagesJson.textContent = "Wird geladen …";
-    requestWorkingMessages();
-  });
-
-  closeWorkingMessages.addEventListener("click", () => {
-    workingMessagesDialog.close();
-  });
+    showWorkingContext.disabled = disconnected;
 
   for (const button of commandButtons) {
       button.disabled = busy || disconnected;
@@ -787,12 +791,24 @@ APP_JS = """
     prompt.focus();
   }
 
-  function requestWorkingMessages() {
+  function setContextTab(tab) {
+    const showMessages = tab === "messages";
+    contextTabMessages.classList.toggle("active", showMessages);
+    contextTabTools.classList.toggle("active", !showMessages);
+    contextTabMessages.setAttribute("aria-selected", String(showMessages));
+    contextTabTools.setAttribute("aria-selected", String(!showMessages));
+    contextPanelMessages.classList.toggle("hidden", !showMessages);
+    contextPanelTools.classList.toggle("hidden", showMessages);
+  }
+
+  function requestWorkingContext() {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      workingMessagesJson.textContent = "Web-UI-Verbindung ist nicht aktiv.";
+      const message = "Web-UI-Verbindung ist nicht aktiv.";
+      workingMessagesJson.textContent = message;
+      workingToolsJson.textContent = message;
       return;
     }
-    socket.send(JSON.stringify({ type: "working_messages" }));
+    socket.send(JSON.stringify({ type: "working_context" }));
   }
 
   function tokenFromFragment() {
@@ -880,11 +896,13 @@ APP_JS = """
       addMessage("error", String(payload.content || "Unbekannter Fehler."));
       return;
     }
-    if (payload.type === "working_messages") {
+    if (payload.type === "working_context") {
       const messages = Array.isArray(payload.messages) ? payload.messages : [];
+      const tools = Array.isArray(payload.tools) ? payload.tools : [];
       workingMessagesJson.textContent = JSON.stringify(messages, null, 2);
-      if (!workingMessagesDialog.open) {
-        workingMessagesDialog.showModal();
+      workingToolsJson.textContent = JSON.stringify(tools, null, 2);
+      if (!workingContextDialog.open) {
+        workingContextDialog.showModal();
       }
       return;
     }
@@ -904,6 +922,29 @@ APP_JS = """
 
   setBusy(true);
   connectSocket();
+
+  showWorkingContext.addEventListener("click", () => {
+    workingMessagesJson.textContent = "Wird geladen …";
+    workingToolsJson.textContent = "Wird geladen …";
+    setContextTab("messages");
+    if (!workingContextDialog.open) {
+      workingContextDialog.showModal();
+    }
+    requestWorkingContext();
+  });
+
+  refreshWorkingContext.addEventListener("click", () => {
+    workingMessagesJson.textContent = "Wird geladen …";
+    workingToolsJson.textContent = "Wird geladen …";
+    requestWorkingContext();
+  });
+
+  closeWorkingContext.addEventListener("click", () => {
+    workingContextDialog.close();
+  });
+
+  contextTabMessages.addEventListener("click", () => setContextTab("messages"));
+  contextTabTools.addEventListener("click", () => setContextTab("tools"));
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
