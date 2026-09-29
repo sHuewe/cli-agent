@@ -417,6 +417,46 @@ def _string(value: Any, *, field: str) -> str:
     return value
 
 
+def _iter_string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(_iter_string_values(item))
+        return result
+    if isinstance(value, dict):
+        result: list[str] = []
+        for item in value.values():
+            result.extend(_iter_string_values(item))
+        return result
+    if isinstance(value, (bool, int, float)):
+        return []
+    raise ValueError(
+        "Subflow-Input unterstützt nur TOML-Strings, Zahlen, boolesche Werte, "
+        "Listen und Tabellen."
+    )
+
+
+def _validate_input_references(
+    values: list[str],
+    *,
+    declared_inputs: tuple[str, ...],
+    field: str,
+) -> None:
+    declared = set(declared_inputs)
+    for value in values:
+        for match in _INPUT_EXPR.finditer(value):
+            path = match.group(1)
+            if path is None:
+                continue
+            root = path.split(".", 1)[0]
+            if root not in declared:
+                raise ValueError(
+                    f"{field} referenziert nicht deklarierten Flow-Input {root!r}."
+                )
+
+
 def _path_list(value: Any, *, field: str) -> tuple[Path, ...]:
     if value is None:
         return ()
