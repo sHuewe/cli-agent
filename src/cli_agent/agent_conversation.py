@@ -61,6 +61,73 @@ def _normalize_json_response(answer: str) -> tuple[str, str | None]:
 
 
 class ConversationMixin:
+    def reset_history(self) -> None:
+        """Forget conversation turns while preserving configured runtime context."""
+
+        empty_history: list[dict[str, Any]] = []
+        dumped_history_json: str | None = None
+        if getattr(self, "dump_llm_context", False):
+            diagnostic_files = (
+                "history.json",
+                "main_working_messages.json",
+                "main_system_prompt.json",
+                "knowledge_working_messages.json",
+                "knowledge_system_prompt.json",
+                "knowledge_last_model_message.json",
+                "knowledge_selection.json",
+                "knowledge_result.json",
+                "knowledge_selection_fallback.json",
+            )
+            original_dump_values: dict[str, bytes | None] = {}
+            for filename in diagnostic_files:
+                path = self._safe_dump_path(filename)
+                try:
+                    original_dump_values[filename] = path.read_bytes()
+                except FileNotFoundError:
+                    original_dump_values[filename] = None
+
+            try:
+                self._write_dump_json("history.json", empty_history)
+                for filename in diagnostic_files[1:]:
+                    self._remove_dump_value(filename)
+            except Exception as exc:
+                restore_errors: list[str] = []
+                for filename, original in original_dump_values.items():
+                    try:
+                        path = self._safe_dump_path(filename)
+                        if original is None:
+                            try:
+                                path.unlink()
+                            except FileNotFoundError:
+                                pass
+                        else:
+                            path.write_bytes(original)
+                    except Exception as restore_exc:
+                        restore_errors.append(
+                            f"{filename}: {type(restore_exc).__name__}: {restore_exc}"
+                        )
+                if restore_errors:
+                    raise RuntimeError(
+                        "History-Reset fehlgeschlagen und die bisherigen "
+                        "LLM-Context-Dumps konnten nicht vollständig "
+                        "wiederhergestellt werden: "
+                        + "; ".join(restore_errors)
+                    ) from exc
+                raise
+
+            dumped_history_json = json.dumps(
+                empty_history,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        self.history.clear()
+        self._last_working_messages = []
+        self._last_working_tools = []
+        self._dumped_history_json = dumped_history_json
+
+        logger.info("conversation_history_reset")
+
     async def ask(self, prompt: str) -> str:
         if self._exit_stack is None:
             raise RuntimeError("Der Agent wurde noch nicht gestartet.")
@@ -68,11 +135,18 @@ class ConversationMixin:
         command = re.fullmatch(r"(enable|disable)\s+(\S+)", prompt.strip())
         if command:
             action, server_name = command.groups()
+            enabled = action == "enable"
+            if server_name.casefold() == "okf" and self._okf_options is not None:
+                changed = self.set_okf_enabled(enabled=enabled)
+                state = "aktiviert" if enabled else "deaktiviert"
+                suffix = "" if changed else " (war bereits so)"
+                return f"OKF-Knowledge-Lauf {state}{suffix}."
+
             changed = await self.set_server_enabled(
                 server_name,
-                enabled=action == "enable",
+                enabled=enabled,
             )
-            state = "aktiviert" if action == "enable" else "deaktiviert"
+            state = "aktiviert" if enabled else "deaktiviert"
             suffix = "" if changed else " (war bereits so)"
             return f"MCP-Server {server_name} {state}{suffix}."
 
@@ -227,7 +301,7 @@ class ConversationMixin:
 
     async def _collect_knowledge(self, prompt: str) -> str | None:
         options = self._okf_options
-        if options is None:
+        if options is None or not getattr(self, "_okf_enabled", True):
             return None
         if self._knowledge_session is None:
             if options.required:

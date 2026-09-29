@@ -712,3 +712,40 @@ def test_json_repairs_accumulate_main_usage(tmp_path: Path) -> None:
     assert "Input gesamt: 300 Tokens" in tokens
     assert "Output gesamt: 30 Tokens" in tokens
     assert "Tokens gesamt: 330 Tokens" in tokens
+
+
+
+def test_web_context_can_be_disabled_and_reenabled(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+    agent._web_contexts = [example_context()]
+
+    assert agent.context_states_snapshot()[0]["enabled"] is True
+    assert "web_contexts" in agent._reference_context_payload(knowledge=None)
+
+    assert agent.set_context_enabled("web:0", enabled=False) is True
+    assert agent.context_states_snapshot()[0]["enabled"] is False
+    assert "web_contexts" not in agent._reference_context_payload(knowledge=None)
+
+    assert agent.set_context_enabled("web:0", enabled=True) is True
+    assert "web_contexts" in agent._reference_context_payload(knowledge=None)
+
+
+def test_history_reset_also_resets_last_usage(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+    agent.history = [{"role": "user", "content": "old"}]
+    agent._last_main_loop_ran = True
+    agent._last_main_usage = LoopTokenUsage(
+        requests=1,
+        usage_requests=1,
+        input_tokens=10,
+        output_tokens=5,
+        total_tokens=15,
+        max_input_tokens=10,
+        last_input_tokens=10,
+    )
+
+    agent.reset_history()
+
+    assert agent.history == []
+    assert agent._last_main_loop_ran is False
+    assert agent._last_main_usage is None

@@ -1285,3 +1285,141 @@ def test_long_dump_prefixes_with_same_start_remain_distinct(
     assert first != second
     assert len(first.encode("utf-8")) <= 240
     assert len(second.encode("utf-8")) <= 240
+
+
+
+def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+    agent._active_servers.add("demo")
+    agent._server_tools["demo"] = [
+        {
+            "type": "function",
+            "function": {
+                "name": "demo__read",
+                "description": "Read demo data",
+                "parameters": {"type": "object"},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "demo__write",
+                "description": "Write demo data",
+                "parameters": {"type": "object"},
+            },
+        },
+    ]
+
+    assert [tool["function"]["name"] for tool in agent._model_tools()] == [
+        "demo__read",
+        "demo__write",
+    ]
+    assert agent.set_tool_enabled("demo__write", enabled=False) is True
+    assert [tool["function"]["name"] for tool in agent._model_tools()] == [
+        "demo__read"
+    ]
+
+    states = {item["name"]: item for item in agent.tool_states_snapshot()}
+    assert states["demo__read"]["enabled"] is True
+    assert states["demo__write"]["enabled"] is False
+    assert states["demo__write"]["description"] == "Write demo data"
+
+    assert agent.set_tool_enabled("demo__write", enabled=True) is True
+    assert len(agent._model_tools()) == 2
+
+
+def test_unknown_tool_cannot_be_toggled(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+
+    with pytest.raises(ValueError, match="Unbekanntes MCP-Tool"):
+        agent.set_tool_enabled("missing__tool", enabled=False)
+
+
+def test_okf_runtime_toggle_requires_configuration(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+    with pytest.raises(ValueError, match="OKF ist nicht konfiguriert"):
+        agent.set_okf_enabled(enabled=False)
+
+    agent._okf_options = SimpleNamespace()
+    agent._okf_enabled = True
+    assert agent.set_okf_enabled(enabled=False) is True
+    assert agent.okf_status_snapshot()["enabled"] is False
+    assert agent.set_okf_enabled(enabled=True) is True
+    assert agent.okf_status_snapshot()["enabled"] is True
+
+
+
+def test_history_reset_rewrites_and_removes_dump_diagnostics(tmp_path: Path) -> None:
+    agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
+    agent.history = [{"role": "user", "content": "old"}]
+
+    dump_directory = tmp_path / ".cli-agent"
+    diagnostic_files = (
+        "main_working_messages.json",
+        "main_system_prompt.json",
+        "knowledge_working_messages.json",
+        "knowledge_system_prompt.json",
+        "knowledge_last_model_message.json",
+        "knowledge_selection.json",
+        "knowledge_result.json",
+        "knowledge_selection_fallback.json",
+    )
+    agent._write_dump_json("history.json", agent.history)
+    for filename in diagnostic_files:
+        agent._write_dump_json(filename, {"old": True})
+
+    agent.reset_history()
+
+    assert json.loads(
+        (dump_directory / "history.json").read_text(encoding="utf-8")
+    ) == []
+    assert all(not (dump_directory / filename).exists() for filename in diagnostic_files)
+
+
+
+def test_history_reset_restores_persisted_and_in_memory_state_if_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
+    agent.history = [{"role": "user", "content": "old"}]
+    agent._last_working_messages = [{"role": "user", "content": "old"}]
+    agent._last_working_tools = [{"type": "function"}]
+    agent._dumped_history_json = "old"
+
+    diagnostic_files = (
+        "history.json",
+        "main_working_messages.json",
+        "main_system_prompt.json",
+    )
+    agent._write_dump_json("history.json", agent.history)
+    agent._write_dump_json("main_working_messages.json", {"old": "messages"})
+    agent._write_dump_json("main_system_prompt.json", {"old": "system"})
+    before = {
+        filename: agent._safe_dump_path(filename).read_bytes()
+        for filename in diagnostic_files
+    }
+
+    original_remove = agent._remove_dump_value
+    calls = 0
+
+    def fail_after_one_remove(filename: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise PermissionError("locked")
+        original_remove(filename)
+
+    monkeypatch.setattr(agent, "_remove_dump_value", fail_after_one_remove)
+
+    with pytest.raises(PermissionError, match="locked"):
+        agent.reset_history()
+
+    assert agent.history == [{"role": "user", "content": "old"}]
+    assert agent._last_working_messages == [{"role": "user", "content": "old"}]
+    assert agent._last_working_tools == [{"type": "function"}]
+    assert agent._dumped_history_json == "old"
+    assert {
+        filename: agent._safe_dump_path(filename).read_bytes()
+        for filename in diagnostic_files
+    } == before

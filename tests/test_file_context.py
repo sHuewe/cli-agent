@@ -496,3 +496,37 @@ def test_direct_file_options_reject_sensitive_workspace_root_name(
         prepare_prompt_file(workspace, Path("prompt.md"))
     with pytest.raises(ValueError, match="Secret-/Credential"):
         prepare_output_target(workspace, Path("output.md"), overwrite=False)
+
+
+
+def test_file_context_can_be_disabled_and_reenabled(tmp_path: Path) -> None:
+    context = FileContext("one.txt", "reference", tmp_path / "one.txt", 9)
+    agent = ContextFileCliAgent(
+        tmp_path,
+        object(),
+        (),
+        file_context=context,
+    )
+
+    assert agent.context_states_snapshot()[-1]["enabled"] is True
+    assert "local_reference_file" in agent._reference_context_payload(knowledge=None)
+
+    assert agent.set_context_enabled("file:0", enabled=False) is True
+    assert agent.context_states_snapshot()[-1]["enabled"] is False
+    assert "local_reference_file" not in agent._reference_context_payload(knowledge=None)
+    assert FILE_CONTEXT_SYSTEM_RULE.strip() not in agent._build_system_prompt()
+
+    assert agent.set_context_enabled("file:0", enabled=True) is True
+    assert "local_reference_file" in agent._reference_context_payload(knowledge=None)
+
+
+def test_context_snapshot_bounds_file_preview(tmp_path: Path) -> None:
+    content = "x" * 20_100
+    context = FileContext("large.txt", content, tmp_path / "large.txt", len(content))
+    agent = ContextFileCliAgent(tmp_path, object(), (), file_context=context)
+
+    state = agent.context_states_snapshot()[-1]
+
+    assert state["content_chars"] == len(content)
+    assert len(state["content"]) < len(content)
+    assert "gekürzt" in state["content"]

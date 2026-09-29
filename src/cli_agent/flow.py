@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Callable
 
+from . import __version__
 from .cli import approve_tool_call
 from .config import AppConfig, default_config_file, load_config
 from .execution import (
@@ -2533,6 +2534,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Run deterministic multi-step cli-agent workflows "
             "in one fixed workspace."
         ),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     subparsers = parser.add_subparsers(
         dest="command",

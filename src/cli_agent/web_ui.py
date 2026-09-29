@@ -283,6 +283,30 @@ class _WebUiSession:
     async def next_prompt(self) -> str:
         return await self._prompt_queue.get()
 
+    def _working_context_payload(self) -> dict[str, Any]:
+        contexts_snapshot = (
+            self.agent.context_states_snapshot()
+            if hasattr(self.agent, "context_states_snapshot")
+            else []
+        )
+        okf_snapshot = (
+            self.agent.okf_status_snapshot()
+            if hasattr(self.agent, "okf_status_snapshot")
+            else {"configured": False, "enabled": False, "available": False}
+        )
+        tool_states = (
+            self.agent.tool_states_snapshot()
+            if hasattr(self.agent, "tool_states_snapshot")
+            else []
+        )
+        return {
+            "type": "working_context",
+            "messages": self.agent.working_messages_snapshot(),
+            "tools": tool_states,
+            "contexts": contexts_snapshot,
+            "okf": okf_snapshot,
+        }
+
     async def _handle_prompt(self, prompt: str) -> None:
         async with self._agent_lock:
             try:
@@ -394,15 +418,100 @@ class _WebUiSession:
                     continue
 
                 if kind == "working_context":
-                    messages = self.agent.working_messages_snapshot()
-                    tools_snapshot = self.agent.working_tools_snapshot()
-                    await sender(
-                        {
-                            "type": "working_context",
-                            "messages": messages,
-                            "tools": tools_snapshot,
-                        }
-                    )
+                    await sender(self._working_context_payload())
+                    continue
+
+                if kind == "reset_history":
+                    if self._busy():
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": "Die History kann während einer laufenden Anfrage nicht zurückgesetzt werden.",
+                            }
+                        )
+                        continue
+                    self.approval_broker.deny_all()
+                    try:
+                        self.agent.reset_history()
+                    except Exception as exc:
+                        if self.debug:
+                            message = "".join(traceback.format_exception(exc))
+                        else:
+                            detail = str(exc).strip()
+                            message = (
+                                f"{type(exc).__name__}: {detail}"
+                                if detail
+                                else type(exc).__name__
+                            )
+                        await sender({"type": "error", "content": message})
+                        continue
+                    await sender({"type": "history_reset"})
+                    await sender(self._working_context_payload())
+                    continue
+
+                if kind == "tool_toggle":
+                    if self._busy():
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": "Tools können während einer laufenden Anfrage nicht geändert werden.",
+                            }
+                        )
+                        continue
+                    tool_name = payload.get("name")
+                    enabled = payload.get("enabled")
+                    if not isinstance(tool_name, str) or not isinstance(enabled, bool):
+                        await sender({"type": "error", "content": "Ungültige Tool-Umschaltung."})
+                        continue
+                    try:
+                        self.agent.set_tool_enabled(tool_name, enabled=enabled)
+                    except ValueError as exc:
+                        await sender({"type": "error", "content": str(exc)})
+                        continue
+                    await sender(self._working_context_payload())
+                    continue
+
+                if kind == "context_toggle":
+                    if self._busy():
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": "Context kann während einer laufenden Anfrage nicht geändert werden.",
+                            }
+                        )
+                        continue
+                    context_id = payload.get("id")
+                    enabled = payload.get("enabled")
+                    if not isinstance(context_id, str) or not isinstance(enabled, bool):
+                        await sender({"type": "error", "content": "Ungültige Context-Umschaltung."})
+                        continue
+                    try:
+                        self.agent.set_context_enabled(context_id, enabled=enabled)
+                    except ValueError as exc:
+                        await sender({"type": "error", "content": str(exc)})
+                        continue
+                    await sender(self._working_context_payload())
+                    continue
+
+                if kind == "okf_toggle":
+                    if self._busy():
+                        await sender(
+                            {
+                                "type": "error",
+                                "content": "OKF kann während einer laufenden Anfrage nicht geändert werden.",
+                            }
+                        )
+                        continue
+                    enabled = payload.get("enabled")
+                    if not isinstance(enabled, bool):
+                        await sender({"type": "error", "content": "Ungültige OKF-Umschaltung."})
+                        continue
+                    try:
+                        self.agent.set_okf_enabled(enabled=enabled)
+                    except ValueError as exc:
+                        await sender({"type": "error", "content": str(exc)})
+                        continue
+                    await sender(self._working_context_payload())
                     continue
 
                 if kind == "quit":
@@ -551,6 +660,7 @@ INDEX_HTML = """<!doctype html>
         <div id="session-meta" class="meta">Verbindung wird hergestellt …</div>
       </div>
       <div class="header-actions">
+        <button id="reset-history" class="secondary" type="button">History zurücksetzen</button>
         <button id="show-working-context" class="secondary" type="button">LLM Context</button>
         <button id="quit" class="secondary" type="button">Sitzung beenden</button>
       </div>
@@ -573,7 +683,7 @@ INDEX_HTML = """<!doctype html>
     <div class="dialog-header">
       <div>
         <h2>LLM Context</h2>
-        <div class="meta">Aktueller bzw. letzter Main-Loop, nur lesend.</div>
+        <div class="meta">Messages des letzten Main-Loops sowie aktuell wirksame Tools und Referenzkontexte.</div>
       </div>
       <div class="dialog-actions">
         <button id="refresh-working-context" class="secondary" type="button">Aktualisieren</button>
@@ -583,12 +693,17 @@ INDEX_HTML = """<!doctype html>
     <div class="context-tabs" role="tablist" aria-label="LLM Context">
       <button id="context-tab-messages" class="secondary active" type="button" role="tab" aria-selected="true" aria-controls="context-panel-messages">Messages</button>
       <button id="context-tab-tools" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-tools">Tools</button>
+      <button id="context-tab-contexts" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-contexts">Context</button>
     </div>
     <div id="context-panel-messages" class="context-panel" role="tabpanel" aria-labelledby="context-tab-messages">
       <pre id="working-messages-json">[]</pre>
     </div>
     <div id="context-panel-tools" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-tools">
-      <pre id="working-tools-json">[]</pre>
+      <div id="working-tools-list" class="state-list"></div>
+    </div>
+    <div id="context-panel-contexts" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-contexts">
+      <div id="okf-state"></div>
+      <div id="working-contexts-list" class="state-list"></div>
     </div>
   </dialog>
   <dialog id="approval">
@@ -652,6 +767,14 @@ pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: an
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .working-context-dialog { width: min(1100px, calc(100vw - 32px)); }
 .working-context-dialog pre { min-height: 55vh; max-height: 72vh; }
+.state-list { display: flex; flex-direction: column; gap: 10px; }
+.state-row { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(260px, 2fr) auto; gap: 12px; align-items: start; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 9px; }
+.state-name { font-weight: 650; overflow-wrap: anywhere; }
+.state-description { opacity: .78; white-space: pre-wrap; overflow-wrap: anywhere; }
+.state-source { opacity: .7; font-size: .85rem; overflow-wrap: anywhere; }
+.state-content { max-height: 16rem; overflow: auto; white-space: pre-wrap; margin-top: 6px; padding: 8px; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); }
+.state-row button { min-width: 92px; padding: 7px 10px; }
+#okf-state { margin-bottom: 12px; }
 .context-tabs { display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent); padding-bottom: 8px; }
 .context-tabs button.active { background: Highlight; color: HighlightText; border-color: transparent; }
 .context-panel.hidden { display: none; }
@@ -662,6 +785,7 @@ pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: an
   .shell { padding: 14px; }
   form { grid-template-columns: 1fr; }
   .message { max-width: 96%; }
+  .state-row { grid-template-columns: 1fr; }
 }
 """
 
@@ -674,17 +798,22 @@ APP_JS = """
   const prompt = document.getElementById("prompt");
   const send = document.getElementById("send");
   const quit = document.getElementById("quit");
+  const resetHistory = document.getElementById("reset-history");
   const meta = document.getElementById("session-meta");
   const showWorkingContext = document.getElementById("show-working-context");
   const workingContextDialog = document.getElementById("working-context-dialog");
   const workingMessagesJson = document.getElementById("working-messages-json");
-  const workingToolsJson = document.getElementById("working-tools-json");
+  const workingToolsList = document.getElementById("working-tools-list");
+  const workingContextsList = document.getElementById("working-contexts-list");
+  const okfState = document.getElementById("okf-state");
   const refreshWorkingContext = document.getElementById("refresh-working-context");
   const closeWorkingContext = document.getElementById("close-working-context");
   const contextTabMessages = document.getElementById("context-tab-messages");
   const contextTabTools = document.getElementById("context-tab-tools");
+  const contextTabContexts = document.getElementById("context-tab-contexts");
   const contextPanelMessages = document.getElementById("context-panel-messages");
   const contextPanelTools = document.getElementById("context-panel-tools");
+  const contextPanelContexts = document.getElementById("context-panel-contexts");
   const commandButtons = Array.from(
     document.querySelectorAll("button[data-command]")
   );
@@ -745,9 +874,15 @@ APP_JS = """
     prompt.disabled = busy;
     send.disabled = busy || disconnected;
     showWorkingContext.disabled = disconnected;
+    resetHistory.disabled = busy || disconnected;
 
-  for (const button of commandButtons) {
+    for (const button of commandButtons) {
       button.disabled = busy || disconnected;
+    }
+    for (const button of document.querySelectorAll("button[data-runtime-toggle]")) {
+      const permanentlyDisabled =
+        button.dataset.permanentlyDisabled === "true";
+      button.disabled = busy || disconnected || permanentlyDisabled;
     }
     cancelCommand.disabled = busy || disconnected;
     if (!busy) {
@@ -793,19 +928,148 @@ APP_JS = """
 
   function setContextTab(tab) {
     const showMessages = tab === "messages";
+    const showTools = tab === "tools";
+    const showContexts = tab === "contexts";
     contextTabMessages.classList.toggle("active", showMessages);
-    contextTabTools.classList.toggle("active", !showMessages);
+    contextTabTools.classList.toggle("active", showTools);
+    contextTabContexts.classList.toggle("active", showContexts);
     contextTabMessages.setAttribute("aria-selected", String(showMessages));
-    contextTabTools.setAttribute("aria-selected", String(!showMessages));
+    contextTabTools.setAttribute("aria-selected", String(showTools));
+    contextTabContexts.setAttribute("aria-selected", String(showContexts));
     contextPanelMessages.classList.toggle("hidden", !showMessages);
-    contextPanelTools.classList.toggle("hidden", showMessages);
+    contextPanelTools.classList.toggle("hidden", !showTools);
+    contextPanelContexts.classList.toggle("hidden", !showContexts);
+  }
+
+  function stateToggleButton(label, enabled, onClick, disabled = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = enabled ? "secondary" : "";
+    button.textContent = enabled ? "Disable" : "Enable";
+    button.title = label;
+    button.dataset.runtimeToggle = "true";
+    button.dataset.permanentlyDisabled = String(Boolean(disabled));
+    const disconnected = !socket || socket.readyState !== WebSocket.OPEN;
+    button.disabled = Boolean(disabled) || busy || disconnected;
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function renderTools(tools) {
+    workingToolsList.replaceChildren();
+    if (!tools.length) {
+      const empty = document.createElement("div");
+      empty.className = "meta";
+      empty.textContent = "Keine MCP-Tools verfügbar.";
+      workingToolsList.appendChild(empty);
+      return;
+    }
+    for (const tool of tools) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = String(tool.name || "");
+      const description = document.createElement("div");
+      description.className = "state-description";
+      description.textContent = String(tool.description || "");
+      const serverEnabled = tool.server_enabled !== false;
+      const enabled = Boolean(tool.enabled);
+      const button = stateToggleButton(
+        name.textContent,
+        enabled,
+        () => socket.send(JSON.stringify({
+          type: "tool_toggle",
+          name: tool.name,
+          enabled: !enabled
+        })),
+        !serverEnabled
+      );
+      if (!serverEnabled) {
+        button.title = "MCP-Server ist deaktiviert.";
+      }
+      row.append(name, description, button);
+      workingToolsList.appendChild(row);
+    }
+  }
+
+  function renderContexts(contexts, okf) {
+    workingContextsList.replaceChildren();
+    okfState.replaceChildren();
+
+    if (okf && okf.configured) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = "OKF Knowledge";
+      const description = document.createElement("div");
+      description.className = "state-description";
+      description.textContent = okf.available
+        ? "Konfigurierter Knowledge-Lauf vor der Hauptanfrage."
+        : "Konfiguriert, aber aktuell nicht verfügbar.";
+      const enabled = Boolean(okf.enabled);
+      const button = stateToggleButton(
+        "OKF Knowledge",
+        enabled,
+        () => socket.send(JSON.stringify({
+          type: "okf_toggle",
+          enabled: !enabled
+        }))
+      );
+      row.append(name, description, button);
+      okfState.appendChild(row);
+    }
+
+    if (!contexts.length) {
+      const empty = document.createElement("div");
+      empty.className = "meta";
+      empty.textContent = "Keine Datei- oder Web-Kontexte vorhanden.";
+      workingContextsList.appendChild(empty);
+      return;
+    }
+
+    for (const context of contexts) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const heading = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = String(context.label || context.source || "");
+      const source = document.createElement("div");
+      source.className = "state-source";
+      source.textContent = (context.kind === "file" ? "Datei: " : "Web: ") +
+        String(context.source || "");
+      heading.append(name, source);
+
+      const body = document.createElement("div");
+      body.className = "state-description";
+      const content = document.createElement("div");
+      content.className = "state-content";
+      content.textContent = String(context.content || "");
+      body.appendChild(content);
+
+      const enabled = Boolean(context.enabled);
+      const button = stateToggleButton(
+        name.textContent,
+        enabled,
+        () => socket.send(JSON.stringify({
+          type: "context_toggle",
+          id: context.id,
+          enabled: !enabled
+        }))
+      );
+      row.append(heading, body, button);
+      workingContextsList.appendChild(row);
+    }
   }
 
   function requestWorkingContext() {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       const message = "Web-UI-Verbindung ist nicht aktiv.";
       workingMessagesJson.textContent = message;
-      workingToolsJson.textContent = message;
+      workingToolsList.textContent = message;
+      workingContextsList.textContent = message;
       return;
     }
     socket.send(JSON.stringify({ type: "working_context" }));
@@ -899,11 +1163,16 @@ APP_JS = """
     if (payload.type === "working_context") {
       const messages = Array.isArray(payload.messages) ? payload.messages : [];
       const tools = Array.isArray(payload.tools) ? payload.tools : [];
+      const contexts = Array.isArray(payload.contexts) ? payload.contexts : [];
       workingMessagesJson.textContent = JSON.stringify(messages, null, 2);
-      workingToolsJson.textContent = JSON.stringify(tools, null, 2);
-      if (!workingContextDialog.open) {
-        workingContextDialog.showModal();
-      }
+      renderTools(tools);
+      renderContexts(contexts, payload.okf || {});
+      return;
+    }
+    if (payload.type === "history_reset") {
+      resetPendingCommand();
+      chat.replaceChildren();
+      addMessage("system", "History wurde zurückgesetzt.");
       return;
     }
     if (payload.type === "approval_required") {
@@ -925,7 +1194,9 @@ APP_JS = """
 
   showWorkingContext.addEventListener("click", () => {
     workingMessagesJson.textContent = "Wird geladen …";
-    workingToolsJson.textContent = "Wird geladen …";
+    workingToolsList.textContent = "Wird geladen …";
+    workingContextsList.textContent = "Wird geladen …";
+    okfState.replaceChildren();
     setContextTab("messages");
     if (!workingContextDialog.open) {
       workingContextDialog.showModal();
@@ -935,7 +1206,9 @@ APP_JS = """
 
   refreshWorkingContext.addEventListener("click", () => {
     workingMessagesJson.textContent = "Wird geladen …";
-    workingToolsJson.textContent = "Wird geladen …";
+    workingToolsList.textContent = "Wird geladen …";
+    workingContextsList.textContent = "Wird geladen …";
+    okfState.replaceChildren();
     requestWorkingContext();
   });
 
@@ -945,6 +1218,17 @@ APP_JS = """
 
   contextTabMessages.addEventListener("click", () => setContextTab("messages"));
   contextTabTools.addEventListener("click", () => setContextTab("tools"));
+  contextTabContexts.addEventListener("click", () => setContextTab("contexts"));
+
+  resetHistory.addEventListener("click", () => {
+    if (busy || !socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (!window.confirm("Conversation-History wirklich zurücksetzen?")) {
+      return;
+    }
+    socket.send(JSON.stringify({ type: "reset_history" }));
+  });
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();

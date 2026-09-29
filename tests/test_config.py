@@ -284,3 +284,23 @@ def test_missing_explicit_config_fails_closed_and_is_not_created(
         load_config(config_file)
 
     assert not config_file.exists()
+
+
+
+def test_okf_reserves_mcp_server_name_when_knowledge_is_configured(
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[okf]
+repository = "knowledge"
+
+[[mcp_servers]]
+name = "okf"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Servername 'okf' ist reserviert"):
+        load_config(config_file)

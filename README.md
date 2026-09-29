@@ -396,6 +396,17 @@ Terminalmodus. `--approve-tool` behält seine bisherige Bedeutung; alle übrigen
 zustimmungspflichtigen Tool-Aufrufe werden im Browser mit `Ja`, `Für Session`
 oder `Nein` bestätigt.
 
+Im Dialog **LLM Context** zeigt die Oberfläche neben den Messages auch die
+aktuell verfügbaren MCP-Tools mit ihrer Server-Beschreibung sowie explizit
+geladene Datei- und Web-Kontexte. Einzelne Tools und Referenzkontexte lassen
+sich dort für die laufende Session deaktivieren und wieder aktivieren. Ein
+konfigurierter OKF-Knowledge-Lauf kann ebenfalls per UI oder mit
+`disable okf` / `enable okf` vorübergehend abgeschaltet bzw. wieder
+aktiviert werden. Der Button **History zurücksetzen** verwirft nur den
+Gesprächsverlauf und die Diagnose-Daten des letzten Laufs; konfigurierte
+MCP-Server, Tool-/Context-Schalter und explizit bereitgestellte Referenzkontexte
+bleiben erhalten.
+
 Die erste Version ist absichtlich **localhost-only**. Der Server bindet fest an
 `127.0.0.1`; es gibt keine CLI- oder Config-Option für einen anderen Host und
 keine Share-/Tunnel-Funktion. Ein zufälliger Prozess-Token und eine strikte

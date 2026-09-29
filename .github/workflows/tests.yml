@@ -127,6 +127,17 @@ jobs:
           }
           uv run --no-project --with $wheel.FullName python -c "import importlib.metadata, pathlib, tomllib, cli_agent; project = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']; expected = project['version']; assert cli_agent.__version__ == expected, f'module version {cli_agent.__version__!r} != {expected!r}'; installed = importlib.metadata.version(project['name']); assert installed == expected, f'distribution version {installed!r} != {expected!r}'"
 
+      - name: Verify built wheel Web UI extra installs
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -Path dist -Filter *.whl | Select-Object -First 1
+          if (-not $wheel) {
+            throw "No wheel was produced in dist/."
+          }
+          $wheelUri = [System.Uri]::new($wheel.FullName).AbsoluteUri
+          $requirement = "cli-agent[web] @ $wheelUri"
+          uv run --no-project --with "$requirement" python -c "from cli_agent.web_ui import ensure_web_ui_available; ensure_web_ui_available(); import starlette, uvicorn, websockets"
+
       - name: Verify source distribution exists
         shell: pwsh
         run: |

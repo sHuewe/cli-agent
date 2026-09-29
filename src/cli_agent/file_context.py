@@ -93,6 +93,7 @@ class ContextFileCliAgent(WebContextCliAgent):
             if file_contexts
             else ((file_context,) if file_context is not None else ())
         )
+        self._disabled_file_context_paths: set[str] = set()
 
     def _build_system_prompt(
         self,
@@ -102,13 +103,20 @@ class ContextFileCliAgent(WebContextCliAgent):
         prompt = super()._build_system_prompt(
             has_reference_context=has_reference_context,
         )
-        if not self._file_contexts:
+        if not any(
+            context.relative_path not in self._disabled_file_context_paths
+            for context in self._file_contexts
+        ):
             return prompt
         return prompt + "\n\n" + FILE_CONTEXT_SYSTEM_RULE.strip()
 
     def _reference_context_payload(self, *, knowledge: str | None) -> dict[str, Any]:
         payload = super()._reference_context_payload(knowledge=knowledge)
-        contexts = self._file_contexts
+        contexts = tuple(
+            context
+            for context in self._file_contexts
+            if context.relative_path not in self._disabled_file_context_paths
+        )
         if len(contexts) == 1:
             # Keep the established payload shape for the common single-file case.
             context = contexts[0]
@@ -126,8 +134,45 @@ class ContextFileCliAgent(WebContextCliAgent):
             ]
         return payload
 
+    def context_states_snapshot(self) -> list[dict[str, Any]]:
+        result = super().context_states_snapshot()
+        result.extend(
+            {
+                "id": f"file:{index}",
+                "kind": "file",
+                "label": context.relative_path,
+                "source": context.relative_path,
+                "content": (
+                    context.content
+                    if len(context.content) <= 20_000
+                    else context.content[:20_000] + "\n\n[… Context-Vorschau gekürzt …]"
+                ),
+                "content_chars": len(context.content),
+                "enabled": context.relative_path not in self._disabled_file_context_paths,
+            }
+            for index, context in enumerate(self._file_contexts)
+        )
+        return result
+
+    def set_context_enabled(self, context_id: str, *, enabled: bool) -> bool:
+        if not context_id.startswith("file:"):
+            return super().set_context_enabled(context_id, enabled=enabled)
+        try:
+            index = int(context_id.split(":", 1)[1])
+            context = self._file_contexts[index]
+        except (ValueError, IndexError) as exc:
+            raise ValueError(f"Unbekannter Context: {context_id}") from exc
+
+        was_enabled = context.relative_path not in self._disabled_file_context_paths
+        if enabled:
+            self._disabled_file_context_paths.discard(context.relative_path)
+        else:
+            self._disabled_file_context_paths.add(context.relative_path)
+        return was_enabled != enabled
+
     async def close(self) -> None:
         self._file_contexts = ()
+        self._disabled_file_context_paths.clear()
         await super().close()
 
 

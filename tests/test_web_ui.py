@@ -224,7 +224,10 @@ def test_web_ui_concurrent_prompt_rejection_releases_browser_busy_state() -> Non
     import inspect
 
     source = inspect.getsource(web_ui._WebUiSession.websocket)
-    concurrent = source.split("if self._busy():", 1)[1].split(
+    command_section = source.split('if kind == "command":', 1)[1].split(
+        'if kind != "message":', 1
+    )[0]
+    concurrent = command_section.split("if self._busy():", 1)[1].split(
         "continue", 1
     )[0]
     assert 'await sender({"type": "busy", "value": False})' in concurrent
@@ -369,8 +372,11 @@ def test_web_ui_renders_working_context_tabs() -> None:
     assert 'id="working-context-dialog"' in web_ui.INDEX_HTML
     assert 'id="context-tab-messages"' in web_ui.INDEX_HTML
     assert 'id="context-tab-tools"' in web_ui.INDEX_HTML
+    assert 'id="context-tab-contexts"' in web_ui.INDEX_HTML
     assert 'id="working-messages-json"' in web_ui.INDEX_HTML
-    assert 'id="working-tools-json"' in web_ui.INDEX_HTML
+    assert 'id="working-tools-list"' in web_ui.INDEX_HTML
+    assert 'id="working-contexts-list"' in web_ui.INDEX_HTML
+    assert 'id="reset-history"' in web_ui.INDEX_HTML
     assert 'type: "working_context"' in web_ui.APP_JS
     assert 'payload.type === "working_context"' in web_ui.APP_JS
 
@@ -380,8 +386,31 @@ def test_web_ui_working_context_includes_messages_and_tools() -> None:
         def working_messages_snapshot(self):
             return [{"role": "user", "content": "hello"}]
 
-        def working_tools_snapshot(self):
-            return [{"type": "function", "function": {"name": "demo"}}]
+        def tool_states_snapshot(self):
+            return [
+                {
+                    "server": "demo",
+                    "name": "demo__read",
+                    "description": "read data",
+                    "server_enabled": True,
+                    "enabled": True,
+                }
+            ]
+
+        def context_states_snapshot(self):
+            return [
+                {
+                    "id": "file:0",
+                    "kind": "file",
+                    "label": "context.txt",
+                    "source": "context.txt",
+                    "content": "reference",
+                    "enabled": True,
+                }
+            ]
+
+        def okf_status_snapshot(self):
+            return {"configured": True, "enabled": True, "available": True}
 
     class WebSocket:
         query_params = {"token": "secret"}
@@ -428,7 +457,26 @@ def test_web_ui_working_context_includes_messages_and_tools() -> None:
     assert {
         "type": "working_context",
         "messages": [{"role": "user", "content": "hello"}],
-        "tools": [{"type": "function", "function": {"name": "demo"}}],
+        "tools": [
+            {
+                "server": "demo",
+                "name": "demo__read",
+                "description": "read data",
+                "server_enabled": True,
+                "enabled": True,
+            }
+        ],
+        "contexts": [
+            {
+                "id": "file:0",
+                "kind": "file",
+                "label": "context.txt",
+                "source": "context.txt",
+                "content": "reference",
+                "enabled": True,
+            }
+        ],
+        "okf": {"configured": True, "enabled": True, "available": True},
     } in sent
 
 
@@ -475,3 +523,134 @@ def test_working_tools_snapshot_defaults_to_empty_list() -> None:
         pass
 
     assert Dummy().working_tools_snapshot() == []
+
+
+
+def test_history_reset_clears_conversation_diagnostics() -> None:
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Dummy(ConversationMixin):
+        pass
+
+    agent = Dummy()
+    agent.history = [{"role": "user", "content": "old"}]
+    agent._last_working_messages = [{"role": "user", "content": "old"}]
+    agent._last_working_tools = [{"type": "function"}]
+    agent._dumped_history_json = "old"
+
+    agent.reset_history()
+
+    assert agent.history == []
+    assert agent.working_messages_snapshot() == []
+    assert agent.working_tools_snapshot() == []
+    assert agent._dumped_history_json is None
+
+
+def test_web_ui_contains_runtime_toggle_protocol() -> None:
+    for event_type in ("reset_history", "tool_toggle", "context_toggle", "okf_toggle"):
+        assert f'type: "{event_type}"' in web_ui.APP_JS
+    assert "renderTools(tools)" in web_ui.APP_JS
+    assert "renderContexts(contexts, payload.okf || {})" in web_ui.APP_JS
+
+
+
+def test_web_ui_runtime_toggle_buttons_follow_busy_state() -> None:
+    assert 'button[data-runtime-toggle]' in web_ui.APP_JS
+    assert 'button.dataset.runtimeToggle = "true"' in web_ui.APP_JS
+    assert 'button.dataset.permanentlyDisabled = String(Boolean(disabled))' in web_ui.APP_JS
+    assert 'button.disabled = busy || disconnected || permanentlyDisabled' in web_ui.APP_JS
+
+
+
+def test_web_ui_history_reset_failure_returns_error_without_disconnect() -> None:
+    class Agent:
+        def reset_history(self):
+            raise PermissionError("dump locked")
+
+        def working_messages_snapshot(self):
+            return [{"role": "user", "content": "old"}]
+
+        def tool_states_snapshot(self):
+            return []
+
+        def context_states_snapshot(self):
+            return []
+
+        def okf_status_snapshot(self):
+            return {"configured": False, "enabled": False, "available": False}
+
+    class WebSocket:
+        query_params = {"token": "secret"}
+        headers = {"origin": "http://127.0.0.1:12345"}
+
+        def __init__(self):
+            self.sent = []
+            self.messages = iter(
+                [
+                    {"type": "reset_history"},
+                    {"type": "working_context"},
+                ]
+            )
+
+        async def accept(self):
+            return None
+
+        async def close(self, *, code):
+            raise AssertionError(f"unexpected close: {code}")
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def receive_json(self):
+            try:
+                return next(self.messages)
+            except StopIteration as exc:
+                raise RuntimeError("disconnect") from exc
+
+    async def run():
+        broker = web_ui.WebUiApprovalBroker()
+        session = web_ui._WebUiSession(
+            agent=Agent(),
+            approval_broker=broker,
+            token="secret",
+            expected_origin="http://127.0.0.1:12345",
+            workspace=Path("."),
+            model="model",
+            mcp_servers=(),
+            output_target=None,
+            initial_messages=(),
+            debug=False,
+        )
+        websocket = WebSocket()
+        await session.websocket(websocket)
+        return websocket.sent
+
+    sent = asyncio.run(run())
+
+    assert any(
+        event.get("type") == "error" and "dump locked" in event.get("content", "")
+        for event in sent
+    )
+    assert {"type": "history_reset"} not in sent
+    assert {
+        "type": "working_context",
+        "messages": [{"role": "user", "content": "old"}],
+        "tools": [],
+        "contexts": [],
+        "okf": {"configured": False, "enabled": False, "available": False},
+    } in sent
+
+
+
+def test_working_context_refresh_does_not_open_dialog_implicitly() -> None:
+    working_context_handler = web_ui.APP_JS.split(
+        'if (payload.type === "working_context") {',
+        1,
+    )[1].split("return;", 1)[0]
+
+    assert "showModal()" not in working_context_handler
+    explicit_action = web_ui.APP_JS.split(
+        'showWorkingContext.addEventListener("click"',
+        1,
+    )[1].split("});", 1)[0]
+    assert "workingContextDialog.showModal()" in explicit_action

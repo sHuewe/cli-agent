@@ -104,6 +104,23 @@ async def process_tool_calls(
                 )
                 continue
 
+        if (
+            phase != "knowledge"
+            and isinstance(exposed_name, str)
+            and hasattr(agent, "_tool_is_enabled")
+            and not agent._tool_is_enabled(exposed_name)
+        ):
+            tool_message = agent._append_tool_error(
+                messages,
+                tool_call,
+                exposed_name,
+                f"Das MCP-Tool {exposed_name!r} ist in dieser Session deaktiviert. "
+                "Rufe es nicht erneut auf und verwende ausschließlich ein "
+                "aktiviertes Tool aus der aktuellen Toolliste.",
+            )
+            transient_rejections.append((assistant_message, tool_call, tool_message))
+            continue
+
         route = routes.get(exposed_name)
         if route is None:
             tool_message = agent._append_tool_error(
