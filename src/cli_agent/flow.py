@@ -132,7 +132,6 @@ class _FlowExecutionContext:
     reserved_inputs: dict[str, Path] | None = None
     flow_cache: dict[str, FlowDefinition] | None = None
     run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
-    generic_run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
     run_start_checkpoint_paths: tuple[Path, ...] = ()
 
     def __post_init__(self) -> None:
@@ -144,8 +143,6 @@ class _FlowExecutionContext:
             self.flow_cache = {}
         if self.run_start_snapshots is None:
             self.run_start_snapshots = {}
-        if self.generic_run_start_snapshots is None:
-            self.generic_run_start_snapshots = {}
 
 
 @dataclass
