@@ -40,6 +40,8 @@ MAX_FLOW_STEPS = 100
 MAX_FOREACH_ITEMS = 1000
 MAX_FLOW_FILE_BYTES = 1_000_000
 MAX_STRUCTURED_OUTPUT_BYTES = 10_000_000
+MAX_SUBFLOW_DEPTH = 8
+MAX_FLOW_EXECUTIONS = 10_000
 
 _STEP_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
 _ITEM_EXPR = re.compile(
@@ -54,6 +56,10 @@ _PREVIOUS_OUTPUT_EXPR = re.compile(
     r"\$\{previous_output(?:\.([A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
+_INPUT_EXPR = re.compile(
+    r"\$\{input(?:\.([A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
+)
 _DYNAMIC_VALUE_EXPR = re.compile(
     r"\$\{(?:(?P<iteration>iteration\.id)"
     r"|item(?:\.(?P<item_path>[A-Za-z_][A-Za-z0-9_-]*"
@@ -61,6 +67,8 @@ _DYNAMIC_VALUE_EXPR = re.compile(
     r"|conversation\.item(?:\.(?P<conversation_path>[A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
     r"|previous_output(?:\.(?P<previous_output_path>[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
+    r"|input(?:\.(?P<input_path>[A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?"
     r"|steps\.(?P<step_output_id>[A-Za-z_][A-Za-z0-9_-]*)\.output"
     r"(?:\.(?P<step_output_path>[A-Za-z_][A-Za-z0-9_-]*"
@@ -78,7 +86,9 @@ class FlowStep:
     step_id: str
     config: Path | None
     model: str | None
-    prompt_file: Path
+    prompt_file: Path | None
+    flow: Path | None
+    flow_input: dict[str, Any]
     context_files: tuple[Path, ...]
     add_web_context: tuple[str, ...]
     output: str | None
@@ -102,6 +112,35 @@ class FlowDefinition:
     source: Path
     steps: tuple[FlowStep, ...]
     excluded_paths: tuple[Path, ...] = ()
+    inputs: tuple[str, ...] = ()
+    result: str | None = None
+
+
+@dataclass(frozen=True)
+class _FlowResultValue:
+    text: str
+    is_json: bool
+
+
+@dataclass
+class _FlowExecutionContext:
+    dependencies: ExecutionDependencies
+    approval_callback: ApprovalCallback | None
+    executed_steps: int = 0
+    claimed_outputs: dict[str, str] | None = None
+    created_output_keys: set[str] | None = None
+    reserved_inputs: dict[str, Path] | None = None
+    flow_cache: dict[str, FlowDefinition] | None = None
+
+    def __post_init__(self) -> None:
+        if self.claimed_outputs is None:
+            self.claimed_outputs = {}
+        if self.created_output_keys is None:
+            self.created_output_keys = set()
+        if self.reserved_inputs is None:
+            self.reserved_inputs = {}
+        if self.flow_cache is None:
+            self.flow_cache = {}
 
 
 def _reject_parent_reference(path: Path, *, purpose: str) -> None:
