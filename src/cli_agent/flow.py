@@ -2639,6 +2639,7 @@ def validate_flow(
     _inherited_excluded_paths: tuple[Path, ...] = (),
     _budget: _SubflowTraversalBudget | None = None,
     _planned_static_outputs: dict[str, str] | None = None,
+    _all_reserved_inputs: dict[str, Path] | None = None,
 ) -> None:
     workspace = workspace.expanduser().resolve()
     traversal_budget = _budget or _SubflowTraversalBudget()
@@ -2658,6 +2659,14 @@ def validate_flow(
         )
     stack = (*_stack, flow_key)
     cache.setdefault(flow_key, flow)
+    all_reserved_inputs = _all_reserved_inputs
+    if all_reserved_inputs is None:
+        all_reserved_inputs = _collect_reserved_flow_input_paths(
+            flow,
+            workspace=workspace,
+            cache=cache,
+            budget=traversal_budget,
+        )
     flow_dir = flow.source.parent
     effective_flow_excluded_paths = tuple(
         dict.fromkeys((*_inherited_excluded_paths, *flow.excluded_paths))
@@ -2683,6 +2692,7 @@ def validate_flow(
                 _inherited_excluded_paths=effective_flow_excluded_paths,
                 _budget=traversal_budget,
                 _planned_static_outputs=planned_static_outputs,
+                _all_reserved_inputs=all_reserved_inputs,
             )
             if step.foreach is not None:
                 match = _FOREACH.fullmatch(step.foreach)
@@ -2813,12 +2823,19 @@ def validate_flow(
                 item=None,
             )
             assert static_output is not None
+            static_output_key = _filesystem_path_key(static_output)
+            reserved_input = all_reserved_inputs.get(static_output_key)
+            if reserved_input is not None:
+                raise ValueError(
+                    f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                    "mit einer reservierten Flow-Eingabe: "
+                    f"{reserved_input}"
+                )
             _prepare_flow_output(
                 step,
                 workspace=workspace,
                 output=static_output,
             )
-            static_output_key = _filesystem_path_key(static_output)
             previous_writer = planned_static_outputs.get(static_output_key)
             if previous_writer is not None and not step.overwrite_output:
                 raise ValueError(
@@ -2851,36 +2868,6 @@ def validate_flow(
                     )
 
         produced.add(step.step_id)
-
-    reserved_inputs = _collect_reserved_flow_input_paths(
-        flow,
-        workspace=workspace,
-        cache=cache,
-        budget=traversal_budget,
-    )
-    for step in flow.steps:
-        if (
-            step.foreach is not None
-            or step.output is None
-            or _INPUT_EXPR.search(step.output) is not None
-        ):
-            continue
-        static_output = _output_for_iteration(
-            step,
-            workspace=workspace,
-            item=None,
-        )
-        assert static_output is not None
-        reserved_input = reserved_inputs.get(
-            _filesystem_path_key(static_output)
-        )
-        if reserved_input is not None:
-            raise ValueError(
-                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                "mit einer reservierten Flow-Eingabe: "
-                f"{reserved_input}"
-            )
-
 
 async def _run_flow_internal(
     flow: FlowDefinition,
