@@ -863,8 +863,13 @@ APP_JS = """
     showWorkingContext.disabled = disconnected;
     resetHistory.disabled = busy || disconnected;
 
-  for (const button of commandButtons) {
+    for (const button of commandButtons) {
       button.disabled = busy || disconnected;
+    }
+    for (const button of document.querySelectorAll("button[data-runtime-toggle]")) {
+      const permanentlyDisabled =
+        button.dataset.permanentlyDisabled === "true";
+      button.disabled = busy || disconnected || permanentlyDisabled;
     }
     cancelCommand.disabled = busy || disconnected;
     if (!busy) {
@@ -929,7 +934,10 @@ APP_JS = """
     button.className = enabled ? "secondary" : "";
     button.textContent = enabled ? "Disable" : "Enable";
     button.title = label;
-    button.disabled = disabled || busy;
+    button.dataset.runtimeToggle = "true";
+    button.dataset.permanentlyDisabled = String(Boolean(disabled));
+    const disconnected = !socket || socket.readyState !== WebSocket.OPEN;
+    button.disabled = Boolean(disabled) || busy || disconnected;
     button.addEventListener("click", onClick);
     return button;
   }
