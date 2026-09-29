@@ -187,7 +187,13 @@ def _cleanup_process_log_files(
             continue
 
         try:
-            newest_mtime = max(path.stat().st_mtime for path in paths)
+            try:
+                newest_mtime = max(path.stat().st_mtime for path in paths)
+            except OSError:
+                # Cleanup is opportunistic. An editor, virus scanner or another
+                # process may temporarily hold an old log file on Windows; that
+                # must never prevent a fresh cli-agent process from starting.
+                continue
             inactive.append((newest_mtime, pid, paths, lock_path))
         finally:
             if probe is not None:
@@ -195,15 +201,20 @@ def _cleanup_process_log_files(
 
     inactive.sort(reverse=True)
     for _mtime, _pid, paths, lock_path in inactive[max(0, keep_inactive):]:
+        cleanup_complete = True
         for path in paths:
             try:
                 path.unlink()
             except FileNotFoundError:
                 pass
-        if lock_path is not None:
+            except OSError:
+                cleanup_complete = False
+        if lock_path is not None and cleanup_complete:
             try:
                 lock_path.unlink()
             except FileNotFoundError:
+                pass
+            except OSError:
                 pass
 
     # Remove stale lock files that no longer have a corresponding log family.
@@ -218,6 +229,8 @@ def _cleanup_process_log_files(
         try:
             lock_path.unlink()
         except FileNotFoundError:
+            pass
+        except OSError:
             pass
 
 
