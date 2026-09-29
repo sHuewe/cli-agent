@@ -639,3 +639,18 @@ def test_web_ui_history_reset_failure_returns_error_without_disconnect() -> None
         "contexts": [],
         "okf": {"configured": False, "enabled": False, "available": False},
     } in sent
+
+
+
+def test_working_context_refresh_does_not_open_dialog_implicitly() -> None:
+    working_context_handler = web_ui.APP_JS.split(
+        'if (payload.type === "working_context") {',
+        1,
+    )[1].split("return;", 1)[0]
+
+    assert "showModal()" not in working_context_handler
+    explicit_action = web_ui.APP_JS.split(
+        'showWorkingContext.addEventListener("click"',
+        1,
+    )[1].split("});", 1)[0]
+    assert "workingContextDialog.showModal()" in explicit_action
