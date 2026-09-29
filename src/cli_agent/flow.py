@@ -2830,11 +2830,17 @@ def validate_flow(
     _stack: tuple[str, ...] = (),
     _inherited_excluded_paths: tuple[Path, ...] = (),
     _budget: _SubflowTraversalBudget | None = None,
+    _planned_static_outputs: dict[str, str] | None = None,
 ) -> None:
     workspace = workspace.expanduser().resolve()
     traversal_budget = _budget or _SubflowTraversalBudget()
     traversal_budget.consume(purpose="Validierung")
     cache = _cache if _cache is not None else {}
+    planned_static_outputs = (
+        _planned_static_outputs
+        if _planned_static_outputs is not None
+        else {}
+    )
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in _stack:
         raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
@@ -2850,7 +2856,6 @@ def validate_flow(
     )
     resolve_excluded_paths(workspace, effective_flow_excluded_paths)
     produced: set[str] = set()
-    planned_static_outputs: dict[str, str] = {}
 
     for step in flow.steps:
         if step.flow is not None:
@@ -2869,6 +2874,7 @@ def validate_flow(
                 _stack=stack,
                 _inherited_excluded_paths=effective_flow_excluded_paths,
                 _budget=traversal_budget,
+                _planned_static_outputs=planned_static_outputs,
             )
             if step.foreach is not None:
                 match = _FOREACH.fullmatch(step.foreach)
@@ -3012,7 +3018,9 @@ def validate_flow(
                     f"mit dem geplanten Output von Schritt {previous_writer!r}; "
                     "der spätere Schritt erlaubt kein Überschreiben."
                 )
-            planned_static_outputs[static_output_key] = step.step_id
+            planned_static_outputs[static_output_key] = (
+                f"{flow.source.name}:{step.step_id}"
+            )
 
         if step.foreach is not None:
             match = _FOREACH.fullmatch(step.foreach)
