@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cli_agent import __version__
 from cli_agent import cli as cli_module
 from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
 from cli_agent.cli import (
@@ -54,6 +55,14 @@ def test_approval_summary_truncates_long_payload_with_head_and_tail() -> None:
     assert "Z" * 100 in summary
     assert "Zeichen gekürzt" in summary
     assert len(summary) < len(content)
+
+
+def test_cli_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["--version"])
+
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"cli-agent {__version__}"
 
 
 def test_os_cli_flags_are_mutually_exclusive() -> None:
