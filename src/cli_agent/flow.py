@@ -2598,12 +2598,13 @@ def _flow_result_value(
         path,
         label=f"Result von Flow {flow.source}",
     )
+    is_json = isinstance(value, _JsonNumber) or not isinstance(value, str)
     return _FlowResultValue(
         text=_json_dumps_preserving_numbers(value)
         if isinstance(value, (dict, list, bool, int, float, _JsonNumber))
         or value is None
         else str(value),
-        is_json=not isinstance(value, str),
+        is_json=is_json,
     )
 
 
