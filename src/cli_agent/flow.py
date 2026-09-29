@@ -1857,10 +1857,16 @@ def _child_invocation_namespace(
     step: FlowStep,
     *,
     iteration_id: str | None,
+    case_colliding_step_ids: frozenset[str],
 ) -> str:
     suffix = str(iteration_id) if iteration_id is not None else "once"
-    return f"{parent_namespace}{step.step_id}.{suffix}."
-
+    step_segment = step.step_id
+    if step.step_id in case_colliding_step_ids:
+        digest = hashlib.sha256(
+            step.step_id.encode("utf-8")
+        ).hexdigest()[:16]
+        step_segment = f"{step_segment}.case-{digest}"
+    return f"{parent_namespace}{step_segment}.{suffix}."
 
 def _capture_run_start_invocation(
     flow: FlowDefinition,
@@ -1892,6 +1898,10 @@ def _capture_run_start_invocation(
     ] = {}
     available_outputs: dict[str, str] = {}
     output_json: dict[str, bool] = {}
+    case_colliding_step_ids = _case_colliding_step_ids(
+        flow,
+        workspace=workspace,
+    )
 
     def remember_checkpoint(
         step: FlowStep,
@@ -1972,6 +1982,7 @@ def _capture_run_start_invocation(
                     namespace,
                     step,
                     iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
                 )
                 child_result = _capture_run_start_invocation(
                     child,
@@ -2897,6 +2908,10 @@ def _preflight_concrete_invocation_outputs(
             f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
         )
     next_stack = (*call_stack, flow_key)
+    case_colliding_step_ids = _case_colliding_step_ids(
+        flow,
+        workspace=workspace,
+    )
 
     for step in flow.steps:
         if step.flow is not None:
@@ -2928,6 +2943,7 @@ def _preflight_concrete_invocation_outputs(
                 namespace,
                 step,
                 iteration_id=None,
+                case_colliding_step_ids=case_colliding_step_ids,
             )
             _preflight_concrete_invocation_outputs(
                 child,
@@ -3086,6 +3102,7 @@ async def _run_flow_internal(
                     namespace,
                     step,
                     iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
                 )
                 _preflight_concrete_invocation_outputs(
                     child,
@@ -3255,10 +3272,11 @@ async def _run_flow_internal(
                     output_json=output_json,
                     flow_input=flow_input,
                 )
-                child_suffix = (
-                    str(iteration_id)
-                    if iteration_id is not None
-                    else "once"
+                child_namespace = _child_invocation_namespace(
+                    namespace,
+                    step,
+                    iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
                 )
                 child_result = await _run_flow_internal(
                     child,
@@ -3266,7 +3284,7 @@ async def _run_flow_internal(
                     context=context,
                     flow_input=child_input,
                     call_stack=next_stack,
-                    namespace=f"{display_name}.{child_suffix}.",
+                    namespace=child_namespace,
                     inherited_excluded_paths=effective_flow_excluded_paths,
                 )
                 if child_result is None:
