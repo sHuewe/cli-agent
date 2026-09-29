@@ -82,6 +82,7 @@ class WebContextCliAgent(CliAgent):
         self._web_allowed_hosts = network.web_allowed_hosts
         self._web_providers: tuple[WebProviderConfig, ...] = tuple(web_providers)
         self._web_contexts: list[WebContext] = []
+        self._disabled_web_context_urls: set[str] = set()
         self._last_main_usage: LoopTokenUsage | None = None
         self._last_knowledge_usage: LoopTokenUsage | None = None
         self._last_main_loop_ran = False
@@ -169,6 +170,7 @@ class WebContextCliAgent(CliAgent):
             replaced = any(existing.requested_url == context.requested_url for existing in self._web_contexts)
             self._web_contexts = [existing for existing in self._web_contexts if existing.requested_url != context.requested_url]
             self._web_contexts.append(context)
+            self._disabled_web_context_urls.discard(context.requested_url)
             logger.info(
                 "web_context_added requested_url=%s final_url=%s chars=%d truncated=%s replaced=%s",
                 redact_url_for_display(context.requested_url),
@@ -187,6 +189,7 @@ class WebContextCliAgent(CliAgent):
         if local_command.command == "clear_web_context":
             count = len(self._web_contexts)
             self._web_contexts.clear()
+            self._disabled_web_context_urls.clear()
             logger.info("web_context_cleared count=%d", count)
             noun = "Eintrag" if count == 1 else "Einträge"
             return f"Web-Kontext gelöscht ({count} {noun})."
@@ -207,16 +210,61 @@ class WebContextCliAgent(CliAgent):
         prompt = super()._build_system_prompt(
             has_reference_context=has_reference_context,
         )
-        if not self._web_contexts:
+        if not any(
+            context.requested_url not in self._disabled_web_context_urls
+            for context in self._web_contexts
+        ):
             return prompt
         return prompt + "\n\n" + WEB_CONTEXT_SYSTEM_RULE.strip()
 
     def _reference_context_payload(self, *, knowledge: str | None) -> dict[str, Any]:
         payload = super()._reference_context_payload(knowledge=knowledge)
-        if self._web_contexts:
-            payload["web_contexts"] = [context.as_dict() for context in self._web_contexts]
+        enabled_contexts = [
+            context
+            for context in self._web_contexts
+            if context.requested_url not in self._disabled_web_context_urls
+        ]
+        if enabled_contexts:
+            payload["web_contexts"] = [context.as_dict() for context in enabled_contexts]
         return payload
+
+    def context_states_snapshot(self) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for index, context in enumerate(self._web_contexts):
+            result.append(
+                {
+                    "id": f"web:{index}",
+                    "kind": "web",
+                    "label": context.title or redact_url_for_display(context.final_url),
+                    "source": redact_url_for_display(context.final_url),
+                    "content": context.content,
+                    "enabled": context.requested_url not in self._disabled_web_context_urls,
+                }
+            )
+        return result
+
+    def set_context_enabled(self, context_id: str, *, enabled: bool) -> bool:
+        if not context_id.startswith("web:"):
+            raise ValueError(f"Unbekannter Context: {context_id}")
+        try:
+            index = int(context_id.split(":", 1)[1])
+            context = self._web_contexts[index]
+        except (ValueError, IndexError) as exc:
+            raise ValueError(f"Unbekannter Context: {context_id}") from exc
+
+        was_enabled = context.requested_url not in self._disabled_web_context_urls
+        if enabled:
+            self._disabled_web_context_urls.discard(context.requested_url)
+        else:
+            self._disabled_web_context_urls.add(context.requested_url)
+        logger.info(
+            "web_context_enabled url=%s enabled=%s",
+            redact_url_for_display(context.final_url),
+            enabled,
+        )
+        return was_enabled != enabled
 
     async def close(self) -> None:
         self._web_contexts.clear()
+        self._disabled_web_context_urls.clear()
         await super().close()
