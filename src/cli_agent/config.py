@@ -330,10 +330,17 @@ def load_config(path: Path | None = None) -> AppConfig:
         names = [server.name for server in mcp_servers]
         if len(names) != len(set(names)):
             raise ValueError("Die Namen der MCP-Server müssen eindeutig sein.")
+    okf = _okf_config(values.get("okf", {})) if "okf" in values else None
+    if okf is not None and any(
+        server.name.casefold() == "okf" for server in mcp_servers
+    ):
+        raise ValueError(
+            "Der MCP-Servername 'okf' ist reserviert, wenn [okf] konfiguriert ist."
+        )
     return AppConfig(
         dump_llm_context=_bool_value(values, "dump_llm_context", False, section="Root-Konfiguration"),
         model=_model_config(model_values),
         logging=_logging_config(logging_values),
         mcp_servers=mcp_servers,
-        okf=_okf_config(values.get("okf", {})) if "okf" in values else None,
+        okf=okf,
     )
