@@ -5807,3 +5807,161 @@ item = "${item}"
 
     with pytest.raises(ValueError, match="global.*Limit"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
+
+
+
+def test_subflow_does_not_accept_checkpoint_created_after_overall_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "parent.md").write_text("parent", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "child-result.json"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "prepare"
+prompt_file = "parent.md"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "parent":
+            (tmp_path / "child-result.json").write_text(
+                '{"from":"parent"}',
+                encoding="utf-8",
+            )
+            return SimpleNamespace(answer="prepared", web_context_statuses=())
+        return SimpleNamespace(
+            answer='{"from":"child"}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == ["parent"]
+
+
+def test_subflow_previous_output_ignores_file_created_after_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "parent.md").write_text("parent", encoding="utf-8")
+    (tmp_path / "child.md").write_text(
+        "{{var:previous}}",
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "child.md"
+response_format = "json"
+output = "child-result.json"
+overwrite_output = true
+
+[steps.vars]
+previous = "${previous_output}"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "prepare"
+prompt_file = "parent.md"
+
+[[steps]]
+id = "child"
+flow = "child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "parent":
+            (tmp_path / "child-result.json").write_text(
+                '{"late":true}',
+                encoding="utf-8",
+            )
+            return SimpleNamespace(answer="prepared", web_context_statuses=())
+        return SimpleNamespace(
+            answer='{"fresh":true}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert calls == ["parent", "null"]
+
+
+def test_recursive_subflow_validation_has_expansion_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(flow_module, "MAX_SUBFLOW_GRAPH_EXPANSIONS", 2)
+    (tmp_path / "leaf.md").write_text("leaf", encoding="utf-8")
+    (tmp_path / "leaf.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "leaf.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "first"
+flow = "leaf.toml"
+
+[[steps]]
+id = "second"
+flow = "leaf.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
+
+    with pytest.raises(ValueError, match="Expansionslimit"):
+        validate_flow(definition, workspace=tmp_path)
