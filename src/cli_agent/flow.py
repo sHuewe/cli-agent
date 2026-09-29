@@ -1296,6 +1296,63 @@ def _render_iteration_text(
     return _render_item_text(rendered, item)
 
 
+def _dynamic_value(
+    match: re.Match[str],
+    *,
+    item: Any,
+    iteration_id: str | None,
+    conversation_item: Any,
+    previous_output: Any,
+    outputs: dict[str, str],
+    flow_input: dict[str, Any],
+) -> Any:
+    if match.group("iteration") is not None:
+        if iteration_id is None:
+            raise ValueError("${iteration.id} ist ohne foreach nicht verfügbar.")
+        return iteration_id
+    if match.group("item_path") is not None or match.group(0).startswith("${item"):
+        return _lookup(
+            item,
+            match.group("item_path"),
+            label="foreach-Element",
+        )
+    if match.group(0).startswith("${previous_output"):
+        return _lookup(
+            previous_output,
+            match.group("previous_output_path"),
+            label="previous_output",
+        )
+    if match.group("input_path") is not None or match.group(0).startswith("${input"):
+        return _lookup(
+            flow_input,
+            match.group("input_path"),
+            label="Flow-Input",
+        )
+    if match.group("step_output_id") is not None:
+        source_id = match.group("step_output_id")
+        if source_id not in outputs:
+            raise ValueError(
+                f"Output von Schritt {source_id!r} ist noch nicht verfügbar."
+            )
+        path = match.group("step_output_path")
+        if path is None:
+            return outputs[source_id]
+        parsed = _parse_structured_output(
+            outputs[source_id],
+            step_id=source_id,
+        )
+        return _lookup(
+            parsed,
+            path,
+            label=f"Output von Schritt {source_id!r}",
+        )
+    return _lookup(
+        conversation_item,
+        match.group("conversation_path"),
+        label="Conversation-Element",
+    )
+
+
 def _render_dynamic_text(
     template: str,
     *,
@@ -1304,49 +1361,19 @@ def _render_dynamic_text(
     conversation_item: Any,
     previous_output: Any,
     outputs: dict[str, str],
+    flow_input: dict[str, Any],
 ) -> str:
     def replace(match: re.Match[str]) -> str:
+        value = _dynamic_value(
+            match,
+            item=item,
+            iteration_id=iteration_id,
+            conversation_item=conversation_item,
+            previous_output=previous_output,
+            outputs=outputs,
+            flow_input=flow_input,
+        )
         is_previous_output = match.group(0).startswith("${previous_output")
-        if match.group("iteration") is not None:
-            if iteration_id is None:
-                raise ValueError("${iteration.id} ist ohne foreach nicht verfügbar.")
-            value: Any = iteration_id
-        elif match.group("item_path") is not None or match.group(0).startswith("${item"):
-            value = _lookup(
-                item,
-                match.group("item_path"),
-                label="foreach-Element",
-            )
-        elif is_previous_output:
-            value = _lookup(
-                previous_output,
-                match.group("previous_output_path"),
-                label="previous_output",
-            )
-        elif match.group("step_output_id") is not None:
-            source_id = match.group("step_output_id")
-            if source_id not in outputs:
-                raise ValueError(
-                    f"Output von Schritt {source_id!r} ist noch nicht verfügbar."
-                )
-            path = match.group("step_output_path")
-            if path is None:
-                return outputs[source_id]
-            parsed = _parse_structured_output(
-                outputs[source_id],
-                step_id=source_id,
-            )
-            value = _lookup(
-                parsed,
-                path,
-                label=f"Output von Schritt {source_id!r}",
-            )
-        else:
-            value = _lookup(
-                conversation_item,
-                match.group("conversation_path"),
-                label="Conversation-Element",
-            )
         if (
             is_previous_output
             and match.group("previous_output_path") is None
@@ -1361,6 +1388,60 @@ def _render_dynamic_text(
         return str(value)
 
     return _DYNAMIC_VALUE_EXPR.sub(replace, template)
+
+
+def _render_flow_input_value(
+    value: Any,
+    *,
+    item: Any,
+    iteration_id: str | None,
+    outputs: dict[str, str],
+    flow_input: dict[str, Any],
+) -> Any:
+    if isinstance(value, str):
+        full = _DYNAMIC_VALUE_EXPR.fullmatch(value)
+        if full is not None:
+            return _dynamic_value(
+                full,
+                item=item,
+                iteration_id=iteration_id,
+                conversation_item=None,
+                previous_output=None,
+                outputs=outputs,
+                flow_input=flow_input,
+            )
+        return _render_dynamic_text(
+            value,
+            item=item,
+            iteration_id=iteration_id,
+            conversation_item=None,
+            previous_output=None,
+            outputs=outputs,
+            flow_input=flow_input,
+        )
+    if isinstance(value, list):
+        return [
+            _render_flow_input_value(
+                item_value,
+                item=item,
+                iteration_id=iteration_id,
+                outputs=outputs,
+                flow_input=flow_input,
+            )
+            for item_value in value
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _render_flow_input_value(
+                item_value,
+                item=item,
+                iteration_id=iteration_id,
+                outputs=outputs,
+                flow_input=flow_input,
+            )
+            for key, item_value in value.items()
+        }
+    return value
 
 
 def _conversation_items_for_iteration(
