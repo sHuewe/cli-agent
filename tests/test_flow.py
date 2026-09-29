@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cli_agent import __version__
 import cli_agent.flow as flow_module
 from cli_agent.flow import load_flow, run_flow, validate_flow
 
@@ -20,6 +21,14 @@ def _write_config(path: Path) -> None:
         encoding="utf-8",
     )
 
+
+
+def test_flow_cli_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        flow_module.build_parser().parse_args(["--version"])
+
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"cli-agent-flow {__version__}"
 
 
 def test_flow_cli_validate_command(tmp_path: Path, monkeypatch, capsys) -> None:
