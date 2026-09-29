@@ -2640,30 +2640,51 @@ def validate_flow(
             )
 
 
-async def run_flow(
+async def _run_flow_internal(
     flow: FlowDefinition,
     *,
     workspace: Path,
-    dependencies: ExecutionDependencies | None = None,
-    approval_callback: ApprovalCallback | None = None,
-) -> None:
-    workspace = workspace.expanduser().resolve()
-    deps = dependencies or ExecutionDependencies()
-    validate_flow(
-        flow,
-        workspace=workspace,
-        config_loader=deps.load_config,
-    )
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    call_stack: tuple[str, ...],
+    namespace: str,
+) -> _FlowResultValue | None:
+    flow_key = _filesystem_path_key(flow.source)
+    if flow_key in call_stack:
+        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+    if len(call_stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+
+    expected_inputs = set(flow.inputs)
+    provided_inputs = set(flow_input)
+    if expected_inputs != provided_inputs:
+        missing = sorted(expected_inputs - provided_inputs)
+        unknown = sorted(provided_inputs - expected_inputs)
+        parts: list[str] = []
+        if missing:
+            parts.append("fehlend: " + ", ".join(missing))
+        if unknown:
+            parts.append("unbekannt: " + ", ".join(unknown))
+        raise ValueError(
+            f"Flow-Inputs für {flow.source} stimmen nicht mit der Deklaration "
+            f"überein ({'; '.join(parts)})."
+        )
+
+    next_stack = (*call_stack, flow_key)
     flow_dir = flow.source.parent
     outputs: dict[str, str] = {}
-    claimed_outputs: dict[str, str] = {}
-    reserved_inputs = _reserved_flow_input_paths(
-        flow,
-        workspace=workspace,
-    )
+    output_json: dict[str, bool] = {}
+    claimed_outputs = context.claimed_outputs
+    reserved_inputs = context.reserved_inputs
+    assert claimed_outputs is not None
+    assert reserved_inputs is not None
+
     run_start_snapshot = _snapshot_initial_flow_state(
         flow,
         workspace=workspace,
+        flow_input=flow_input,
     )
     initial_checkpoint_fingerprints = (
         run_start_snapshot.checkpoint_fingerprints
@@ -2697,13 +2718,18 @@ async def run_flow(
 
         preflight_outputs: list[Path | None] | None = None
         preflight_checkpoint_fingerprints: list[bytes | None] | None = None
-        if step.foreach is not None and step.output is not None:
+        if (
+            step.flow is None
+            and step.foreach is not None
+            and step.output is not None
+        ):
             preflight_outputs = [
                 _output_for_iteration(
                     step,
                     workspace=workspace,
                     item=item,
                     iteration_id=iteration_id,
+                    flow_input=flow_input,
                 )
                 for item, iteration_id in zip(items, iteration_ids)
             ]
@@ -2752,7 +2778,7 @@ async def run_flow(
                 _claim_output(
                     claimed_outputs,
                     path=output,
-                    owner=_output_owner(
+                    owner=namespace + _output_owner(
                         step,
                         iteration_id=iteration_id,
                     ),
@@ -2783,17 +2809,18 @@ async def run_flow(
                     expected_fingerprint
                 )
 
-        iteration_answers: list[str] = []
+        iteration_answers: list[tuple[str, bool]] = []
         foreach_parts: list[str] = []
         foreach_payload_bytes = 0
 
         def record_iteration_answer(
             answer: str,
+            answer_is_json: bool,
             iteration_id: str | None,
         ) -> None:
             nonlocal foreach_payload_bytes
             if step.foreach is None:
-                iteration_answers.append(answer)
+                iteration_answers.append((answer, answer_is_json))
                 return
             assert iteration_id is not None
             foreach_payload_bytes = _append_foreach_iteration(
@@ -2802,25 +2829,74 @@ async def run_flow(
                 payload_bytes=foreach_payload_bytes,
                 iteration_id=iteration_id,
                 answer=answer,
+                answer_is_json=answer_is_json,
             )
 
         for index, (item, iteration_id) in enumerate(
             zip(items, iteration_ids),
             start=1,
         ):
+            context.executed_steps += 1
+            if context.executed_steps > MAX_FLOW_EXECUTIONS:
+                raise ValueError(
+                    f"Flow-Ausführung überschreitet das globale Limit von "
+                    f"{MAX_FLOW_EXECUTIONS} Step-Iterationen."
+                )
+
             suffix = (
                 f" [{index}/{len(items)}; id={iteration_id}]"
                 if step.foreach is not None
                 else ""
             )
+            display_name = namespace + step.step_id
             print(
                 sanitize_terminal_text(
-                    f"Flow-Schritt {step.step_id}{suffix}",
+                    f"Flow-Schritt {display_name}{suffix}",
                     multiline=False,
                     escape_invisible_formatting=True,
                     escape_literal_backslashes=True,
                 )
             )
+
+            if step.flow is not None:
+                assert context.flow_cache is not None
+                child = _load_subflow_definition(
+                    step,
+                    parent_flow=flow,
+                    workspace=workspace,
+                    cache=context.flow_cache,
+                )
+                _validate_subflow_interface(step, child)
+                child_input = _render_subflow_inputs(
+                    step,
+                    item=item,
+                    iteration_id=iteration_id,
+                    outputs=outputs,
+                    flow_input=flow_input,
+                )
+                child_suffix = (
+                    str(iteration_id)
+                    if iteration_id is not None
+                    else "once"
+                )
+                child_result = await _run_flow_internal(
+                    child,
+                    workspace=workspace,
+                    context=context,
+                    flow_input=child_input,
+                    call_stack=next_stack,
+                    namespace=f"{display_name}.{child_suffix}.",
+                )
+                if child_result is None:
+                    raise ValueError(
+                        f"Subflow {child.source} besitzt kein Ergebnis."
+                    )
+                record_iteration_answer(
+                    child_result.text,
+                    child_result.is_json,
+                    iteration_id,
+                )
+                continue
 
             output = (
                 preflight_outputs[index - 1]
@@ -2830,6 +2906,7 @@ async def run_flow(
                     workspace=workspace,
                     item=item,
                     iteration_id=iteration_id,
+                    flow_input=flow_input,
                 )
             )
             if output is not None:
@@ -2846,7 +2923,7 @@ async def run_flow(
                     _claim_output(
                         claimed_outputs,
                         path=output,
-                        owner=_output_owner(
+                        owner=namespace + _output_owner(
                             step,
                             iteration_id=iteration_id,
                         ),
@@ -2884,7 +2961,7 @@ async def run_flow(
             if checkpoint is not None:
                 print(
                     sanitize_terminal_text(
-                        f"Flow-Schritt {step.step_id}{suffix}: "
+                        f"Flow-Schritt {display_name}{suffix}: "
                         f"vorhandenen JSON-Checkpoint verwendet: {output}",
                         multiline=False,
                         escape_invisible_formatting=True,
@@ -2893,6 +2970,7 @@ async def run_flow(
                 )
                 record_iteration_answer(
                     checkpoint,
+                    True,
                     iteration_id,
                 )
                 continue
@@ -2926,7 +3004,7 @@ async def run_flow(
             )
             callback = build_preapproval_callback(
                 step.approve_tools,
-                fallback=approval_callback,
+                fallback=context.approval_callback,
             )
             excluded_paths = (
                 tuple(
@@ -2940,7 +3018,7 @@ async def run_flow(
                 if step.workspace_access in {"read", "write"}
                 else ()
             )
-            dump_file_prefix = _dump_prefix_for_iteration(
+            local_dump_prefix = _dump_prefix_for_iteration(
                 step,
                 index=index,
                 case_colliding_step_ids=case_colliding_step_ids,
@@ -2950,6 +3028,11 @@ async def run_flow(
                     else None
                 ),
             )
+            dump_file_prefix = (
+                namespace.replace("/", ".") + local_dump_prefix
+                if namespace
+                else local_dump_prefix
+            )
 
             conversation_prompts = _conversation_prompts_for_iteration(
                 step,
@@ -2958,6 +3041,7 @@ async def run_flow(
                 item=item,
                 iteration_id=iteration_id,
                 previous_output=previous_output,
+                flow_input=flow_input,
             )
             if conversation_prompts is None:
                 prompt = _prompt_for_iteration(
@@ -2967,6 +3051,7 @@ async def run_flow(
                     iteration_id=iteration_id,
                     previous_output=previous_output,
                     outputs=outputs,
+                    flow_input=flow_input,
                 )
                 result = await run_once(
                     OneShotRunOptions(
@@ -2987,7 +3072,7 @@ async def run_flow(
                         excluded_paths=excluded_paths,
                         dump_file_prefix=dump_file_prefix,
                     ),
-                    dependencies=deps,
+                    dependencies=context.dependencies,
                 )
             else:
                 result = await run_conversation(
@@ -3009,10 +3094,11 @@ async def run_flow(
                         excluded_paths=excluded_paths,
                         dump_file_prefix=dump_file_prefix,
                     ),
-                    dependencies=deps,
+                    dependencies=context.dependencies,
                 )
             record_iteration_answer(
                 result.answer,
+                step.response_format == "json",
                 iteration_id,
             )
             for status in getattr(result, "web_context_statuses", ()):
@@ -3032,11 +3118,62 @@ async def run_flow(
 
         if step.foreach is None:
             assert len(iteration_answers) == 1
-            outputs[step.step_id] = iteration_answers[0]
+            outputs[step.step_id] = iteration_answers[0][0]
+            output_json[step.step_id] = iteration_answers[0][1]
         else:
             outputs[step.step_id] = _finish_foreach_output(
                 foreach_parts
             )
+            output_json[step.step_id] = True
+
+    return _flow_result_value(
+        flow,
+        outputs,
+        output_json,
+    )
+
+
+async def run_flow(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    dependencies: ExecutionDependencies | None = None,
+    approval_callback: ApprovalCallback | None = None,
+) -> None:
+    workspace = workspace.expanduser().resolve()
+    deps = dependencies or ExecutionDependencies()
+    cache = {_filesystem_path_key(flow.source): flow}
+    validate_flow(
+        flow,
+        workspace=workspace,
+        config_loader=deps.load_config,
+        _cache=cache,
+    )
+    if flow.inputs:
+        raise ValueError(
+            f"Flow {flow.source} deklariert Inputs und kann nicht direkt ohne "
+            "aufrufenden Flow ausgeführt werden: "
+            + ", ".join(flow.inputs)
+        )
+    reserved_inputs = _collect_reserved_flow_input_paths(
+        flow,
+        workspace=workspace,
+        cache=cache,
+    )
+    context = _FlowExecutionContext(
+        dependencies=deps,
+        approval_callback=approval_callback,
+        reserved_inputs=reserved_inputs,
+        flow_cache=cache,
+    )
+    await _run_flow_internal(
+        flow,
+        workspace=workspace,
+        context=context,
+        flow_input={},
+        call_stack=(),
+        namespace="",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
