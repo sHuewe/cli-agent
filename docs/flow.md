@@ -208,6 +208,32 @@ Output-Pfade in Child-Flows dürfen explizite Inputs verwenden, etwa
 `output = "work/${input.item.id}.json"`; die resultierenden Pfade werden
 weiterhin gegen die Workspace-Grenze und reservierte Flow-Eingaben geprüft.
 
+Für Resume zählt der Zustand zu Beginn des **gesamten** Flow-Laufs. Ist die
+konkrete Child-Invocation bereits daraus rekonstruierbar, werden ihre Inputs
+aufgelöst und ihre Checkpoints ebenfalls am Run-Start erfasst. Das gilt
+insbesondere, wenn die `foreach`-Quelle selbst aus einem vorhandenen
+JSON-Checkpoint stammt:
+
+```text
+Run-Start:
+  plan.json -> items = [a, b]
+  work/a.json vorhanden
+  work/b.json fehlt
+
+Ausführung:
+  plan       -> Checkpoint
+  child(a)   -> Checkpoint
+  child(b)   -> wird ausgeführt
+```
+
+Entstehen die `foreach`-Elemente dagegen erst durch einen neuen LLM-Aufruf im
+aktuellen Lauf, werden die Child-Invocations ganz normal danach erzeugt und
+ausgeführt. Bereits vorhandene oder während des Laufs entstandene Dateien
+werden für solche erst später bekannten Invocations **nicht nachträglich** als
+Run-Start-Checkpoints bzw. `previous_output` übernommen. Damit schränkt die
+Run-Start-Regel dynamische `foreach`-Flows nicht ein, verhindert aber, dass
+Laufzeit-Seiteneffekte versehentlich als Resume-Zustand interpretiert werden.
+
 ### Outputs vorheriger Schritte in Variablen
 
 Ein späterer Step kann den Output eines bereits abgeschlossenen Steps direkt in
