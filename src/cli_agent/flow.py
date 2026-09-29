@@ -2434,6 +2434,7 @@ def validate_flow(
     config_loader: Callable[[Path | None], AppConfig] = load_config,
     _cache: dict[str, FlowDefinition] | None = None,
     _stack: tuple[str, ...] = (),
+    _inherited_excluded_paths: tuple[Path, ...] = (),
 ) -> None:
     workspace = workspace.expanduser().resolve()
     cache = _cache if _cache is not None else {}
@@ -2447,7 +2448,10 @@ def validate_flow(
     stack = (*_stack, flow_key)
     cache.setdefault(flow_key, flow)
     flow_dir = flow.source.parent
-    resolve_excluded_paths(workspace, flow.excluded_paths)
+    effective_flow_excluded_paths = tuple(
+        dict.fromkeys((*_inherited_excluded_paths, *flow.excluded_paths))
+    )
+    resolve_excluded_paths(workspace, effective_flow_excluded_paths)
     produced: set[str] = set()
     planned_static_outputs: dict[str, str] = {}
 
@@ -2466,6 +2470,7 @@ def validate_flow(
                 config_loader=config_loader,
                 _cache=cache,
                 _stack=stack,
+                _inherited_excluded_paths=effective_flow_excluded_paths,
             )
             if step.foreach is not None:
                 match = _FOREACH.fullmatch(step.foreach)
@@ -2670,6 +2675,7 @@ async def _run_flow_internal(
     flow_input: dict[str, Any],
     call_stack: tuple[str, ...],
     namespace: str,
+    inherited_excluded_paths: tuple[Path, ...],
 ) -> _FlowResultValue | None:
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
@@ -2696,6 +2702,9 @@ async def _run_flow_internal(
 
     next_stack = (*call_stack, flow_key)
     flow_dir = flow.source.parent
+    effective_flow_excluded_paths = tuple(
+        dict.fromkeys((*inherited_excluded_paths, *flow.excluded_paths))
+    )
     outputs: dict[str, str] = {}
     output_json: dict[str, bool] = {}
     claimed_outputs = context.claimed_outputs
@@ -2908,6 +2917,7 @@ async def _run_flow_internal(
                     flow_input=child_input,
                     call_stack=next_stack,
                     namespace=f"{display_name}.{child_suffix}.",
+                    inherited_excluded_paths=effective_flow_excluded_paths,
                 )
                 if child_result is None:
                     raise ValueError(
@@ -3032,7 +3042,7 @@ async def _run_flow_internal(
                 tuple(
                     dict.fromkeys(
                         (
-                            *flow.excluded_paths,
+                            *effective_flow_excluded_paths,
                             *step.excluded_paths,
                         )
                     )
@@ -3195,6 +3205,7 @@ async def run_flow(
         flow_input={},
         call_stack=(),
         namespace="",
+        inherited_excluded_paths=(),
     )
 
 
