@@ -2041,6 +2041,7 @@ def _render_prompt_file(
     conversation_item: Any,
     previous_output: Any,
     outputs: dict[str, str],
+    flow_input: dict[str, Any],
     final_prompt: bool = False,
 ) -> str:
     prompt_path = _workspace_path(
@@ -2078,6 +2079,7 @@ def _render_prompt_file(
             conversation_item=conversation_item,
             previous_output=previous_output,
             outputs=outputs,
+            flow_input=flow_input,
         )
     rendered = template.render(values)
     if not rendered or rendered.isspace():
@@ -2101,7 +2103,9 @@ def _prompt_for_iteration(
     conversation_item: Any = None,
     previous_output: Any = None,
     outputs: dict[str, str] | None = None,
+    flow_input: dict[str, Any] | None = None,
 ) -> str:
+    assert step.prompt_file is not None
     return _render_prompt_file(
         step,
         workspace=workspace,
@@ -2111,6 +2115,7 @@ def _prompt_for_iteration(
         conversation_item=conversation_item,
         previous_output=previous_output,
         outputs=outputs or {},
+        flow_input=flow_input or {},
     )
 
 
@@ -2122,6 +2127,7 @@ def _conversation_prompts_for_iteration(
     item: Any,
     iteration_id: str | None,
     previous_output: Any,
+    flow_input: dict[str, Any],
 ) -> tuple[str, ...] | None:
     conversation_items = _conversation_items_for_iteration(
         step,
@@ -2139,6 +2145,7 @@ def _conversation_prompts_for_iteration(
             conversation_item=conversation_item,
             previous_output=previous_output,
             outputs=outputs,
+            flow_input=flow_input,
         )
         for conversation_item in conversation_items
     ]
@@ -2153,6 +2160,7 @@ def _conversation_prompts_for_iteration(
                 conversation_item=None,
                 previous_output=previous_output,
                 outputs=outputs,
+                flow_input=flow_input,
                 final_prompt=True,
             )
         )
