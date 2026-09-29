@@ -1462,12 +1462,13 @@ def _render_flow_input_value(
     item: Any,
     iteration_id: str | None,
     outputs: dict[str, str],
+    output_json: dict[str, bool],
     flow_input: dict[str, Any],
 ) -> Any:
     if isinstance(value, str):
         full = _DYNAMIC_VALUE_EXPR.fullmatch(value)
         if full is not None:
-            return _dynamic_value(
+            rendered_value = _dynamic_value(
                 full,
                 item=item,
                 iteration_id=iteration_id,
@@ -1476,6 +1477,17 @@ def _render_flow_input_value(
                 outputs=outputs,
                 flow_input=flow_input,
             )
+            source_id = full.group("step_output_id")
+            if (
+                source_id is not None
+                and full.group("step_output_path") is None
+                and output_json.get(source_id, False)
+            ):
+                return _parse_structured_output(
+                    outputs[source_id],
+                    step_id=source_id,
+                )
+            return rendered_value
         return _render_dynamic_text(
             value,
             item=item,
@@ -1492,6 +1504,7 @@ def _render_flow_input_value(
                 item=item,
                 iteration_id=iteration_id,
                 outputs=outputs,
+                output_json=output_json,
                 flow_input=flow_input,
             )
             for item_value in value
@@ -1503,6 +1516,7 @@ def _render_flow_input_value(
                 item=item,
                 iteration_id=iteration_id,
                 outputs=outputs,
+                output_json=output_json,
                 flow_input=flow_input,
             )
             for key, item_value in value.items()
