@@ -2869,6 +2869,106 @@ def validate_flow(
 
         produced.add(step.step_id)
 
+def _preflight_concrete_invocation_outputs(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    cache: dict[str, FlowDefinition],
+    flow_input: dict[str, Any],
+    reserved_inputs: dict[str, Path],
+    claimed_outputs: dict[str, str],
+    namespace: str,
+    call_stack: tuple[str, ...] = (),
+) -> None:
+    """Preflight outputs that are concrete before an invocation starts.
+
+    This intentionally checks only outputs whose paths can be determined
+    without executing an LLM step. Dynamic foreach descendants whose source
+    is produced during the invocation are preflighted later, immediately
+    after their item list becomes available and before their first iteration.
+    """
+
+    flow_key = _filesystem_path_key(flow.source)
+    if flow_key in call_stack:
+        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+    if len(call_stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError(
+            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+        )
+    next_stack = (*call_stack, flow_key)
+
+    for step in flow.steps:
+        if step.flow is not None:
+            if step.foreach is not None:
+                # The concrete foreach batch is checked by the caller once
+                # its source output is available.
+                continue
+            if not _subflow_inputs_resolvable_at_run_start(
+                step,
+                available_outputs={},
+            ):
+                continue
+            child = _load_subflow_definition(
+                step,
+                parent_flow=flow,
+                workspace=workspace,
+                cache=cache,
+            )
+            _validate_subflow_interface(step, child)
+            child_input = _render_subflow_inputs(
+                step,
+                item=None,
+                iteration_id=None,
+                outputs={},
+                output_json={},
+                flow_input=flow_input,
+            )
+            child_namespace = _child_invocation_namespace(
+                namespace,
+                step,
+                iteration_id=None,
+            )
+            _preflight_concrete_invocation_outputs(
+                child,
+                workspace=workspace,
+                cache=cache,
+                flow_input=child_input,
+                reserved_inputs=reserved_inputs,
+                claimed_outputs=claimed_outputs,
+                namespace=child_namespace,
+                call_stack=next_stack,
+            )
+            continue
+
+        if step.foreach is not None or step.output is None:
+            continue
+
+        output = _output_for_iteration(
+            step,
+            workspace=workspace,
+            item=None,
+            flow_input=flow_input,
+        )
+        assert output is not None
+        key = _filesystem_path_key(output)
+        reserved_input = reserved_inputs.get(key)
+        if reserved_input is not None:
+            raise ValueError(
+                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                "mit einer reservierten Flow-Eingabe: "
+                f"{reserved_input}"
+            )
+        _claim_output(
+            claimed_outputs,
+            path=output,
+            owner=namespace + _output_owner(
+                step,
+                iteration_id=None,
+            ),
+            allow_replace=step.overwrite_output,
+        )
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -2956,6 +3056,47 @@ async def _run_flow_internal(
 
         preflight_outputs: list[Path | None] | None = None
         preflight_checkpoint_fingerprints: list[bytes | None] | None = None
+
+        if step.flow is not None:
+            assert context.flow_cache is not None
+            child = _load_subflow_definition(
+                step,
+                parent_flow=flow,
+                workspace=workspace,
+                cache=context.flow_cache,
+            )
+            _validate_subflow_interface(step, child)
+
+            # Preflight the complete concrete subflow batch before the first
+            # child starts. Use a copy so execution still performs the real
+            # claims, while collisions across siblings/foreach items are
+            # detected without any model/tool side effects.
+            batch_claims = dict(claimed_outputs)
+            for item, iteration_id in zip(items, iteration_ids):
+                child_input = _render_subflow_inputs(
+                    step,
+                    item=item,
+                    iteration_id=iteration_id,
+                    outputs=outputs,
+                    output_json=output_json,
+                    flow_input=flow_input,
+                )
+                child_namespace = _child_invocation_namespace(
+                    namespace,
+                    step,
+                    iteration_id=iteration_id,
+                )
+                _preflight_concrete_invocation_outputs(
+                    child,
+                    workspace=workspace,
+                    cache=context.flow_cache,
+                    flow_input=child_input,
+                    reserved_inputs=reserved_inputs,
+                    claimed_outputs=batch_claims,
+                    namespace=child_namespace,
+                    call_stack=next_stack,
+                )
+
         if (
             step.flow is None
             and step.foreach is not None
