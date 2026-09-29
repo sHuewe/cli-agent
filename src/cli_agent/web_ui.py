@@ -431,7 +431,20 @@ class _WebUiSession:
                         )
                         continue
                     self.approval_broker.deny_all()
-                    self.agent.reset_history()
+                    try:
+                        self.agent.reset_history()
+                    except Exception as exc:
+                        if self.debug:
+                            message = "".join(traceback.format_exception(exc))
+                        else:
+                            detail = str(exc).strip()
+                            message = (
+                                f"{type(exc).__name__}: {detail}"
+                                if detail
+                                else type(exc).__name__
+                            )
+                        await sender({"type": "error", "content": message})
+                        continue
                     await sender({"type": "history_reset"})
                     await sender(self._working_context_payload())
                     continue
