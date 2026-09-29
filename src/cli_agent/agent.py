@@ -471,13 +471,15 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 name = str(function.get("name") or "")
                 if not name:
                     continue
+                server_enabled = server_name in self._active_servers
                 result.append(
                     {
                         "server": server_name,
                         "name": name,
                         "description": str(function.get("description") or ""),
+                        "server_enabled": server_enabled,
                         "enabled": (
-                            server_name in self._active_servers
+                            server_enabled
                             and self._tool_is_enabled(name)
                         ),
                     }
