@@ -5657,6 +5657,140 @@ flow = "${item.flow}"
         load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
 
+def test_subflow_path_is_relative_to_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "orchestration").mkdir()
+    (tmp_path / "flows").mkdir()
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "child.md").write_text(
+        "child",
+        encoding="utf-8",
+    )
+    (tmp_path / "flows" / "child.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "prompts/child.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "orchestration" / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "child"
+flow = "flows/child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(
+        tmp_path / "orchestration" / "parent.toml",
+        workspace=tmp_path,
+    )
+    validate_flow(definition, workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["child"]
+
+
+def test_nested_subflow_paths_are_always_workspace_relative(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "orchestration").mkdir()
+    (tmp_path / "flows").mkdir()
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "leaf.md").write_text("leaf", encoding="utf-8")
+    (tmp_path / "flows" / "leaf.toml").write_text(
+        """
+version = 1
+result = "steps.work.output"
+
+[[steps]]
+id = "work"
+prompt_file = "prompts/leaf.md"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "flows" / "child.toml").write_text(
+        """
+version = 1
+result = "steps.leaf.output"
+
+[[steps]]
+id = "leaf"
+flow = "flows/leaf.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "orchestration" / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "child"
+flow = "flows/child.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+
+    definition = load_flow(
+        tmp_path / "orchestration" / "parent.toml",
+        workspace=tmp_path,
+    )
+    validate_flow(definition, workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.prompt for call in calls] == ["leaf"]
+
+
+def test_subflow_path_cannot_escape_workspace_with_parent_reference(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "orchestration").mkdir()
+    (tmp_path / "orchestration" / "parent.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "child"
+flow = "../outside.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(
+        tmp_path / "orchestration" / "parent.toml",
+        workspace=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="darf '..' nicht enthalten"):
+        validate_flow(definition, workspace=tmp_path)
+
+
 
 def test_parent_exclusions_apply_inside_subflow(
     tmp_path: Path,

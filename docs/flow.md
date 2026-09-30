@@ -27,8 +27,8 @@ Der feste Workspace wird beim Start angegeben:
 cli-agent-flow run flow.toml --workspace C:\dev\project
 ```
 
-Die Flow-Datei selbst, Prompt-Dateien, Context-Dateien und Outputs müssen
-innerhalb dieses Workspace liegen. Relative Pfade für `prompt_file`,
+Die Flow-Datei selbst, Subflow-Dateien, Prompt-Dateien, Context-Dateien und Outputs müssen
+innerhalb dieses Workspace liegen. Relative Pfade für `flow`, `prompt_file`,
 `add_file_context`/`context_file` und `output` werden immer relativ zum
 Workspace-Root interpretiert, unabhängig davon, in welchem Unterordner die
 `flow.toml` liegt. Fehlende Elternordner eines `output`-Pfads werden beim
@@ -66,7 +66,7 @@ add_file_context = ["handbuch.txt", "anweisungen.txt"]
 output = "okf/Index.md"
 ```
 
-Dabei beziehen sich `prompt_file`, `add_file_context` und `output` auf
+Dabei beziehen sich `flow`, `prompt_file`, `add_file_context` und `output` auf
 `workspace/`. Nur `config = "config.toml"` bezieht sich auf den Ordner der
 Flow-Datei und bezeichnet hier daher `workspace/flow/config.toml`.
 
@@ -118,8 +118,9 @@ title = "${item.title}"
 ### Subflows und explizite Flow-Schnittstellen
 
 Ein Step kann statt eines direkten Agentenlaufs einen anderen Flow aufrufen.
-Der Pfad des Child-Flows ist statisch und wird relativ zum Ordner des
-aufrufenden Flows aufgelöst:
+Der Pfad des Child-Flows ist statisch und wird wie Prompt-, Context- und
+Output-Pfade relativ zum festen Workspace-Root aufgelöst, nicht relativ zum
+Ordner des aufrufenden Flows:
 
 ```toml
 [[steps]]
@@ -190,9 +191,11 @@ referenzierten Child-Flows werden außerdem gemeinsam als geschützte
 Flow-Eingaben behandelt.
 
 Subflow-Pfade dürfen nicht aus LLM-, `foreach`- oder Input-Daten erzeugt
-werden. Damit kann dynamischer Inhalt zwar bestimmen, **welche Daten** ein
-statisch festgelegter Child-Flow erhält, aber nicht, **welcher Flow** oder
-welche Capabilities ausgeführt werden.
+werden. Sie werden mit denselben Workspace-Grenzen wie andere Flow-Datenpfade
+geprüft: `..`, Symlink-/Reparse-Ausbrüche und aufgelöste Ziele außerhalb des
+festen Workspace werden abgewiesen. Damit kann dynamischer Inhalt zwar bestimmen,
+**welche Daten** ein statisch festgelegter Child-Flow erhält, aber nicht,
+**welcher Flow** oder welche Capabilities ausgeführt werden.
 
 Die Validierung folgt Subflow-Referenzen rekursiv. Zyklen werden abgewiesen,
 die Verschachtelungstiefe ist begrenzt und zusätzlich gilt ein globales Budget

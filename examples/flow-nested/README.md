@@ -71,4 +71,4 @@ No dedicated config file is included. All steps use the normal default user conf
 
 The example does not enable `workspace_access`. The agents do not need OS tools; the flow execution core writes the configured output files.
 
-The `flow = "flows/describe-item.toml"` path is relative to the parent flow file. Prompt and output paths remain relative to the workspace root, which is why the child references `prompts/describe-item.md` and `results/...`.
+The `flow = "flows/describe-item.toml"` path is relative to the workspace root, just like prompt and output paths. In this example the current directory is the workspace root, so the child can reference `prompts/describe-item.md` and `results/...` in the same way.
