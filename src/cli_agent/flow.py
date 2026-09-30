@@ -2579,7 +2579,6 @@ def _collect_reserved_flow_input_paths(
             continue
         child = _load_subflow_definition(
             step,
-            parent_flow=flow,
             workspace=workspace,
             cache=cache,
         )
@@ -3353,7 +3352,7 @@ async def _run_flow_internal(
                 assert context.flow_cache is not None
                 child = _load_subflow_definition(
                     step,
-                        workspace=workspace,
+                    workspace=workspace,
                     cache=context.flow_cache,
                 )
                 _validate_subflow_interface(step, child)
