@@ -6,11 +6,11 @@
 
 **Stable Release:** [v1.0.0](https://github.com/sHuewe/cli-agent/releases/tag/v1.0.0) — geprüfte Release-Artefakte (Wheel, Source Distribution, CycloneDX-SBOM und SHA-256-Prüfsummen) sind über GitHub Releases verfügbar.
 
+**Ergänzende Tools und Flows:** Im separaten Repository [cli-agent-utils](https://github.com/sHuewe/cli-agent-utils) werden optionale Werkzeuge und wiederverwendbare Flows gesammelt. Sie gehören bewusst nicht zum offiziellen `cli-agent`-Paket und können unabhängig vom Kernprojekt verwendet, geprüft und weiterentwickelt werden.
+
 ```text
 User -> CLI Agent -> [optional: OKF Retrieval] -> LLM <-> MCP Tools -> Antwort
 ```
-
-Docker Compose und der Docker-basierte Python Validator gehören nicht zum Kern. Sie werden separat unter `sHuewe/cli-agent-mcp` gepflegt, damit Docker-/Prozessausführung separat geprüft und freigegeben werden kann.
 
 ## Setup / Installation
 
