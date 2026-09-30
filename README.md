@@ -4,6 +4,8 @@
 
 `cli-agent` ist ein lokaler Kommandozeilen-Agent für LLM-basierte Aufgaben mit Conversation History, konfigurierbaren MCP-Servern, optionalem OKF-Retrieval und explizit ladbarem Web-Kontext.
 
+**Stable Release:** [v1.0.0](https://github.com/sHuewe/cli-agent/releases/tag/v1.0.0) — geprüfte Release-Artefakte (Wheel, Source Distribution, CycloneDX-SBOM und SHA-256-Prüfsummen) sind über GitHub Releases verfügbar.
+
 ```text
 User -> CLI Agent -> [optional: OKF Retrieval] -> LLM <-> MCP Tools -> Antwort
 ```
