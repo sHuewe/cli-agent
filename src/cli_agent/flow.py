@@ -358,15 +358,12 @@ def _resolve_subflow_path(
     step: FlowStep,
     *,
     workspace: Path,
-    flow_dir: Path,
 ) -> Path:
     if step.flow is None:
         raise ValueError(f"Schritt {step.step_id!r} ist kein Subflow-Schritt.")
-    path = step.flow.expanduser()
-    candidate = path if path.is_absolute() else flow_dir / path
     return _workspace_path(
         workspace,
-        candidate,
+        step.flow,
         purpose=f"Subflow-Datei von Schritt {step.step_id!r}",
         must_exist=True,
     )
@@ -404,7 +401,6 @@ def _reserved_flow_input_paths(
             subflow_path = _resolve_subflow_path(
                 step,
                 workspace=workspace,
-                flow_dir=flow_dir,
             )
             reserved[_filesystem_path_key(subflow_path)] = subflow_path
             continue
@@ -1979,7 +1975,6 @@ def _capture_run_start_invocation(
 
             child = _load_subflow_definition(
                 step,
-                parent_flow=flow,
                 workspace=workspace,
                 cache=cache,
             )
@@ -2517,14 +2512,12 @@ def _output_for_iteration(
 def _load_subflow_definition(
     step: FlowStep,
     *,
-    parent_flow: FlowDefinition,
     workspace: Path,
     cache: dict[str, FlowDefinition],
 ) -> FlowDefinition:
     path = _resolve_subflow_path(
         step,
         workspace=workspace,
-        flow_dir=parent_flow.source.parent,
     )
     key = _filesystem_path_key(path)
     cached = cache.get(key)
@@ -2586,7 +2579,6 @@ def _collect_reserved_flow_input_paths(
             continue
         child = _load_subflow_definition(
             step,
-            parent_flow=flow,
             workspace=workspace,
             cache=cache,
         )
@@ -2711,7 +2703,6 @@ def validate_flow(
         if step.flow is not None:
             child = _load_subflow_definition(
                 step,
-                parent_flow=flow,
                 workspace=workspace,
                 cache=cache,
             )
@@ -2974,7 +2965,6 @@ def _preflight_concrete_invocation_outputs(
 
             child = _load_subflow_definition(
                 step,
-                parent_flow=flow,
                 workspace=workspace,
                 cache=cache,
             )
@@ -3178,7 +3168,6 @@ async def _run_flow_internal(
             assert context.flow_cache is not None
             child = _load_subflow_definition(
                 step,
-                parent_flow=flow,
                 workspace=workspace,
                 cache=context.flow_cache,
             )
@@ -3363,7 +3352,6 @@ async def _run_flow_internal(
                 assert context.flow_cache is not None
                 child = _load_subflow_definition(
                     step,
-                    parent_flow=flow,
                     workspace=workspace,
                     cache=context.flow_cache,
                 )
