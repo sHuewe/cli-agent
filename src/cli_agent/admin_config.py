@@ -10,6 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .mcp_contracts import validate_tool_contract_fingerprint
 from .network_policy import LOCAL_HOSTS, NetworkConfig
+from .workspace_access import is_reserved_workspace_environment_name
 
 
 def _normalize_mcp_url(value: str, *, section: str) -> str:
@@ -319,10 +320,16 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
     command = str(command_value).strip() if command_value is not None else None
     env = _string_map(values.get("env", {}), section=section, key="env")
     headers = _string_map(values.get("headers", {}), section=section, key="headers")
-    if any(name.casefold() == "cli_agent_workspace_access" for name, _ in env):
+    reserved_env = tuple(
+        name
+        for name, _ in env
+        if is_reserved_workspace_environment_name(name)
+    )
+    if reserved_env:
         raise ValueError(
-            f"{section}.env darf CLI_AGENT_WORKSPACE_ACCESS nicht setzen; "
-            "der Wert wird ausschließlich vom cli-agent Core festgelegt."
+            f"{section}.env darf die Core-eigenen Workspace-Variablen "
+            "CLI_AGENT_WORKSPACE_ACCESS und CLI_AGENT_WORKSPACE_DIRECTORY "
+            "nicht setzen."
         )
     bearer_token_env: str | None = None
 
