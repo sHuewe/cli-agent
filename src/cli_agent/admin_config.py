@@ -319,7 +319,7 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
     command = str(command_value).strip() if command_value is not None else None
     env = _string_map(values.get("env", {}), section=section, key="env")
     headers = _string_map(values.get("headers", {}), section=section, key="headers")
-    if any(name == "CLI_AGENT_WORKSPACE_ACCESS" for name, _ in env):
+    if any(name.casefold() == "cli_agent_workspace_access" for name, _ in env):
         raise ValueError(
             f"{section}.env darf CLI_AGENT_WORKSPACE_ACCESS nicht setzen; "
             "der Wert wird ausschließlich vom cli-agent Core festgelegt."
