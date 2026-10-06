@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from cli_agent import cli as cli_module
-from cli_agent.admin_config import AdminConfig
+from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
 from cli_agent.cli import McpToolInspection
 from cli_agent.config import AppConfig, McpServerConfig, ModelConfig
 
@@ -537,9 +537,9 @@ def test_inspection_requires_explicit_workspace_access_for_trusted_stdio(
 ) -> None:
     server = McpServerConfig(name="validator")
     admin = AdminConfig(
-        mcp=cli_module.McpPolicy(
+        mcp=McpPolicy(
             trusted_servers=(
-                cli_module.TrustedMcpServer(
+                TrustedMcpServer(
                     name="validator",
                     transport="stdio",
                     command="/trusted/validator",
@@ -567,9 +567,9 @@ def test_inspection_accepts_explicit_workspace_access_for_trusted_stdio(
 ) -> None:
     server = McpServerConfig(name="validator")
     admin = AdminConfig(
-        mcp=cli_module.McpPolicy(
+        mcp=McpPolicy(
             trusted_servers=(
-                cli_module.TrustedMcpServer(
+                TrustedMcpServer(
                     name="validator",
                     transport="stdio",
                     command="/trusted/validator",
