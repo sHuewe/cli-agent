@@ -620,3 +620,22 @@ def test_inspection_accepts_explicit_workspace_access_for_trusted_stdio(
 
     assert captured["workspace_access"] == "read"
     assert inspection.tool_name == "run"
+
+
+@pytest.mark.parametrize("required_workspace_access", ["none", "read", "write"])
+def test_render_trusted_stdio_server_fragment_preserves_workspace_access(
+    required_workspace_access: str,
+) -> None:
+    server = TrustedMcpServer(
+        name="validator",
+        transport="stdio",
+        command="/trusted/validator",
+        required_workspace_access=required_workspace_access,
+    )
+
+    fragment = cli_module._render_trusted_server_fragment(server)
+
+    assert (
+        f'required_workspace_access = "{required_workspace_access}"'
+        in fragment
+    )
