@@ -103,20 +103,17 @@ Nach Auswahl dieses Roots sind die OKF-Tools zwar read-only und deterministisch
 auf genau diesen Root begrenzt; die Anwendung besitzt derzeit jedoch keine
 administrative `okf_allowed_roots`-Liste.
 
-Für ein gemanagtes Deployment bedeutet das:
-
-- OKF nur aktivieren, wenn die konkrete Knowledge-Quelle für den vorgesehenen
-  LLM-Einsatz freigegeben ist;
-- zulässige Repository-Pfade in der zentral ausgelieferten Benutzerkonfiguration
-  beziehungsweise im Deployment-Profil festlegen und reviewen;
-- Änderungen an diesen Pfaden als Datenfreigabeänderung behandeln;
-- OKF deaktivieren beziehungsweise den `[okf]`-Block weglassen, wenn keine
-  freigegebene Knowledge-Quelle benötigt wird.
+Die Auswahl dieses Roots bleibt auch in einem gemanagten Deployment bewusst
+eine Benutzerentscheidung. Sie wird wie andere explizit bereitgestellte
+LLM-Kontextdaten behandelt: Der Benutzer wählt eine lokale Knowledge-Quelle,
+deren relevante Inhalte an das konfigurierte LLM weitergegeben werden dürfen.
+Eine zentrale Allowlist zulässiger OKF-Roots ist deshalb kein Bestandteil des
+vorgesehenen Deployment-Modells.
 
 Die technische Garantie des Core-Agenten ist das Containment **innerhalb des
-gewählten Roots**. Welche lokalen Roots organisatorisch genutzt werden dürfen,
-ist derzeit eine Deployment-/Governance-Entscheidung und keine maschinenweit
-erzwungene Produktpolicy.
+vom Benutzer gewählten Roots**. Nach der Auswahl kann der Knowledge-Lauf diesen
+Root nicht verlassen und erhält ausschließlich die vorgesehenen read-only
+OKF-Tools.
 
 ## 4. Referenzweg für Windows
 
