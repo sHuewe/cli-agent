@@ -8,6 +8,8 @@
 
 **Ergänzende Tools und Flows:** Im separaten Repository [cli-agent-utils](https://github.com/sHuewe/cli-agent-utils) werden optionale Werkzeuge und wiederverwendbare Flows gesammelt. Sie gehören bewusst nicht zum offiziellen `cli-agent`-Paket und können unabhängig vom Kernprojekt verwendet, geprüft und weiterentwickelt werden.
 
+**Einsatzzweck und Abgrenzung:** [docs/einsatzprofil-und-abgrenzung.md](docs/einsatzprofil-und-abgrenzung.md) beschreibt das bewusst begrenzte Capability-Modell von `cli-agent` und ordnet es gegenüber bekannten Open-Source-Agenten ein.
+
 ```text
 User -> CLI Agent -> [optional: OKF Retrieval] -> LLM <-> MCP Tools -> Antwort
 ```
