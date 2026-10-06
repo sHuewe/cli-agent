@@ -114,6 +114,7 @@ class TrustedMcpServer:
     bearer_token_env: str | None = None
     auto_approve_tools: tuple[TrustedMcpToolApproval, ...] = ()
     trust_instructions: bool = False
+    required_workspace_access: str = "none"
 
 
 @dataclass(frozen=True)
@@ -301,6 +302,13 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
 
     tools = _trusted_tool_approvals(values, section=section)
     trust_instructions = _bool_value(values, "trust_instructions", False, section=section)
+    required_workspace_access = str(
+        values.get("required_workspace_access", "none")
+    ).strip().lower()
+    if required_workspace_access not in {"none", "read", "write"}:
+        raise ValueError(
+            f"{section}.required_workspace_access muss 'none', 'read' oder 'write' sein."
+        )
     raw_args = values.get("args", [])
     if not isinstance(raw_args, list) or not all(isinstance(value, str) for value in raw_args):
         raise ValueError(f"{section}.args muss eine String-Liste sein.")
@@ -311,9 +319,18 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
     command = str(command_value).strip() if command_value is not None else None
     env = _string_map(values.get("env", {}), section=section, key="env")
     headers = _string_map(values.get("headers", {}), section=section, key="headers")
+    if any(name == "CLI_AGENT_WORKSPACE_ACCESS" for name, _ in env):
+        raise ValueError(
+            f"{section}.env darf CLI_AGENT_WORKSPACE_ACCESS nicht setzen; "
+            "der Wert wird ausschließlich vom cli-agent Core festgelegt."
+        )
     bearer_token_env: str | None = None
 
     if transport == "streamable_http":
+        if required_workspace_access != "none":
+            raise ValueError(
+                f"{section}.required_workspace_access wird derzeit nur für stdio-MCP-Server unterstützt."
+            )
         if not url:
             raise ValueError(f"{section} benötigt für streamable_http eine url.")
         if command or raw_args or env:
@@ -349,6 +366,7 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
         bearer_token_env=bearer_token_env,
         auto_approve_tools=tools,
         trust_instructions=trust_instructions,
+        required_workspace_access=required_workspace_access,
     )
 
 
