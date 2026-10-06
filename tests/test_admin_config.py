@@ -309,3 +309,112 @@ command = "external-mcp"
 '''.strip(), encoding="utf-8")
     with pytest.raises(ValueError, match="Admin-Policy|nur.*Namen|nur.*referenziert"):
         load_config(path)
+
+
+def test_trusted_stdio_loads_required_workspace_access(tmp_path: Path) -> None:
+    executable = str((tmp_path / "trusted-mcp").resolve())
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        f"""
+[[mcp.trusted_servers]]
+name = "validator"
+transport = "stdio"
+command = {json.dumps(executable)}
+required_workspace_access = "read"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    trusted = load_admin_config(path).mcp.trusted_servers[0]
+
+    assert trusted.required_workspace_access == "read"
+
+
+@pytest.mark.parametrize("value", ["admin", "READ_WRITE", ""])
+def test_trusted_stdio_rejects_invalid_required_workspace_access(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    executable = str((tmp_path / "trusted-mcp").resolve())
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        f"""
+[[mcp.trusted_servers]]
+name = "validator"
+transport = "stdio"
+command = {json.dumps(executable)}
+required_workspace_access = {json.dumps(value)}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="required_workspace_access"):
+        load_admin_config(path)
+
+
+def test_trusted_stdio_rejects_reserved_workspace_access_env(
+    tmp_path: Path,
+) -> None:
+    executable = str((tmp_path / "trusted-mcp").resolve())
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        f"""
+[[mcp.trusted_servers]]
+name = "validator"
+transport = "stdio"
+command = {json.dumps(executable)}
+
+[mcp.trusted_servers.env]
+cli_agent_workspace_access = "write"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="CLI_AGENT_WORKSPACE_ACCESS"):
+        load_admin_config(path)
+
+
+def test_trusted_http_rejects_required_workspace_access_for_now(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        """
+[[mcp.trusted_servers]]
+name = "remote"
+transport = "streamable_http"
+url = "https://mcp.internal/mcp"
+required_workspace_access = "read"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="nur für stdio"):
+        load_admin_config(path)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["CLI_AGENT_WORKSPACE_DIRECTORY", "cli_agent_workspace_directory"],
+)
+def test_trusted_stdio_rejects_reserved_workspace_directory_env(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    executable = str((tmp_path / "trusted-mcp").resolve())
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        f"""
+[[mcp.trusted_servers]]
+name = "validator"
+transport = "stdio"
+command = {json.dumps(executable)}
+
+[mcp.trusted_servers.env]
+{name} = "/attacker/workspace"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="CLI_AGENT_WORKSPACE_DIRECTORY"):
+        load_admin_config(path)

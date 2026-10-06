@@ -842,3 +842,43 @@ def test_run_once_combines_os_read_and_data_read(
     assert [server.name for server in servers] == ["os", "data"]
     assert servers[0].args[-2:] == ("--access", "read")
     assert servers[1].args[-2:] == ("--access", "read")
+
+
+def test_run_once_propagates_effective_workspace_access_to_agent(
+    tmp_path: Path,
+) -> None:
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, *_args, **kwargs):
+            captured["workspace_access"] = kwargs["workspace_access"]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def ask(self, prompt):
+            return "usage" if prompt == "tokens" else "answer"
+
+    dependencies = ExecutionDependencies(
+        load_config=lambda _path: _config(),
+        load_admin_config=lambda: AdminConfig(),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+
+    asyncio.run(
+        run_once(
+            OneShotRunOptions(
+                workspace=tmp_path,
+                prompt="work",
+                workspace_access="read",
+            ),
+            dependencies=dependencies,
+        )
+    )
+
+    assert captured["workspace_access"] == "read"

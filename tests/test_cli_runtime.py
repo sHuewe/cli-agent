@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from cli_agent import cli as cli_module
-from cli_agent.admin_config import AdminConfig
+from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
 from cli_agent.cli import McpToolInspection
 from cli_agent.config import AppConfig, McpServerConfig, ModelConfig
 
@@ -505,3 +505,137 @@ def test_main_dispatches_admin_subcommand(monkeypatch) -> None:
     cli_module.main()
 
     assert captured == {"command": "inspect-tool", "server": "srv", "tool": "tool"}
+
+
+def test_admin_parser_supports_explicit_workspace_access_flags() -> None:
+    inspect_read = cli_module.build_admin_parser().parse_args(
+        ["inspect-tool", "validator", "run", "--with-os-read"]
+    )
+    trust_write = cli_module.build_admin_parser().parse_args(
+        ["trust-tool", "validator", "run", "--with-os-write"]
+    )
+
+    assert inspect_read.os_access == "read"
+    assert trust_write.os_access == "write"
+
+
+def test_admin_parser_rejects_combined_workspace_access_flags() -> None:
+    with pytest.raises(SystemExit):
+        cli_module.build_admin_parser().parse_args(
+            [
+                "inspect-tool",
+                "validator",
+                "run",
+                "--with-os-read",
+                "--with-os-write",
+            ]
+        )
+
+
+def test_inspection_requires_explicit_workspace_access_for_trusted_stdio(
+    tmp_path: Path,
+) -> None:
+    server = McpServerConfig(name="validator")
+    admin = AdminConfig(
+        mcp=McpPolicy(
+            trusted_servers=(
+                TrustedMcpServer(
+                    name="validator",
+                    transport="stdio",
+                    command="/trusted/validator",
+                    required_workspace_access="read",
+                ),
+            )
+        )
+    )
+
+    with pytest.raises(PermissionError, match="--with-os-read"):
+        asyncio.run(
+            cli_module._inspect_mcp_tool(
+                server=server,
+                tool_name="run",
+                workspace=tmp_path,
+                config_file=tmp_path / "config.toml",
+                admin_config=admin,
+            )
+        )
+
+
+def test_inspection_accepts_explicit_workspace_access_for_trusted_stdio(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = McpServerConfig(name="validator")
+    admin = AdminConfig(
+        mcp=McpPolicy(
+            trusted_servers=(
+                TrustedMcpServer(
+                    name="validator",
+                    transport="stdio",
+                    command="/trusted/validator",
+                    required_workspace_access="read",
+                ),
+            )
+        )
+    )
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, *_args, **kwargs):
+            captured["workspace_access"] = kwargs["workspace_access"]
+            self._server_tools = {
+                "validator": [
+                    {
+                        "function": {
+                            "name": "validator__run",
+                            "description": "run",
+                            "parameters": {"type": "object"},
+                        }
+                    }
+                ]
+            }
+            self._server_configs = {"validator": server}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def _trusted_server_matches(self, *_args):
+            return True
+
+    monkeypatch.setattr(cli_module, "CliAgent", FakeAgent)
+
+    inspection = asyncio.run(
+        cli_module._inspect_mcp_tool(
+            server=server,
+            tool_name="run",
+            workspace=tmp_path,
+            config_file=tmp_path / "config.toml",
+            admin_config=admin,
+            workspace_access="read",
+        )
+    )
+
+    assert captured["workspace_access"] == "read"
+    assert inspection.tool_name == "run"
+
+
+@pytest.mark.parametrize("required_workspace_access", ["none", "read", "write"])
+def test_render_trusted_stdio_server_fragment_preserves_workspace_access(
+    required_workspace_access: str,
+) -> None:
+    server = TrustedMcpServer(
+        name="validator",
+        transport="stdio",
+        command="/trusted/validator",
+        required_workspace_access=required_workspace_access,
+    )
+
+    fragment = cli_module._render_trusted_server_fragment(server)
+
+    assert (
+        f'required_workspace_access = "{required_workspace_access}"'
+        in fragment
+    )
