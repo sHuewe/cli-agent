@@ -13,7 +13,7 @@ Ein typischer Einsatz geht von folgenden Anforderungen aus:
 - technisch erzwingbare administrative Grenzen, die eine normale Benutzerkonfiguration nicht lockern kann;
 - kein generisches Shell-Tool und keine beliebige Codeausführung durch das Modell;
 - kein projektübergreifendes persistentes Agenten-Memory im Core;
-- explizit begrenzter Datei-, Netzwerk- und Toolzugriff;
+- explizit begrenzter Workspace-, Netzwerk- und Toolzugriff; optionale Knowledge-Quellen besitzen separat dokumentierte Vertrauensgrenzen;
 - nachvollziehbare, reproduzierbare Abläufe für wiederkehrende Aufgaben.
 
 Damit ist die zentrale Designfrage nicht: **Welche Fähigkeiten kann ein Agent theoretisch anbieten?** Sondern: **Welche Fähigkeiten werden für einen konkreten Einsatz tatsächlich benötigt und wie eng können sie technisch begrenzt werden?**
@@ -22,7 +22,7 @@ Damit ist die zentrale Designfrage nicht: **Welche Fähigkeiten kann ein Agent t
 
 Der Core von `cli-agent` stellt dem Modell keine universelle Ausführungsprimitive wie `shell(command)` oder eine frei programmierbare Code-Execution-Umgebung bereit.
 
-Dateisystemzugriffe erfolgen stattdessen über definierte eingebaute MCP-Tools mit eigener Pfadvalidierung, Workspace-Containment, Größenlimits, Sensitive-Path-Schutz und getrennten Lese-/Schreibfähigkeiten. Externe MCPs können zusätzliche Fähigkeiten bereitstellen, müssen für einen gemanagten Einsatz jedoch separat bewertet und administrativ freigegeben werden.
+Workspace-Dateisystemzugriffe des Main-Agenten erfolgen stattdessen über definierte eingebaute MCP-Tools mit eigener Pfadvalidierung, Workspace-Containment, Größenlimits, Sensitive-Path-Schutz und getrennten Lese-/Schreibfähigkeiten. Diese Aussage gilt bewusst **nicht pauschal für jede optionale lokale Kontextquelle**: Der separat aktivierbare OKF-Knowledge-Server besitzt einen eigenen, read-only Repository-Root, der außerhalb des Workspace liegen darf. Externe MCPs können ebenfalls zusätzliche Fähigkeiten bereitstellen und müssen für einen gemanagten Einsatz separat bewertet und administrativ freigegeben werden.
 
 Dadurch soll vermieden werden, dass eine einzelne generische Capability zahlreiche andere Grenzen indirekt wieder öffnet. Ein Shell-Tool kann beispielsweise Datei-, Netzwerk-, Prozess- und Codeausführungsfähigkeiten kombinieren. Ein eng definiertes Tool wie `read_file` oder ein fachliches MCP-Tool besitzt dagegen einen deutlich kleineren und besser prüfbaren Contract.
 
@@ -42,6 +42,23 @@ Wesentliche Eigenschaften:
 - Netzwerkziele werden getrennt für Modell, MCP und Web administrativ begrenzt.
 
 Details stehen in [Security](security.md), [Deployment](deployment.md) und der [Firmen-Rollout-Checkliste](company-deployment-checklist.md).
+
+### OKF als separate lokale Read-Boundary
+
+Der optionale OKF-Knowledge-Zugriff ist eine bewusste Ausnahme von der Workspace-Grenze. `[okf].repository` gehört zur normalen Benutzer-/Projektkonfiguration und darf auf einen lokalen Repository-Root außerhalb des Workspace zeigen. Nach Auswahl dieses Roots sind die Knowledge-Tools deterministisch und read-only auf genau diesen Root begrenzt: absolute Folgepfade, `..`, Symlink-/Reparse-Escapes und Hardlink-Aliase werden abgefangen, und der Retrieval-Lauf besitzt ausschließlich die vorgesehenen OKF-Tools.
+
+Die **Auswahl des OKF-Roots selbst ist derzeit jedoch keine maschinenweit administrativ erzwungene Policy**. Es existiert keine `okf_allowed_roots`-Allowlist in `admin_config.toml`. Ein Benutzer beziehungsweise eine Projektkonfiguration kann daher einen anderen gültigen lokalen OKF-Root auswählen; relevante gelesene Inhalte dieses Roots können als Referenzkontext an das konfigurierte LLM weitergegeben werden.
+
+Für einen gemanagten Einsatz folgt daraus:
+
+- OKF nur aktivieren, wenn die konkrete Knowledge-Quelle für den vorgesehenen LLM-Einsatz freigegeben ist;
+- zulässige `[okf].repository`-Werte über die zentral bereitgestellte beziehungsweise geprüfte Benutzerkonfiguration und den Deployment-Prozess festlegen;
+- Änderungen des Repository-Roots als Änderung der lokalen Datenfreigabe behandeln;
+- OKF deaktivieren, wenn keine freigegebene Knowledge-Quelle benötigt wird.
+
+Damit sind zwei unterschiedliche Grenzen zu unterscheiden: Der Workspace-OS-MCP kann seinen Workspace nicht verlassen; der OKF-MCP kann den **gewählten** Repository-Root nicht verlassen. Welche OKF-Roots organisatorisch zulässig sind, ist im aktuellen Stand eine Deployment-/Governance-Entscheidung und keine durch die Admin-Policy technisch erzwungene Grenze.
+
+Details: [OKF MCP](mcp-okf.md) und [Security](security.md).
 
 ## MCP als kontrollierte Capability-Grenze
 
