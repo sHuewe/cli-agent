@@ -38,6 +38,7 @@ from .mcp_contracts import tool_contract_fingerprint
 from .model_factory import create_model_client
 from .prompt_template import PromptTemplate, parse_variable_assignments
 from .terminal_output import sanitize_terminal_text
+from .workspace_access import normalize_workspace_access, workspace_access_allows
 
 OS_MCP_SERVER_NAME = "os"
 DATA_MCP_SERVER_NAME = "data"
@@ -171,6 +172,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_admin_workspace_access_arguments(parser: argparse.ArgumentParser) -> None:
+    os_access = parser.add_mutually_exclusive_group()
+    os_access.add_argument(
+        "--with-os-read",
+        action="store_const",
+        const="read",
+        dest="os_access",
+        help=(
+            "Explicitly grant read-only workspace access while starting the MCP "
+            "server for contract inspection."
+        ),
+    )
+    os_access.add_argument(
+        "--with-os-write",
+        action="store_const",
+        const="write",
+        dest="os_access",
+        help=(
+            "Explicitly grant read and write workspace access while starting the "
+            "MCP server for contract inspection."
+        ),
+    )
+
+
 def build_admin_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cli-agent admin", description="Inspect MCP tool contracts and generate admin-policy fragments. These commands never modify admin_config.toml.")
     subparsers = parser.add_subparsers(dest="admin_command", required=True)
@@ -179,12 +204,14 @@ def build_admin_parser() -> argparse.ArgumentParser:
     inspect_tool.add_argument("tool", help="Native MCP tool name")
     inspect_tool.add_argument("--config", type=Path, default=None)
     inspect_tool.add_argument("--workspace", type=Path, default=Path.cwd())
+    _add_admin_workspace_access_arguments(inspect_tool)
     trust_tool = subparsers.add_parser("trust-tool", help="Generate a pinned auto-approval fragment for one MCP tool.")
     trust_tool.add_argument("server", help="Configured MCP server name")
     trust_tool.add_argument("tool", help="Native MCP tool name")
     trust_tool.add_argument("--config", type=Path, default=None)
     trust_tool.add_argument("--workspace", type=Path, default=Path.cwd())
     trust_tool.add_argument("--update", action="store_true", help="Compare against an existing pinned approval and print a replacement fragment. The admin policy is never written automatically.")
+    _add_admin_workspace_access_arguments(trust_tool)
     return parser
 
 
@@ -245,7 +272,15 @@ def print_error(exc: BaseException, *, debug: bool) -> None:
         )
 
 
-async def _inspect_mcp_tool(*, server: McpServerConfig, tool_name: str, workspace: Path, config_file: Path, admin_config: AdminConfig) -> McpToolInspection:
+async def _inspect_mcp_tool(
+    *,
+    server: McpServerConfig,
+    tool_name: str,
+    workspace: Path,
+    config_file: Path,
+    admin_config: AdminConfig,
+    workspace_access: str | None = None,
+) -> McpToolInspection:
     if getattr(server, "built_in", False):
         raise ValueError("Built-in MCP-Tools werden nicht über permanente Admin-Auto-Approvals freigegeben.")
     native_tool_name = tool_name.strip()
@@ -262,11 +297,27 @@ async def _inspect_mcp_tool(*, server: McpServerConfig, tool_name: str, workspac
         ),
         None,
     )
-    inspection_workspace_access = (
+    inspection_workspace_access = normalize_workspace_access(workspace_access)
+    required_workspace_access = (
         trusted_profile.required_workspace_access
         if trusted_profile is not None
         else "none"
     )
+    if not workspace_access_allows(
+        inspection_workspace_access,
+        required_workspace_access,
+    ):
+        required_flag = (
+            "--with-os-write"
+            if required_workspace_access == "write"
+            else "--with-os-read"
+        )
+        raise PermissionError(
+            f"MCP-Server {server.name!r} benötigt mindestens "
+            f"workspace_access={required_workspace_access!r}. "
+            f"Erteile den Zugriff für diesen Admin-Aufruf explizit mit "
+            f"{required_flag}."
+        )
     agent = CliAgent(
         workspace,
         _InspectionModel(),
@@ -365,7 +416,14 @@ async def run_admin(args: argparse.Namespace) -> None:
     if server is None:
         raise ValueError(f"MCP-Server {args.server!r} ist in der Benutzerkonfiguration nicht definiert.")
     config_file = args.config or default_config_file()
-    inspection = await _inspect_mcp_tool(server=server, tool_name=args.tool, workspace=workspace, config_file=config_file, admin_config=admin_config)
+    inspection = await _inspect_mcp_tool(
+        server=server,
+        tool_name=args.tool,
+        workspace=workspace,
+        config_file=config_file,
+        admin_config=admin_config,
+        workspace_access=getattr(args, "os_access", None),
+    )
     print(
         "MCP-Server: "
         + sanitize_terminal_text(
