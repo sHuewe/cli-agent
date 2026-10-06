@@ -35,12 +35,20 @@ web_allowed_hosts = []
 # config may only reference such a server by name; command, args and env come
 # exclusively from this machine-wide policy. The agent resolves managed
 # placeholders such as {workspace_directory} itself at launch time.
+# required_workspace_access declares the minimum workspace capability needed to
+# start the server: "none", "read" or "write". If the current run grants less,
+# the process is not started and its tools are not exposed. External stdio
+# servers receive the effective runtime capability in the Core-owned
+# CLI_AGENT_WORKSPACE_ACCESS environment variable and may use it to expose a
+# smaller read-only or read/write tool set. The variable name is reserved and
+# cannot be set through this policy.
 #
 # [[mcp.trusted_servers]]
 # name = "local-audited-tool"
 # transport = "stdio"
 # command = "C:/Program Files/Company/audited-mcp.exe"
 # args = ["--project-directory", "{workspace_directory}", "--stdio"]
+# required_workspace_access = "read"
 # trust_instructions = false
 #
 # For stdio, commands must be absolute executables. The special {python}
