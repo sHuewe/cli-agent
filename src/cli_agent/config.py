@@ -126,6 +126,7 @@ class McpServerConfig:
     compress_result: bool = False
     compress_min_chars: int = 8000
     built_in: bool = False
+    required_workspace_access: str = "none"
 
     def allow_write_files(self) -> bool:
         return self.config.get("allow_write_files", False) is True
