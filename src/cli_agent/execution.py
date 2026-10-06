@@ -23,6 +23,7 @@ from .file_context import (
 from .logging_setup import configure_logging
 from .model import ModelRetryPolicy, RetryingModelClient
 from .model_factory import create_model_client
+from .workspace_access import normalize_workspace_access
 
 OS_MCP_SERVER_NAME = "os"
 DATA_MCP_SERVER_NAME = "data"
@@ -342,6 +343,7 @@ async def _run_prompt_sequence(
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
     response_format = _validate_response_format(options.response_format)
+    effective_workspace_access = normalize_workspace_access(options.workspace_access)
     excluded_paths = resolve_excluded_paths(
         workspace,
         options.excluded_paths,
@@ -411,6 +413,7 @@ async def _run_prompt_sequence(
         okf=config.okf,
         file_contexts=file_contexts,
         response_format=response_format,
+        workspace_access=effective_workspace_access,
     )
 
     web_statuses: list[str] = []
