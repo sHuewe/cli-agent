@@ -254,7 +254,28 @@ async def _inspect_mcp_tool(*, server: McpServerConfig, tool_name: str, workspac
         native_tool_name = native_tool_name[len(exposed_prefix):]
     if not native_tool_name:
         raise ValueError("Toolname darf nicht leer sein.")
-    agent = CliAgent(workspace, _InspectionModel(), (server,), config_file=config_file, network=admin_config.network, mcp_policy=admin_config.mcp)
+    trusted_profile = next(
+        (
+            item
+            for item in admin_config.mcp.trusted_servers
+            if item.name == server.name and item.transport == server.transport
+        ),
+        None,
+    )
+    inspection_workspace_access = (
+        trusted_profile.required_workspace_access
+        if trusted_profile is not None
+        else "none"
+    )
+    agent = CliAgent(
+        workspace,
+        _InspectionModel(),
+        (server,),
+        config_file=config_file,
+        network=admin_config.network,
+        mcp_policy=admin_config.mcp,
+        workspace_access=inspection_workspace_access,
+    )
     async with agent:
         exposed_name = f"{server.name}__{native_tool_name}"
         tool_metadata = next((tool for tool in agent._server_tools.get(server.name, ()) if tool.get("function", {}).get("name") == exposed_name), None)
@@ -626,6 +647,7 @@ async def run(args: argparse.Namespace) -> None:
         okf=config.okf,
         file_contexts=file_contexts,
         response_format=getattr(args, "response_format", "text"),
+        workspace_access=args.os_access,
     )
 
     async with agent:
