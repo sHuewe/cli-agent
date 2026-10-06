@@ -21,7 +21,12 @@ from .mcp_limits import (
 )
 from .mcp_schema_guard import validate_mcp_server_metadata
 from .network_policy import validate_http_url
-from .workspace_access import WORKSPACE_ACCESS_ENV, workspace_access_allows
+from .workspace_access import (
+    WORKSPACE_ACCESS_ENV,
+    WORKSPACE_DIRECTORY_ENV,
+    is_reserved_workspace_environment_name,
+    workspace_access_allows,
+)
 
 logger = logging.getLogger("cli_agent.agent_mcp")
 
@@ -261,10 +266,16 @@ class McpLifecycleMixin:
                 {
                     key: self._resolve_stdio_value(value)
                     for key, value in server_config.env.items()
+                    if built_in or not is_reserved_workspace_environment_name(key)
                 }
             )
             if not built_in:
                 environment[WORKSPACE_ACCESS_ENV] = self.workspace_access
+                environment.pop(WORKSPACE_DIRECTORY_ENV, None)
+                if self.workspace_access in {"read", "write"}:
+                    environment[WORKSPACE_DIRECTORY_ENV] = str(
+                        self.workspace_directory
+                    )
             parameters = StdioServerParameters(
                 command=self._resolve_stdio_value(server_config.command),
                 args=[
