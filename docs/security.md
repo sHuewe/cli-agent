@@ -18,7 +18,7 @@
 
 ### OKF-Knowledge-Root als separate lokale Read-Boundary
 
-**Design / dokumentiertes Restrisiko:** Der optionale OKF-Root ist bewusst nicht
+**Designentscheidung / separate Trust Boundary:** Der optionale OKF-Root ist bewusst nicht
 an den Projekt-Workspace gebunden. `[okf].repository` wird aus der normalen
 Benutzer-/Projektkonfiguration gelesen und darf absolut sein beziehungsweise auf
 ein Verzeichnis außerhalb des Workspaces zeigen. Eine administrative
@@ -43,21 +43,17 @@ kein Knowledge-Repository aktiviert. Nicht-konformes Concept-Markdown wird
 außerdem nicht als Knowledge angeboten. Diese Boundary wird weiterhin nicht als
 Teil der maschinenweiten Workspace- oder Netzwerkpolicy dargestellt.
 
-Für einen gemanagten Unternehmenseinsatz gilt:
-
-- OKF nur aktivieren, wenn die Knowledge-Quelle für den vorgesehenen
-  Datenklassifizierungs- und LLM-Einsatz freigegeben ist;
-- zulässige `[okf].repository`-Werte über zentral bereitgestellte bzw. geprüfte
-  Benutzerkonfigurationen festlegen;
-- projektlokale oder individuell veränderte Konfigurationen nicht als
-  administrative Freigabe interpretieren;
-- OKF deaktivieren, wenn keine zentral freigegebene Knowledge-Quelle benötigt
-  wird.
+Die Auswahl des Roots ist bewusst eine **explizite Datenfreigabeentscheidung
+des Benutzers** und keine administrative Freigabe. Das Threat Model setzt voraus,
+dass der Benutzer dem konfigurierten und freigegebenen LLM lokale Informationen,
+auf die er zugreifen darf, auch selbst als Kontext bereitstellen darf. Eine
+zusätzliche zentrale Allowlist für mögliche OKF-Roots ist deshalb im aktuellen
+Design nicht vorgesehen.
 
 Damit ist die technische Garantie klar abgegrenzt: `cli-agent` erzwingt die
-Containment-Grenze **innerhalb des gewählten OKF-Roots**, erzwingt derzeit aber
-nicht administrativ, **welcher lokale Root gewählt werden darf**. Details stehen
-in [mcp-okf.md](mcp-okf.md).
+Containment-Grenze **innerhalb des vom Benutzer gewählten OKF-Roots**. Die
+Root-Auswahl selbst wird absichtlich nicht als Teil der maschinenweiten
+Admin-Policy behandelt. Details stehen in [mcp-okf.md](mcp-okf.md).
 
 ### Schutz der Windows-Admin-Policy
 

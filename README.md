@@ -8,6 +8,8 @@
 
 **Ergänzende Tools und Flows:** Im separaten Repository [cli-agent-utils](https://github.com/sHuewe/cli-agent-utils) werden optionale Werkzeuge und wiederverwendbare Flows gesammelt. Sie gehören bewusst nicht zum offiziellen `cli-agent`-Paket und können unabhängig vom Kernprojekt verwendet, geprüft und weiterentwickelt werden.
 
+**Einsatzzweck und Abgrenzung:** [docs/einsatzprofil-und-abgrenzung.md](docs/einsatzprofil-und-abgrenzung.md) beschreibt das bewusst begrenzte Capability-Modell von `cli-agent` und ordnet es gegenüber bekannten Open-Source-Agenten ein.
+
 ```text
 User -> CLI Agent -> [optional: OKF Retrieval] -> LLM <-> MCP Tools -> Antwort
 ```
@@ -30,7 +32,7 @@ Für die lokale Open-Source-Nutzung ist keine Admin-Datei zwingend erforderlich.
 
 Die normale `config.toml` bestimmt, **was der Benutzer verwenden möchte**. Die maschinenweite `admin_config.toml` bestimmt unabhängig davon, **was für die administrativ kontrollierten Netzwerk-, MCP- und Credential-Grenzen verwendet werden darf**. Diese Freigaben können deshalb nicht über die normale Benutzerkonfiguration gelockert werden.
 
-Eine bewusste Ausnahme von diesem Policy-Modell ist der optionale OKF-Knowledge-Root: `[okf].repository` ist eine vom Benutzer ausgewählte **lokale read-only Datenquelle** und keine administrative Freigabe. Der Root darf außerhalb des Projekt-Workspaces liegen. Damit erweitert eine aktivierte OKF-Konfiguration die Menge lokaler Markdown-/Knowledge-Inhalte, die der Knowledge-Lauf lesen und bei Relevanz an das konfigurierte LLM weitergeben kann. Für einen gemanagten Unternehmenseinsatz muss deshalb zusätzlich organisatorisch beziehungsweise über eine zentral bereitgestellte Benutzerkonfiguration festgelegt werden, welche OKF-Repositories verwendet werden dürfen. Details stehen unter [OKF MCP](docs/mcp-okf.md).
+Eine bewusste Ausnahme von diesem Policy-Modell ist der optionale OKF-Knowledge-Root: `[okf].repository` ist eine vom Benutzer explizit ausgewählte **lokale read-only Datenquelle** und keine administrative Freigabe. Der Root darf außerhalb des Projekt-Workspaces liegen. Damit erweitert eine aktivierte OKF-Konfiguration die Menge lokaler Markdown-/Knowledge-Inhalte, die der Knowledge-Lauf lesen und bei Relevanz an das konfigurierte LLM weitergeben kann. Die Auswahl des Roots ist bewusst Teil der Benutzerkonfiguration: Wer einen OKF-Root konfiguriert, wählt damit eine lokale Kontextquelle für das freigegebene LLM aus. Die technische Grenze besteht im Containment innerhalb dieses gewählten Roots, nicht in einer administrativen Allowlist möglicher Roots. Details stehen unter [OKF MCP](docs/mcp-okf.md).
 
 Unter Windows wird die Admin-Policy ausschließlich von folgendem festen Pfad geladen:
 
@@ -611,7 +613,7 @@ required = true
 
 Der konfigurierte Ordner wird dabei **nicht als generischer Markdown-Root behandelt**. Er gilt nur dann als OKF-Repository, wenn direkt im konfigurierten Root eine lesbare `index.md` liegt. Es wird dafür ausdrücklich **nicht rekursiv in Unterverzeichnissen nach einem OKF gesucht**. Fehlt die Root-`index.md`, startet der OKF-Server fail-closed nicht. Normale bzw. nicht OKF-konforme Markdown-Dateien werden zudem nicht über `knowledge_index` angeboten und nicht über `knowledge_read` gelesen. Bei `required = false` läuft die Main-Phase in diesem Fall ohne OKF-Kontext weiter; bei `required = true` wird der Lauf abgebrochen.
 
-Für einen Unternehmens-Rollout sollte OKF entweder weggelassen werden, wenn es nicht benötigt wird, oder die zulässigen Knowledge-Repositories sollten im Deployment-/Konfigurationsprozess zentral festgelegt und überprüft werden.
+Die Root-Auswahl ist dabei bewusst eine Benutzerentscheidung und keine maschinenweite Policy. Das Sicherheitsmodell setzt voraus, dass ein Benutzer Inhalte, auf die er lokal zugreifen darf, dem konfigurierten LLM auch explizit als Kontext bereitstellen darf. OKF ändert diese Datenfreigabeentscheidung nicht, sondern begrenzt den anschließenden Knowledge-Zugriff deterministisch auf das ausgewählte Repository.
 
 Details: [OKF MCP](docs/mcp-okf.md).
 

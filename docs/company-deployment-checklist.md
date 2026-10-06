@@ -35,7 +35,7 @@ Die folgenden Punkte können nicht allein durch den Quellcode erfüllt werden. S
 - [ ] Jeder externe stdio-Server besitzt vor Nutzung ein eigenes geprüftes administratives `[[mcp.trusted_servers]]`-Launchprofil. Command, Args, Env und verwendete Runtime-Platzhalter sind bewusst freigegeben.
 - [ ] Permanente MCP-Auto-Approvals sind nur für notwendige externe Tools eingerichtet und an die tatsächlich geprüfte Serveridentität sowie den Tool-Contract gebunden. Änderungen an URL, Command, Args, Headern, expliziten Environment-Werten, Toolbeschreibung oder Schema erfordern eine erneute Prüfung beziehungsweise führen automatisch zurück zur interaktiven Freigabe.
 - [ ] `trust_instructions = true` ist nur für MCP-Server gesetzt, deren serverseitige Anleitungen bewusst als vertrauenswürdige Betriebsanweisungen des Agenten gelten sollen. Für normale HTTP-MCPs bleibt die Option aus; deren Instructions werden weiterhin als untrusted Referenzdaten berücksichtigt.
-- [ ] Wenn OKF verwendet wird, ist das konkrete `[okf].repository` als lokale Knowledge-Datenquelle geprüft und für die Weitergabe relevanter Inhalte an das konfigurierte LLM freigegeben. Zulässige OKF-Roots werden über den Unternehmens-Deployment-/Konfigurationsprozess zentral festgelegt; eine normale Benutzer-/Projektkonfiguration gilt nicht als administrative Freigabe.
+- [ ] Wenn OKF verwendet wird, ist berücksichtigt, dass `[okf].repository` eine vom Benutzer explizit ausgewählte lokale Knowledge-Datenquelle ist und relevante Inhalte an das konfigurierte LLM weitergegeben werden können. Die Root-Auswahl ist bewusst keine administrative Freigabegrenze; die technischen OKF-Tools bleiben read-only und auf den ausgewählten Root begrenzt.
 - [ ] Für den jeweiligen Workspace ist geprüft, welche vertraulichen Daten dort vorhanden sein dürfen. Die technischen Secret-Filter sind Defense-in-Depth und kein Ersatz für Datenklassifizierung.
 
 ## Host- und Netzwerkhärtung
@@ -52,7 +52,6 @@ Die folgenden Punkte können nicht allein durch den Quellcode erfüllt werden. S
 - [ ] Retention und Zugriffsrechte des internen LLM-Endpunkts sind geprüft; es gibt keine unerwünschte externe Telemetrie oder Trainingsweitergabe.
 - [ ] Vor Support-Bundles oder Backups werden `.env`, `.cli-agent`, Logs, Credentials und Schlüssel geprüft und entfernt.
 - [ ] Es ist festgelegt, welche Daten in Prompts gelangen dürfen und welche Datenklassen ausgeschlossen sind.
-- [ ] Falls OKF aktiv ist, ist dokumentiert, welche Knowledge-Repositories als LLM-Kontextquelle zulässig sind und wer Änderungen an diesen Repository-Pfaden freigibt.
 
 ## Prüfung und Freigabe
 

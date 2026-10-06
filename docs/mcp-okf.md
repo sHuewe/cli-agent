@@ -48,18 +48,21 @@ Daraus folgt bewusst ein anderes Vertrauensmodell als beim Workspace-OS-MCP:
 - gelesene und ausgewählte OKF-Inhalte können als Referenzkontext an das
   konfigurierte LLM übertragen werden.
 
-Das ist für lokale Entwickler-Setups ein beabsichtigter Funktionsumfang. Für
-einen gemanagten Unternehmenseinsatz muss die Organisation jedoch bewusst
-festlegen, welche Knowledge-Repositories verwendet werden dürfen. Empfohlen ist,
-OKF nur über zentral bereitgestellte bzw. geprüfte Benutzerkonfigurationen zu
-aktivieren oder die Funktion zu deaktivieren, wenn kein freigegebenes
-Knowledge-Repository benötigt wird.
+Das ist beabsichtigter Funktionsumfang und gilt unabhängig davon, ob der
+Agent lokal individuell oder gemanagt bereitgestellt wird. Die Root-Auswahl ist
+eine **explizite lokale Datenfreigabeentscheidung des Benutzers**: Durch
+`[okf].repository` wählt er eine Knowledge-Quelle aus, deren relevante Inhalte
+dem konfigurierten LLM als Kontext bereitgestellt werden dürfen. Das entspricht
+der allgemeinen Annahme, dass der Benutzer dem freigegebenen LLM auch selbst
+lokale Informationen als Kontext geben darf. Eine zusätzliche administrative
+`okf_allowed_roots`-Allowlist ist deshalb im aktuellen Design nicht vorgesehen.
 
 Eine manipulierte oder versehentlich falsch ausgewählte Benutzerkonfiguration
-kann zwar **nicht aus dem konfigurierten Root ausbrechen**, aber einen zu weit
-gefassten oder fachlich ungeeigneten Root auswählen. Die Root-Auswahl ist daher
-eine lokale Datenfreigabeentscheidung und sollte wie die Auswahl anderer
-LLM-Kontextquellen behandelt werden.
+kann zwar **nicht aus dem konfigurierten Root ausbrechen**, aber einen anderen
+gültigen OKF-Root auswählen. Das ist keine Capability-Eskalation: Die Auswahl
+bestimmt die vom Benutzer freigegebene Knowledge-Quelle; die technischen
+Knowledge-Tools bleiben anschließend read-only und auf genau diesen Root
+begrenzt.
 
 Ein konfiguriertes Verzeichnis wird **nicht automatisch zu einem OKF-Repository**. Direkt im konfigurierten Root muss eine lesbare `index.md` vorhanden sein. Genau diese Datei ist der explizite Repository-Marker und Einstiegspunkt der Knowledge-Phase. Der Agent durchsucht den konfigurierten Root beim Start **nicht rekursiv**, um irgendwo in tieferen Unterverzeichnissen ein vermeintliches OKF zu finden. Fehlt die Root-`index.md`, startet der OKF-MCP fail-closed nicht und gibt keine Verzeichnis- oder Markdown-Inhalte an den Retrieval-Lauf weiter.
 
