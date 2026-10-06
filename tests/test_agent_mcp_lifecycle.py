@@ -576,3 +576,110 @@ def test_enable_cannot_bypass_workspace_access_requirement(tmp_path: Path) -> No
             await agent.close()
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("workspace_access", ["read", "write"])
+def test_external_stdio_receives_core_owned_workspace_directory_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    workspace_access: str,
+) -> None:
+    captured = {}
+
+    class Session:
+        async def initialize(self):
+            return SimpleNamespace(instructions=None)
+
+    @asynccontextmanager
+    async def fake_stdio_client(parameters):
+        captured["environment"] = parameters.env
+        yield object(), object()
+
+    @asynccontextmanager
+    async def fake_client_session(_read_stream, _write_stream):
+        yield Session()
+
+    async def exercise() -> None:
+        monkeypatch.setenv("CLI_AGENT_WORKSPACE_DIRECTORY", "/host/attacker")
+        agent = CliAgent(
+            tmp_path,
+            OllamaClient(base_url="http://localhost:11434", model="test"),
+            (),
+            workspace_access=workspace_access,
+        )
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        monkeypatch.setattr(agent_mcp_module, "stdio_client", fake_stdio_client)
+        monkeypatch.setattr(agent_mcp_module, "ClientSession", fake_client_session)
+        try:
+            await agent._connect_server(
+                stack,
+                McpServerConfig(
+                    name="external",
+                    transport="stdio",
+                    command="unused",
+                    env={
+                        "CLI_AGENT_WORKSPACE_DIRECTORY": "/configured/attacker",
+                        "CLI_AGENT_WORKSPACE_ACCESS": "none",
+                    },
+                ),
+            )
+        finally:
+            await stack.aclose()
+
+    asyncio.run(exercise())
+
+    assert captured["environment"]["CLI_AGENT_WORKSPACE_ACCESS"] == workspace_access
+    assert captured["environment"]["CLI_AGENT_WORKSPACE_DIRECTORY"] == str(
+        tmp_path.resolve()
+    )
+
+
+def test_external_stdio_omits_workspace_directory_without_workspace_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = {}
+
+    class Session:
+        async def initialize(self):
+            return SimpleNamespace(instructions=None)
+
+    @asynccontextmanager
+    async def fake_stdio_client(parameters):
+        captured["environment"] = parameters.env
+        yield object(), object()
+
+    @asynccontextmanager
+    async def fake_client_session(_read_stream, _write_stream):
+        yield Session()
+
+    async def exercise() -> None:
+        monkeypatch.setenv("CLI_AGENT_WORKSPACE_DIRECTORY", "/host/attacker")
+        agent = CliAgent(
+            tmp_path,
+            OllamaClient(base_url="http://localhost:11434", model="test"),
+            (),
+            workspace_access="none",
+        )
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        monkeypatch.setattr(agent_mcp_module, "stdio_client", fake_stdio_client)
+        monkeypatch.setattr(agent_mcp_module, "ClientSession", fake_client_session)
+        try:
+            await agent._connect_server(
+                stack,
+                McpServerConfig(
+                    name="external",
+                    transport="stdio",
+                    command="unused",
+                    env={"CLI_AGENT_WORKSPACE_DIRECTORY": "/configured/attacker"},
+                ),
+            )
+        finally:
+            await stack.aclose()
+
+    asyncio.run(exercise())
+
+    assert captured["environment"]["CLI_AGENT_WORKSPACE_ACCESS"] == "none"
+    assert "CLI_AGENT_WORKSPACE_DIRECTORY" not in captured["environment"]
