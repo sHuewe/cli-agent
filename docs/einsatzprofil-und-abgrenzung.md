@@ -47,16 +47,11 @@ Details stehen in [Security](security.md), [Deployment](deployment.md) und der [
 
 Der optionale OKF-Knowledge-Zugriff ist eine bewusste Ausnahme von der Workspace-Grenze. `[okf].repository` gehört zur normalen Benutzer-/Projektkonfiguration und darf auf einen lokalen Repository-Root außerhalb des Workspace zeigen. Nach Auswahl dieses Roots sind die Knowledge-Tools deterministisch und read-only auf genau diesen Root begrenzt: absolute Folgepfade, `..`, Symlink-/Reparse-Escapes und Hardlink-Aliase werden abgefangen, und der Retrieval-Lauf besitzt ausschließlich die vorgesehenen OKF-Tools.
 
-Die **Auswahl des OKF-Roots selbst ist derzeit jedoch keine maschinenweit administrativ erzwungene Policy**. Es existiert keine `okf_allowed_roots`-Allowlist in `admin_config.toml`. Ein Benutzer beziehungsweise eine Projektkonfiguration kann daher einen anderen gültigen lokalen OKF-Root auswählen; relevante gelesene Inhalte dieses Roots können als Referenzkontext an das konfigurierte LLM weitergegeben werden.
+Die **Auswahl des OKF-Roots ist bewusst Benutzerkonfiguration und keine administrative Policy**. Es existiert keine `okf_allowed_roots`-Allowlist in `admin_config.toml`, und eine solche Einschränkung ist für das aktuelle Trust-Modell nicht vorgesehen. Durch das explizite Setzen von `[okf].repository` wählt der Benutzer eine lokale Knowledge-Quelle aus, deren relevante Inhalte an das konfigurierte LLM weitergegeben werden dürfen. Das entspricht der grundsätzlichen Annahme, dass der Benutzer dem freigegebenen LLM auch selbst lokale Informationen als Kontext bereitstellen darf.
 
-Für einen gemanagten Einsatz folgt daraus:
+Die technische Sicherheitsgrenze liegt deshalb nicht in einer administrativen Auswahl erlaubter Repository-Pfade, sondern **innerhalb des explizit gewählten OKF-Roots**. Nach dessen Auswahl kann der Retrieval-Lauf den Root nicht verlassen und erhält ausschließlich die vorgesehenen read-only Knowledge-Tools. Zusätzlich muss es sich um ein gültiges OKF-Repository mit Root-`index.md` handeln; ein beliebiger lokaler Ordner wird nicht automatisch zu einer durchsuchbaren Datenquelle.
 
-- OKF nur aktivieren, wenn die konkrete Knowledge-Quelle für den vorgesehenen LLM-Einsatz freigegeben ist;
-- zulässige `[okf].repository`-Werte über die zentral bereitgestellte beziehungsweise geprüfte Benutzerkonfiguration und den Deployment-Prozess festlegen;
-- Änderungen des Repository-Roots als Änderung der lokalen Datenfreigabe behandeln;
-- OKF deaktivieren, wenn keine freigegebene Knowledge-Quelle benötigt wird.
-
-Damit sind zwei unterschiedliche Grenzen zu unterscheiden: Der Workspace-OS-MCP kann seinen Workspace nicht verlassen; der OKF-MCP kann den **gewählten** Repository-Root nicht verlassen. Welche OKF-Roots organisatorisch zulässig sind, ist im aktuellen Stand eine Deployment-/Governance-Entscheidung und keine durch die Admin-Policy technisch erzwungene Grenze.
+Damit sind zwei unterschiedliche Grenzen zu unterscheiden: Der Workspace-OS-MCP kann seinen Workspace nicht verlassen; der OKF-MCP kann den **vom Benutzer ausdrücklich gewählten** Repository-Root nicht verlassen. Die fehlende administrative Root-Allowlist ist damit eine bewusste Designentscheidung und nicht als offene Sicherheitsmaßnahme dargestellt.
 
 Details: [OKF MCP](mcp-okf.md) und [Security](security.md).
 
