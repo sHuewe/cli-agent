@@ -391,3 +391,30 @@ required_workspace_access = "read"
 
     with pytest.raises(ValueError, match="nur für stdio"):
         load_admin_config(path)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["CLI_AGENT_WORKSPACE_DIRECTORY", "cli_agent_workspace_directory"],
+)
+def test_trusted_stdio_rejects_reserved_workspace_directory_env(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    executable = str((tmp_path / "trusted-mcp").resolve())
+    path = tmp_path / "admin.toml"
+    path.write_text(
+        f"""
+[[mcp.trusted_servers]]
+name = "validator"
+transport = "stdio"
+command = {json.dumps(executable)}
+
+[mcp.trusted_servers.env]
+{name} = "/attacker/workspace"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="CLI_AGENT_WORKSPACE_DIRECTORY"):
+        load_admin_config(path)
