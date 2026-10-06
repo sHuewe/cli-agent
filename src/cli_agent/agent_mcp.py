@@ -21,6 +21,7 @@ from .mcp_limits import (
 )
 from .mcp_schema_guard import validate_mcp_server_metadata
 from .network_policy import validate_http_url
+from .workspace_access import WORKSPACE_ACCESS_ENV, workspace_access_allows
 
 logger = logging.getLogger("cli_agent.agent_mcp")
 
@@ -34,7 +35,9 @@ class McpLifecycleMixin:
             if not was_enabled:
                 server_config = self._server_configs.get(server_name)
                 if server_config is not None and self._exit_stack is not None:
-                    await self._start_server(server_config, self._exit_stack)
+                    started = await self._start_server(server_config, self._exit_stack)
+                    if started is False:
+                        return False
                 self._active_servers.add(server_name)
         elif was_enabled:
             self._active_servers.discard(server_name)
@@ -74,8 +77,9 @@ class McpLifecycleMixin:
         await stack.__aenter__()
         try:
             for server_config in self.mcp_servers:
-                await self._start_server(server_config, stack)
-                self._active_servers.add(server_config.name)
+                started = await self._start_server(server_config, stack)
+                if started is not False:
+                    self._active_servers.add(server_config.name)
             if self._okf_options is not None:
                 await self._start_knowledge_server(stack)
             self.history = []
@@ -112,10 +116,25 @@ class McpLifecycleMixin:
             command=trusted.command,
             args=trusted.args,
             env=dict(trusted.env),
+            required_workspace_access=trusted.required_workspace_access,
         )
 
-    async def _start_server(self, server_config: ServerConfig, parent_stack: AsyncExitStack) -> None:
+    async def _start_server(self, server_config: ServerConfig, parent_stack: AsyncExitStack) -> bool:
         server_config = self._resolve_external_stdio_server(server_config)
+        required_access = getattr(
+            server_config,
+            "required_workspace_access",
+            "none",
+        )
+        if not workspace_access_allows(self.workspace_access, required_access):
+            self._server_configs[server_config.name] = server_config
+            logger.info(
+                "mcp_server_workspace_access_blocked name=%s required=%s granted=%s",
+                server_config.name,
+                required_access,
+                self.workspace_access,
+            )
+            return False
         if server_config.name in self._sessions:
             raise RuntimeError(f"MCP-Server bereits verbunden: {server_config.name}")
         server_stack = AsyncExitStack(); await server_stack.__aenter__()
@@ -164,6 +183,7 @@ class McpLifecycleMixin:
             logger.info("mcp_server_instructions_untrusted name=%s", server_config.name)
         parent_stack.push_async_callback(server_stack.aclose)
         logger.info("mcp_server_connected name=%s transport=%s tools=%s", server_config.name, server_config.transport, json.dumps(tool_names, ensure_ascii=False))
+        return True
 
     async def _start_knowledge_server(self, stack: AsyncExitStack) -> None:
         options = self._okf_options
@@ -243,6 +263,8 @@ class McpLifecycleMixin:
                     for key, value in server_config.env.items()
                 }
             )
+            if not built_in:
+                environment[WORKSPACE_ACCESS_ENV] = self.workspace_access
             parameters = StdioServerParameters(
                 command=self._resolve_stdio_value(server_config.command),
                 args=[
