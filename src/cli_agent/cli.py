@@ -390,6 +390,13 @@ def _render_trusted_server_fragment(server: Any) -> str:
         args = tuple(str(value) for value in (getattr(server, "args", ()) or ()))
         if args:
             lines.append("args = [" + ", ".join(json.dumps(value, ensure_ascii=False) for value in args) + "]")
+        required_workspace_access = str(
+            getattr(server, "required_workspace_access", "none")
+        )
+        lines.append(
+            "required_workspace_access = "
+            + json.dumps(required_workspace_access, ensure_ascii=False)
+        )
         env = getattr(server, "env", None)
         if env:
             lines.append("# Environment-Werte werden aus Sicherheitsgründen nicht ausgegeben; Werte aus der vorhandenen Admin-Konfiguration übernehmen.")
