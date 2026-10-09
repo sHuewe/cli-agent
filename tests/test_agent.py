@@ -453,6 +453,7 @@ def test_mcp_message_to_user_stays_in_working_history_but_not_model_context(
         ]
     )
     agent, _ = connected_agent(tmp_path, model)
+    agent.dump_llm_context = True
 
     class UserMessageSession:
         async def call_tool(self, name, arguments):
@@ -490,13 +491,12 @@ def test_mcp_message_to_user_stays_in_working_history_but_not_model_context(
         "Dependencies are unavailable."
     )
 
-    working = agent.working_messages_snapshot()
-    notices = [
+    internal_notices = [
         message
-        for message in working
+        for message in agent._last_working_messages
         if message.get("role") == "cli_agent_user_message"
     ]
-    assert notices == [
+    assert internal_notices == [
         {
             "role": "cli_agent_user_message",
             "type": "mcp_message_to_user",
@@ -508,6 +508,14 @@ def test_mcp_message_to_user_stays_in_working_history_but_not_model_context(
         ("Run the trusted host preparation command.", "documents__read")
     ]
 
+    web_history = json.dumps(
+        agent.working_messages_snapshot(),
+        ensure_ascii=False,
+    )
+    assert "cli_agent_user_message" not in web_history
+    assert "Run the trusted host preparation command." not in web_history
+    assert "\"_meta\"" not in web_history
+
     second_model_messages = model.calls[1][0]
     serialized = json.dumps(second_model_messages, ensure_ascii=False)
     assert "cli_agent_user_message" not in serialized
@@ -515,6 +523,15 @@ def test_mcp_message_to_user_stays_in_working_history_but_not_model_context(
     assert "host-only metadata" not in serialized
     assert "\"_meta\"" not in serialized
     assert "dependencies_not_prepared" in serialized
+
+    dumped = (
+        tmp_path / ".cli-agent" / "main_working_messages.json"
+    ).read_text(encoding="utf-8")
+    assert "cli_agent_user_message" not in dumped
+    assert "Run the trusted host preparation command." not in dumped
+    assert "host-only metadata" not in dumped
+    assert "\"_meta\"" not in dumped
+    assert "dependencies_not_prepared" in dumped
 
 
 def test_unknown_tool_call_is_reported_to_model(tmp_path: Path) -> None:
