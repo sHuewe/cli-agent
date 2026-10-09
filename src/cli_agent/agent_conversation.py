@@ -241,9 +241,11 @@ class ConversationMixin:
         return answer
 
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
-        """Return a detached snapshot of the latest/current main-loop messages."""
+        """Return the exact model-visible view of the current/last main loop."""
 
-        return copy.deepcopy(getattr(self, "_last_working_messages", []))
+        return messages_for_model(
+            getattr(self, "_last_working_messages", [])
+        )
 
     def working_tools_snapshot(self) -> list[dict[str, Any]]:
         """Return the exact tool definitions used by the latest/current main loop."""
