@@ -546,6 +546,88 @@ def test_history_reset_clears_conversation_diagnostics() -> None:
     assert agent._dumped_history_json is None
 
 
+def test_web_ui_renders_mcp_user_messages_centered_and_distinct() -> None:
+    assert ".message.mcp-user" in web_ui.APP_CSS
+    assert "align-self: center" in web_ui.APP_CSS
+    assert 'payload.type === "mcp_user_message"' in web_ui.APP_JS
+    assert 'addMessage(' in web_ui.APP_JS
+    assert '"mcp-user"' in web_ui.APP_JS
+
+
+def test_web_ui_broker_sends_mcp_user_message_event() -> None:
+    async def exercise():
+        broker = web_ui.WebUiApprovalBroker()
+        sent = []
+
+        async def sender(payload):
+            sent.append(payload)
+
+        broker.set_event_sender(sender)
+        await broker.show_mcp_user_message(
+            "Prepare dependencies on the host.",
+            "code-validator__run_java_build",
+        )
+        return sent
+
+    assert asyncio.run(exercise()) == [
+        {
+            "type": "mcp_user_message",
+            "content": "Prepare dependencies on the host.",
+            "source": "code-validator__run_java_build",
+        }
+    ]
+
+
+def test_web_ui_mcp_user_message_is_queued_across_disconnects() -> None:
+    class Agent:
+        pass
+
+    async def exercise():
+        broker = web_ui.WebUiApprovalBroker()
+        session = web_ui._WebUiSession(
+            agent=Agent(),
+            approval_broker=broker,
+            token="secret",
+            expected_origin="http://127.0.0.1:12345",
+            workspace=Path("."),
+            model="model",
+            mcp_servers=(),
+            output_target=None,
+            initial_messages=(),
+            debug=False,
+        )
+        await broker.show_mcp_user_message(
+            "Prepare dependencies on the host.",
+            "code-validator__run_java_build",
+        )
+        assert session._pending_events == [
+            {
+                "type": "mcp_user_message",
+                "content": "Prepare dependencies on the host.",
+                "source": "code-validator__run_java_build",
+            }
+        ]
+
+        delivered = []
+
+        async def sender(payload):
+            delivered.append(payload)
+
+        session._active_sender = sender
+        await session._flush_pending_events()
+        return delivered, session._pending_events
+
+    delivered, pending = asyncio.run(exercise())
+    assert delivered == [
+        {
+            "type": "mcp_user_message",
+            "content": "Prepare dependencies on the host.",
+            "source": "code-validator__run_java_build",
+        }
+    ]
+    assert pending == []
+
+
 def test_web_ui_contains_runtime_toggle_protocol() -> None:
     for event_type in ("reset_history", "tool_toggle", "context_toggle", "okf_toggle"):
         assert f'type: "{event_type}"' in web_ui.APP_JS

@@ -23,10 +23,11 @@ from .agent_knowledge import (
 from .agent_mcp import McpLifecycleMixin
 from .agent_permissions import WRITE_TOOLS
 from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT
-from .agent_types import ApprovalCallback, ServerConfig, ToolRoute
+from .agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageCallback
 from .config import LoggingConfig, McpServerConfig
 from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
 from .mcp_contracts import tool_contract_fingerprint
+from .message_visibility import messages_for_model
 from .model import ModelClient
 from .network_policy import NetworkConfig
 from .workspace_access import normalize_workspace_access
@@ -75,7 +76,7 @@ DUMP_PREFIX_HASH_HEX_CHARS = 16
 
 
 class CliAgent(McpLifecycleMixin, ConversationMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, okf: OkfConfigLike | str | Path | None = None, response_format: str = "text", workspace_access: str | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, response_format: str = "text", workspace_access: str | None = None) -> None:
         self.workspace_directory = workspace_directory.resolve()
         self.model_client = model_client
         self.mcp_servers = mcp_servers
@@ -95,6 +96,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self.network = network or NetworkConfig()
         self.mcp_policy = mcp_policy or McpPolicy()
         self.approval_callback = approval_callback
+        self.user_message_callback = user_message_callback
         self.workspace_access = normalize_workspace_access(workspace_access)
         if response_format not in {"text", "json"}:
             raise ValueError("response_format muss 'text' oder 'json' sein.")
@@ -289,12 +291,18 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
     def _dump_context(self, working_messages: list[dict[str, Any]], *, phase: str) -> None:
         if not self.dump_llm_context:
             return
-        history_json = json.dumps(self.history, ensure_ascii=False, indent=2)
+        model_history = messages_for_model(self.history)
+        history_json = json.dumps(model_history, ensure_ascii=False, indent=2)
         if history_json != self._dumped_history_json:
-            self._write_dump_json("history.json", self.history)
+            self._write_dump_json("history.json", model_history)
             self._dumped_history_json = history_json
-        self._write_dump_json(f"{phase}_working_messages.json", working_messages)
-        self._write_dump_json(f"{phase}_system_prompt.json", working_messages[0]["content"])
+        model_messages = messages_for_model(working_messages)
+        self._write_dump_json(f"{phase}_working_messages.json", model_messages)
+        if model_messages:
+            self._write_dump_json(
+                f"{phase}_system_prompt.json",
+                model_messages[0]["content"],
+            )
 
     def _dump_value(self, filename: str, value: Any) -> None:
         if not self.dump_llm_context:

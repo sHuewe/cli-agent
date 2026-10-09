@@ -46,6 +46,28 @@ REDACTED_CONFIG_VALUE = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"
 logger = logging.getLogger("cli_agent.cli")
 
 
+async def _show_mcp_user_message(
+    content: str,
+    source: str | None,
+) -> None:
+    safe_content = sanitize_terminal_text(
+        content,
+        multiline=True,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
+    if source:
+        safe_source = sanitize_terminal_text(
+            source,
+            multiline=False,
+            escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
+        )
+        print(f"\n[MCP {safe_source}] {safe_content}")
+    else:
+        print(f"\n[MCP] {safe_content}")
+
+
 def _status_text(value: object) -> str:
     return sanitize_terminal_text(
         str(value),
@@ -674,6 +696,7 @@ async def run(args: argparse.Namespace) -> None:
                 response_format=getattr(args, "response_format", "text"),
                 add_web_context=tuple(getattr(args, "add_web_context", ()) or ()),
                 approval_callback=approval_callback,
+                user_message_callback=_show_mcp_user_message,
                 prepared_file_contexts=file_contexts,
                 prepared_output_target=output_target,
                 excluded_paths=tuple(getattr(args, "exclude_path", ()) or ()),
@@ -709,6 +732,11 @@ async def run(args: argparse.Namespace) -> None:
         web_providers=admin_config.web.providers,
         mcp_policy=admin_config.mcp,
         approval_callback=approval_callback,
+        user_message_callback=(
+            web_approval_broker.show_mcp_user_message
+            if web_approval_broker is not None
+            else _show_mcp_user_message
+        ),
         okf=config.okf,
         file_contexts=file_contexts,
         response_format=getattr(args, "response_format", "text"),

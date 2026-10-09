@@ -28,3 +28,4 @@ class _RuntimeMcpServerConfig:
 ServerConfig = McpServerConfig | _RuntimeMcpServerConfig
 ToolRoute = tuple[ClientSession, str, ServerConfig]
 ApprovalCallback = Callable[[str, dict[str, Any]], Awaitable[bool | str]]
+UserMessageCallback = Callable[[str, str | None], Awaitable[None]]

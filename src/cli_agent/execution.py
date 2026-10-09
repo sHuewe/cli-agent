@@ -82,6 +82,7 @@ class OneShotRunOptions:
     overwrite_output: bool = False
     add_web_context: tuple[str, ...] = ()
     approval_callback: ApprovalCallback | None = None
+    user_message_callback: Callable[[str, str | None], Awaitable[None]] | None = None
     prepared_file_contexts: tuple[FileContext, ...] = ()
     prepared_output_target: OutputTarget | None = None
     mutation_protected_paths: tuple[Path, ...] = ()
@@ -104,6 +105,7 @@ class ConversationRunOptions:
     overwrite_output: bool = False
     add_web_context: tuple[str, ...] = ()
     approval_callback: ApprovalCallback | None = None
+    user_message_callback: Callable[[str, str | None], Awaitable[None]] | None = None
     prepared_file_contexts: tuple[FileContext, ...] = ()
     prepared_output_target: OutputTarget | None = None
     mutation_protected_paths: tuple[Path, ...] = ()
@@ -410,6 +412,7 @@ async def _run_prompt_sequence(
         web_providers=admin_config.web.providers,
         mcp_policy=admin_config.mcp,
         approval_callback=options.approval_callback,
+        user_message_callback=options.user_message_callback,
         okf=config.okf,
         file_contexts=file_contexts,
         response_format=response_format,

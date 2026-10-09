@@ -15,6 +15,7 @@ from .agent_knowledge import (
 )
 from .agent_loop import ModelLoopRunState, run_model_loop
 from .agent_types import ToolRoute
+from .message_visibility import messages_for_model
 from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
 logger = logging.getLogger("cli_agent.agent_conversation")
@@ -23,6 +24,7 @@ _JSON_CODE_FENCE = re.compile(
     r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*)\r?\n```[ \t]*\Z",
     re.IGNORECASE | re.DOTALL,
 )
+
 
 
 def _json_validation_error(answer: str) -> str | None:
@@ -239,9 +241,11 @@ class ConversationMixin:
         return answer
 
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
-        """Return a detached snapshot of the latest/current main-loop messages."""
+        """Return the exact model-visible view of the current/last main loop."""
 
-        return copy.deepcopy(getattr(self, "_last_working_messages", []))
+        return messages_for_model(
+            getattr(self, "_last_working_messages", [])
+        )
 
     def working_tools_snapshot(self) -> list[dict[str, Any]]:
         """Return the exact tool definitions used by the latest/current main loop."""
@@ -530,7 +534,7 @@ class ConversationMixin:
         result_text: str,
     ) -> str:
         compression_input = {
-            "current_agent_run": current_turn_messages,
+            "current_agent_run": messages_for_model(current_turn_messages),
             "current_tool": {
                 "name": tool_name,
                 "arguments": arguments,

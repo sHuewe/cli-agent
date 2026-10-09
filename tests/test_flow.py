@@ -463,6 +463,7 @@ add_web_context = ["https://docs.example/reference"]
     assert len(calls) == 1
     assert calls[0].context_files == ((tmp_path / "context.txt").resolve(),)
     assert calls[0].add_web_context == ("https://docs.example/reference",)
+    assert calls[0].user_message_callback is flow_module._show_mcp_user_message
 
 
 def test_flow_rejects_dynamic_context_configuration(tmp_path: Path) -> None:
@@ -4140,6 +4141,10 @@ directory = "${conversation.item}"
         "dir=rules",
     )
     assert conversations[0].response_format == "json"
+    assert (
+        conversations[0].user_message_callback
+        is flow_module._show_mcp_user_message
+    )
 
 
 def test_flow_static_conversation_items_serialize_toml_floats(
