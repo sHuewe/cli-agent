@@ -158,6 +158,38 @@ class WebUiApprovalBroker:
             return False
         return True
 
+    async def show_mcp_user_message(
+        self,
+        content: str,
+        source: str | None,
+    ) -> None:
+        sender = self._sender
+        if sender is None:
+            return
+        safe_content = sanitize_terminal_text(
+            content,
+            multiline=True,
+            escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
+        )
+        safe_source = (
+            sanitize_terminal_text(
+                source,
+                multiline=False,
+                escape_invisible_formatting=True,
+                escape_literal_backslashes=True,
+            )
+            if source
+            else None
+        )
+        await sender(
+            {
+                "type": "mcp_user_message",
+                "content": safe_content,
+                "source": safe_source,
+            }
+        )
+
     async def approve_tool_call(
         self,
         tool_name: str,
@@ -752,6 +784,7 @@ h1 { margin: 0 0 4px; font-size: 1.35rem; }
 .message.assistant table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; }
 .message.assistant th, .message.assistant td { border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); padding: 6px 9px; text-align: left; }
 .message.error { align-self: flex-start; border: 1px solid #b42318; }
+.message.mcp-user { align-self: center; max-width: 76%; text-align: center; background: color-mix(in srgb, Highlight 8%, Canvas); border: 1px solid color-mix(in srgb, Highlight 35%, CanvasText 15%); }
 .commands { display: flex; flex-wrap: wrap; gap: 8px; }
 .commands button { padding: 7px 10px; font-size: .9rem; }
 .hidden { display: none; }
@@ -1158,6 +1191,15 @@ APP_JS = """
     }
     if (payload.type === "error") {
       addMessage("error", String(payload.content || "Unbekannter Fehler."));
+      return;
+    }
+    if (payload.type === "mcp_user_message") {
+      const source = String(payload.source || "").trim();
+      const content = String(payload.content || "");
+      addMessage(
+        "mcp-user",
+        source ? "MCP (" + source + ")\n" + content : content
+      );
       return;
     }
     if (payload.type === "working_context") {
