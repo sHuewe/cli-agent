@@ -23,7 +23,7 @@ from .agent_knowledge import (
 from .agent_mcp import McpLifecycleMixin
 from .agent_permissions import WRITE_TOOLS
 from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT
-from .agent_types import ApprovalCallback, ServerConfig, ToolRoute
+from .agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageCallback
 from .config import LoggingConfig, McpServerConfig
 from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
 from .mcp_contracts import tool_contract_fingerprint
@@ -75,7 +75,7 @@ DUMP_PREFIX_HASH_HEX_CHARS = 16
 
 
 class CliAgent(McpLifecycleMixin, ConversationMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, okf: OkfConfigLike | str | Path | None = None, response_format: str = "text", workspace_access: str | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, response_format: str = "text", workspace_access: str | None = None) -> None:
         self.workspace_directory = workspace_directory.resolve()
         self.model_client = model_client
         self.mcp_servers = mcp_servers
@@ -95,6 +95,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self.network = network or NetworkConfig()
         self.mcp_policy = mcp_policy or McpPolicy()
         self.approval_callback = approval_callback
+        self.user_message_callback = user_message_callback
         self.workspace_access = normalize_workspace_access(workspace_access)
         if response_format not in {"text", "json"}:
             raise ValueError("response_format muss 'text' oder 'json' sein.")
