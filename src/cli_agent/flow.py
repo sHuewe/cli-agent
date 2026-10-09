@@ -36,6 +36,7 @@ from .filesystem_security import path_entry_is_symlink_or_reparse
 from .model import ModelRetryPolicy
 from .prompt_template import PromptTemplate
 from .terminal_output import sanitize_terminal_text
+from .agent_types import UserMessageCallback
 
 MAX_FLOW_STEPS = 100
 MAX_FOREACH_ITEMS = 1000
@@ -128,7 +129,7 @@ class _FlowResultValue:
 class _FlowExecutionContext:
     dependencies: ExecutionDependencies
     approval_callback: ApprovalCallback | None
-    user_message_callback: Callable[[str, str | None], Any] | None
+    user_message_callback: UserMessageCallback | None
     executed_steps: int = 0
     claimed_outputs: dict[str, str] | None = None
     reserved_inputs: dict[str, Path] | None = None
@@ -3640,9 +3641,7 @@ async def run_flow(
     workspace: Path,
     dependencies: ExecutionDependencies | None = None,
     approval_callback: ApprovalCallback | None = None,
-    user_message_callback: Callable[[str, str | None], Any] | None = (
-        _show_mcp_user_message
-    ),
+    user_message_callback: UserMessageCallback | None = _show_mcp_user_message,
 ) -> None:
     workspace = workspace.expanduser().resolve()
     deps = dependencies or ExecutionDependencies()
