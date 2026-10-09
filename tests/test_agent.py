@@ -425,7 +425,16 @@ def connected_agent(tmp_path: Path, model: RecordingModel):
     agent._server_configs = {"documents": documents}
     agent._active_servers = {"documents"}
     agent._server_instructions = {"documents": "Document instructions"}
-    agent._server_tools = {"documents": [{"function": {"name": "documents__read"}}]}
+    agent._server_tools = {
+        "documents": [
+            {
+                "function": {
+                    "name": "documents__read",
+                    "parameters": {"type": "object"},
+                }
+            }
+        ]
+    }
     agent._tool_routes = {"documents__read": (session, "read", documents)}
     agent.messages = [{"role": "system", "content": agent._build_system_prompt()}]
     return agent, session
