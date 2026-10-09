@@ -5,7 +5,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from .agent_conversation import messages_for_model
 from .agent_knowledge import (
     MAX_KNOWLEDGE_SELECTION_RETRIES,
     MAX_PREMATURE_KNOWLEDGE_RETRIES,
@@ -15,6 +14,7 @@ from .agent_knowledge import (
 )
 from .agent_tool_calls import process_tool_calls
 from .agent_types import ToolRoute
+from .message_visibility import messages_for_model
 
 logger = logging.getLogger("cli_agent.agent_loop")
 
