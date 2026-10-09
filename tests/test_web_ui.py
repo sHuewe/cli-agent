@@ -562,7 +562,7 @@ def test_web_ui_broker_sends_mcp_user_message_event() -> None:
         async def sender(payload):
             sent.append(payload)
 
-        broker.attach(sender)
+        broker.set_event_sender(sender)
         await broker.show_mcp_user_message(
             "Prepare dependencies on the host.",
             "code-validator__run_java_build",
@@ -576,6 +576,56 @@ def test_web_ui_broker_sends_mcp_user_message_event() -> None:
             "source": "code-validator__run_java_build",
         }
     ]
+
+
+def test_web_ui_mcp_user_message_is_queued_across_disconnects() -> None:
+    class Agent:
+        pass
+
+    async def exercise():
+        broker = web_ui.WebUiApprovalBroker()
+        session = web_ui._WebUiSession(
+            agent=Agent(),
+            approval_broker=broker,
+            token="secret",
+            expected_origin="http://127.0.0.1:12345",
+            workspace=Path("."),
+            model="model",
+            mcp_servers=(),
+            output_target=None,
+            initial_messages=(),
+            debug=False,
+        )
+        await broker.show_mcp_user_message(
+            "Prepare dependencies on the host.",
+            "code-validator__run_java_build",
+        )
+        assert session._pending_events == [
+            {
+                "type": "mcp_user_message",
+                "content": "Prepare dependencies on the host.",
+                "source": "code-validator__run_java_build",
+            }
+        ]
+
+        delivered = []
+
+        async def sender(payload):
+            delivered.append(payload)
+
+        session._active_sender = sender
+        await session._flush_pending_events()
+        return delivered, session._pending_events
+
+    delivered, pending = asyncio.run(exercise())
+    assert delivered == [
+        {
+            "type": "mcp_user_message",
+            "content": "Prepare dependencies on the host.",
+            "source": "code-validator__run_java_build",
+        }
+    ]
+    assert pending == []
 
 
 def test_web_ui_contains_runtime_toggle_protocol() -> None:
