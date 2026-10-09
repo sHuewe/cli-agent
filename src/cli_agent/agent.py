@@ -27,6 +27,7 @@ from .agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageC
 from .config import LoggingConfig, McpServerConfig
 from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
 from .mcp_contracts import tool_contract_fingerprint
+from .message_visibility import messages_for_model
 from .model import ModelClient
 from .network_policy import NetworkConfig
 from .workspace_access import normalize_workspace_access
@@ -290,12 +291,18 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
     def _dump_context(self, working_messages: list[dict[str, Any]], *, phase: str) -> None:
         if not self.dump_llm_context:
             return
-        history_json = json.dumps(self.history, ensure_ascii=False, indent=2)
+        model_history = messages_for_model(self.history)
+        history_json = json.dumps(model_history, ensure_ascii=False, indent=2)
         if history_json != self._dumped_history_json:
-            self._write_dump_json("history.json", self.history)
+            self._write_dump_json("history.json", model_history)
             self._dumped_history_json = history_json
-        self._write_dump_json(f"{phase}_working_messages.json", working_messages)
-        self._write_dump_json(f"{phase}_system_prompt.json", working_messages[0]["content"])
+        model_messages = messages_for_model(working_messages)
+        self._write_dump_json(f"{phase}_working_messages.json", model_messages)
+        if model_messages:
+            self._write_dump_json(
+                f"{phase}_system_prompt.json",
+                model_messages[0]["content"],
+            )
 
     def _dump_value(self, filename: str, value: Any) -> None:
         if not self.dump_llm_context:
