@@ -50,9 +50,19 @@ async def _show_mcp_user_message(
     content: str,
     source: str | None,
 ) -> None:
-    safe_content = sanitize_terminal_text(content, multiline=True)
+    safe_content = sanitize_terminal_text(
+        content,
+        multiline=True,
+        escape_invisible_formatting=True,
+        escape_literal_backslashes=True,
+    )
     if source:
-        safe_source = sanitize_terminal_text(source, multiline=False)
+        safe_source = sanitize_terminal_text(
+            source,
+            multiline=False,
+            escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
+        )
         print(f"\n[MCP {safe_source}] {safe_content}")
     else:
         print(f"\n[MCP] {safe_content}")
