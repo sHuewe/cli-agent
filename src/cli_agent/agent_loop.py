@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from .agent_conversation import messages_for_model
 from .agent_knowledge import (
     MAX_KNOWLEDGE_SELECTION_RETRIES,
     MAX_PREMATURE_KNOWLEDGE_RETRIES,
@@ -52,7 +53,7 @@ async def run_model_loop(
         agent._dump_context(messages, phase=phase)
         try:
             message = await agent.model_client.chat(
-                messages=messages,
+                messages=messages_for_model(messages),
                 tools=(
                     []
                     if phase == "knowledge" and knowledge_selection_only_mode
