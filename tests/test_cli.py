@@ -345,6 +345,23 @@ def test_run_sanitizes_dynamic_startup_status_values(
     assert str(tmp_path) in output
 
 
+def test_mcp_user_message_uses_strict_terminal_sanitization(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    asyncio.run(
+        cli_module._show_mcp_user_message(
+            "run prep\u200b-command \\u001b",
+            "validator\u200b__build",
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert "\u200b" not in output
+    assert "validator\\u200b__build" in output
+    assert "prep\\u200b-command" in output
+    assert "\\\\u001b" in output
+
+
 def test_terminal_sanitizer_preserves_normal_unicode_and_emoji() -> None:
     value = "Grüße ✅ 🚀 👨‍💻 ❤️"
 
