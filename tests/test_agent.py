@@ -10,7 +10,37 @@ from cli_agent.admin_config import McpPolicy, TrustedMcpServer, TrustedMcpToolAp
 from cli_agent.agent import CliAgent
 from cli_agent.config import McpServerConfig
 from cli_agent.mcp_contracts import tool_contract_fingerprint
+from cli_agent.message_visibility import messages_for_model
 from cli_agent.ollama import OllamaClient
+
+
+def test_messages_for_model_strips_only_message_envelope_meta() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "_meta": {"transport": "hidden"},
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "function": {
+                        "name": "demo__tool",
+                        "arguments": {
+                            "_meta": {"application": "keep"},
+                            "value": 1,
+                        },
+                    },
+                }
+            ],
+        }
+    ]
+
+    visible = messages_for_model(messages)
+
+    assert "_meta" not in visible[0]
+    assert visible[0]["tool_calls"][0]["function"]["arguments"]["_meta"] == {
+        "application": "keep"
+    }
+    assert messages[0]["_meta"] == {"transport": "hidden"}
 
 
 class RecordingModel:
