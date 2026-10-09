@@ -23,8 +23,30 @@ from .mcp_limits import (
     enforce_mcp_tool_result_limit,
 )
 from .mcp_schema_guard import validate_mcp_tool_arguments
+from .message_visibility import (
+    CLI_AGENT_MESSAGE_TO_USER_META_KEY,
+    MCP_USER_MESSAGE_ROLE,
+    MCP_USER_MESSAGE_TYPE,
+)
 
 logger = logging.getLogger("cli_agent.agent_tool_calls")
+
+
+def _message_to_user(result: Any) -> str | None:
+    meta = getattr(result, "meta", None)
+    if not isinstance(meta, dict):
+        return None
+    extension = meta.get(CLI_AGENT_MESSAGE_TO_USER_META_KEY)
+    if extension is None:
+        return None
+    if not isinstance(extension, dict):
+        logger.warning("mcp_message_to_user_invalid reason=not_object")
+        return None
+    text = extension.get("text")
+    if not isinstance(text, str) or not text.strip():
+        logger.warning("mcp_message_to_user_invalid reason=missing_text")
+        return None
+    return enforce_mcp_tool_result_limit(text.strip())
 
 
 async def process_tool_calls(
@@ -284,6 +306,7 @@ async def process_tool_calls(
             )
             raise
 
+        user_message = _message_to_user(result)
         is_error = bool(getattr(result, "isError", False))
         if (
             not is_error
@@ -387,6 +410,25 @@ async def process_tool_calls(
             tool_message["tool_name"] = exposed_name
 
         messages.append(tool_message)
+        if user_message is not None:
+            notice = {
+                "role": MCP_USER_MESSAGE_ROLE,
+                "type": MCP_USER_MESSAGE_TYPE,
+                "content": user_message,
+                "source": str(exposed_name or original_name),
+            }
+            messages.append(notice)
+            callback = getattr(agent, "user_message_callback", None)
+            if callback is not None:
+                try:
+                    await callback(user_message, notice["source"])
+                except Exception as exc:
+                    logger.error(
+                        "mcp_message_to_user_delivery_failed "
+                        "source=%s error_type=%s",
+                        notice["source"],
+                        type(exc).__name__,
+                    )
         agent._dump_context(messages, phase=phase)
 
     return calls, knowledge_concept_limit_notice_pending
