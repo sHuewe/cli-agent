@@ -431,6 +431,92 @@ def connected_agent(tmp_path: Path, model: RecordingModel):
     return agent, session
 
 
+def test_mcp_message_to_user_stays_in_working_history_but_not_model_context(
+    tmp_path: Path,
+) -> None:
+    model = RecordingModel(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "read-1",
+                        "function": {
+                            "name": "documents__read",
+                            "arguments": {},
+                        },
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "Dependencies are unavailable."},
+        ]
+    )
+    agent, _ = connected_agent(tmp_path, model)
+
+    class UserMessageSession:
+        async def call_tool(self, name, arguments):
+            assert name == "read"
+            assert arguments == {}
+            return SimpleNamespace(
+                structuredContent={
+                    "success": False,
+                    "reason": "dependencies_not_prepared",
+                    "message": "Dependencies are unavailable.",
+                },
+                content=[],
+                isError=False,
+                meta={
+                    "io.github.shuewe.cli-agent/messageToUser": {
+                        "text": "Run the trusted host preparation command."
+                    },
+                    "example.other/private": {"value": "host-only metadata"},
+                },
+            )
+
+    session = UserMessageSession()
+    documents = agent._server_configs["documents"]
+    agent._sessions["documents"] = session
+    agent._tool_routes["documents__read"] = (session, "read", documents)
+
+    delivered: list[tuple[str, str | None]] = []
+
+    async def user_message_callback(content: str, source: str | None) -> None:
+        delivered.append((content, source))
+
+    agent.user_message_callback = user_message_callback
+
+    assert asyncio.run(agent.ask("Validate the project")) == (
+        "Dependencies are unavailable."
+    )
+
+    working = agent.working_messages_snapshot()
+    notices = [
+        message
+        for message in working
+        if message.get("role") == "cli_agent_user_message"
+    ]
+    assert notices == [
+        {
+            "role": "cli_agent_user_message",
+            "type": "mcp_message_to_user",
+            "content": "Run the trusted host preparation command.",
+            "source": "documents__read",
+        }
+    ]
+    assert delivered == [
+        ("Run the trusted host preparation command.", "documents__read")
+    ]
+
+    second_model_messages = model.calls[1][0]
+    serialized = json.dumps(second_model_messages, ensure_ascii=False)
+    assert "cli_agent_user_message" not in serialized
+    assert "Run the trusted host preparation command." not in serialized
+    assert "host-only metadata" not in serialized
+    assert "\"_meta\"" not in serialized
+    assert "dependencies_not_prepared" in serialized
+
+
 def test_unknown_tool_call_is_reported_to_model(tmp_path: Path) -> None:
     model = RecordingModel([{"role": "assistant", "content": "", "tool_calls": [{"id": "invented-call", "function": {"name": "invented__tool", "arguments": {}}}]}, {"role": "assistant", "content": "I cannot use that tool."}])
     agent, _ = connected_agent(tmp_path, model)
