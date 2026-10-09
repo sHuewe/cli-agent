@@ -122,7 +122,14 @@ class WebUiApprovalBroker:
 
     def __init__(self) -> None:
         self._sender: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        self._event_sender: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._pending: dict[str, asyncio.Future[bool | str]] = {}
+
+    def set_event_sender(
+        self,
+        sender: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        self._event_sender = sender
 
     def attach(
         self,
@@ -163,7 +170,7 @@ class WebUiApprovalBroker:
         content: str,
         source: str | None,
     ) -> None:
-        sender = self._sender
+        sender = self._event_sender
         if sender is None:
             return
         safe_content = sanitize_terminal_text(
@@ -264,6 +271,7 @@ class _WebUiSession:
         self._prompt_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=1)
         self._request_pending = False
         self.shutdown_callback: Callable[[], None] | None = None
+        self.approval_broker.set_event_sender(self._send_event)
 
     def _authorized(self, websocket: Any) -> bool:
         token = websocket.query_params.get("token")
