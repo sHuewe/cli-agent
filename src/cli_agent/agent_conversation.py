@@ -15,48 +15,17 @@ from .agent_knowledge import (
 )
 from .agent_loop import ModelLoopRunState, run_model_loop
 from .agent_types import ToolRoute
+from .message_visibility import messages_for_model
 from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
 logger = logging.getLogger("cli_agent.agent_conversation")
 MAX_RESPONSE_FORMAT_REPAIRS = 2
-MCP_USER_MESSAGE_ROLE = "cli_agent_user_message"
-MCP_USER_MESSAGE_TYPE = "mcp_message_to_user"
 _JSON_CODE_FENCE = re.compile(
     r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*)\r?\n```[ \t]*\Z",
     re.IGNORECASE | re.DOTALL,
 )
 
 
-
-
-def _strip_meta(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _strip_meta(item)
-            for key, item in value.items()
-            if key != "_meta"
-        }
-    if isinstance(value, list):
-        return [_strip_meta(item) for item in value]
-    if isinstance(value, tuple):
-        return [_strip_meta(item) for item in value]
-    return value
-
-
-def messages_for_model(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return a detached, model-safe view of working messages.
-
-    cli-agent-only user notices remain in working history for UI/diagnostics but
-    are never forwarded to a model. Protocol `_meta` data is stripped
-    recursively as a second boundary even if an MCP result or future message
-    shape accidentally carries it into the working list.
-    """
-
-    return [
-        _strip_meta(copy.deepcopy(message))
-        for message in messages
-        if message.get("role") != MCP_USER_MESSAGE_ROLE
-    ]
 
 def _json_validation_error(answer: str) -> str | None:
     def reject_constant(value: str) -> None:
