@@ -546,6 +546,38 @@ def test_history_reset_clears_conversation_diagnostics() -> None:
     assert agent._dumped_history_json is None
 
 
+def test_web_ui_renders_mcp_user_messages_centered_and_distinct() -> None:
+    assert ".message.mcp-user" in web_ui.APP_CSS
+    assert "align-self: center" in web_ui.APP_CSS
+    assert 'payload.type === "mcp_user_message"' in web_ui.APP_JS
+    assert 'addMessage(' in web_ui.APP_JS
+    assert '"mcp-user"' in web_ui.APP_JS
+
+
+def test_web_ui_broker_sends_mcp_user_message_event() -> None:
+    async def exercise():
+        broker = web_ui.WebUiApprovalBroker()
+        sent = []
+
+        async def sender(payload):
+            sent.append(payload)
+
+        broker.attach(sender)
+        await broker.show_mcp_user_message(
+            "Prepare dependencies on the host.",
+            "code-validator__run_java_build",
+        )
+        return sent
+
+    assert asyncio.run(exercise()) == [
+        {
+            "type": "mcp_user_message",
+            "content": "Prepare dependencies on the host.",
+            "source": "code-validator__run_java_build",
+        }
+    ]
+
+
 def test_web_ui_contains_runtime_toggle_protocol() -> None:
     for event_type in ("reset_history", "tool_toggle", "context_toggle", "okf_toggle"):
         assert f'type: "{event_type}"' in web_ui.APP_JS
