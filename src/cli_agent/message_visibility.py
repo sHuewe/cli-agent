@@ -6,6 +6,7 @@ from typing import Any
 
 MCP_USER_MESSAGE_ROLE = "cli_agent_user_message"
 MCP_USER_MESSAGE_TYPE = "mcp_message_to_user"
+CLI_AGENT_MESSAGE_TO_USER_META_KEY = "io.github.shuewe.cli-agent/messageToUser"
 
 
 def _strip_meta(value: Any) -> Any:
