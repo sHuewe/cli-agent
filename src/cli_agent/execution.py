@@ -6,7 +6,7 @@ import logging
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
-from .admin_config import AdminConfig, load_admin_config
+from .admin_config import AdminConfig, _normalize_mcp_url, load_admin_config
 from .config import (
     AppConfig,
     McpServerConfig,
@@ -320,12 +320,51 @@ def apply_workspace_access_override(
     return replace(config, mcp_servers=servers)
 
 
+def _same_http_mcp_identity(
+    existing: McpServerConfig,
+    selected: McpServerConfig,
+    *,
+    workspace: Path | None,
+) -> bool:
+    """Use the runtime's URL and case-insensitive header identity rules."""
+    def expand(value: str) -> str:
+        unsupported = ("{python}", "{config_file}")
+        if any(part in value for part in unsupported):
+            raise ValueError("Nicht zulässiger HTTP-MCP-Platzhalter.")
+        if workspace is None:
+            return value
+        return (
+            value.replace("{workspace_directory}", str(workspace))
+            .replace("{project_directory}", str(workspace))
+        )
+
+    if existing.url is None or selected.url is None:
+        return False
+    try:
+        first = _normalize_mcp_url(
+            expand(existing.url), section=f"MCP-Server {existing.name!r}"
+        )
+        second = _normalize_mcp_url(
+            expand(selected.url), section=f"Trusted MCP-Server {selected.name!r}"
+        )
+        first_headers = sorted(
+            (key.casefold(), expand(value)) for key, value in existing.headers.items()
+        )
+        second_headers = sorted(
+            (key.casefold(), expand(value)) for key, value in selected.headers.items()
+        )
+    except ValueError:
+        return False
+    return first == second and first_headers == second_headers
+
+
 def apply_named_mcp_overrides(
     config: AppConfig,
     *,
     admin_config: AdminConfig,
     server_names: Iterable[str],
     workspace_access: str | None,
+    workspace: Path | None = None,
 ) -> AppConfig:
     """Select admin-defined external MCPs for this invocation only.
 
@@ -398,8 +437,9 @@ def apply_named_mcp_overrides(
                 and (
                     selected.transport == "stdio"
                     or (
-                        existing.url == selected.url
-                        and existing.headers == selected.headers
+                        _same_http_mcp_identity(
+                            existing, selected, workspace=workspace
+                        )
                     )
                 )
             )
@@ -474,6 +514,7 @@ async def _run_prompt_sequence(
         admin_config=admin_config,
         server_names=options.with_mcp,
         workspace_access=options.workspace_access,
+        workspace=workspace,
     )
 
     if options.prepared_file_contexts or options.prepared_output_target is not None:
