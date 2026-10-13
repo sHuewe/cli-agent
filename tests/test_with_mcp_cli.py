@@ -97,6 +97,37 @@ def test_http_selection_uses_exact_admin_endpoint_and_headers() -> None:
     assert "FACH_TOKEN" not in repr(selected.mcp_servers)
 
 
+def test_existing_http_server_with_equivalent_url_and_header_case_is_reused() -> None:
+    existing = McpServerConfig(
+        name="fachsoftware",
+        transport="streamable_http",
+        url="HTTPS://MCP.INTERNAL./mcp",
+        headers={"x-company": "trusted"},
+    )
+    config = AppConfig(mcp_servers=(existing,))
+    selected = _select(
+        config,
+        names=("fachsoftware",),
+        admin=_policy(_http()),
+    )
+    assert selected.mcp_servers == (existing,)
+
+
+def test_existing_http_server_with_different_header_value_is_rejected() -> None:
+    existing = McpServerConfig(
+        name="fachsoftware",
+        transport="streamable_http",
+        url="https://mcp.internal/mcp",
+        headers={"x-company": "TRUSTED"},
+    )
+    with pytest.raises(ValueError, match="anderen Serveridentität"):
+        _select(
+            AppConfig(mcp_servers=(existing,)),
+            names=("fachsoftware",),
+            admin=_policy(_http()),
+        )
+
+
 def test_multiple_servers_extend_existing_configuration_in_order() -> None:
     original = McpServerConfig(name="existing", transport="streamable_http", url="http://localhost:1234/mcp")
     config = AppConfig(mcp_servers=(original,))
