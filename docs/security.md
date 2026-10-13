@@ -69,6 +69,8 @@ Admin-Policy behandelt. Details stehen in [mcp-okf.md](mcp-okf.md).
 
 Der Agent setzt Runtime-Platzhalter wie `{workspace_directory}` selbst ein. Dadurch können workspacegebundene MCPs wie Compose- oder Validator-Server weiterhin als 1:1-stdio-Prozess an den aktuellen Agent-Workspace gebunden werden, ohne den Workspace als modellkontrollierten Tool-Parameter offenzulegen. stdio-Prozesse erhalten außerdem nur eine reduzierte Umgebung; zusätzliche Werte stammen explizit aus dem administrativen Launchprofil. `PYTHONSAFEPATH=1` wird gesetzt und `PYTHONPATH` nicht geerbt.
 
+Die CLI-Option `--with-mcp NAME` ermöglicht dieselbe Auswahl administrativ definierter MCP-Server temporär und wiederholbar für einen Prozesslauf, ohne die Userconfig zu verändern. Bei stdio werden alle Launch-Parameter weiterhin ausschließlich aus der Admin-Policy aufgelöst; bei Streamable HTTP werden URL und Header aus dem passenden Trusted-Profil übernommen. Unbekannte Server, abweichende bestehende Identitäten und unzureichende Workspace-Freigaben werden vor dem Verbindungsaufbau abgewiesen. Die Auswahl gewährt keine zusätzlichen Tool-Approvals und verändert weder Netzwerkrichtlinien noch den Umgang mit untrusted Instructions.
+
 ### Modell-Credentials nicht als statische Header
 
 **Problem:** `[model.headers]` ist normale Benutzer-/Projektkonfiguration. Wenn dort
