@@ -6,7 +6,7 @@ import logging
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
-from .admin_config import AdminConfig, load_admin_config
+from .admin_config import AdminConfig, _normalize_mcp_url, load_admin_config
 from .config import (
     AppConfig,
     McpServerConfig,
@@ -23,7 +23,7 @@ from .file_context import (
 from .logging_setup import configure_logging
 from .model import ModelRetryPolicy, RetryingModelClient
 from .model_factory import create_model_client
-from .workspace_access import normalize_workspace_access
+from .workspace_access import normalize_workspace_access, workspace_access_allows
 
 OS_MCP_SERVER_NAME = "os"
 DATA_MCP_SERVER_NAME = "data"
@@ -88,6 +88,7 @@ class OneShotRunOptions:
     mutation_protected_paths: tuple[Path, ...] = ()
     excluded_paths: tuple[Path, ...] = ()
     dump_file_prefix: str | None = None
+    with_mcp: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,7 @@ class ConversationRunOptions:
     mutation_protected_paths: tuple[Path, ...] = ()
     excluded_paths: tuple[Path, ...] = ()
     dump_file_prefix: str | None = None
+    with_mcp: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -318,6 +320,142 @@ def apply_workspace_access_override(
     return replace(config, mcp_servers=servers)
 
 
+def _same_http_mcp_identity(
+    existing: McpServerConfig,
+    selected: McpServerConfig,
+    *,
+    workspace: Path | None,
+) -> bool:
+    """Use the runtime's URL and case-insensitive header identity rules."""
+    def expand(value: str) -> str:
+        unsupported = ("{python}", "{config_file}")
+        if any(part in value for part in unsupported):
+            raise ValueError("Nicht zulässiger HTTP-MCP-Platzhalter.")
+        if workspace is None:
+            return value
+        return (
+            value.replace("{workspace_directory}", str(workspace))
+            .replace("{project_directory}", str(workspace))
+        )
+
+    if existing.url is None or selected.url is None:
+        return False
+    try:
+        first = _normalize_mcp_url(
+            expand(existing.url), section=f"MCP-Server {existing.name!r}"
+        )
+        second = _normalize_mcp_url(
+            expand(selected.url), section=f"Trusted MCP-Server {selected.name!r}"
+        )
+        first_headers = sorted(
+            (key.casefold(), expand(value)) for key, value in existing.headers.items()
+        )
+        second_headers = sorted(
+            (key.casefold(), expand(value)) for key, value in selected.headers.items()
+        )
+    except ValueError:
+        return False
+    return first == second and first_headers == second_headers
+
+
+def apply_named_mcp_overrides(
+    config: AppConfig,
+    *,
+    admin_config: AdminConfig,
+    server_names: Iterable[str],
+    workspace_access: str | None,
+    workspace: Path | None = None,
+) -> AppConfig:
+    """Select admin-defined external MCPs for this invocation only.
+
+    Never accept launch parameters from the caller: stdio process details and
+    HTTP endpoint/headers are taken exclusively from the machine-wide policy.
+    """
+    requested = tuple(server_names)
+    if not requested:
+        return config
+
+    trusted_by_name = {server.name: server for server in admin_config.mcp.trusted_servers}
+    configured = {server.name: server for server in config.mcp_servers}
+    added: list[McpServerConfig] = []
+
+    for raw_name in requested:
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ValueError("--with-mcp benötigt einen nicht-leeren MCP-Servernamen.")
+        name = raw_name.strip()
+        if name.casefold() in {OS_MCP_SERVER_NAME, DATA_MCP_SERVER_NAME} or (
+            name.casefold() == "okf" and config.okf is not None
+        ):
+            raise ValueError(
+                f"MCP-Servername {name!r} ist für einen eingebauten Server reserviert."
+            )
+
+        trusted = trusted_by_name.get(name)
+        if trusted is None:
+            raise ValueError(
+                f"MCP-Server {name!r} ist nicht in [[mcp.trusted_servers]] "
+                "der maschinenweiten Admin-Policy definiert."
+            )
+
+        if not workspace_access_allows(
+            normalize_workspace_access(workspace_access),
+            trusted.required_workspace_access,
+        ):
+            required_flag = (
+                "--with-os-write"
+                if trusted.required_workspace_access == "write"
+                else "--with-os-read oder --with-os-write"
+            )
+            raise PermissionError(
+                f"MCP-Server {name!r} benötigt Workspace-Zugriff "
+                f"{trusted.required_workspace_access!r}. Bitte {required_flag} verwenden."
+            )
+
+        if trusted.transport == "stdio":
+            selected = McpServerConfig(name=name)
+        elif trusted.transport == "streamable_http":
+            selected = McpServerConfig(
+                name=name,
+                transport="streamable_http",
+                url=trusted.url,
+                headers=dict(trusted.headers),
+            )
+        else:
+            raise ValueError(
+                f"Nicht unterstützter administrativer MCP-Transport: "
+                f"{trusted.transport!r}."
+            )
+
+        existing = configured.get(name)
+        if existing is not None:
+            same_identity = (
+                not existing.built_in
+                and existing.transport == selected.transport
+                and existing.command is None
+                and not existing.args
+                and not existing.env
+                and (
+                    selected.transport == "stdio"
+                    or (
+                        _same_http_mcp_identity(
+                            existing, selected, workspace=workspace
+                        )
+                    )
+                )
+            )
+            if not same_identity:
+                raise ValueError(
+                    f"MCP-Server {name!r} ist bereits mit einer anderen "
+                    "Serveridentität konfiguriert."
+                )
+            continue
+
+        added.append(selected)
+        configured[name] = selected
+
+    return replace(config, mcp_servers=config.mcp_servers + tuple(added))
+
+
 def _validate_response_format(value: str) -> str:
     if value not in {"text", "json"}:
         raise ValueError("response_format muss 'text' oder 'json' sein.")
@@ -370,6 +508,13 @@ async def _run_prompt_sequence(
         workspace_access=options.workspace_access,
         mutation_protected_paths=options.mutation_protected_paths,
         excluded_paths=excluded_paths,
+    )
+    config = apply_named_mcp_overrides(
+        config,
+        admin_config=admin_config,
+        server_names=options.with_mcp,
+        workspace_access=options.workspace_access,
+        workspace=workspace,
     )
 
     if options.prepared_file_contexts or options.prepared_output_target is not None:

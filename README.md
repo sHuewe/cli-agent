@@ -180,6 +180,24 @@ X-Workspace = "{workspace_directory}"
 
 Für HTTP-MCP-URL- und Headerwerte werden bewusst nur `{workspace_directory}` und der gleichbedeutende Alias `{project_directory}` aufgelöst. Damit kann der Agent den Workspace hostseitig an die MCP-Session binden, ohne ihn dem LLM als frei wählbaren Toolparameter zu überlassen. Die lokalen Runtime-Werte `{python}` und `{config_file}` sind für HTTP-MCPs nicht zulässig; sie bleiben ausschließlich für administrativ kontrollierte stdio-Launchprofile verfügbar. Ein Workspace-Header kann den absoluten lokalen Pfad auch an einen entfernten, administrativ erlaubten MCP-Host übermitteln und sollte daher nur konfiguriert werden, wenn dieser Server diese Information tatsächlich benötigt.
 
+Alternativ können administrativ definierte MCP-Server nur für den aktuellen CLI-Aufruf
+aktiviert werden, ohne `config.toml` zu ändern:
+
+```powershell
+cli-agent --with-mcp code-validator --with-os-read
+cli-agent --with-mcp code-validator --with-mcp compose --with-os-write
+```
+
+`--with-mcp NAME` kann mehrfach angegeben werden. Die Auswahl ergänzt bereits
+konfigurierte Server; identische Einträge werden nicht doppelt gestartet.
+Die Admin-Policy muss für jeden genannten Server ein
+`[[mcp.trusted_servers]]`-Profil enthalten, aus dem cli-agent die gesamte
+stdio-Startkonfiguration beziehungsweise HTTP-URL und Header übernimmt.
+Unbekannte Server und kollidierende Serveridentitäten führen zu einem Fehler.
+Ein über `--with-mcp` angeforderter Server mit
+`required_workspace_access = "read"` oder `"write"` erfordert weiterhin
+`--with-os-read` beziehungsweise `--with-os-write`. Tool-Approvals werden dadurch
+nicht erteilt; die bestehende Admin-, Netzwerk- und Tool-Policy gilt unverändert.
 Ein externer stdio-MCP wird in der Benutzerkonfiguration dagegen ausschließlich über seinen administrativ vergebenen Namen ausgewählt:
 
 ```toml

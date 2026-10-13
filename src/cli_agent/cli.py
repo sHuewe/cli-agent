@@ -28,6 +28,7 @@ from .execution import (
     build_preapproval_callback,
     apply_workspace_access_override,
     apply_data_override,
+    apply_named_mcp_overrides,
     data_mcp_server_config,
     os_mcp_server_config,
     run_once,
@@ -148,6 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
     os_access = parser.add_mutually_exclusive_group()
     os_access.add_argument("--with-os-read", action="store_const", const="read", dest="os_access", help="Enable the built-in workspace OS MCP server with read-only access. Overrides an 'os' MCP server from the config.")
     os_access.add_argument("--with-os-write", action="store_const", const="write", dest="os_access", help="Enable the built-in workspace OS MCP server with read and write access. Overrides an 'os' MCP server from the config.")
+    parser.add_argument("--with-mcp", action="append", default=[], metavar="NAME", help="Enable an admin-defined MCP server for this run; repeat for multiple servers.")
     parser.add_argument(
         "--with-data",
         action="store_true",
@@ -574,6 +576,13 @@ async def run(args: argparse.Namespace) -> None:
         workspace_access=args.os_access,
         excluded_paths=resolved_excluded_paths,
     )
+    config = apply_named_mcp_overrides(
+        config,
+        admin_config=admin_config,
+        server_names=getattr(args, "with_mcp", ()) or (),
+        workspace_access=args.os_access,
+        workspace=workspace,
+    )
 
     prompt_file_arg = getattr(args, "prompt_file", None)
     if prompt_file_arg is not None and args.prompt:
@@ -693,6 +702,7 @@ async def run(args: argparse.Namespace) -> None:
                 model=args.model,
                 workspace_access=args.os_access,
                 with_data=bool(getattr(args, "with_data", False)),
+                with_mcp=tuple(getattr(args, "with_mcp", ()) or ()),
                 response_format=getattr(args, "response_format", "text"),
                 add_web_context=tuple(getattr(args, "add_web_context", ()) or ()),
                 approval_callback=approval_callback,
