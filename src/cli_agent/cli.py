@@ -581,6 +581,7 @@ async def run(args: argparse.Namespace) -> None:
         admin_config=admin_config,
         server_names=getattr(args, "with_mcp", ()) or (),
         workspace_access=args.os_access,
+        workspace=workspace,
     )
 
     prompt_file_arg = getattr(args, "prompt_file", None)
