@@ -554,6 +554,31 @@ def test_web_ui_renders_mcp_user_messages_centered_and_distinct() -> None:
     assert '"mcp-user"' in web_ui.APP_JS
 
 
+
+def test_web_ui_served_javascript_has_valid_mcp_notice_escape() -> None:
+    # APP_JS is a Python triple-quoted string: a single \n in its source
+    # becomes a literal newline inside a JavaScript string and breaks startup.
+    assert 'source ? "MCP (" + source + ")\\n" + content : content' in web_ui.APP_JS
+
+
+def test_web_ui_served_javascript_syntax() -> None:
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is not installed")
+
+    result = subprocess.run(
+        [node, "--check", "--input-type=commonjs"],
+        input=web_ui.APP_JS,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_web_ui_broker_sends_mcp_user_message_event() -> None:
     async def exercise():
         broker = web_ui.WebUiApprovalBroker()
