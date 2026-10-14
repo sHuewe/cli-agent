@@ -1206,7 +1206,7 @@ APP_JS = """
       const content = String(payload.content || "");
       addMessage(
         "mcp-user",
-        source ? "MCP (" + source + ")\n" + content : content
+        source ? "MCP (" + source + ")\\n" + content : content
       );
       return;
     }
