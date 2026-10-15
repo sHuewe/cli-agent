@@ -690,9 +690,9 @@ async def run(args: argparse.Namespace) -> None:
                 McpServerConfig(name="os", config={"allow_write_files": True}),
                 protected_paths=tuple(protected_for_preview),
                 mutation_protected_paths=tuple(
-                    file.path for file in file_contexts
+                    file.source_path for file in file_contexts
                 ) + (
-                    (prompt_file.path,) if prompt_file is not None else ()
+                    (prompt_file.source_path,) if prompt_file is not None else ()
                 ),
             ) if args.os_access == "write" else None
         )
