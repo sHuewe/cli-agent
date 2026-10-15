@@ -98,6 +98,7 @@ output = "work/items.json"
 overwrite_output = true
 workspace_access = "read"
 with_data = true
+with_mcp = ["code-validator"]
 
 [[steps]]
 id = "process"
@@ -412,6 +413,26 @@ deaktiviert. Der Data-MCP übernimmt die Dateirechte des Schritts aus
 dürfen Workspace-Datendateien gelesen werden und bei `write` stehen zusätzlich
 die expliziten `*_to_file`-Werkzeuge zur Verfügung. Die Option ist statisch in
 der Flow-Datei festgelegt und kann nicht aus LLM-Output parametrisiert werden.
+
+`with_mcp = ["code-validator", "compose"]` aktiviert pro Step zusätzliche
+administrativ definierte externe MCP-Server, analog zum wiederholbaren
+CLI-Schalter `--with-mcp NAME`. Ohne Angabe gilt `[]`; die Auswahl ergänzt
+bereits in der geladenen Config ausgewählte MCP-Server. Servernamen sind
+statische, nichtleere Strings und dürfen nicht aus Flow-Variablen, Foreach-
+oder LLM-Daten stammen. Die komplette Startkonfiguration wird ausschließlich
+der maschinenweiten `[[mcp.trusted_servers]]`-Policy entnommen; unbekannte
+Namen, reservierte Built-in-Namen und widersprüchliche Identitäten werden
+abgewiesen. Ein Server mit `required_workspace_access = "read"` oder
+`"write"` benötigt entsprechend `workspace_access = "read"` oder `"write"`.
+Die Auswahl wird bereits bei `cli-agent-flow validate` und vor dem ersten
+Step eines `run` gegen die effektive Step-Konfiguration und die Admin-Policy
+geprüft, einschließlich verschachtelter Subflows. Deterministische Fehler
+(unbekannte bzw. reservierte Namen, fehlende Workspace-Rechte oder kollidierende
+Serveridentitäten) brechen die Validierung vor möglichen Seiteneffekten ab.
+Die Auswahl gewährt keine Tool-Approvals und umgeht weder Netzwerk- noch
+Admin-Policy. Die eingebauten OS- und Data-MCPs werden weiterhin getrennt
+über `workspace_access` und `with_data` aktiviert. Subflow-Schritte wählen
+keine MCPs für ihre Kinder: Die jeweiligen Child-Steps konfigurieren sie selbst.
 
 `exclude_paths` kann sowohl global auf Flow-Ebene als auch pro Step gesetzt
 werden. Die Pfade werden relativ zum Workspace interpretiert. Globale und
@@ -731,7 +752,7 @@ Insbesondere gilt:
 
 - Ein Step kann den Workspace nicht überschreiben.
 - `config`, `model`, `prompt_file`, `add_file_context`, `add_web_context`,
-  `workspace_access`, `retry` und `approve_tools` werden niemals aus
+  `workspace_access`, `with_mcp`, `retry` und `approve_tools` werden niemals aus
   `foreach`-Daten interpoliert.
 - LLM-generierte Werte dürfen Prompt-Variablen und Output-Dateinamen
   parametrisieren. Resultierende Output-Pfade werden erneut gegen den festen

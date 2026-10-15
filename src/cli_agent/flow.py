@@ -14,12 +14,14 @@ from typing import Any, Callable
 
 from . import __version__
 from .cli import _show_mcp_user_message, approve_tool_call
+from .admin_config import AdminConfig, load_admin_config
 from .config import AppConfig, default_config_file, load_config
 from .execution import (
     ApprovalCallback,
     ExecutionDependencies,
     ConversationRunOptions,
     OneShotRunOptions,
+    apply_named_mcp_overrides,
     build_preapproval_callback,
     resolve_excluded_paths,
     run_conversation,
@@ -98,6 +100,7 @@ class FlowStep:
     overwrite_output: bool
     workspace_access: str
     with_data: bool
+    with_mcp: tuple[str, ...]
     retry_policy: ModelRetryPolicy | None
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
@@ -689,6 +692,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "overwrite_output",
         "workspace_access",
         "with_data",
+        "with_mcp",
         "exclude_paths",
         "retry",
         "response_format",
@@ -769,7 +773,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "config", "model", "prompt_file", "context_file",
                 "add_file_context", "add_web_context", "output",
                 "overwrite_output", "workspace_access", "with_data",
-                "exclude_paths", "retry", "response_format",
+                "with_mcp", "exclude_paths", "retry", "response_format",
                 "approve_tools", "vars", "conversation_items",
                 "conversation_final_prompt_file",
             }
@@ -922,6 +926,25 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if not isinstance(with_data, bool):
             raise ValueError(
                 f"steps[{index}].with_data muss boolesch sein."
+            )
+
+        raw_with_mcp = raw.get("with_mcp", [])
+        if (
+            not isinstance(raw_with_mcp, list)
+            or not all(
+                isinstance(name, str) and name.strip()
+                for name in raw_with_mcp
+            )
+        ):
+            raise ValueError(
+                f"steps[{index}].with_mcp muss eine Liste "
+                "nichtleerer MCP-Servernamen sein."
+            )
+        with_mcp = tuple(name.strip() for name in raw_with_mcp)
+        if any("${" in name for name in with_mcp):
+            raise ValueError(
+                f"steps[{index}].with_mcp darf keine dynamischen "
+                "Flow-Platzhalter enthalten."
             )
 
         step_excluded_paths = _path_list(
@@ -1215,6 +1238,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 overwrite_output=overwrite_output,
                 workspace_access=workspace_access,
                 with_data=with_data,
+                with_mcp=with_mcp,
                 retry_policy=retry_policy,
                 response_format=response_format,
                 approve_tools=approve_tools,
@@ -2661,6 +2685,7 @@ def validate_flow(
     *,
     workspace: Path,
     config_loader: Callable[[Path | None], AppConfig] = load_config,
+    admin_config_loader: Callable[[], AdminConfig] = load_admin_config,
     _cache: dict[str, FlowDefinition] | None = None,
     _stack: tuple[str, ...] = (),
     _inherited_excluded_paths: tuple[Path, ...] = (),
@@ -2713,6 +2738,7 @@ def validate_flow(
                 child,
                 workspace=workspace,
                 config_loader=config_loader,
+                admin_config_loader=admin_config_loader,
                 _cache=cache,
                 _stack=stack,
                 _inherited_excluded_paths=effective_flow_excluded_paths,
@@ -2831,12 +2857,29 @@ def validate_flow(
                 )
             config_argument = config
         try:
-            config_loader(config_argument)
+            config = config_loader(config_argument)
         except Exception as exc:
             raise ValueError(
                 f"Konfiguration von Schritt {step.step_id!r} "
                 f"ist ungültig: {exc}"
             ) from exc
+
+        if step.with_mcp:
+            # MCP selection is static: reject invalid admin/identity/access
+            # combinations before any previous step can invoke tools or write.
+            try:
+                apply_named_mcp_overrides(
+                    config,
+                    admin_config=admin_config_loader(),
+                    server_names=step.with_mcp,
+                    workspace_access=step.workspace_access,
+                    workspace=workspace,
+                )
+            except (ValueError, PermissionError) as exc:
+                raise type(exc)(
+                    f"MCP-Auswahl von Schritt {step.step_id!r} "
+                    f"ist ungültig: {exc}"
+                ) from exc
 
         if (
             step.foreach is None
@@ -3561,6 +3604,7 @@ async def _run_flow_internal(
                         model=step.model,
                         workspace_access=step.workspace_access,
                         with_data=step.with_data,
+                        with_mcp=step.with_mcp,
                         retry_policy=step.retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
@@ -3584,6 +3628,7 @@ async def _run_flow_internal(
                         model=step.model,
                         workspace_access=step.workspace_access,
                         with_data=step.with_data,
+                        with_mcp=step.with_mcp,
                         retry_policy=step.retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
@@ -3651,6 +3696,7 @@ async def run_flow(
         flow,
         workspace=workspace,
         config_loader=deps.load_config,
+        admin_config_loader=deps.load_admin_config,
         _cache=cache,
         _budget=validation_budget,
     )
