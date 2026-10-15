@@ -940,17 +940,17 @@ def test_write_preview_rejects_symlink_swap_before_open(tmp_path, monkeypatch):
         McpServerConfig(name="os", config={"allow_write_files": True}),
         protected_paths=(secret,),
     )
-    original_open = web_ui.os.open
+    original_open = web_ui._open_preview_file
 
-    def swap_and_open(path, flags, *args, **kwargs):
+    def swap_and_open(path):
         target.unlink()
         try:
             target.symlink_to(secret)
         except (OSError, NotImplementedError):
             pytest.skip("Symlink creation unavailable")
-        return original_open(path, flags, *args, **kwargs)
+        return original_open(path)
 
-    monkeypatch.setattr(web_ui.os, "open", swap_and_open)
+    monkeypatch.setattr(web_ui, "_open_preview_file", swap_and_open)
     preview, snapshot = web_ui.WebUiApprovalBroker(workspace=workspace)._write_preview(
         "os__write_file", {"path": "a.txt", "content": "new"}
     )
