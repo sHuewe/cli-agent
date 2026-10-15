@@ -6926,6 +6926,7 @@ result = "steps.child.output"
 [[steps]]
 id = "child"
 prompt_file = "child.md"
+output = "child-result.txt"
 with_mcp = ["missing"]
 """,
         encoding="utf-8",
