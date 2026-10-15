@@ -835,7 +835,7 @@ def test_external_tool_never_receives_local_file_diff(tmp_path):
     assert snapshot is None
 
 
-@pytest.mark.parametrize("newline", ["\\r\\n", "\\r", "\\n"])
+@pytest.mark.parametrize("newline", ["\r\n", "\r", "\n"])
 def test_write_diff_ignores_existing_line_ending_style(tmp_path, newline):
     from cli_agent.config import McpServerConfig
     from cli_agent.os_operations import Workspace
@@ -849,15 +849,15 @@ def test_write_diff_ignores_existing_line_ending_style(tmp_path, newline):
         )
     )
     proposal = "".join(
-        f"line{i if i != 800 else 'changed'}\\n" for i in range(1500)
+        f"line{i if i != 800 else 'changed'}\n" for i in range(1500)
     )
     preview, snapshot = broker._write_preview(
         "os__write_file", {"path": "file.txt", "content": proposal}
     )
     assert snapshot is not None
     assert "diff_error" not in preview
-    assert "-line800\\n" in preview["diff"]
-    assert "+linechanged\\n" in preview["diff"]
+    assert "-line800\n" in preview["diff"]
+    assert "+linechanged\n" in preview["diff"]
     assert "-line799" not in preview["diff"]
 
 
@@ -865,8 +865,8 @@ def test_write_diff_escapes_unicode_controls_in_paths_and_content(tmp_path):
     from cli_agent.config import McpServerConfig
     from cli_agent.os_operations import Workspace
 
-    filename = "a\\u202eb.txt"
-    (tmp_path / filename).write_text("old\\u2066value", encoding="utf-8")
+    filename = "a\u202eb.txt"
+    (tmp_path / filename).write_text("old\u2066value", encoding="utf-8")
     broker = web_ui.WebUiApprovalBroker(
         workspace=Workspace.from_directory(
             tmp_path, McpServerConfig(name="os", config={"allow_write_files": True})
@@ -874,22 +874,22 @@ def test_write_diff_escapes_unicode_controls_in_paths_and_content(tmp_path):
     )
     preview, snapshot = broker._write_preview(
         "os__write_file",
-        {"path": filename, "content": "new\\u202evalue\\u200d"},
+        {"path": filename, "content": "new\u202evalue\u200d"},
     )
     assert snapshot is not None
     assert "\\u202e" in preview["diff"]
     assert "\\u2066" in preview["diff"]
     assert "\\u200d" in preview["diff"]
-    assert "\\u202e" not in preview["diff"].replace("\\\\u202e", "")
-    assert "\\u2066" not in preview["diff"].replace("\\\\u2066", "")
+    assert "\u202e" not in preview["diff"]
+    assert "\u2066" not in preview["diff"]
 
 
 @pytest.mark.parametrize(
     ("before", "after", "removed", "added"),
     [
-        ("old", "new", "-old\\n\\\\ No newline at end of file", "+new\\n\\\\ No newline at end of file"),
-        ("same", "same\\n", "-same\\n\\\\ No newline at end of file", "+same\\n"),
-        ("same\\n", "same", "-same\\n", "+same\\n\\\\ No newline at end of file"),
+        ("old", "new", "-old\n\\ No newline at end of file", "+new\n\\ No newline at end of file"),
+        ("same", "same\n", "-same\n\\ No newline at end of file", "+same\n"),
+        ("same\n", "same", "-same\n", "+same\n\\ No newline at end of file"),
     ],
 )
 def test_write_diff_marks_unterminated_lines(tmp_path, before, after, removed, added):
