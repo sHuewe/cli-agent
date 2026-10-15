@@ -6672,3 +6672,141 @@ outer = "${item}"
 
     assert calls == []
     assert not (tmp_path / "results" / "shared.json").exists()
+
+
+def test_flow_with_mcp_parses_static_server_names_and_defaults_to_empty(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "selected"
+prompt_file = "prompt.md"
+with_mcp = [" validator ", "fachsoftware"]
+
+[[steps]]
+id = "default"
+prompt_file = "prompt.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    assert definition.steps[0].with_mcp == ("validator", "fachsoftware")
+    assert definition.steps[1].with_mcp == ()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        '"validator"',
+        "true",
+        "123",
+        "[]",
+        '["validator", ""]',
+        '["validator", 3]',
+        '["${item.name}"]',
+        '["${input.server}"]',
+        '["${steps.discover.output.name}"]',
+        '["${previous_output.name}"]',
+        '["${conversation.item.name}"]',
+    ],
+)
+def test_flow_with_mcp_rejects_invalid_or_dynamic_selection(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    # An empty list is valid; all other parameter values are rejected.
+    (tmp_path / "flow.toml").write_text(
+        (
+            'version = 1\n'
+            '[[steps]]\n'
+            'id = "selected"\n'
+            'prompt_file = "prompt.md"\n'
+            f'with_mcp = {value}\n'
+        ),
+        encoding="utf-8",
+    )
+    if value == "[]":
+        definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+        assert definition.steps[0].with_mcp == ()
+    else:
+        with pytest.raises(ValueError, match="with_mcp"):
+            load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_flow_with_mcp_is_per_step_and_forwarded_to_foreach_and_conversation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "process.md").write_text("process", encoding="utf-8")
+    (tmp_path / "conversation.md").write_text("talk", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        """
+version = 1
+
+[[steps]]
+id = "discover"
+prompt_file = "discover.md"
+
+[[steps]]
+id = "process"
+prompt_file = "process.md"
+foreach = "steps.discover.output.items"
+with_mcp = ["validator"]
+
+[[steps]]
+id = "conversation"
+prompt_file = "conversation.md"
+conversation_items = ["first", "second"]
+with_mcp = ["fachsoftware", "validator"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    once_calls = []
+    conversations = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        once_calls.append(options)
+        answer = '{"items":[{"id":"a"},{"id":"b"}]}' if options.prompt == "discover" else "ok"
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    async def fake_run_conversation(options, *, dependencies=None):
+        conversations.append(options)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(flow_module, "run_conversation", fake_run_conversation)
+
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert [call.with_mcp for call in once_calls] == [
+        (),
+        ("validator",),
+        ("validator",),
+    ]
+    assert len(conversations) == 1
+    assert conversations[0].with_mcp == ("fachsoftware", "validator")
+
+
+def test_flow_with_mcp_cannot_be_set_on_subflow_invocation(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "parent"\nflow = "child.toml"\nwith_mcp = ["validator"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Subflow-Schritt.*with_mcp"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
