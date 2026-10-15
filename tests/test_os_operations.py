@@ -131,7 +131,7 @@ def test_write_preserves_cr_line_endings(tmp_path):
 
 
 @pytest.mark.parametrize("operation,args,target,method,message", [
-    ("read_file", ("file.txt",), Path, "read_text", "gelesen"),
+    ("read_file", ("file.txt",), Path, "read_bytes", "gelesen"),
     ("write_file", ("file.txt", "replacement"), Path, "write_text", "geschrieben"),
     ("delete_file", ("file.txt",), Path, "unlink", "gelöscht"),
     ("copy_file", ("file.txt", "copy.txt"), os_operations.shutil, "copy2", "kopiert"),
