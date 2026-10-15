@@ -14,12 +14,14 @@ from typing import Any, Callable
 
 from . import __version__
 from .cli import _show_mcp_user_message, approve_tool_call
+from .admin_config import AdminConfig, load_admin_config
 from .config import AppConfig, default_config_file, load_config
 from .execution import (
     ApprovalCallback,
     ExecutionDependencies,
     ConversationRunOptions,
     OneShotRunOptions,
+    apply_named_mcp_overrides,
     build_preapproval_callback,
     resolve_excluded_paths,
     run_conversation,
@@ -2683,6 +2685,7 @@ def validate_flow(
     *,
     workspace: Path,
     config_loader: Callable[[Path | None], AppConfig] = load_config,
+    admin_config_loader: Callable[[], AdminConfig] = load_admin_config,
     _cache: dict[str, FlowDefinition] | None = None,
     _stack: tuple[str, ...] = (),
     _inherited_excluded_paths: tuple[Path, ...] = (),
@@ -2735,6 +2738,7 @@ def validate_flow(
                 child,
                 workspace=workspace,
                 config_loader=config_loader,
+                admin_config_loader=admin_config_loader,
                 _cache=cache,
                 _stack=stack,
                 _inherited_excluded_paths=effective_flow_excluded_paths,
@@ -2853,12 +2857,29 @@ def validate_flow(
                 )
             config_argument = config
         try:
-            config_loader(config_argument)
+            config = config_loader(config_argument)
         except Exception as exc:
             raise ValueError(
                 f"Konfiguration von Schritt {step.step_id!r} "
                 f"ist ungültig: {exc}"
             ) from exc
+
+        if step.with_mcp:
+            # MCP selection is static: reject invalid admin/identity/access
+            # combinations before any previous step can invoke tools or write.
+            try:
+                apply_named_mcp_overrides(
+                    config,
+                    admin_config=admin_config_loader(),
+                    server_names=step.with_mcp,
+                    workspace_access=step.workspace_access,
+                    workspace=workspace,
+                )
+            except (ValueError, PermissionError) as exc:
+                raise type(exc)(
+                    f"MCP-Auswahl von Schritt {step.step_id!r} "
+                    f"ist ungültig: {exc}"
+                ) from exc
 
         if (
             step.foreach is None
@@ -3675,6 +3696,7 @@ async def run_flow(
         flow,
         workspace=workspace,
         config_loader=deps.load_config,
+        admin_config_loader=deps.load_admin_config,
         _cache=cache,
         _budget=validation_budget,
     )
