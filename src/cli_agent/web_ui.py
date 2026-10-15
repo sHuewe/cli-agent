@@ -63,6 +63,15 @@ def _open_preview_file(path: Path):
             ("nFileIndexLow", wintypes.DWORD),
         ]
 
+    class _FileId128(ctypes.Structure):
+        _fields_ = [("Identifier", ctypes.c_ubyte * 16)]
+
+    class _FileIdInfo(ctypes.Structure):
+        _fields_ = [
+            ("VolumeSerialNumber", ctypes.c_ulonglong),
+            ("FileId", _FileId128),
+        ]
+
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     create = kernel.CreateFileW
     create.argtypes = [
@@ -73,6 +82,11 @@ def _open_preview_file(path: Path):
     get_info = kernel.GetFileInformationByHandle
     get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_FileInfo)]
     get_info.restype = wintypes.BOOL
+    get_file_id = kernel.GetFileInformationByHandleEx
+    get_file_id.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+    ]
+    get_file_id.restype = wintypes.BOOL
     get_path = kernel.GetFinalPathNameByHandleW
     get_path.argtypes = [
         wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD,
@@ -96,13 +110,21 @@ def _open_preview_file(path: Path):
         info = _FileInfo()
         if not get_info(handle, ctypes.byref(info)):
             raise OSError(ctypes.get_last_error(), "Dateiidentität nicht lesbar")
-        # Reject reparse points, directories, hardlinks, and filesystem
-        # providers that cannot supply a stable handle-level file index.
-        file_index = (int(info.nFileIndexHigh) << 32) | int(info.nFileIndexLow)
+        # The older 64-bit file index is not unique on ReFS. FileIdInfo (18)
+        # returns a full 128-bit ID and volume serial from the open handle.
+        # Do not fall back to BY_HANDLE_FILE_INFORMATION IDs on failure.
+        file_id_info = _FileIdInfo()
+        if not get_file_id(
+            handle, 18, ctypes.byref(file_id_info), ctypes.sizeof(file_id_info)
+        ):
+            raise WorkspaceError(
+                "128-Bit-Dateiidentität konnte nicht sicher geprüft werden."
+            )
+        file_id = bytes(file_id_info.FileId.Identifier)
         if (
             (int(info.dwFileAttributes) & (0x400 | 0x10))
             or info.nNumberOfLinks != 1
-            or file_index == 0
+            or file_id == bytes(16)
         ):
             raise WorkspaceError("Dateiidentität konnte nicht sicher geprüft werden.")
 
@@ -123,7 +145,7 @@ def _open_preview_file(path: Path):
         ):
             raise WorkspaceError("Zieldatei verweist auf einen anderen Dateipfad.")
 
-        identifier = (int(info.dwVolumeSerialNumber), file_index)
+        identifier = (int(file_id_info.VolumeSerialNumber), file_id)
         descriptor = msvcrt.open_osfhandle(
             int(handle), os.O_RDONLY | getattr(os, "O_BINARY", 0)
         )
@@ -144,7 +166,7 @@ def _preview_target_bytes(
 
     The workspace resolver protects target paths, parents, excluded paths and
     hardlinks. On POSIX require O_NOFOLLOW and reliable inode identifiers.
-    On Windows use a no-follow Win32 handle and its file index/final path.
+    On Windows use a no-follow Win32 handle, full 128-bit ID, and final path.
     A failed validation never returns any file content to the browser.
     """
     target = workspace.resolve_writable_file(relative_path)
