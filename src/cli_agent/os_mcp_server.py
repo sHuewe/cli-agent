@@ -47,7 +47,7 @@ Only write, move or delete a file when the user requested a file change.
         end_line: int | None = None,
     ) -> str:
         """
-        Read one UTF-8 text file or extract text from a PDF in the project workspace.
+        Read one UTF-8 or ISO-8859-1 text file or extract text from a PDF in the project workspace.
 
         Full text-file reads are limited to 1 MB. For larger text files,
         start_line/end_line can select a 1-based inclusive line range; ranged
@@ -76,7 +76,7 @@ Only write, move or delete a file when the user requested a file change.
     @mcp.tool()
     def search_text(path: str, text: str, max_results: int = 50) -> str:
         """
-        Search literal text in allowed UTF-8 text files below a workspace path.
+        Search literal text in allowed UTF-8 or ISO-8859-1 text files below a workspace path.
 
         The search is recursive for directories, does not follow symlinks,
         excludes sensitive files and directories, skips hardlinked or oversized
@@ -126,7 +126,7 @@ Only write, move or delete a file when the user requested a file change.
         @mcp.tool()
         def write_file(path: str, content: str) -> str:
             """
-            Create or completely overwrite one UTF-8 text file.
+            Create a UTF-8 text file, or overwrite while preserving existing UTF-8/Latin-1 encoding.
 
             Use only when the user explicitly requests a file change. The
             parent directory must already exist. Read an existing file before
@@ -135,7 +135,7 @@ Only write, move or delete a file when the user requested a file change.
             Args:
                 path: File relative to the project workspace. Absolute paths
                     and ".." are forbidden.
-                content: Complete new UTF-8 text content of the file.
+                content: Complete new text content of the file.
             """
             return workspace.write_file(path, content)
 
