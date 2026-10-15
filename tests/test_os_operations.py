@@ -804,3 +804,33 @@ def test_sensitive_workspace_root_name_protects_all_descendants(
         workspace.read_file("service.json")
     with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
         workspace.list_files(".")
+
+
+def test_latin1_read_search_and_preserve_encoding(tmp_path):
+    path = tmp_path / "messages.properties"
+    path.write_bytes(b"title=Gr\xfc\xdfe\n")
+    workspace = _workspace(tmp_path)
+    assert workspace.read_file(path.name) == "title=Grüße\n"
+    assert workspace.read_file(path.name, start_line=1, end_line=1) == "title=Grüße\n"
+    assert '"line": 1' in workspace.search_text(".", "Grüße")
+    workspace.write_file(path.name, "title=Änderung\n")
+    assert path.read_bytes() == "title=Änderung\n".encode("iso-8859-1")
+
+
+def test_latin1_write_rejects_unrepresentable_without_modifying(tmp_path):
+    path = tmp_path / "old.properties"
+    original = b"name=\xe4\n"
+    path.write_bytes(original)
+    with pytest.raises(WorkspaceError, match="Kodierung"):
+        _workspace(tmp_path).write_file(path.name, "name=🦄\n")
+    assert path.read_bytes() == original
+
+
+def test_latin1_fallback_rejects_binary_data(tmp_path):
+    path = tmp_path / "binary.properties"
+    path.write_bytes(b"foo=\xff\x00\n")
+    with pytest.raises(WorkspaceError, match="Text"):
+        _workspace(tmp_path).read_file(path.name)
+    with pytest.raises(WorkspaceError, match="Kodierung"):
+        _workspace(tmp_path).write_file(path.name, "safe")
+    assert path.read_bytes() == b"foo=\xff\x00\n"
