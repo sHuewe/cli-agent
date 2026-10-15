@@ -761,3 +761,75 @@ def test_working_context_refresh_does_not_open_dialog_implicitly() -> None:
         1,
     )[1].split("});", 1)[0]
     assert "workingContextDialog.showModal()" in explicit_action
+
+
+def test_write_diff_preview_and_changed_file_rejection(tmp_path):
+    from cli_agent.config import McpServerConfig
+    from cli_agent.os_operations import Workspace
+
+    (tmp_path / "a.properties").write_bytes(b"color=gr\xfcn\n")
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True})
+    )
+
+    async def run():
+        broker = web_ui.WebUiApprovalBroker(workspace=workspace)
+        messages = []
+
+        async def sender(payload):
+            messages.append(payload)
+
+        broker.attach(sender)
+        task = asyncio.create_task(
+            broker.approve_tool_call(
+                "os__write_file",
+                {"path": "a.properties", "content": "color=blau\n"},
+            )
+        )
+        while not messages:
+            await asyncio.sleep(0)
+        assert "-color=grün" in messages[0]["diff"]
+        assert "+color=blau" in messages[0]["diff"]
+        (tmp_path / "a.properties").write_bytes(b"color=rot\n")
+        assert broker.resolve(messages[0]["id"], "yes")
+        return await task
+
+    assert asyncio.run(run()) is False
+
+
+def test_write_diff_cannot_read_protected_or_external_paths(tmp_path):
+    from cli_agent.config import McpServerConfig
+    from cli_agent.os_operations import Workspace
+
+    (tmp_path / "private.txt").write_text("secret")
+    workspace = Workspace.from_directory(
+        tmp_path,
+        McpServerConfig(name="os", config={"allow_write_files": True}),
+        protected_paths=(tmp_path / "private.txt",),
+    )
+    broker = web_ui.WebUiApprovalBroker(workspace=workspace)
+    for path in ("private.txt", "../outside.txt"):
+        preview, snapshot = broker._write_preview(
+            "os__write_file", {"path": path, "content": "new"}
+        )
+        assert snapshot is None
+        assert "diff_error" in preview
+        assert "secret" not in str(preview)
+
+
+def test_external_tool_never_receives_local_file_diff(tmp_path):
+    from cli_agent.config import McpServerConfig
+    from cli_agent.os_operations import Workspace
+
+    (tmp_path / "source.txt").write_text("private")
+    broker = web_ui.WebUiApprovalBroker(
+        workspace=Workspace.from_directory(
+            tmp_path, McpServerConfig(name="os", config={"allow_write_files": True})
+        )
+    )
+    preview, snapshot = broker._write_preview(
+        "external__write_file",
+        {"path": "source.txt", "content": "replacement"},
+    )
+    assert preview == {}
+    assert snapshot is None
