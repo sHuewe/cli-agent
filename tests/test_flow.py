@@ -6784,8 +6784,20 @@ with_mcp = ["fachsoftware", "validator"]
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     monkeypatch.setattr(flow_module, "run_conversation", fake_run_conversation)
 
+    from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
+
+    dependencies = flow_module.ExecutionDependencies(
+        load_admin_config=lambda: AdminConfig(
+            mcp=McpPolicy(
+                trusted_servers=(
+                    TrustedMcpServer(name="validator", transport="stdio", command="validator"),
+                    TrustedMcpServer(name="fachsoftware", transport="stdio", command="fachsoftware"),
+                )
+            )
+        )
+    )
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    asyncio.run(run_flow(definition, workspace=tmp_path))
+    asyncio.run(run_flow(definition, workspace=tmp_path, dependencies=dependencies))
 
     assert [call.with_mcp for call in once_calls] == [
         (),
@@ -6810,3 +6822,136 @@ def test_flow_with_mcp_cannot_be_set_on_subflow_invocation(
     )
     with pytest.raises(ValueError, match="Subflow-Schritt.*with_mcp"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("name", "access", "existing", "error"),
+    [
+        ("missing", "none", False, ValueError),
+        ("data", "none", False, ValueError),
+        ("validator", "none", False, PermissionError),
+        ("validator", "read", True, ValueError),
+    ],
+)
+def test_flow_mcp_preflight_rejects_invalid_selection_before_first_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    access: str,
+    existing: bool,
+    error: type[Exception],
+) -> None:
+    from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
+    from cli_agent.config import AppConfig, McpServerConfig
+
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    (tmp_path / "second.md").write_text("second", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        f"""version = 1
+
+[[steps]]
+id = "first"
+prompt_file = "first.md"
+output = "first.out"
+
+[[steps]]
+id = "second"
+prompt_file = "second.md"
+workspace_access = "{access}"
+with_mcp = ["{name}"]
+""",
+        encoding="utf-8",
+    )
+    executed = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        executed.append(options.prompt)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    configured = (
+        AppConfig(
+            mcp_servers=(
+                McpServerConfig(
+                    name="validator",
+                    transport="streamable_http",
+                    url="http://localhost:9000/mcp",
+                ),
+            )
+        )
+        if existing
+        else AppConfig()
+    )
+    deps = flow_module.ExecutionDependencies(
+        load_config=lambda path: configured,
+        load_admin_config=lambda: AdminConfig(
+            mcp=McpPolicy(
+                trusted_servers=(
+                    TrustedMcpServer(
+                        name="validator",
+                        transport="stdio",
+                        command="validator",
+                        required_workspace_access="read",
+                    ),
+                )
+            )
+        ),
+    )
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(error, match="MCP-Auswahl"):
+        validate_flow(
+            definition,
+            workspace=tmp_path,
+            config_loader=deps.load_config,
+            admin_config_loader=deps.load_admin_config,
+        )
+    with pytest.raises(error, match="MCP-Auswahl"):
+        asyncio.run(run_flow(definition, workspace=tmp_path, dependencies=deps))
+    assert executed == []
+    assert not (tmp_path / "first.out").exists()
+
+
+def test_flow_mcp_preflight_recurses_into_child_flows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cli_agent.admin_config import AdminConfig
+
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        """version = 1
+result = "steps.child.output"
+
+[[steps]]
+id = "child"
+prompt_file = "child.md"
+with_mcp = ["missing"]
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        """version = 1
+
+[[steps]]
+id = "first"
+prompt_file = "first.md"
+
+[[steps]]
+id = "nested"
+flow = "child.toml"
+""",
+        encoding="utf-8",
+    )
+    executed = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        executed.append(options.prompt)
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    deps = flow_module.ExecutionDependencies(load_admin_config=AdminConfig)
+    with pytest.raises(ValueError, match="MCP-Auswahl"):
+        asyncio.run(run_flow(definition, workspace=tmp_path, dependencies=deps))
+    assert executed == []
