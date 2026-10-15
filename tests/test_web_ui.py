@@ -1026,3 +1026,38 @@ def test_blocked_write_approval_can_be_dismissed_without_authorizing(tmp_path, d
         return broker.resolve(request_id, "no")
 
     assert asyncio.run(run()) is False
+
+
+@pytest.mark.skipif(web_ui.os.name == "nt", reason="POSIX st_ino fallback only")
+def test_write_preview_fails_closed_when_inode_unavailable(tmp_path, monkeypatch):
+    from cli_agent.config import McpServerConfig
+    from cli_agent.os_operations import Workspace
+
+    file_path = tmp_path / "safe.txt"
+    file_path.write_text("legitimate")
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True})
+    )
+    original_fstat = web_ui.os.fstat
+
+    def unavailable_id(fd):
+        from types import SimpleNamespace
+
+        values = original_fstat(fd)
+        return SimpleNamespace(
+            st_mode=values.st_mode, st_nlink=values.st_nlink,
+            st_dev=values.st_dev, st_ino=0,
+            st_size=values.st_size, st_mtime_ns=values.st_mtime_ns,
+            st_ctime_ns=values.st_ctime_ns,
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(web_ui.os, "fstat", unavailable_id)
+        preview, snapshot = web_ui.WebUiApprovalBroker(
+            workspace=workspace
+        )._write_preview("os__write_file", {
+            "path": "safe.txt", "content": "replacement"
+        })
+    assert snapshot is None
+    assert "Dateiidentität" in preview["diff_error"]
+    assert "legitimate" not in str(preview)
