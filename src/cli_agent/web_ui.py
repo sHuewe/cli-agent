@@ -1314,9 +1314,9 @@ APP_JS = """
       approvalDiffSection.classList.toggle("hidden", typeof payload.diff !== "string");
       approvalDiff.replaceChildren();
       if (typeof payload.diff === "string") {
-        for (const line of payload.diff.split("\n")) {
+        for (const line of payload.diff.split("\\n")) {
           const span = document.createElement("span");
-          span.textContent = line + "\n";
+          span.textContent = line + "\\n";
           if (line.startsWith("+") && !line.startsWith("+++")) span.style.color = "#288a42";
           if (line.startsWith("-") && !line.startsWith("---")) span.style.color = "#d24747";
           approvalDiff.append(span);
