@@ -240,12 +240,43 @@ class WebUiApprovalBroker:
             newline = self._workspace._existing_line_ending(target)
             proposed = content.replace("\r\n", "\n").replace("\r", "\n")
             proposed.replace("\n", newline).encode(encoding)
-            diff = "".join(difflib.unified_diff(
-                before.splitlines(keepends=True),
-                proposed.splitlines(keepends=True),
-                fromfile=f"a/{path}" if original is not None else "/dev/null",
-                tofile=f"b/{path}",
-            ))
+            if len(proposed.encode("utf-8")) > MAX_APPROVAL_DIFF_BYTES:
+                return {"diff_error": "Neuer Dateiinhalt ist zu groß für die Vorschau."}, None
+
+            # write_file retains the original newline convention, so compare
+            # logical lines rather than treating CRLF/CR as content changes.
+            before = before.replace("\r\n", "\n").replace("\r", "\n")
+
+            # Browsers interpret bidi/format controls even in textContent.
+            # Escape them (and literal backslashes for unambiguous display)
+            # before producing the human-facing diff, never before writing.
+            safe_before = sanitize_terminal_text(
+                before, multiline=True, escape_invisible_formatting=True,
+                escape_literal_backslashes=True,
+            )
+            safe_after = sanitize_terminal_text(
+                proposed, multiline=True, escape_invisible_formatting=True,
+                escape_literal_backslashes=True,
+            )
+            safe_path = sanitize_terminal_text(
+                path, multiline=False, escape_invisible_formatting=True,
+                escape_literal_backslashes=True,
+            )
+            records = difflib.unified_diff(
+                safe_before.splitlines(keepends=True),
+                safe_after.splitlines(keepends=True),
+                fromfile=f"a/{safe_path}" if original is not None else "/dev/null",
+                tofile=f"b/{safe_path}",
+            )
+            # difflib leaves a final unterminated content record without a
+            # line separator. Append one plus the conventional explicit marker
+            # so -old and +new remain distinct, including newline-only edits.
+            diff_parts: list[str] = []
+            for record in records:
+                diff_parts.append(record)
+                if not record.endswith("\n"):
+                    diff_parts.append("\n\\ No newline at end of file\n")
+            diff = "".join(diff_parts)
             if len(diff) > MAX_APPROVAL_DIFF_CHARS:
                 return {
                     "diff_error": "Diff zu groß: vollständige Prüfung nicht möglich.",
