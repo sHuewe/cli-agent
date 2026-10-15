@@ -424,6 +424,11 @@ der maschinenweiten `[[mcp.trusted_servers]]`-Policy entnommen; unbekannte
 Namen, reservierte Built-in-Namen und widersprüchliche Identitäten werden
 abgewiesen. Ein Server mit `required_workspace_access = "read"` oder
 `"write"` benötigt entsprechend `workspace_access = "read"` oder `"write"`.
+Die Auswahl wird bereits bei `cli-agent-flow validate` und vor dem ersten
+Step eines `run` gegen die effektive Step-Konfiguration und die Admin-Policy
+geprüft, einschließlich verschachtelter Subflows. Deterministische Fehler
+(unbekannte bzw. reservierte Namen, fehlende Workspace-Rechte oder kollidierende
+Serveridentitäten) brechen die Validierung vor möglichen Seiteneffekten ab.
 Die Auswahl gewährt keine Tool-Approvals und umgeht weder Netzwerk- noch
 Admin-Policy. Die eingebauten OS- und Data-MCPs werden weiterhin getrennt
 über `workspace_access` und `with_data` aktiviert. Subflow-Schritte wählen
