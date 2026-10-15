@@ -908,3 +908,121 @@ def test_write_diff_marks_unterminated_lines(tmp_path, before, after, removed, a
     assert snapshot is not None
     assert removed in preview["diff"]
     assert added in preview["diff"]
+
+
+def test_write_preview_limits_reads_before_open(tmp_path, monkeypatch):
+    from cli_agent.config import McpServerConfig
+    from cli_agent.os_operations import Workspace
+
+    path = tmp_path / "large.txt"
+    path.write_bytes(b"a" * (web_ui.MAX_APPROVAL_DIFF_BYTES + 1))
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True})
+    )
+    broker = web_ui.WebUiApprovalBroker(workspace=workspace)
+    preview, snapshot = broker._write_preview(
+        "os__write_file", {"path": "large.txt", "content": "short"}
+    )
+    assert snapshot is None
+    assert "zu groß" in preview["diff_error"]
+
+
+def test_write_preview_rejects_symlink_swap_before_open(tmp_path, monkeypatch):
+    from cli_agent.config import McpServerConfig
+    from cli_agent.os_operations import Workspace
+
+    target = tmp_path / "a.txt"
+    secret = tmp_path / "secret.txt"
+    target.write_text("allowed")
+    secret.write_text("sensitive")
+    workspace = Workspace.from_directory(
+        tmp_path,
+        McpServerConfig(name="os", config={"allow_write_files": True}),
+        protected_paths=(secret,),
+    )
+    original_open = web_ui.os.open
+
+    def swap_and_open(path, flags, *args, **kwargs):
+        target.unlink()
+        try:
+            target.symlink_to(secret)
+        except (OSError, NotImplementedError):
+            pytest.skip("Symlink creation unavailable")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(web_ui.os, "open", swap_and_open)
+    preview, snapshot = web_ui.WebUiApprovalBroker(workspace=workspace)._write_preview(
+        "os__write_file", {"path": "a.txt", "content": "new"}
+    )
+    assert snapshot is None
+    assert "sensitive" not in str(preview)
+    assert "diff_error" in preview
+
+
+def test_write_preview_rejects_file_growth_on_confirm(tmp_path):
+    from cli_agent.config import McpServerConfig
+    from cli_agent.os_operations import Workspace
+
+    path = tmp_path / "a.txt"
+    path.write_text("initial", encoding="utf-8")
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True})
+    )
+
+    async def run():
+        broker = web_ui.WebUiApprovalBroker(workspace=workspace)
+        messages = []
+
+        async def sender(payload):
+            messages.append(payload)
+
+        broker.attach(sender)
+        task = asyncio.create_task(
+            broker.approve_tool_call(
+                "os__write_file", {"path": "a.txt", "content": "changed"}
+            )
+        )
+        while not messages:
+            await asyncio.sleep(0)
+        path.write_bytes(b"x" * (web_ui.MAX_APPROVAL_DIFF_BYTES + 1))
+        assert broker.resolve(messages[0]["id"], "yes")
+        return await task
+
+    assert asyncio.run(run()) is False
+
+
+@pytest.mark.parametrize("decision", ["no", "yes", "session"])
+def test_blocked_write_approval_can_be_dismissed_without_authorizing(tmp_path, decision):
+    from cli_agent.config import McpServerConfig
+    from cli_agent.os_operations import Workspace
+
+    (tmp_path / "huge.txt").write_bytes(
+        b"a" * (web_ui.MAX_APPROVAL_DIFF_BYTES + 1)
+    )
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True})
+    )
+
+    async def run():
+        broker = web_ui.WebUiApprovalBroker(workspace=workspace)
+        messages = []
+
+        async def sender(payload):
+            messages.append(payload)
+
+        broker.attach(sender)
+        task = asyncio.create_task(
+            broker.approve_tool_call(
+                "os__write_file", {"path": "huge.txt", "content": "changed"}
+            )
+        )
+        while not messages:
+            await asyncio.sleep(0)
+        request_id = messages[0]["id"]
+        assert messages[0]["diff_blocked"] is True
+        assert task.done() is False
+        assert broker.resolve(request_id, decision)
+        assert await task is False
+        return broker.resolve(request_id, "no")
+
+    assert asyncio.run(run()) is False
