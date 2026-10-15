@@ -5,6 +5,8 @@ import importlib
 import difflib
 import hashlib
 import json
+import os
+import stat
 import secrets
 import socket
 import traceback
@@ -18,7 +20,6 @@ from markdown_it import MarkdownIt
 from .approval_display import approval_arguments
 from .file_context import OutputTarget, is_local_agent_command
 from .local_commands import classify_local_command
-from .config import McpServerConfig
 from .os_operations import Workspace, WorkspaceError
 from .terminal_output import sanitize_terminal_text
 
@@ -27,6 +28,84 @@ MAX_PROMPT_BYTES = 512 * 1024
 MAX_WS_MESSAGE_BYTES = 1024 * 1024
 MAX_APPROVAL_DIFF_BYTES = 128_000
 MAX_APPROVAL_DIFF_CHARS = 30_000
+
+
+def _preview_target_bytes(
+    workspace: Workspace, relative_path: str,
+) -> tuple[Path, bytes | None]:
+    """Read at most the preview budget, verifying the opened file's identity.
+
+    The workspace resolver protects target paths, parents, excluded paths and
+    hardlinks. Open with O_NOFOLLOW where available, and independently compare
+    lstat/fstat identities before and after the read on all platforms.
+    A failed validation never returns any file content to the browser.
+    """
+    target = workspace.resolve_writable_file(relative_path)
+    if not workspace._is_text_file(target):
+        raise WorkspaceError("Dateityp ist nicht zum Schreiben freigegeben.")
+    try:
+        before = target.lstat()
+    except FileNotFoundError:
+        # A new file has no previous bytes. Revalidate in case the parent/path
+        # was exchanged while checking its existence.
+        workspace.resolve_writable_file(relative_path)
+        if target.is_symlink() or target.exists():
+            raise WorkspaceError("Zieldatei wurde während der Vorschau verändert.")
+        return target, None
+
+    if not stat.S_ISREG(before.st_mode):
+        raise WorkspaceError("Zieldatei ist keine reguläre Datei.")
+    if before.st_size > MAX_APPROVAL_DIFF_BYTES:
+        raise WorkspaceError("Originaldatei ist zu groß für die Vorschau.")
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(target, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                raise WorkspaceError("Dateiidentität konnte nicht sicher geprüft werden.")
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise WorkspaceError("Zieldatei wurde während der Vorschau ausgetauscht.")
+            if opened.st_size > MAX_APPROVAL_DIFF_BYTES:
+                raise WorkspaceError("Originaldatei ist zu groß für die Vorschau.")
+
+            if workspace.resolve_writable_file(relative_path) != target:
+                raise WorkspaceError("Zieldatei wurde während der Vorschau ausgetauscht.")
+            data = handle.read(MAX_APPROVAL_DIFF_BYTES + 1)
+            if len(data) > MAX_APPROVAL_DIFF_BYTES:
+                raise WorkspaceError("Originaldatei ist zu groß für die Vorschau.")
+
+            after = os.fstat(handle.fileno())
+            checked = workspace.resolve_writable_file(relative_path)
+            path_stat = target.lstat()
+            if (
+                checked != target
+                or not stat.S_ISREG(path_stat.st_mode)
+                or (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
+                or (path_stat.st_dev, path_stat.st_ino) != (opened.st_dev, opened.st_ino)
+                or (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                   != (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
+            ):
+                raise WorkspaceError("Zieldatei wurde während der Vorschau verändert.")
+            return target, data
+    except (OSError, FileNotFoundError) as exc:
+        raise WorkspaceError("Datei konnte nicht sicher für die Vorschau gelesen werden.") from exc
+
+
+def _preview_line_ending(original: bytes | None) -> str:
+    """Match Workspace._existing_line_ending without an unbounded second read."""
+    if original is None:
+        return "\n"
+    crlf = original.count(b"\r\n")
+    lf = original.count(b"\n") - crlf
+    cr = original.count(b"\r") - crlf
+    if crlf > lf and crlf > cr:
+        return "\r\n"
+    if cr > lf and cr > crlf:
+        return "\r"
+    return "\n"
 
 _MARKDOWN = (
     MarkdownIt(
@@ -128,7 +207,8 @@ class WebUiApprovalBroker:
 
     def __init__(self, workspace: Workspace | None = None) -> None:
         self._workspace = workspace
-        self._approval_snapshots: dict[str, tuple[Path, bytes | None]] = {}
+        self._approval_snapshots: dict[str, tuple[str, bytes | None]] = {}
+        self._blocked_approvals: set[str] = set()
         self._sender: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._event_sender: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._pending: dict[str, asyncio.Future[bool | str]] = {}
@@ -156,32 +236,35 @@ class WebUiApprovalBroker:
 
     def deny_all(self) -> None:
         self._approval_snapshots.clear()
+        self._blocked_approvals.clear()
         for future in tuple(self._pending.values()):
             if not future.done():
                 future.set_result(False)
 
     def resolve(self, request_id: str, decision: str) -> bool:
         future = self._pending.get(request_id)
-        if future is None or future.done():
+        if future is None or future.done() or decision not in {"no", "yes", "session"}:
             return False
-        snapshot = self._approval_snapshots.pop(request_id, None)
+        if request_id in self._blocked_approvals:
+            # The browser can only dismiss this dialog. Ignore forged approvals.
+            future.set_result(False)
+            return True
+        snapshot = self._approval_snapshots.get(request_id)
         if snapshot is not None and decision in {"yes", "session"}:
-            path, previous = snapshot
+            relative_path, previous = snapshot
             try:
-                current = path.read_bytes() if path.exists() else None
-            except OSError:
-                current = object()
+                assert self._workspace is not None
+                _path, current = _preview_target_bytes(self._workspace, relative_path)
+            except (WorkspaceError, OSError):
+                future.set_result(False)
+                return True
             if current != previous:
                 future.set_result(False)
                 return True
         if decision == "session":
             future.set_result("session")
-        elif decision == "yes":
-            future.set_result(True)
-        elif decision == "no":
-            future.set_result(False)
         else:
-            return False
+            future.set_result(decision == "yes")
         return True
 
     async def show_mcp_user_message(
@@ -227,17 +310,12 @@ class WebUiApprovalBroker:
         if not isinstance(path, str) or not isinstance(content, str):
             return {"diff_error": "Ungültige Schreibargumente."}, None
         try:
-            target = self._workspace.resolve_writable_file(path)
-            if not self._workspace._is_text_file(target):
-                raise WorkspaceError("Dateityp ist nicht zum Schreiben freigegeben.")
-            original = target.read_bytes() if target.exists() else None
-            if original is not None and len(original) > MAX_APPROVAL_DIFF_BYTES:
-                return {"diff_error": "Originaldatei ist zu groß für die Vorschau."}, None
+            _target, original = _preview_target_bytes(self._workspace, path)
             from .os_operations import _decode_workspace_text
             before, encoding = (
                 _decode_workspace_text(original) if original is not None else ("", "utf-8")
             )
-            newline = self._workspace._existing_line_ending(target)
+            newline = _preview_line_ending(original)
             proposed = content.replace("\r\n", "\n").replace("\r", "\n")
             proposed.replace("\n", newline).encode(encoding)
             if len(proposed.encode("utf-8")) > MAX_APPROVAL_DIFF_BYTES:
@@ -281,7 +359,7 @@ class WebUiApprovalBroker:
                 return {
                     "diff_error": "Diff zu groß: vollständige Prüfung nicht möglich.",
                 }, None
-            return {"diff": diff, "diff_status": "created" if original is None else "modified"}, (target, original)
+            return {"diff": diff, "diff_status": "created" if original is None else "modified"}, (path, original)
         except (WorkspaceError, OSError, UnicodeError, ValueError) as exc:
             return {"diff_error": str(exc)}, None
 
@@ -308,18 +386,13 @@ class WebUiApprovalBroker:
             escape_literal_backslashes=True,
         )
         preview, snapshot = self._write_preview(tool_name, arguments)
-        if tool_name == "os__write_file" and self._workspace is not None and snapshot is None:
-            # A missing or truncated diff cannot be approved safely.
-            self._pending.pop(request_id, None)
-            await sender({
-                "type": "approval_required",
-                "id": request_id,
-                "tool": safe_tool_name,
-                "arguments": approval_arguments(arguments),
-                **preview,
-                "diff_blocked": True,
-            })
-            return False
+        blocked = (
+            tool_name == "os__write_file"
+            and self._workspace is not None
+            and snapshot is None
+        )
+        if blocked:
+            self._blocked_approvals.add(request_id)
         if snapshot is not None:
             self._approval_snapshots[request_id] = snapshot
         try:
@@ -330,11 +403,13 @@ class WebUiApprovalBroker:
                     "tool": safe_tool_name,
                     "arguments": approval_arguments(arguments),
                     **preview,
+                    "diff_blocked": blocked,
                 }
             )
         except Exception:
             self._pending.pop(request_id, None)
             self._approval_snapshots.pop(request_id, None)
+            self._blocked_approvals.discard(request_id)
             return False
 
         try:
@@ -342,6 +417,7 @@ class WebUiApprovalBroker:
         finally:
             self._pending.pop(request_id, None)
             self._approval_snapshots.pop(request_id, None)
+            self._blocked_approvals.discard(request_id)
 
 
 class _WebUiSession:
