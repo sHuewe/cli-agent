@@ -834,3 +834,52 @@ def test_latin1_fallback_rejects_binary_data(tmp_path):
     with pytest.raises(WorkspaceError, match="Kodierung"):
         _workspace(tmp_path).write_file(path.name, "safe")
     assert path.read_bytes() == b"foo=\xff\x00\n"
+
+
+def test_latin1_ranged_read_uses_one_bounded_scan(tmp_path, monkeypatch):
+    path = tmp_path / "long.properties"
+    path.write_bytes(b"a" * 9000 + b"\xe4\n")
+    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 512)
+    monkeypatch.setattr(os_operations, "MAX_READ_RANGE_SCAN_BYTES", 10_000)
+
+    original_open = Path.open
+    scanned = []
+
+    class TrackedReader:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            self.handle.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def read(self, length=-1):
+            result = self.handle.read(length)
+            scanned.append(len(result))
+            return result
+
+    def tracked_open(self, *args, **kwargs):
+        handle = original_open(self, *args, **kwargs)
+        return TrackedReader(handle) if self == path else handle
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    assert _workspace(tmp_path).read_file(
+        "long.properties", start_line=1, end_line=1
+    ) == "a" * 9000 + "ä\n"
+    assert sum(scanned) <= 10_000
+
+
+def test_latin1_range_scan_limit_is_not_reset_on_late_decode_error(
+    tmp_path, monkeypatch,
+):
+    path = tmp_path / "long.properties"
+    path.write_bytes(b"x" * 9000 + b"\xe4\n")
+    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 512)
+    monkeypatch.setattr(os_operations, "MAX_READ_RANGE_SCAN_BYTES", 9_000)
+    with pytest.raises(WorkspaceError, match="Scan-Limit"):
+        _workspace(tmp_path).read_file(
+            "long.properties", start_line=1, end_line=1
+        )
