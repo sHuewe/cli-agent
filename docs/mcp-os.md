@@ -50,7 +50,9 @@ für die laufende Session oder mit `--approve-tool <exposed_name>` für genau de
 aktuellen Prozesslauf freigegeben werden. Administrative Auto-Approvals für
 externe MCPs können die Built-in-Write-Regel nicht umgehen.
 
-Der Web-UI-Approval-Dialog zeigt für eingebautes `os__write_file` zusätzlich einen begrenzten Unified Diff vor der Freigabe. Nicht darstellbare, nicht dekodierbare oder zu große Änderungen sind im Dialog nicht genehmigungsfähig. Wird die Zieldatei während der Anzeige geändert, wird die Freigabe abgelehnt. Die Momentaufnahmeprüfung erfolgt beim Bestätigen, nicht atomar beim Schreiben; parallele externe Dateiveränderungen im anschließenden Zeitfenster können dadurch nicht vollständig ausgeschlossen werden. Session- und vorab freigegebene Aufrufe umgehen diesen Dialog.\n\nDer Approval-Dialog zeigt eine begrenzte Vorschau der Toolargumente. Die
+Der Web-UI-Approval-Dialog zeigt für eingebautes `os__write_file` zusätzlich einen begrenzten Unified Diff vor der Freigabe. Nicht darstellbare, nicht dekodierbare oder zu große Änderungen sind im Dialog nicht genehmigungsfähig. Wird die Zieldatei während der Anzeige geändert, wird die Freigabe abgelehnt. Die Momentaufnahmeprüfung erfolgt beim Bestätigen, nicht atomar beim Schreiben; parallele externe Dateiveränderungen im anschließenden Zeitfenster können dadurch nicht vollständig ausgeschlossen werden. Session- und vorab freigegebene Aufrufe umgehen diesen Dialog.
+
+Der Approval-Dialog zeigt eine begrenzte Vorschau der Toolargumente. Die
 Argumentnamen eines MCP-Servers gelten dabei nicht als vertrauenswürdige
 Redaction-Policy: Auch Namen wie `token`, `password`, `authorization` oder
 `api_key` verbergen den zu sendenden Wert nicht. Dadurch bleibt für den Benutzer
