@@ -40,6 +40,7 @@ from .model_factory import create_model_client
 from .prompt_template import PromptTemplate, parse_variable_assignments
 from .terminal_output import sanitize_terminal_text
 from .workspace_access import normalize_workspace_access, workspace_access_allows
+from .os_operations import Workspace
 
 OS_MCP_SERVER_NAME = "os"
 DATA_MCP_SERVER_NAME = "data"
@@ -677,7 +678,24 @@ async def run(args: argparse.Namespace) -> None:
 
         # Validate the optional dependency set before model/MCP construction.
         ensure_web_ui_available()
-        web_approval_broker = WebUiApprovalBroker()
+        # Mirror the OS MCP server's protected workspace boundaries for previews.
+        # This must not permit inspecting files excluded from the agent's access.
+        protected_for_preview = (
+            args.config or default_config_file(),
+            *resolved_excluded_paths,
+        )
+        web_approval_broker = WebUiApprovalBroker(
+            workspace=Workspace.from_directory(
+                workspace,
+                McpServerConfig(name="os", config={"allow_write_files": True}),
+                protected_paths=tuple(protected_for_preview),
+                mutation_protected_paths=tuple(
+                    file.path for file in file_contexts
+                ) + (
+                    (prompt_file.path,) if prompt_file is not None else ()
+                ),
+            ) if args.os_access == "write" else None
+        )
         approval_callback = build_preapproval_callback(
             getattr(args, "approve_tool", ()),
             fallback=web_approval_broker.approve_tool_call,
