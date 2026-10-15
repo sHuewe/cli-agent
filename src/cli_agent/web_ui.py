@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import difflib
+import hashlib
 import json
 import secrets
 import socket
@@ -16,11 +18,15 @@ from markdown_it import MarkdownIt
 from .approval_display import approval_arguments
 from .file_context import OutputTarget, is_local_agent_command
 from .local_commands import classify_local_command
+from .config import McpServerConfig
+from .os_operations import Workspace, WorkspaceError
 from .terminal_output import sanitize_terminal_text
 
 WEB_UI_HOST = "127.0.0.1"
 MAX_PROMPT_BYTES = 512 * 1024
 MAX_WS_MESSAGE_BYTES = 1024 * 1024
+MAX_APPROVAL_DIFF_BYTES = 128_000
+MAX_APPROVAL_DIFF_CHARS = 30_000
 
 _MARKDOWN = (
     MarkdownIt(
@@ -120,7 +126,9 @@ def ensure_web_ui_available() -> None:
 class WebUiApprovalBroker:
     """Bridge the agent's approval callback to one authenticated browser."""
 
-    def __init__(self) -> None:
+    def __init__(self, workspace: Workspace | None = None) -> None:
+        self._workspace = workspace
+        self._approval_snapshots: dict[str, tuple[Path, bytes | None]] = {}
         self._sender: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._event_sender: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._pending: dict[str, asyncio.Future[bool | str]] = {}
@@ -147,6 +155,7 @@ class WebUiApprovalBroker:
         self.deny_all()
 
     def deny_all(self) -> None:
+        self._approval_snapshots.clear()
         for future in tuple(self._pending.values()):
             if not future.done():
                 future.set_result(False)
@@ -155,6 +164,16 @@ class WebUiApprovalBroker:
         future = self._pending.get(request_id)
         if future is None or future.done():
             return False
+        snapshot = self._approval_snapshots.pop(request_id, None)
+        if snapshot is not None and decision in {"yes", "session"}:
+            path, previous = snapshot
+            try:
+                current = path.read_bytes() if path.exists() else None
+            except OSError:
+                current = object()
+            if current != previous:
+                future.set_result(False)
+                return True
         if decision == "session":
             future.set_result("session")
         elif decision == "yes":
@@ -197,6 +216,44 @@ class WebUiApprovalBroker:
             }
         )
 
+    def _write_preview(
+        self, tool_name: str, arguments: dict[str, object],
+    ) -> tuple[dict[str, object], tuple[Path, bytes | None] | None]:
+        # Do not give external MCP tools access to the local workspace.
+        if tool_name != "os__write_file" or self._workspace is None:
+            return {}, None
+        path = arguments.get("path")
+        content = arguments.get("content")
+        if not isinstance(path, str) or not isinstance(content, str):
+            return {"diff_error": "Ungültige Schreibargumente."}, None
+        try:
+            target = self._workspace.resolve_writable_file(path)
+            if not self._workspace._is_text_file(target):
+                raise WorkspaceError("Dateityp ist nicht zum Schreiben freigegeben.")
+            original = target.read_bytes() if target.exists() else None
+            if original is not None and len(original) > MAX_APPROVAL_DIFF_BYTES:
+                return {"diff_error": "Originaldatei ist zu groß für die Vorschau."}, None
+            from .os_operations import _decode_workspace_text
+            before, encoding = (
+                _decode_workspace_text(original) if original is not None else ("", "utf-8")
+            )
+            newline = self._workspace._existing_line_ending(target)
+            proposed = content.replace("\r\n", "\n").replace("\r", "\n")
+            proposed.replace("\n", newline).encode(encoding)
+            diff = "".join(difflib.unified_diff(
+                before.splitlines(keepends=True),
+                proposed.splitlines(keepends=True),
+                fromfile=f"a/{path}" if original is not None else "/dev/null",
+                tofile=f"b/{path}",
+            ))
+            if len(diff) > MAX_APPROVAL_DIFF_CHARS:
+                return {
+                    "diff_error": "Diff zu groß: vollständige Prüfung nicht möglich.",
+                }, None
+            return {"diff": diff, "diff_status": "created" if original is None else "modified"}, (target, original)
+        except (WorkspaceError, OSError, UnicodeError, ValueError) as exc:
+            return {"diff_error": str(exc)}, None
+
     async def approve_tool_call(
         self,
         tool_name: str,
@@ -219,6 +276,21 @@ class WebUiApprovalBroker:
             escape_invisible_formatting=True,
             escape_literal_backslashes=True,
         )
+        preview, snapshot = self._write_preview(tool_name, arguments)
+        if tool_name == "os__write_file" and self._workspace is not None and snapshot is None:
+            # A missing or truncated diff cannot be approved safely.
+            self._pending.pop(request_id, None)
+            await sender({
+                "type": "approval_required",
+                "id": request_id,
+                "tool": safe_tool_name,
+                "arguments": approval_arguments(arguments),
+                **preview,
+                "diff_blocked": True,
+            })
+            return False
+        if snapshot is not None:
+            self._approval_snapshots[request_id] = snapshot
         try:
             await sender(
                 {
@@ -226,16 +298,19 @@ class WebUiApprovalBroker:
                     "id": request_id,
                     "tool": safe_tool_name,
                     "arguments": approval_arguments(arguments),
+                    **preview,
                 }
             )
         except Exception:
             self._pending.pop(request_id, None)
+            self._approval_snapshots.pop(request_id, None)
             return False
 
         try:
             return await future
         finally:
             self._pending.pop(request_id, None)
+            self._approval_snapshots.pop(request_id, None)
 
 
 class _WebUiSession:
@@ -749,7 +824,9 @@ INDEX_HTML = """<!doctype html>
   <dialog id="approval">
     <h2>Tool-Freigabe erforderlich</h2>
     <div id="approval-tool" class="tool"></div>
+    <div id="approval-diff-section" class="hidden"><h3>Änderungsvorschau</h3><pre id="approval-diff"></pre></div>
     <pre id="approval-arguments"></pre>
+    <p id="approval-warning" class="hidden" role="alert"></p>
     <div class="approval-actions">
       <button data-decision="no" class="secondary" type="button">Nein</button>
       <button data-decision="session" class="secondary" type="button">Für Session</button>
@@ -806,6 +883,8 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .tool { font-weight: 650; margin-bottom: 10px; overflow-wrap: anywhere; }
 pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: color-mix(in srgb, CanvasText 8%, Canvas); border-radius: 8px; }
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
+#approval-diff { white-space: pre; overflow-x: auto; max-height: 48vh; }
+#approval-warning { color: #b42318; font-weight: 650; }
 .working-context-dialog { width: min(1100px, calc(100vw - 32px)); }
 .working-context-dialog pre { min-height: 55vh; max-height: 72vh; }
 .state-list { display: flex; flex-direction: column; gap: 10px; }
@@ -862,6 +941,9 @@ APP_JS = """
   const approval = document.getElementById("approval");
   const approvalTool = document.getElementById("approval-tool");
   const approvalArguments = document.getElementById("approval-arguments");
+  const approvalDiffSection = document.getElementById("approval-diff-section");
+  const approvalDiff = document.getElementById("approval-diff");
+  const approvalWarning = document.getElementById("approval-warning");
 
   let socket = null;
   let pendingApprovalId = null;
@@ -1229,6 +1311,22 @@ APP_JS = """
       pendingApprovalId = String(payload.id);
       approvalTool.textContent = String(payload.tool || "");
       approvalArguments.textContent = String(payload.arguments || "{}");
+      approvalDiffSection.classList.toggle("hidden", typeof payload.diff !== "string");
+      approvalDiff.replaceChildren();
+      if (typeof payload.diff === "string") {
+        for (const line of payload.diff.split("\n")) {
+          const span = document.createElement("span");
+          span.textContent = line + "\n";
+          if (line.startsWith("+") && !line.startsWith("+++")) span.style.color = "#288a42";
+          if (line.startsWith("-") && !line.startsWith("---")) span.style.color = "#d24747";
+          approvalDiff.append(span);
+        }
+      }
+      approvalWarning.classList.toggle("hidden", !payload.diff_error);
+      approvalWarning.textContent = String(payload.diff_error || "");
+      for (const button of approval.querySelectorAll('button[data-decision="yes"], button[data-decision="session"]')) {
+        button.disabled = !!payload.diff_blocked;
+      }
       approval.showModal();
       return;
     }
