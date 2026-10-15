@@ -98,6 +98,7 @@ class FlowStep:
     overwrite_output: bool
     workspace_access: str
     with_data: bool
+    with_mcp: tuple[str, ...]
     retry_policy: ModelRetryPolicy | None
     approve_tools: tuple[str, ...]
     variables: dict[str, str]
@@ -689,6 +690,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "overwrite_output",
         "workspace_access",
         "with_data",
+        "with_mcp",
         "exclude_paths",
         "retry",
         "response_format",
@@ -769,7 +771,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "config", "model", "prompt_file", "context_file",
                 "add_file_context", "add_web_context", "output",
                 "overwrite_output", "workspace_access", "with_data",
-                "exclude_paths", "retry", "response_format",
+                "with_mcp", "exclude_paths", "retry", "response_format",
                 "approve_tools", "vars", "conversation_items",
                 "conversation_final_prompt_file",
             }
@@ -922,6 +924,25 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if not isinstance(with_data, bool):
             raise ValueError(
                 f"steps[{index}].with_data muss boolesch sein."
+            )
+
+        raw_with_mcp = raw.get("with_mcp", [])
+        if (
+            not isinstance(raw_with_mcp, list)
+            or not all(
+                isinstance(name, str) and name.strip()
+                for name in raw_with_mcp
+            )
+        ):
+            raise ValueError(
+                f"steps[{index}].with_mcp muss eine Liste "
+                "nichtleerer MCP-Servernamen sein."
+            )
+        with_mcp = tuple(name.strip() for name in raw_with_mcp)
+        if any("${" in name for name in with_mcp):
+            raise ValueError(
+                f"steps[{index}].with_mcp darf keine dynamischen "
+                "Flow-Platzhalter enthalten."
             )
 
         step_excluded_paths = _path_list(
@@ -1215,6 +1236,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 overwrite_output=overwrite_output,
                 workspace_access=workspace_access,
                 with_data=with_data,
+                with_mcp=with_mcp,
                 retry_policy=retry_policy,
                 response_format=response_format,
                 approve_tools=approve_tools,
@@ -3561,6 +3583,7 @@ async def _run_flow_internal(
                         model=step.model,
                         workspace_access=step.workspace_access,
                         with_data=step.with_data,
+                        with_mcp=step.with_mcp,
                         retry_policy=step.retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
@@ -3584,6 +3607,7 @@ async def _run_flow_internal(
                         model=step.model,
                         workspace_access=step.workspace_access,
                         with_data=step.with_data,
+                        with_mcp=step.with_mcp,
                         retry_policy=step.retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
