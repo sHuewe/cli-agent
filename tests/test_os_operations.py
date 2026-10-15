@@ -131,7 +131,7 @@ def test_write_preserves_cr_line_endings(tmp_path):
 
 
 @pytest.mark.parametrize("operation,args,target,method,message", [
-    ("read_file", ("file.txt",), Path, "read_text", "gelesen"),
+    ("read_file", ("file.txt",), Path, "read_bytes", "gelesen"),
     ("write_file", ("file.txt", "replacement"), Path, "write_text", "geschrieben"),
     ("delete_file", ("file.txt",), Path, "unlink", "gelöscht"),
     ("copy_file", ("file.txt", "copy.txt"), os_operations.shutil, "copy2", "kopiert"),
@@ -804,3 +804,82 @@ def test_sensitive_workspace_root_name_protects_all_descendants(
         workspace.read_file("service.json")
     with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
         workspace.list_files(".")
+
+
+def test_latin1_read_search_and_preserve_encoding(tmp_path):
+    path = tmp_path / "messages.properties"
+    path.write_bytes(b"title=Gr\xfc\xdfe\n")
+    workspace = _workspace(tmp_path)
+    assert workspace.read_file(path.name) == "title=Grüße\n"
+    assert workspace.read_file(path.name, start_line=1, end_line=1) == "title=Grüße\n"
+    assert '"line": 1' in workspace.search_text(".", "Grüße")
+    workspace.write_file(path.name, "title=Änderung\n")
+    assert path.read_bytes() == "title=Änderung\n".encode("iso-8859-1")
+
+
+def test_latin1_write_rejects_unrepresentable_without_modifying(tmp_path):
+    path = tmp_path / "old.properties"
+    original = b"name=\xe4\n"
+    path.write_bytes(original)
+    with pytest.raises(WorkspaceError, match="Kodierung"):
+        _workspace(tmp_path).write_file(path.name, "name=🦄\n")
+    assert path.read_bytes() == original
+
+
+def test_latin1_fallback_rejects_binary_data(tmp_path):
+    path = tmp_path / "binary.properties"
+    path.write_bytes(b"foo=\xff\x00\n")
+    with pytest.raises(WorkspaceError, match="Text"):
+        _workspace(tmp_path).read_file(path.name)
+    with pytest.raises(WorkspaceError, match="Kodierung"):
+        _workspace(tmp_path).write_file(path.name, "safe")
+    assert path.read_bytes() == b"foo=\xff\x00\n"
+
+
+def test_latin1_ranged_read_uses_one_bounded_scan(tmp_path, monkeypatch):
+    path = tmp_path / "long.properties"
+    path.write_bytes(b"a" * 9000 + b"\xe4\n")
+    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 512)
+    monkeypatch.setattr(os_operations, "MAX_READ_RANGE_SCAN_BYTES", 10_000)
+
+    original_open = Path.open
+    scanned = []
+
+    class TrackedReader:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            self.handle.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def read(self, length=-1):
+            result = self.handle.read(length)
+            scanned.append(len(result))
+            return result
+
+    def tracked_open(self, *args, **kwargs):
+        handle = original_open(self, *args, **kwargs)
+        return TrackedReader(handle) if self == path else handle
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    assert _workspace(tmp_path).read_file(
+        "long.properties", start_line=1, end_line=1
+    ) == "a" * 9000 + "ä\n"
+    assert sum(scanned) <= 10_000
+
+
+def test_latin1_range_scan_limit_is_not_reset_on_late_decode_error(
+    tmp_path, monkeypatch,
+):
+    path = tmp_path / "long.properties"
+    path.write_bytes(b"x" * 9000 + b"\xe4\n")
+    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 512)
+    monkeypatch.setattr(os_operations, "MAX_READ_RANGE_SCAN_BYTES", 9_000)
+    with pytest.raises(WorkspaceError, match="Scan-Limit"):
+        _workspace(tmp_path).read_file(
+            "long.properties", start_line=1, end_line=1
+        )

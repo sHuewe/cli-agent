@@ -50,6 +50,8 @@ für die laufende Session oder mit `--approve-tool <exposed_name>` für genau de
 aktuellen Prozesslauf freigegeben werden. Administrative Auto-Approvals für
 externe MCPs können die Built-in-Write-Regel nicht umgehen.
 
+Der Web-UI-Approval-Dialog zeigt für eingebautes `os__write_file` zusätzlich einen begrenzten Unified Diff vor der Freigabe. Nicht darstellbare, nicht dekodierbare oder zu große Änderungen sind im Dialog nicht genehmigungsfähig. Wird die Zieldatei während der Anzeige geändert, wird die Freigabe abgelehnt. Die Momentaufnahmeprüfung erfolgt beim Bestätigen, nicht atomar beim Schreiben; parallele externe Dateiveränderungen im anschließenden Zeitfenster können dadurch nicht vollständig ausgeschlossen werden. Session- und vorab freigegebene Aufrufe umgehen diesen Dialog.
+
 Der Approval-Dialog zeigt eine begrenzte Vorschau der Toolargumente. Die
 Argumentnamen eines MCP-Servers gelten dabei nicht als vertrauenswürdige
 Redaction-Policy: Auch Namen wie `token`, `password`, `authorization` oder
@@ -72,14 +74,14 @@ Immer verfügbar:
 | Tool | Funktion |
 | --- | --- |
 | `list_files(path)` | Listet Dateien und Verzeichnisse direkt unter einem relativen Workspace-Pfad. |
-| `read_file(path, start_line=None, end_line=None)` | Liest eine unterstützte UTF-8-Textdatei oder extrahiert PDF-Text mit Seitenmarkierungen. Für Textdateien können optional 1-basierte inklusive Zeilengrenzen angegeben werden. Rückgabe bleibt `str`. |
+| `read_file(path, start_line=None, end_line=None)` | Liest eine unterstützte UTF-8-/ISO-8859-1-Textdatei oder extrahiert PDF-Text mit Seitenmarkierungen. Für Textdateien können optional 1-basierte inklusive Zeilengrenzen angegeben werden. Rückgabe bleibt `str`. |
 | `search_text(path, text, max_results=50)` | Sucht literalen Text rekursiv in freigegebenen Textdateien und liefert höchstens 200 Treffer. |
 
 Nur bei Schreibzugriff:
 
 | Tool | Funktion |
 | --- | --- |
-| `write_file(path, content)` | Erstellt oder überschreibt eine UTF-8-Textdatei vollständig. |
+| `write_file(path, content)` | Erstellt eine UTF-8-Textdatei oder überschreibt eine bestehende Textdatei unter Erhalt ihrer erkannten Kodierung (UTF-8/ISO-8859-1). |
 | `delete_file(path)` | Löscht eine Datei. |
 | `make_directory(path)` | Erstellt ein Verzeichnis im Workspace. |
 | `copy_file(path_src, path_dst)` | Kopiert eine Datei innerhalb des Workspaces. |

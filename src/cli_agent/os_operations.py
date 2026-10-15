@@ -204,8 +204,72 @@ MAX_FIND_RESULTS = 500
 MAX_FIND_SCAN_FILES = 10_000
 
 
+def _validate_latin1_bytes(data: bytes) -> None:
+    """Reject recognizable binary formats before the permissive Latin-1 fallback."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        raise UnicodeError("UTF-16-Dateien werden nicht unterstützt.")
+    if any(
+        byte < 32 and byte not in (9, 10, 13) or 127 <= byte <= 159
+        for byte in data
+    ):
+        raise UnicodeError("Datei enthält Steuerzeichen oder Binärdaten.")
+
+
+def _decode_workspace_text(data: bytes) -> tuple[str, str]:
+    """Prefer UTF-8, falling back to ISO-8859-1 only for plausible text."""
+    try:
+        return data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        _validate_latin1_bytes(data)
+        return data.decode("iso-8859-1"), "iso-8859-1"
+
+
 class WorkspaceError(RuntimeError):
     """An OS operation could not be performed inside the workspace."""
+
+
+@dataclass
+class _RangeTextSelection:
+    """Bounded collection of a requested range from one decoded text stream."""
+
+    start: int
+    end: int | None
+    selected_parts: list[str] = None
+    selected_bytes: int = 0
+    line_number: int = 1
+    pending_cr: bool = False
+    done: bool = False
+    oversized: bool = False
+
+    def __post_init__(self) -> None:
+        self.selected_parts = []
+
+    def feed(self, text: str, *, final: bool = False) -> None:
+        if self.done:
+            return
+        if self.pending_cr:
+            text = "\r" + text
+            self.pending_cr = False
+        if not final and text.endswith("\r"):
+            text = text[:-1]
+            self.pending_cr = True
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        for fragment in text.splitlines(keepends=True):
+            in_range = (
+                self.line_number >= self.start
+                and (self.end is None or self.line_number <= self.end)
+            )
+            if in_range:
+                self.selected_bytes += len(fragment.encode("utf-8"))
+                if self.selected_bytes > MAX_READ_FILE_BYTES:
+                    self.oversized = True
+                elif not self.oversized:
+                    self.selected_parts.append(fragment)
+            if fragment.endswith("\n"):
+                if self.end is not None and self.line_number >= self.end:
+                    self.done = True
+                    return
+                self.line_number += 1
 
 
 class _TraversalBudgetReached(RuntimeError):
@@ -516,56 +580,28 @@ class Workspace:
         start_line: int | None,
         end_line: int | None,
     ) -> str:
+        """Decode UTF-8 or Latin-1 in one bounded scan, without retry I/O.
+
+        Both candidate decoders consume the same bytes. Latin-1 is used only
+        after a UTF-8 decode failure, and only if the scanned bytes are
+        plausible Latin-1 text. Each candidate buffers at most the output
+        limit; neither can cause an extra file read.
+        """
         start = 1 if start_line is None else start_line
-        selected_parts: list[str] = []
-        selected_bytes = 0
+        utf8_selection = _RangeTextSelection(start, end_line)
+        latin1_selection = _RangeTextSelection(start, end_line)
+        utf8_decoder = codecs.getincrementaldecoder("utf-8")()
+        utf8_invalid = False
+        latin1_valid = True
         scanned_bytes = 0
-        line_number = 1
         saw_content = False
-        pending_cr = False
-        decoder = codecs.getincrementaldecoder("utf-8")()
-
-        def consume_text(text: str) -> bool:
-            nonlocal line_number, selected_bytes
-            for fragment in text.splitlines(keepends=True):
-                in_range = (
-                    line_number >= start
-                    and (end_line is None or line_number <= end_line)
-                )
-                if in_range:
-                    fragment_bytes = len(fragment.encode("utf-8"))
-                    selected_bytes += fragment_bytes
-                    if selected_bytes > MAX_READ_FILE_BYTES:
-                        raise WorkspaceError(
-                            "Angeforderter Datei-Ausschnitt überschreitet "
-                            f"das Leselimit von {MAX_READ_FILE_BYTES} Bytes: "
-                            f"{path!r}"
-                        )
-                    selected_parts.append(fragment)
-
-                if fragment.endswith("\n"):
-                    if end_line is not None and line_number >= end_line:
-                        return True
-                    line_number += 1
-            return False
-
-        def normalize_chunk(text: str, *, final: bool = False) -> str:
-            nonlocal pending_cr
-            if pending_cr:
-                text = "\r" + text
-                pending_cr = False
-            if not final and text.endswith("\r"):
-                text = text[:-1]
-                pending_cr = True
-            return text.replace("\r\n", "\n").replace("\r", "\n")
 
         try:
             with file_path.open("rb") as handle:
-                done = False
-                while not done:
+                while True:
                     remaining = MAX_READ_RANGE_SCAN_BYTES - scanned_bytes
                     raw = handle.read(min(READ_RANGE_CHUNK_BYTES, remaining + 1))
-                    if raw == b"":
+                    if not raw:
                         break
                     saw_content = True
                     scanned_bytes += len(raw)
@@ -574,27 +610,58 @@ class Workspace:
                             "Datei-Ausschnitt überschreitet das Scan-Limit von "
                             f"{MAX_READ_RANGE_SCAN_BYTES} Bytes: {path!r}"
                         )
-                    decoded = decoder.decode(raw, final=False)
-                    done = consume_text(normalize_chunk(decoded))
 
-                if not done:
-                    decoded = decoder.decode(b"", final=True)
-                    normalized = normalize_chunk(decoded, final=True)
-                    if pending_cr:
-                        normalized += "\n"
-                        pending_cr = False
-                    consume_text(normalized)
+                    if latin1_valid:
+                        try:
+                            _validate_latin1_bytes(raw)
+                        except UnicodeError:
+                            latin1_valid = False
+                        else:
+                            latin1_selection.feed(raw.decode("iso-8859-1"))
 
-            result = "".join(selected_parts)
+                    if not utf8_invalid:
+                        try:
+                            decoded = utf8_decoder.decode(raw, final=False)
+                        except UnicodeDecodeError:
+                            utf8_invalid = True
+                        else:
+                            utf8_selection.feed(decoded)
+
+                    if utf8_invalid:
+                        if not latin1_valid:
+                            raise UnicodeError("Datei ist kein unterstützter Text.")
+                        if latin1_selection.done:
+                            break
+                    elif utf8_selection.done:
+                        break
+
+                if not utf8_invalid and not utf8_selection.done:
+                    try:
+                        decoded = utf8_decoder.decode(b"", final=True)
+                    except UnicodeDecodeError:
+                        utf8_invalid = True
+                    else:
+                        utf8_selection.feed(decoded, final=True)
+
+                if utf8_invalid:
+                    if not latin1_valid:
+                        raise UnicodeError("Datei ist kein unterstützter Text.")
+                    latin1_selection.feed("", final=True)
+                    selected = latin1_selection
+                else:
+                    selected = utf8_selection
+
+            if selected.oversized:
+                raise WorkspaceError(
+                    "Angeforderter Datei-Ausschnitt überschreitet "
+                    f"das Leselimit von {MAX_READ_FILE_BYTES} Bytes: {path!r}"
+                )
+            result = "".join(selected.selected_parts)
             if result:
                 return result
             if not saw_content:
                 return "(Empty file)"
             return "(No lines in requested range)"
-        except UnicodeDecodeError as exc:
-            raise WorkspaceError(
-                f"Datei ist nicht als UTF-8-Text lesbar: {path!r}"
-            ) from exc
         except OSError as exc:
             raise WorkspaceError(
                 f"Datei konnte nicht gelesen werden: {path!r}: {exc}"
@@ -676,12 +743,14 @@ class Workspace:
             )
 
         if ranged_read:
-            return self._read_text_line_range(
-                file_path,
-                path=path,
-                start_line=start_line,
-                end_line=end_line,
-            )
+            try:
+                return self._read_text_line_range(
+                    file_path, path=path, start_line=start_line, end_line=end_line,
+                )
+            except UnicodeError as exc:
+                raise WorkspaceError(
+                    f"Datei ist kein unterstützter Text: {path!r}"
+                ) from exc
 
         try:
             if file_path.stat().st_size > MAX_READ_FILE_BYTES:
@@ -689,13 +758,19 @@ class Workspace:
                     f"Datei überschreitet das Leselimit von "
                     f"{MAX_READ_FILE_BYTES} Bytes: {path!r}"
                 )
-            res = file_path.read_text(encoding="utf-8")
-            if not res or len(res) == 0:
-                res = "(Empty file)"
-            return res
-        except UnicodeDecodeError as exc:
+            data = file_path.read_bytes()
+            if len(data) > MAX_READ_FILE_BYTES:
+                raise WorkspaceError(
+                    f"Datei überschreitet das Leselimit von "
+                    f"{MAX_READ_FILE_BYTES} Bytes: {path!r}"
+                )
+            res, _encoding = _decode_workspace_text(data)
+            # Match Path.read_text(newline=None): normalize all text line endings.
+            res = res.replace("\r\n", "\n").replace("\r", "\n")
+            return res if res else "(Empty file)"
+        except UnicodeError as exc:
             raise WorkspaceError(
-                f"Datei ist nicht als UTF-8-Text lesbar: {path!r}"
+                f"Datei ist kein unterstützter UTF-8-/ISO-8859-1-Text: {path!r}"
             ) from exc
         except OSError as exc:
             raise WorkspaceError(
@@ -753,7 +828,7 @@ class Workspace:
                     # Decode the complete bounded file before publishing any
                     # matches. A later invalid byte must invalidate the entire
                     # file rather than leave earlier partial results behind.
-                    content = data.decode("utf-8")
+                    content, _encoding = _decode_workspace_text(data)
                     with io.StringIO(content, newline=None) as handle:
                         for line_number, line in enumerate(handle, start=1):
                             match_start = line.find(text)
@@ -786,7 +861,7 @@ class Workspace:
                             if len(matches) > limit:
                                 truncated = True
                                 break
-                except UnicodeDecodeError:
+                except UnicodeError:
                     continue
                 except OSError as exc:
                     raise WorkspaceError(
@@ -985,12 +1060,25 @@ class Workspace:
 
         try:
             newline = self._existing_line_ending(file_path)
+            encoding = "utf-8"
+            if file_path.exists():
+                _previous_content, encoding = _decode_workspace_text(
+                    file_path.read_bytes()
+                )
             normalized_content = content.replace("\r\n", "\n").replace("\r", "\n")
+            # Validate representability before opening the target for writing:
+            # a failed Latin-1 encode must never truncate an existing file.
+            normalized_content.replace("\n", newline).encode(encoding)
             file_path.write_text(
                 normalized_content,
-                encoding="utf-8",
+                encoding=encoding,
                 newline=newline,
             )
+        except UnicodeError as exc:
+            raise WorkspaceError(
+                f"Datei kann nicht in ihrer bisherigen Kodierung geschrieben werden: "
+                f"{path!r}"
+            ) from exc
         except OSError as exc:
             raise WorkspaceError(
                 f"Datei konnte nicht geschrieben werden: {path!r}: {exc}"

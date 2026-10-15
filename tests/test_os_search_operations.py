@@ -274,7 +274,7 @@ def test_search_text_discards_partial_matches_from_invalid_utf8_file(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "invalid.txt").write_bytes(
-        b"needle must be discarded\n" + b"x" * 9_000 + b"\xff"
+        b"needle must be discarded\n" + b"x" * 9_000 + b"\xff\x00"
     )
 
     result = json.loads(_workspace(tmp_path).search_text("invalid.txt", "needle"))

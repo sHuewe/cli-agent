@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import difflib
+import hashlib
 import json
+import os
+import stat
 import secrets
 import socket
 import traceback
@@ -16,11 +20,241 @@ from markdown_it import MarkdownIt
 from .approval_display import approval_arguments
 from .file_context import OutputTarget, is_local_agent_command
 from .local_commands import classify_local_command
+from .os_operations import Workspace, WorkspaceError
 from .terminal_output import sanitize_terminal_text
 
 WEB_UI_HOST = "127.0.0.1"
 MAX_PROMPT_BYTES = 512 * 1024
 MAX_WS_MESSAGE_BYTES = 1024 * 1024
+MAX_APPROVAL_DIFF_BYTES = 128_000
+MAX_APPROVAL_DIFF_CHARS = 30_000
+
+
+
+
+def _open_preview_file(path: Path):
+    """Open a preview target without following a final symlink or reparse point.
+
+    Returns (binary_handle, Windows volume/file identifier or None). Windows
+    uses handle metadata rather than potentially missing/non-unique st_ino.
+    """
+    if os.name != "nt":
+        if not hasattr(os, "O_NOFOLLOW"):
+            raise WorkspaceError("Sicheres Öffnen wird auf diesem System nicht unterstützt.")
+        flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(path, flags)
+        return os.fdopen(descriptor, "rb"), None
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _FileInfo(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    class _FileId128(ctypes.Structure):
+        _fields_ = [("Identifier", ctypes.c_ubyte * 16)]
+
+    class _FileIdInfo(ctypes.Structure):
+        _fields_ = [
+            ("VolumeSerialNumber", ctypes.c_ulonglong),
+            ("FileId", _FileId128),
+        ]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+        wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    get_info = kernel.GetFileInformationByHandle
+    get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_FileInfo)]
+    get_info.restype = wintypes.BOOL
+    get_file_id = kernel.GetFileInformationByHandleEx
+    get_file_id.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+    ]
+    get_file_id.restype = wintypes.BOOL
+    get_path = kernel.GetFinalPathNameByHandleW
+    get_path.argtypes = [
+        wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD,
+    ]
+    get_path.restype = wintypes.DWORD
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+
+    # OPEN_REPARSE_POINT makes the final symlink itself the opened object;
+    # never follow it to a protected file. BACKUP_SEMANTICS permits checking
+    # directory/reparse handles which are rejected below.
+    handle = create(
+        str(path), 0x80000000, 0x00000007, None, 3,
+        0x00200000 | 0x02000000, None,
+    )
+    if handle == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), "Sicheres Öffnen fehlgeschlagen")
+    owned = True
+    try:
+        info = _FileInfo()
+        if not get_info(handle, ctypes.byref(info)):
+            raise OSError(ctypes.get_last_error(), "Dateiidentität nicht lesbar")
+        # The older 64-bit file index is not unique on ReFS. FileIdInfo (18)
+        # returns a full 128-bit ID and volume serial from the open handle.
+        # Do not fall back to BY_HANDLE_FILE_INFORMATION IDs on failure.
+        file_id_info = _FileIdInfo()
+        if not get_file_id(
+            handle, 18, ctypes.byref(file_id_info), ctypes.sizeof(file_id_info)
+        ):
+            raise WorkspaceError(
+                "128-Bit-Dateiidentität konnte nicht sicher geprüft werden."
+            )
+        file_id = bytes(file_id_info.FileId.Identifier)
+        if (
+            (int(info.dwFileAttributes) & (0x400 | 0x10))
+            or info.nNumberOfLinks != 1
+            or file_id == bytes(16)
+        ):
+            raise WorkspaceError("Dateiidentität konnte nicht sicher geprüft werden.")
+
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = get_path(handle, buffer, len(buffer), 0)
+        if not length or length >= len(buffer):
+            raise WorkspaceError("Tatsächlicher Dateipfad konnte nicht geprüft werden.")
+
+        # Final handle paths have the \\?\ prefix. Compare the physical path
+        # from the open handle rather than a pathname that can be swapped.
+        final_path = buffer.value
+        if final_path.startswith("\\\\?\\UNC\\"):
+            final_path = "\\\\" + final_path[8:]
+        elif final_path.startswith("\\\\?\\"):
+            final_path = final_path[4:]
+        if os.path.normcase(os.path.normpath(final_path)) != os.path.normcase(
+            os.path.normpath(str(path))
+        ):
+            raise WorkspaceError("Zieldatei verweist auf einen anderen Dateipfad.")
+
+        identifier = (int(file_id_info.VolumeSerialNumber), file_id)
+        descriptor = msvcrt.open_osfhandle(
+            int(handle), os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        )
+        owned = False  # CRT descriptor now owns the Windows handle.
+        try:
+            return os.fdopen(descriptor, "rb"), identifier
+        except BaseException:
+            os.close(descriptor)
+            raise
+    finally:
+        if owned:
+            close(handle)
+
+def _preview_target_bytes(
+    workspace: Workspace, relative_path: str,
+) -> tuple[Path, bytes | None]:
+    """Read at most the preview budget, verifying the opened file's identity.
+
+    The workspace resolver protects target paths, parents, excluded paths and
+    hardlinks. On POSIX require O_NOFOLLOW and reliable inode identifiers.
+    On Windows use a no-follow Win32 handle, full 128-bit ID, and final path.
+    A failed validation never returns any file content to the browser.
+    """
+    target = workspace.resolve_writable_file(relative_path)
+    if not workspace._is_text_file(target):
+        raise WorkspaceError("Dateityp ist nicht zum Schreiben freigegeben.")
+    try:
+        before = target.lstat()
+    except FileNotFoundError:
+        # A new file has no previous bytes. Revalidate in case the parent/path
+        # was exchanged while checking its existence.
+        workspace.resolve_writable_file(relative_path)
+        if target.is_symlink() or target.exists():
+            raise WorkspaceError("Zieldatei wurde während der Vorschau verändert.")
+        return target, None
+
+    if not stat.S_ISREG(before.st_mode):
+        raise WorkspaceError("Zieldatei ist keine reguläre Datei.")
+    if before.st_size > MAX_APPROVAL_DIFF_BYTES:
+        raise WorkspaceError("Originaldatei ist zu groß für die Vorschau.")
+
+    try:
+        handle, windows_id = _open_preview_file(target)
+        with handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                raise WorkspaceError("Dateiidentität konnte nicht sicher geprüft werden.")
+            if os.name != "nt":
+                # st_ino=0 or st_dev=0 may be dummy/non-unique identifiers
+                # (e.g. virtual filesystems). Fail closed rather than trust them.
+                if (
+                    before.st_ino <= 0 or opened.st_ino <= 0
+                    or before.st_dev <= 0 or opened.st_dev <= 0
+                ):
+                    raise WorkspaceError("Dateiidentität ist nicht verfügbar.")
+                if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                    raise WorkspaceError("Zieldatei wurde während der Vorschau ausgetauscht.")
+            elif windows_id is None:
+                raise WorkspaceError("Windows-Dateiidentität ist nicht verfügbar.")
+            if opened.st_size > MAX_APPROVAL_DIFF_BYTES:
+                raise WorkspaceError("Originaldatei ist zu groß für die Vorschau.")
+
+            if workspace.resolve_writable_file(relative_path) != target:
+                raise WorkspaceError("Zieldatei wurde während der Vorschau ausgetauscht.")
+            data = handle.read(MAX_APPROVAL_DIFF_BYTES + 1)
+            if len(data) > MAX_APPROVAL_DIFF_BYTES:
+                raise WorkspaceError("Originaldatei ist zu groß für die Vorschau.")
+
+            after = os.fstat(handle.fileno())
+            checked = workspace.resolve_writable_file(relative_path)
+            path_stat = target.lstat()
+            if (
+                checked != target
+                or not stat.S_ISREG(path_stat.st_mode)
+                or (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                   != (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
+            ):
+                raise WorkspaceError("Zieldatei wurde während der Vorschau verändert.")
+            if os.name == "nt":
+                # Check the same physical Windows file is still at the target.
+                # A symlink/reparse swap is rejected by _open_preview_file.
+                recheck_handle, recheck_id = _open_preview_file(target)
+                with recheck_handle:
+                    if recheck_id != windows_id:
+                        raise WorkspaceError(
+                            "Zieldatei wurde während der Vorschau ausgetauscht."
+                        )
+            elif (
+                (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
+                or (path_stat.st_dev, path_stat.st_ino) != (opened.st_dev, opened.st_ino)
+            ):
+                raise WorkspaceError("Zieldatei wurde während der Vorschau ausgetauscht.")
+            return target, data
+    except (OSError, FileNotFoundError) as exc:
+        raise WorkspaceError("Datei konnte nicht sicher für die Vorschau gelesen werden.") from exc
+
+
+def _preview_line_ending(original: bytes | None) -> str:
+    """Match Workspace._existing_line_ending without an unbounded second read."""
+    if original is None:
+        return "\n"
+    crlf = original.count(b"\r\n")
+    lf = original.count(b"\n") - crlf
+    cr = original.count(b"\r") - crlf
+    if crlf > lf and crlf > cr:
+        return "\r\n"
+    if cr > lf and cr > crlf:
+        return "\r"
+    return "\n"
 
 _MARKDOWN = (
     MarkdownIt(
@@ -120,7 +354,10 @@ def ensure_web_ui_available() -> None:
 class WebUiApprovalBroker:
     """Bridge the agent's approval callback to one authenticated browser."""
 
-    def __init__(self) -> None:
+    def __init__(self, workspace: Workspace | None = None) -> None:
+        self._workspace = workspace
+        self._approval_snapshots: dict[str, tuple[str, bytes | None]] = {}
+        self._blocked_approvals: set[str] = set()
         self._sender: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._event_sender: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._pending: dict[str, asyncio.Future[bool | str]] = {}
@@ -147,22 +384,36 @@ class WebUiApprovalBroker:
         self.deny_all()
 
     def deny_all(self) -> None:
+        self._approval_snapshots.clear()
+        self._blocked_approvals.clear()
         for future in tuple(self._pending.values()):
             if not future.done():
                 future.set_result(False)
 
     def resolve(self, request_id: str, decision: str) -> bool:
         future = self._pending.get(request_id)
-        if future is None or future.done():
+        if future is None or future.done() or decision not in {"no", "yes", "session"}:
             return False
+        if request_id in self._blocked_approvals:
+            # The browser can only dismiss this dialog. Ignore forged approvals.
+            future.set_result(False)
+            return True
+        snapshot = self._approval_snapshots.get(request_id)
+        if snapshot is not None and decision in {"yes", "session"}:
+            relative_path, previous = snapshot
+            try:
+                assert self._workspace is not None
+                _path, current = _preview_target_bytes(self._workspace, relative_path)
+            except (WorkspaceError, OSError):
+                future.set_result(False)
+                return True
+            if current != previous:
+                future.set_result(False)
+                return True
         if decision == "session":
             future.set_result("session")
-        elif decision == "yes":
-            future.set_result(True)
-        elif decision == "no":
-            future.set_result(False)
         else:
-            return False
+            future.set_result(decision == "yes")
         return True
 
     async def show_mcp_user_message(
@@ -197,6 +448,70 @@ class WebUiApprovalBroker:
             }
         )
 
+    def _write_preview(
+        self, tool_name: str, arguments: dict[str, object],
+    ) -> tuple[dict[str, object], tuple[Path, bytes | None] | None]:
+        # Do not give external MCP tools access to the local workspace.
+        if tool_name != "os__write_file" or self._workspace is None:
+            return {}, None
+        path = arguments.get("path")
+        content = arguments.get("content")
+        if not isinstance(path, str) or not isinstance(content, str):
+            return {"diff_error": "Ungültige Schreibargumente."}, None
+        try:
+            _target, original = _preview_target_bytes(self._workspace, path)
+            from .os_operations import _decode_workspace_text
+            before, encoding = (
+                _decode_workspace_text(original) if original is not None else ("", "utf-8")
+            )
+            newline = _preview_line_ending(original)
+            proposed = content.replace("\r\n", "\n").replace("\r", "\n")
+            proposed.replace("\n", newline).encode(encoding)
+            if len(proposed.encode("utf-8")) > MAX_APPROVAL_DIFF_BYTES:
+                return {"diff_error": "Neuer Dateiinhalt ist zu groß für die Vorschau."}, None
+
+            # write_file retains the original newline convention, so compare
+            # logical lines rather than treating CRLF/CR as content changes.
+            before = before.replace("\r\n", "\n").replace("\r", "\n")
+
+            # Browsers interpret bidi/format controls even in textContent.
+            # Escape them (and literal backslashes for unambiguous display)
+            # before producing the human-facing diff, never before writing.
+            safe_before = sanitize_terminal_text(
+                before, multiline=True, escape_invisible_formatting=True,
+                escape_literal_backslashes=True,
+            )
+            safe_after = sanitize_terminal_text(
+                proposed, multiline=True, escape_invisible_formatting=True,
+                escape_literal_backslashes=True,
+            )
+            safe_path = sanitize_terminal_text(
+                path, multiline=False, escape_invisible_formatting=True,
+                escape_literal_backslashes=True,
+            )
+            records = difflib.unified_diff(
+                safe_before.splitlines(keepends=True),
+                safe_after.splitlines(keepends=True),
+                fromfile=f"a/{safe_path}" if original is not None else "/dev/null",
+                tofile=f"b/{safe_path}",
+            )
+            # difflib leaves a final unterminated content record without a
+            # line separator. Append one plus the conventional explicit marker
+            # so -old and +new remain distinct, including newline-only edits.
+            diff_parts: list[str] = []
+            for record in records:
+                diff_parts.append(record)
+                if not record.endswith("\n"):
+                    diff_parts.append("\n\\ No newline at end of file\n")
+            diff = "".join(diff_parts)
+            if len(diff) > MAX_APPROVAL_DIFF_CHARS:
+                return {
+                    "diff_error": "Diff zu groß: vollständige Prüfung nicht möglich.",
+                }, None
+            return {"diff": diff, "diff_status": "created" if original is None else "modified"}, (path, original)
+        except (WorkspaceError, OSError, UnicodeError, ValueError) as exc:
+            return {"diff_error": str(exc)}, None
+
     async def approve_tool_call(
         self,
         tool_name: str,
@@ -219,6 +534,16 @@ class WebUiApprovalBroker:
             escape_invisible_formatting=True,
             escape_literal_backslashes=True,
         )
+        preview, snapshot = self._write_preview(tool_name, arguments)
+        blocked = (
+            tool_name == "os__write_file"
+            and self._workspace is not None
+            and snapshot is None
+        )
+        if blocked:
+            self._blocked_approvals.add(request_id)
+        if snapshot is not None:
+            self._approval_snapshots[request_id] = snapshot
         try:
             await sender(
                 {
@@ -226,16 +551,22 @@ class WebUiApprovalBroker:
                     "id": request_id,
                     "tool": safe_tool_name,
                     "arguments": approval_arguments(arguments),
+                    **preview,
+                    "diff_blocked": blocked,
                 }
             )
         except Exception:
             self._pending.pop(request_id, None)
+            self._approval_snapshots.pop(request_id, None)
+            self._blocked_approvals.discard(request_id)
             return False
 
         try:
             return await future
         finally:
             self._pending.pop(request_id, None)
+            self._approval_snapshots.pop(request_id, None)
+            self._blocked_approvals.discard(request_id)
 
 
 class _WebUiSession:
@@ -749,7 +1080,9 @@ INDEX_HTML = """<!doctype html>
   <dialog id="approval">
     <h2>Tool-Freigabe erforderlich</h2>
     <div id="approval-tool" class="tool"></div>
+    <div id="approval-diff-section" class="hidden"><h3>Änderungsvorschau</h3><pre id="approval-diff"></pre></div>
     <pre id="approval-arguments"></pre>
+    <p id="approval-warning" class="hidden" role="alert"></p>
     <div class="approval-actions">
       <button data-decision="no" class="secondary" type="button">Nein</button>
       <button data-decision="session" class="secondary" type="button">Für Session</button>
@@ -806,6 +1139,8 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .tool { font-weight: 650; margin-bottom: 10px; overflow-wrap: anywhere; }
 pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: color-mix(in srgb, CanvasText 8%, Canvas); border-radius: 8px; }
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
+#approval-diff { white-space: pre; overflow-x: auto; max-height: 48vh; }
+#approval-warning { color: #b42318; font-weight: 650; }
 .working-context-dialog { width: min(1100px, calc(100vw - 32px)); }
 .working-context-dialog pre { min-height: 55vh; max-height: 72vh; }
 .state-list { display: flex; flex-direction: column; gap: 10px; }
@@ -862,6 +1197,9 @@ APP_JS = """
   const approval = document.getElementById("approval");
   const approvalTool = document.getElementById("approval-tool");
   const approvalArguments = document.getElementById("approval-arguments");
+  const approvalDiffSection = document.getElementById("approval-diff-section");
+  const approvalDiff = document.getElementById("approval-diff");
+  const approvalWarning = document.getElementById("approval-warning");
 
   let socket = null;
   let pendingApprovalId = null;
@@ -1229,6 +1567,22 @@ APP_JS = """
       pendingApprovalId = String(payload.id);
       approvalTool.textContent = String(payload.tool || "");
       approvalArguments.textContent = String(payload.arguments || "{}");
+      approvalDiffSection.classList.toggle("hidden", typeof payload.diff !== "string");
+      approvalDiff.replaceChildren();
+      if (typeof payload.diff === "string") {
+        for (const line of payload.diff.split("\\n")) {
+          const span = document.createElement("span");
+          span.textContent = line + "\\n";
+          if (line.startsWith("+") && !line.startsWith("+++")) span.style.color = "#288a42";
+          if (line.startsWith("-") && !line.startsWith("---")) span.style.color = "#d24747";
+          approvalDiff.append(span);
+        }
+      }
+      approvalWarning.classList.toggle("hidden", !payload.diff_error);
+      approvalWarning.textContent = String(payload.diff_error || "");
+      for (const button of approval.querySelectorAll('button[data-decision="yes"], button[data-decision="session"]')) {
+        button.disabled = !!payload.diff_blocked;
+      }
       approval.showModal();
       return;
     }
