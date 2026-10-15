@@ -30,14 +30,121 @@ MAX_APPROVAL_DIFF_BYTES = 128_000
 MAX_APPROVAL_DIFF_CHARS = 30_000
 
 
+
+
+def _open_preview_file(path: Path):
+    """Open a preview target without following a final symlink or reparse point.
+
+    Returns (binary_handle, Windows volume/file identifier or None). Windows
+    uses handle metadata rather than potentially missing/non-unique st_ino.
+    """
+    if os.name != "nt":
+        if not hasattr(os, "O_NOFOLLOW"):
+            raise WorkspaceError("Sicheres Öffnen wird auf diesem System nicht unterstützt.")
+        flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(path, flags)
+        return os.fdopen(descriptor, "rb"), None
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _FileInfo(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+        wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    get_info = kernel.GetFileInformationByHandle
+    get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_FileInfo)]
+    get_info.restype = wintypes.BOOL
+    get_path = kernel.GetFinalPathNameByHandleW
+    get_path.argtypes = [
+        wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD,
+    ]
+    get_path.restype = wintypes.DWORD
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+
+    # OPEN_REPARSE_POINT makes the final symlink itself the opened object;
+    # never follow it to a protected file. BACKUP_SEMANTICS permits checking
+    # directory/reparse handles which are rejected below.
+    handle = create(
+        str(path), 0x80000000, 0x00000007, None, 3,
+        0x00200000 | 0x02000000, None,
+    )
+    if handle == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), "Sicheres Öffnen fehlgeschlagen")
+    owned = True
+    try:
+        info = _FileInfo()
+        if not get_info(handle, ctypes.byref(info)):
+            raise OSError(ctypes.get_last_error(), "Dateiidentität nicht lesbar")
+        # Reject reparse points, directories, hardlinks, and filesystem
+        # providers that cannot supply a stable handle-level file index.
+        file_index = (int(info.nFileIndexHigh) << 32) | int(info.nFileIndexLow)
+        if (
+            (int(info.dwFileAttributes) & (0x400 | 0x10))
+            or info.nNumberOfLinks != 1
+            or file_index == 0
+        ):
+            raise WorkspaceError("Dateiidentität konnte nicht sicher geprüft werden.")
+
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = get_path(handle, buffer, len(buffer), 0)
+        if not length or length >= len(buffer):
+            raise WorkspaceError("Tatsächlicher Dateipfad konnte nicht geprüft werden.")
+
+        # Final handle paths have the \\?\ prefix. Compare the physical path
+        # from the open handle rather than a pathname that can be swapped.
+        final_path = buffer.value
+        if final_path.startswith("\\\\?\\UNC\\"):
+            final_path = "\\\\" + final_path[8:]
+        elif final_path.startswith("\\\\?\\"):
+            final_path = final_path[4:]
+        if os.path.normcase(os.path.normpath(final_path)) != os.path.normcase(
+            os.path.normpath(str(path))
+        ):
+            raise WorkspaceError("Zieldatei verweist auf einen anderen Dateipfad.")
+
+        identifier = (int(info.dwVolumeSerialNumber), file_index)
+        descriptor = msvcrt.open_osfhandle(
+            int(handle), os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        )
+        owned = False  # CRT descriptor now owns the Windows handle.
+        try:
+            return os.fdopen(descriptor, "rb"), identifier
+        except BaseException:
+            os.close(descriptor)
+            raise
+    finally:
+        if owned:
+            close(handle)
+
 def _preview_target_bytes(
     workspace: Workspace, relative_path: str,
 ) -> tuple[Path, bytes | None]:
     """Read at most the preview budget, verifying the opened file's identity.
 
     The workspace resolver protects target paths, parents, excluded paths and
-    hardlinks. Open with O_NOFOLLOW where available, and independently compare
-    lstat/fstat identities before and after the read on all platforms.
+    hardlinks. On POSIX require O_NOFOLLOW and reliable inode identifiers.
+    On Windows use a no-follow Win32 handle and its file index/final path.
     A failed validation never returns any file content to the browser.
     """
     target = workspace.resolve_writable_file(relative_path)
@@ -58,16 +165,24 @@ def _preview_target_bytes(
     if before.st_size > MAX_APPROVAL_DIFF_BYTES:
         raise WorkspaceError("Originaldatei ist zu groß für die Vorschau.")
 
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
     try:
-        descriptor = os.open(target, flags)
-        with os.fdopen(descriptor, "rb") as handle:
+        handle, windows_id = _open_preview_file(target)
+        with handle:
             opened = os.fstat(handle.fileno())
             if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
                 raise WorkspaceError("Dateiidentität konnte nicht sicher geprüft werden.")
-            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-                raise WorkspaceError("Zieldatei wurde während der Vorschau ausgetauscht.")
+            if os.name != "nt":
+                # st_ino=0 or st_dev=0 may be dummy/non-unique identifiers
+                # (e.g. virtual filesystems). Fail closed rather than trust them.
+                if (
+                    before.st_ino <= 0 or opened.st_ino <= 0
+                    or before.st_dev <= 0 or opened.st_dev <= 0
+                ):
+                    raise WorkspaceError("Dateiidentität ist nicht verfügbar.")
+                if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                    raise WorkspaceError("Zieldatei wurde während der Vorschau ausgetauscht.")
+            elif windows_id is None:
+                raise WorkspaceError("Windows-Dateiidentität ist nicht verfügbar.")
             if opened.st_size > MAX_APPROVAL_DIFF_BYTES:
                 raise WorkspaceError("Originaldatei ist zu groß für die Vorschau.")
 
@@ -83,12 +198,24 @@ def _preview_target_bytes(
             if (
                 checked != target
                 or not stat.S_ISREG(path_stat.st_mode)
-                or (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
-                or (path_stat.st_dev, path_stat.st_ino) != (opened.st_dev, opened.st_ino)
                 or (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
                    != (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
             ):
                 raise WorkspaceError("Zieldatei wurde während der Vorschau verändert.")
+            if os.name == "nt":
+                # Check the same physical Windows file is still at the target.
+                # A symlink/reparse swap is rejected by _open_preview_file.
+                recheck_handle, recheck_id = _open_preview_file(target)
+                with recheck_handle:
+                    if recheck_id != windows_id:
+                        raise WorkspaceError(
+                            "Zieldatei wurde während der Vorschau ausgetauscht."
+                        )
+            elif (
+                (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
+                or (path_stat.st_dev, path_stat.st_ino) != (opened.st_dev, opened.st_ino)
+            ):
+                raise WorkspaceError("Zieldatei wurde während der Vorschau ausgetauscht.")
             return target, data
     except (OSError, FileNotFoundError) as exc:
         raise WorkspaceError("Datei konnte nicht sicher für die Vorschau gelesen werden.") from exc
