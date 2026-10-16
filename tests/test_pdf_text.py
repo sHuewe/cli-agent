@@ -215,3 +215,66 @@ def test_worker_stdio_protocol(monkeypatch, data, status, expected):
         assert output.getvalue().decode("utf-8") == expected
     finally:
         logging.disable(old_disable)
+
+
+
+def test_pdf_page_range_preserves_original_page_numbers(tmp_path):
+    path = tmp_path / "long.pdf"
+    path.write_bytes(_pdf("one", "two", "three", "four"))
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"max_pdf_pages": 2})
+    )
+    with pytest.raises(WorkspaceError, match="Seiten"):
+        workspace.read_file("long.pdf")
+    result = workspace.read_file("long.pdf", start_page=2, end_page=3)
+    assert "--- Seite 2 von 4 ---\ntwo" in result
+    assert "--- Seite 3 von 4 ---\nthree" in result
+    assert "Seite 1" not in result
+    assert "Seite 4" not in result
+    assert workspace.read_file("long.pdf", end_page=2).count("--- Seite") == 2
+    assert workspace.read_file("long.pdf", start_page=4).count("--- Seite") == 1
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"start_page": 0},
+    {"end_page": -1},
+    {"start_page": True},
+    {"start_page": 3, "end_page": 2},
+    {"start_page": 5},
+    {"end_page": 5},
+])
+def test_pdf_page_range_validation(tmp_path, kwargs):
+    (tmp_path / "short.pdf").write_bytes(_pdf("one", "two", "three"))
+    with pytest.raises(WorkspaceError):
+        _workspace(tmp_path).read_file("short.pdf", **kwargs)
+
+
+def test_pdf_page_limit_caps_selected_range(tmp_path):
+    path = tmp_path / "long.pdf"
+    path.write_bytes(_pdf("one", "two", "three", "four"))
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"max_pdf_pages": 2})
+    )
+    with pytest.raises(WorkspaceError, match="Seiten"):
+        workspace.read_file("long.pdf", start_page=1, end_page=3)
+
+
+def test_pdf_options_not_allowed_for_text_files(tmp_path):
+    (tmp_path / "test.txt").write_text("hello", encoding="utf-8")
+    with pytest.raises(WorkspaceError, match="PDF"):
+        _workspace(tmp_path).read_file("test.txt", start_page=1)
+
+
+def test_worker_page_options_round_trip(monkeypatch):
+    from types import SimpleNamespace
+    output = io.BytesIO()
+    old_disable = __import__("logging").root.manager.disable
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(pdf_text.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(_pdf("one", "two", "three"))))
+            patch.setattr(pdf_text.sys, "stdout", SimpleNamespace(buffer=output))
+            assert pdf_text._main(["--max-pages", "2", "--start-page", "2", "--end-page", "3"]) == 0
+        assert "Seite 2 von 3" in output.getvalue().decode("utf-8")
+        assert "Seite 1 von 3" not in output.getvalue().decode("utf-8")
+    finally:
+        __import__("logging").disable(old_disable)
