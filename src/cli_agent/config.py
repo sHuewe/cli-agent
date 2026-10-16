@@ -338,8 +338,8 @@ def load_config(path: Path | None = None) -> AppConfig:
     if set(pdf_values) - {"max_pdf_pages"}:
         raise ValueError("[pdf] enthält unbekannte Optionen.")
     max_pdf_pages = pdf_values.get("max_pdf_pages", 100)
-    if isinstance(max_pdf_pages, bool) or not isinstance(max_pdf_pages, int) or not 1 <= max_pdf_pages <= 10_000:
-        raise ValueError("pdf.max_pdf_pages muss zwischen 1 und 10000 liegen.")
+    if isinstance(max_pdf_pages, bool) or not isinstance(max_pdf_pages, int) or not 1 <= max_pdf_pages <= 2_000:
+        raise ValueError("pdf.max_pdf_pages muss zwischen 1 und 2000 liegen.")
     okf = _okf_config(values.get("okf", {})) if "okf" in values else None
     if okf is not None and any(
         server.name.casefold() == "okf" for server in mcp_servers
