@@ -6,6 +6,7 @@ Only validated file bytes cross into that process, never workspace paths.
 
 from __future__ import annotations
 
+import argparse
 import io
 import logging
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 
 MAX_PDF_BYTES = 10_000_000
 MAX_PDF_PAGES = 100
+MAX_CONFIGURABLE_PDF_PAGES = 10_000
 MAX_PDF_TEXT_CHARS = 1_000_000
 PDF_TIMEOUT_SECONDS = 20
 
@@ -45,9 +47,39 @@ class PdfTextError(RuntimeError):
     """A PDF could not be safely read as text."""
 
 
-def _extract_text(data: bytes) -> str:
+def _validate_page_options(
+    start_page: int | None,
+    end_page: int | None,
+    max_pages: int,
+) -> None:
+    if (
+        isinstance(max_pages, bool)
+        or not isinstance(max_pages, int)
+        or not 1 <= max_pages <= MAX_CONFIGURABLE_PDF_PAGES
+    ):
+        raise PdfTextError(
+            f"max_pdf_pages muss zwischen 1 und {MAX_CONFIGURABLE_PDF_PAGES} liegen."
+        )
+    for name, number in (("start_page", start_page), ("end_page", end_page)):
+        if number is not None and (
+            isinstance(number, bool) or not isinstance(number, int) or number < 1
+        ):
+            raise PdfTextError(f"{name} muss eine positive ganze Zahl sein.")
+    if start_page is not None and end_page is not None and start_page > end_page:
+        raise PdfTextError("start_page darf nicht größer als end_page sein.")
+
+
+def _extract_text(
+    data: bytes,
+    *,
+    start_page: int | None = None,
+    end_page: int | None = None,
+    max_pages: int | None = None,
+) -> str:
     from pypdf import PdfReader
 
+    page_limit = MAX_PDF_PAGES if max_pages is None else max_pages
+    _validate_page_options(start_page, end_page, page_limit)
     if len(data) > MAX_PDF_BYTES:
         raise PdfTextError(f"PDF überschreitet das Leselimit von {MAX_PDF_BYTES} Bytes.")
     try:
@@ -55,13 +87,26 @@ def _extract_text(data: bytes) -> str:
         if reader.is_encrypted:
             raise PdfTextError("Verschlüsselte PDFs werden nicht unterstützt.")
         page_count = len(reader.pages)
-        if page_count > MAX_PDF_PAGES:
-            raise PdfTextError(f"PDF überschreitet das Limit von {MAX_PDF_PAGES} Seiten.")
         if page_count == 0:
+            if start_page is not None or end_page is not None:
+                raise PdfTextError("PDF enthält keine Seiten für den angeforderten Bereich.")
             return "(PDF enthält keine Seiten.)"
+        first = 1 if start_page is None else start_page
+        last = page_count if end_page is None else end_page
+        if first > page_count or last > page_count:
+            raise PdfTextError(
+                f"Angeforderter Seitenbereich liegt außerhalb des PDFs "
+                f"mit {page_count} Seiten."
+            )
+        selected_pages = last - first + 1
+        if selected_pages > page_limit:
+            raise PdfTextError(
+                f"PDF-Seitenbereich überschreitet das Limit von {page_limit} Seiten."
+            )
         sections = []
         total_chars = 0
-        for number, page in enumerate(reader.pages, start=1):
+        for number in range(first, last + 1):
+            page = reader.pages[number - 1]
             text = (page.extract_text() or "").strip()
             if not text:
                 text = "[Kein extrahierbarer Text auf dieser Seite; OCR ist nicht verfügbar.]"
@@ -80,7 +125,15 @@ def _extract_text(data: bytes) -> str:
         raise PdfTextError("PDF konnte nicht vollständig als Text gelesen werden.") from exc
 
 
-def read_pdf_text(path: Path) -> str:
+def read_pdf_text(
+    path: Path,
+    *,
+    start_page: int | None = None,
+    end_page: int | None = None,
+    max_pages: int | None = None,
+) -> str:
+    page_limit = MAX_PDF_PAGES if max_pages is None else max_pages
+    _validate_page_options(start_page, end_page, page_limit)
     try:
         if path.stat().st_size > MAX_PDF_BYTES:
             raise PdfTextError(f"PDF überschreitet das Leselimit von {MAX_PDF_BYTES} Bytes.")
@@ -89,7 +142,12 @@ def read_pdf_text(path: Path) -> str:
         if len(data) > MAX_PDF_BYTES:
             raise PdfTextError(f"PDF überschreitet das Leselimit von {MAX_PDF_BYTES} Bytes.")
         result = subprocess.run(
-            [sys.executable, "-m", "cli_agent.pdf_text"],
+            [
+                sys.executable, "-m", "cli_agent.pdf_text",
+                "--max-pages", str(page_limit),
+                *([] if start_page is None else ["--start-page", str(start_page)]),
+                *([] if end_page is None else ["--end-page", str(end_page)]),
+            ],
             input=data,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -110,10 +168,23 @@ def read_pdf_text(path: Path) -> str:
     return result.stdout.decode("utf-8")
 
 
-def _main() -> int:
+def _main(argv: list[str] | None = None) -> int:
     logging.disable(logging.CRITICAL)
+    parser = argparse.ArgumentParser(description="Bounded PDF text extraction worker")
+    parser.add_argument("--start-page", type=int, default=None)
+    parser.add_argument("--end-page", type=int, default=None)
+    parser.add_argument("--max-pages", type=int, default=MAX_PDF_PAGES)
+    # argv=None denotes direct test/library usage; the __main__ path passes
+    # sys.argv[1:] explicitly so pytest's arguments are not parsed by tests.
+    args = parser.parse_args([] if argv is None else argv)
     try:
-        text = _extract_text(sys.stdin.buffer.read(MAX_PDF_BYTES + 1))
+        _validate_page_options(args.start_page, args.end_page, args.max_pages)
+        text = _extract_text(
+            sys.stdin.buffer.read(MAX_PDF_BYTES + 1),
+            start_page=args.start_page,
+            end_page=args.end_page,
+            max_pages=args.max_pages,
+        )
     except PdfTextError as exc:
         sys.stdout.buffer.write(str(exc).encode("utf-8"))
         return 2
@@ -122,4 +193,4 @@ def _main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(_main())
+    raise SystemExit(_main(sys.argv[1:]))
