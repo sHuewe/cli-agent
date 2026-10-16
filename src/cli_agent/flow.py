@@ -111,6 +111,8 @@ class FlowStep:
     iteration_id: str | None = None
     excluded_paths: tuple[Path, ...] = ()
     response_format: str = "text"
+    # Explicit [steps.retry] keys, before load-time defaults are applied.
+    retry_overrides: dict[str, int | float] | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +122,8 @@ class FlowDefinition:
     excluded_paths: tuple[Path, ...] = ()
     inputs: tuple[str, ...] = ()
     result: str | None = None
+    # Root-level [retry], separate from effective per-step defaults.
+    retry_policy: ModelRetryPolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -1240,6 +1244,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 with_data=with_data,
                 with_mcp=with_mcp,
                 retry_policy=retry_policy,
+                retry_overrides=dict(raw_retry) if raw_retry is not None else None,
                 response_format=response_format,
                 approve_tools=approve_tools,
                 variables=variables,
@@ -1270,6 +1275,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         excluded_paths=excluded_paths,
         inputs=inputs,
         result=result_selector,
+        retry_policy=global_retry_policy,
     )
 
 
@@ -3127,6 +3133,7 @@ async def _run_flow_internal(
     call_stack: tuple[str, ...],
     namespace: str,
     inherited_excluded_paths: tuple[Path, ...],
+    inherited_retry_policy: ModelRetryPolicy | None,
 ) -> _FlowResultValue | None:
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
@@ -3195,7 +3202,32 @@ async def _run_flow_internal(
         workspace=workspace,
     )
 
+    # Resolve defaults per invocation, never by mutating cached flow definitions.
+    # Root [retry] replaces the inherited policy; step-level partial overrides
+    # keep all unspecified values from that effective flow default.
+    flow_retry_policy = (
+        flow.retry_policy
+        if flow.retry_policy is not None
+        else inherited_retry_policy
+    )
     for step in flow.steps:
+        if step.retry_overrides is not None:
+            defaults = flow_retry_policy or ModelRetryPolicy()
+            values = step.retry_overrides
+            effective_retry_policy = ModelRetryPolicy(
+                max_attempts=values.get("max_attempts", defaults.max_attempts),
+                initial_delay_seconds=values.get(
+                    "initial_delay_seconds", defaults.initial_delay_seconds
+                ),
+                backoff_multiplier=values.get(
+                    "backoff_multiplier", defaults.backoff_multiplier
+                ),
+                max_delay_seconds=values.get(
+                    "max_delay_seconds", defaults.max_delay_seconds
+                ),
+            )
+        else:
+            effective_retry_policy = flow_retry_policy
         items = _foreach_items(
             step,
             outputs=outputs,
@@ -3423,6 +3455,7 @@ async def _run_flow_internal(
                     call_stack=next_stack,
                     namespace=child_namespace,
                     inherited_excluded_paths=effective_flow_excluded_paths,
+                    inherited_retry_policy=effective_retry_policy,
                 )
                 if child_result is None:
                     raise ValueError(
@@ -3605,7 +3638,7 @@ async def _run_flow_internal(
                         workspace_access=step.workspace_access,
                         with_data=step.with_data,
                         with_mcp=step.with_mcp,
-                        retry_policy=step.retry_policy,
+                        retry_policy=effective_retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
                         add_web_context=step.add_web_context,
@@ -3629,7 +3662,7 @@ async def _run_flow_internal(
                         workspace_access=step.workspace_access,
                         with_data=step.with_data,
                         with_mcp=step.with_mcp,
-                        retry_policy=step.retry_policy,
+                        retry_policy=effective_retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
                         add_web_context=step.add_web_context,
@@ -3736,6 +3769,7 @@ async def run_flow(
         call_stack=(),
         namespace="",
         inherited_excluded_paths=(),
+        inherited_retry_policy=None,
     )
 
 
