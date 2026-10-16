@@ -707,6 +707,8 @@ class Workspace:
         path: str,
         start_line: int | None = None,
         end_line: int | None = None,
+        start_page: int | None = None,
+        end_page: int | None = None,
     ) -> str:
         start_line = self._validate_line_number(
             start_line,
@@ -725,6 +727,10 @@ class Workspace:
                 "start_line darf nicht größer als end_line sein."
             )
 
+        for name, number in (("start_page", start_page), ("end_page", end_page)):
+            self._validate_line_number(number, name=name)
+        if start_page is not None and end_page is not None and start_page > end_page:
+            raise WorkspaceError("start_page darf nicht größer als end_page sein.")
         file_path = self.resolve_readable_file(path)
 
         ranged_read = start_line is not None or end_line is not None
@@ -734,9 +740,11 @@ class Workspace:
                     "start_line/end_line werden für PDF-Dateien nicht unterstützt."
                 )
             try:
-                return read_pdf_text(file_path)
+                return read_pdf_text(file_path, start_page=start_page, end_page=end_page, max_pages=self.config.config.get("max_pdf_pages", 100))
             except PdfTextError as exc:
                 raise WorkspaceError(str(exc)) from exc
+        if start_page is not None or end_page is not None:
+            raise WorkspaceError("start_page/end_page sind nur für PDF-Dateien verfügbar.")
         if not self._is_text_file(file_path):
             raise WorkspaceError(
                 f"Dateityp darf nicht als Text gelesen werden: {path!r}"

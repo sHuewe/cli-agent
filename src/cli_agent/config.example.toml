@@ -19,6 +19,12 @@ log_tool_results = false
 max_bytes = 5000000
 backup_count = 3
 
+# PDF text extraction: applies to the built-in OS MCP reader.
+# A selected page range may contain at most this many pages.
+# Maximum configurable value: 2000 (also the hard total page cap). Byte/text/timeout limits remain fixed.
+[pdf]
+max_pdf_pages = 100
+
 [model]
 provider = "ollama"
 model = "qwen3.5:9b"

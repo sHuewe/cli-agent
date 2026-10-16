@@ -74,7 +74,7 @@ Immer verfügbar:
 | Tool | Funktion |
 | --- | --- |
 | `list_files(path)` | Listet Dateien und Verzeichnisse direkt unter einem relativen Workspace-Pfad. |
-| `read_file(path, start_line=None, end_line=None)` | Liest eine unterstützte UTF-8-/ISO-8859-1-Textdatei oder extrahiert PDF-Text mit Seitenmarkierungen. Für Textdateien können optional 1-basierte inklusive Zeilengrenzen angegeben werden. Rückgabe bleibt `str`. |
+| `read_file(path, start_line=None, end_line=None, start_page=None, end_page=None)` | Liest eine unterstützte UTF-8-/ISO-8859-1-Textdatei oder extrahiert PDF-Text mit Seitenmarkierungen. Für Textdateien können optional 1-basierte inklusive Zeilengrenzen angegeben werden. Rückgabe bleibt `str`. |
 | `search_text(path, text, max_results=50)` | Sucht literalen Text rekursiv in freigegebenen Textdateien und liefert höchstens 200 Treffer. |
 
 Nur bei Schreibzugriff:
@@ -134,7 +134,30 @@ Jede Seite erhält eine Markierung; Seiten ohne extrahierbaren Text erhalten ein
 expliziten Hinweis. Bilder und Diagramme werden nicht interpretiert, Tabellen
 und Spalten können ihre ursprüngliche Struktur verlieren.
 
-PDFs dürfen maximal 10.000.000 Bytes und 100 Seiten umfassen. Die gesamte Ausgabe
+PDFs dürfen maximal 10.000.000 Bytes umfassen. Das Seitenlimit lässt sich in der
+Benutzerkonfiguration einstellen (Standard: 100, maximal konfigurierbar: 2.000):
+
+```toml
+[pdf]
+max_pdf_pages = 200
+```
+
+Dieses Limit gilt für die **je Aufruf ausgewählten Seiten**. Unabhängig davon gilt\nein hartes Sicherheitslimit von 2.000 Gesamtseiten pro PDF. Ein PDF mit mehr als
+200 Seiten lässt sich also abschnittsweise lesen:
+
+```text
+read_file("unterlagen/handbuch.pdf", start_page=120, end_page=135)
+```
+
+`start_page` und `end_page` sind 1-basiert und inklusiv; eine Grenze darf
+weggelassen werden. Ohne Seitenbereich wird das ganze PDF extrahiert und muss
+innerhalb des konfigurierten Seitenlimits liegen. Ungültige, vertauschte oder
+außerhalb des Dokuments liegende Grenzen erzeugen einen Fehler. In der Ausgabe
+werden stets die ursprünglichen Seitennummern angezeigt. `start_line` und
+`end_line` sind für PDFs nicht verfügbar; die Seitenargumente sind für
+Textdateien nicht verfügbar.
+
+Die gesamte Ausgabe
 ist auf 1.000.000 Zeichen begrenzt (inklusive Markierungen). Die Extraktion läuft
 mit 20 Sekunden Timeout in einem separaten Prozess. Der Parser-Prozess erhält
 eine minimale Environment-Allowlist und `PYTHONSAFEPATH=1`; insbesondere werden
@@ -142,7 +165,7 @@ beliebige Credential-Variablen und `PYTHONPATH` nicht geerbt. Der separate
 Prozess dient der Timeout-/Lifecycle-Isolation und ist keine vollwertige Sandbox.
 Dies ist kein hartes Speicherlimit: komprimierte PDF-Inhalte können beim Parsen
 deutlich anwachsen.
-Die Limits stehen zentral in `pdf_text.py`; Überschreitungen liefern einen Fehler,
+Die übrigen Limits stehen weiterhin in `pdf_text.py`; Überschreitungen liefern einen Fehler,
 keinen still gekürzten Text. Verschlüsselte und nicht lesbare PDFs liefern ebenfalls
 einen Fehler. Die Originaldatei bleibt unverändert; es gibt keine externen Dienste
 oder zusätzlichen Systemprogramme. `pypdf` wird bei der Installation mitinstalliert.

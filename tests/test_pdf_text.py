@@ -215,3 +215,116 @@ def test_worker_stdio_protocol(monkeypatch, data, status, expected):
         assert output.getvalue().decode("utf-8") == expected
     finally:
         logging.disable(old_disable)
+
+
+
+def test_pdf_page_range_preserves_original_page_numbers(tmp_path):
+    path = tmp_path / "long.pdf"
+    path.write_bytes(_pdf("one", "two", "three", "four"))
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"max_pdf_pages": 2})
+    )
+    with pytest.raises(WorkspaceError, match="Seiten"):
+        workspace.read_file("long.pdf")
+    result = workspace.read_file("long.pdf", start_page=2, end_page=3)
+    assert "--- Seite 2 von 4 ---\ntwo" in result
+    assert "--- Seite 3 von 4 ---\nthree" in result
+    assert "Seite 1" not in result
+    assert "Seite 4" not in result
+    assert workspace.read_file("long.pdf", end_page=2).count("--- Seite") == 2
+    assert workspace.read_file("long.pdf", start_page=4).count("--- Seite") == 1
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"start_page": 0},
+    {"end_page": -1},
+    {"start_page": True},
+    {"start_page": 3, "end_page": 2},
+    {"start_page": 5},
+    {"end_page": 5},
+])
+def test_pdf_page_range_validation(tmp_path, kwargs):
+    (tmp_path / "short.pdf").write_bytes(_pdf("one", "two", "three"))
+    with pytest.raises(WorkspaceError):
+        _workspace(tmp_path).read_file("short.pdf", **kwargs)
+
+
+def test_pdf_page_limit_caps_selected_range(tmp_path):
+    path = tmp_path / "long.pdf"
+    path.write_bytes(_pdf("one", "two", "three", "four"))
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"max_pdf_pages": 2})
+    )
+    with pytest.raises(WorkspaceError, match="Seiten"):
+        workspace.read_file("long.pdf", start_page=1, end_page=3)
+
+
+def test_pdf_options_not_allowed_for_text_files(tmp_path):
+    (tmp_path / "test.txt").write_text("hello", encoding="utf-8")
+    with pytest.raises(WorkspaceError, match="PDF"):
+        _workspace(tmp_path).read_file("test.txt", start_page=1)
+
+
+def test_worker_page_options_round_trip(monkeypatch):
+    from types import SimpleNamespace
+    output = io.BytesIO()
+    old_disable = __import__("logging").root.manager.disable
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(pdf_text.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(_pdf("one", "two", "three"))))
+            patch.setattr(pdf_text.sys, "stdout", SimpleNamespace(buffer=output))
+            assert pdf_text._main(["--max-pages", "2", "--start-page", "2", "--end-page", "3"]) == 0
+        assert "Seite 2 von 3" in output.getvalue().decode("utf-8")
+        assert "Seite 1 von 3" not in output.getvalue().decode("utf-8")
+    finally:
+        __import__("logging").disable(old_disable)
+
+
+def test_total_page_limit_rejects_small_range_of_large_pdf(monkeypatch):
+    monkeypatch.setattr(pdf_text, "MAX_TOTAL_PDF_PAGES", 3)
+    data = _pdf("one", "two", "three", "four")
+    with pytest.raises(pdf_text.PdfTextError, match="Sicherheitslimit"):
+        pdf_text._extract_text(data, start_page=1, end_page=1, max_pages=2)
+
+
+def test_page_tree_rejects_lying_count_without_expanding_pages():
+    from pypdf import PdfReader
+    from pypdf.generic import NameObject, NumberObject
+
+    data = _pdf("one", "two", "three")
+    reader = PdfReader(io.BytesIO(data))
+    pages_root = reader.trailer["/Root"]["/Pages"]
+    pages_root[NameObject("/Count")] = NumberObject(2500)
+    with pytest.raises(pdf_text.PdfTextError, match="Sicherheitslimit"):
+        pdf_text._bounded_page_count(reader)
+
+
+
+def test_page_tree_limits_cumulative_pending_queue(monkeypatch):
+    """A nested /Pages chain must not accumulate an unbounded sibling queue."""
+    from pypdf import PdfReader
+    from pypdf.generic import ArrayObject, DictionaryObject, NameObject, NumberObject
+
+    monkeypatch.setattr(pdf_text, "MAX_TOTAL_PDF_PAGES", 3)
+    reader = PdfReader(io.BytesIO(_pdf("one")))
+    root = reader.trailer["/Root"]["/Pages"]
+    current = root
+    for _ in range(5):
+        child = DictionaryObject({
+            NameObject("/Type"): NameObject("/Pages"),
+            NameObject("/Count"): NumberObject(1),
+            NameObject("/Kids"): ArrayObject(),
+        })
+        # The last entry is traversed first (LIFO); each earlier sibling
+        # remains pending and consumes the cumulative node budget.
+        current[NameObject("/Kids")] = ArrayObject([
+            DictionaryObject({NameObject("/Type"): NameObject("/Page")}),
+            DictionaryObject({NameObject("/Type"): NameObject("/Page")}),
+            child,
+        ])
+        current[NameObject("/Count")] = NumberObject(1)
+        current = child
+    current[NameObject("/Kids")] = ArrayObject()
+
+    with pytest.raises(pdf_text.PdfTextError, match="Seitenbaum.*Sicherheitslimit"):
+        pdf_text._bounded_page_count(reader)

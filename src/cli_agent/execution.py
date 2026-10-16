@@ -166,6 +166,7 @@ def os_mcp_server_config(
     *,
     mutation_protected_paths: tuple[Path, ...] = (),
     excluded_paths: tuple[Path, ...] = (),
+    max_pdf_pages: int = 100,
 ) -> McpServerConfig:
     if access not in {"read", "write"}:
         raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
@@ -201,7 +202,7 @@ def os_mcp_server_config(
                 )
             )
         ),
-        config={"allow_write_files": access == "write"},
+        config={"allow_write_files": access == "write", "max_pdf_pages": max_pdf_pages},
         built_in=True,
     )
 
@@ -315,6 +316,7 @@ def apply_workspace_access_override(
             workspace_access,
             mutation_protected_paths=mutation_protected_paths,
             excluded_paths=excluded_paths,
+            max_pdf_pages=config.max_pdf_pages,
         ),
     )
     return replace(config, mcp_servers=servers)
