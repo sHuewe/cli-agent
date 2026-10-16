@@ -289,11 +289,11 @@ def test_total_page_limit_rejects_small_range_of_large_pdf(monkeypatch):
 
 def test_page_tree_rejects_lying_count_without_expanding_pages():
     from pypdf import PdfReader
-    from pypdf.generic import NumberObject
+    from pypdf.generic import NameObject, NumberObject
 
     data = _pdf("one", "two", "three")
     reader = PdfReader(io.BytesIO(data))
     pages_root = reader.trailer["/Root"]["/Pages"]
-    pages_root["/Count"] = NumberObject(2500)
+    pages_root[NameObject("/Count")] = NumberObject(2500)
     with pytest.raises(pdf_text.PdfTextError, match="Sicherheitslimit"):
         pdf_text._bounded_page_count(reader)
