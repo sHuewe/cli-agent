@@ -168,8 +168,8 @@ def test_okf_main_converts_repository_error_to_system_exit(tmp_path, monkeypatch
 def _workspace_stub(calls):
     return SimpleNamespace(
         list_files=lambda path: calls.append(("list", path)) or "listed",
-        read_file=lambda path, start_line=None, end_line=None: (
-            calls.append(("read", path, start_line, end_line)) or "contents"
+        read_file=lambda path, start_line=None, end_line=None, start_page=None, end_page=None: (
+            calls.append(("read", path, start_line, end_line, start_page, end_page)) or "contents"
         ),
         search_text=lambda path, text, max_results=50: calls.append(("search", path, text, max_results)) or "matches",
         find_files=lambda path, pattern, max_results=100: calls.append(("find", path, pattern, max_results)) or "files",
@@ -198,7 +198,7 @@ def test_os_create_server_read_only_registers_only_read_tools(monkeypatch) -> No
     assert server.tools["file_info"]("README.md") == "metadata"
     assert calls == [
         ("list", "."),
-        ("read", "README.md", None, None),
+        ("read", "README.md", None, None, None, None),
         ("search", "src", "needle", 12),
         ("find", ".", "*.py", 15),
         ("info", "README.md"),
@@ -217,11 +217,15 @@ def test_os_read_file_contract_and_pdf_description(monkeypatch) -> None:
         "path",
         "start_line",
         "end_line",
+        "start_page",
+        "end_page",
     ]
     assert get_type_hints(read_file) == {
         "path": str,
         "start_line": int | None,
         "end_line": int | None,
+        "start_page": int | None,
+        "end_page": int | None,
         "return": str,
     }
     assert "PDF" in read_file.__doc__
@@ -231,8 +235,8 @@ def test_os_read_file_contract_and_pdf_description(monkeypatch) -> None:
     assert read_file("document.pdf") == "contents"
     assert read_file("README.md", start_line=10, end_line=20) == "contents"
     assert calls == [
-        ("read", "document.pdf", None, None),
-        ("read", "README.md", 10, 20),
+        ("read", "document.pdf", None, None, None, None),
+        ("read", "README.md", 10, 20, None, None),
     ]
 
 
@@ -328,7 +332,7 @@ def test_os_main_uses_resolved_config_workspace_and_stdio(tmp_path, monkeypatch)
     monkeypatch.setattr(
         os_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=logging_config, mcp_servers=()),
+        lambda path: SimpleNamespace(logging=logging_config, mcp_servers=(), max_pdf_pages=100),
     )
 
     def fake_configure_logging(config, **kwargs):
