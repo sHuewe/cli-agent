@@ -16,7 +16,8 @@ from pathlib import Path
 
 MAX_PDF_BYTES = 10_000_000
 MAX_PDF_PAGES = 100
-MAX_CONFIGURABLE_PDF_PAGES = 10_000
+MAX_CONFIGURABLE_PDF_PAGES = 2_000
+MAX_TOTAL_PDF_PAGES = 2_000
 MAX_PDF_TEXT_CHARS = 1_000_000
 PDF_TIMEOUT_SECONDS = 20
 
@@ -45,6 +46,58 @@ def _pdf_worker_environment() -> dict[str, str]:
 
 class PdfTextError(RuntimeError):
     """A PDF could not be safely read as text."""
+
+
+def _bounded_page_count(reader: object) -> int:
+    """Check the PDF page tree before pypdf expands its flattened pages list."""
+    from pypdf.generic import ArrayObject, DictionaryObject
+
+    root = reader.trailer["/Root"]
+    page_tree = root["/Pages"]
+    pending = [page_tree]
+    visited: set[tuple[int, int] | int] = set()
+    pages = 0
+    nodes = 0
+    while pending:
+        entry = pending.pop()
+        key = (
+            (entry.idnum, entry.generation)
+            if hasattr(entry, "idnum") and hasattr(entry, "generation")
+            else id(entry)
+        )
+        if key in visited:
+            raise PdfTextError("PDF enthält einen zyklischen Seitenbaum.")
+        visited.add(key)
+        nodes += 1
+        if nodes > 2 * MAX_TOTAL_PDF_PAGES + 1:
+            raise PdfTextError("PDF-Seitenbaum überschreitet das Sicherheitslimit.")
+        node = entry.get_object() if hasattr(entry, "get_object") else entry
+        if not isinstance(node, DictionaryObject):
+            raise PdfTextError("PDF enthält einen ungültigen Seitenbaum.")
+        if str(node.get("/Type")) == "/Page":
+            pages += 1
+            if pages > MAX_TOTAL_PDF_PAGES:
+                raise PdfTextError(
+                    f"PDF überschreitet das Sicherheitslimit von {MAX_TOTAL_PDF_PAGES} Gesamtseiten."
+                )
+            continue
+        if str(node.get("/Type")) != "/Pages":
+            raise PdfTextError("PDF enthält einen ungültigen Seitenbaum.")
+        count = node.get("/Count")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise PdfTextError("PDF enthält eine ungültige Seitenanzahl.")
+        if count > MAX_TOTAL_PDF_PAGES:
+            raise PdfTextError(
+                f"PDF überschreitet das Sicherheitslimit von {MAX_TOTAL_PDF_PAGES} Gesamtseiten."
+            )
+        kids = node.get("/Kids")
+        kids = kids.get_object() if hasattr(kids, "get_object") else kids
+        if not isinstance(kids, ArrayObject):
+            raise PdfTextError("PDF enthält einen ungültigen Seitenbaum.")
+        if len(kids) > MAX_TOTAL_PDF_PAGES or len(kids) + nodes > 2 * MAX_TOTAL_PDF_PAGES + 1:
+            raise PdfTextError("PDF-Seitenbaum überschreitet das Sicherheitslimit.")
+        pending.extend(kids)
+    return pages
 
 
 def _validate_page_options(
@@ -86,7 +139,10 @@ def _extract_text(
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted:
             raise PdfTextError("Verschlüsselte PDFs werden nicht unterstützt.")
-        page_count = len(reader.pages)
+        page_count = _bounded_page_count(reader)
+        # Reject conflicting declared counts before asking pypdf to flatten.
+        if len(reader.pages) != page_count:
+            raise PdfTextError("PDF-Seitenanzahl ist widersprüchlich.")
         if page_count == 0:
             if start_page is not None or end_page is not None:
                 raise PdfTextError("PDF enthält keine Seiten für den angeforderten Bereich.")
