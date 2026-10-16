@@ -135,14 +135,14 @@ expliziten Hinweis. Bilder und Diagramme werden nicht interpretiert, Tabellen
 und Spalten können ihre ursprüngliche Struktur verlieren.
 
 PDFs dürfen maximal 10.000.000 Bytes umfassen. Das Seitenlimit lässt sich in der
-Benutzerkonfiguration einstellen (Standard: 100, maximal konfigurierbar: 10.000):
+Benutzerkonfiguration einstellen (Standard: 100, maximal konfigurierbar: 2.000):
 
 ```toml
 [pdf]
 max_pdf_pages = 200
 ```
 
-Dieses Limit gilt für die **je Aufruf ausgewählten Seiten**. Ein PDF mit mehr als
+Dieses Limit gilt für die **je Aufruf ausgewählten Seiten**. Unabhängig davon gilt\nein hartes Sicherheitslimit von 2.000 Gesamtseiten pro PDF. Ein PDF mit mehr als
 200 Seiten lässt sich also abschnittsweise lesen:
 
 ```text
