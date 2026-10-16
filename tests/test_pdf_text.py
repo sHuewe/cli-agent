@@ -278,3 +278,22 @@ def test_worker_page_options_round_trip(monkeypatch):
         assert "Seite 1 von 3" not in output.getvalue().decode("utf-8")
     finally:
         __import__("logging").disable(old_disable)
+
+
+def test_total_page_limit_rejects_small_range_of_large_pdf(monkeypatch):
+    monkeypatch.setattr(pdf_text, "MAX_TOTAL_PDF_PAGES", 3)
+    data = _pdf("one", "two", "three", "four")
+    with pytest.raises(pdf_text.PdfTextError, match="Sicherheitslimit"):
+        pdf_text._extract_text(data, start_page=1, end_page=1, max_pages=2)
+
+
+def test_page_tree_rejects_lying_count_without_expanding_pages():
+    from pypdf import PdfReader
+    from pypdf.generic import NumberObject
+
+    data = _pdf("one", "two", "three")
+    reader = PdfReader(io.BytesIO(data))
+    pages_root = reader.trailer["/Root"]["/Pages"]
+    pages_root["/Count"] = NumberObject(2500)
+    with pytest.raises(pdf_text.PdfTextError, match="Sicherheitslimit"):
+        pdf_text._bounded_page_count(reader)
