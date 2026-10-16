@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -264,7 +265,11 @@ def resolve_mcp_config(
     max_pdf_pages: int = 100,
 ) -> McpServerConfig:
     if access is None:
-        return find_mcp_config(configurations)
+        existing = find_mcp_config(configurations)
+        return replace(
+            existing,
+            config={**existing.config, "max_pdf_pages": max_pdf_pages},
+        )
     return McpServerConfig(
         name="os",
         config={"allow_write_files": access == "write", "max_pdf_pages": max_pdf_pages},
