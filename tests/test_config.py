@@ -313,7 +313,7 @@ def test_pdf_page_limit_from_toml(tmp_path):
     assert load_config(config_path).max_pdf_pages == 250
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "true", '"100"', "10001"])
+@pytest.mark.parametrize("value", ["0", "-1", "true", '"100"', "2001"])
 def test_pdf_page_limit_rejects_invalid_config(tmp_path, value):
     config_path = tmp_path / "config.toml"
     config_path.write_text(f"[pdf]\nmax_pdf_pages = {value}\n", encoding="utf-8")
