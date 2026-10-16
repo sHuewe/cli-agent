@@ -450,3 +450,16 @@ def test_os_main_converts_workspace_error_to_system_exit(tmp_path, monkeypatch) 
 
     with pytest.raises(SystemExit, match="Kein MCP-Server"):
         os_mcp_server.main()
+
+
+def test_os_configured_mode_preserves_pdf_limit():
+    configured = McpServerConfig(
+        name="os",
+        config={"allow_write_files": True, "existing_option": "kept"},
+    )
+    effective = os_mcp_server.resolve_mcp_config(
+        (configured,), access=None, max_pdf_pages=250,
+    )
+    assert effective.allow_write_files()
+    assert effective.config["existing_option"] == "kept"
+    assert effective.config["max_pdf_pages"] == 250
