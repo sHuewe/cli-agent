@@ -58,6 +58,7 @@ def _bounded_page_count(reader: object) -> int:
     visited: set[tuple[int, int] | int] = set()
     pages = 0
     nodes = 0
+    max_nodes = 2 * MAX_TOTAL_PDF_PAGES + 1
     while pending:
         entry = pending.pop()
         key = (
@@ -69,7 +70,7 @@ def _bounded_page_count(reader: object) -> int:
             raise PdfTextError("PDF enthält einen zyklischen Seitenbaum.")
         visited.add(key)
         nodes += 1
-        if nodes > 2 * MAX_TOTAL_PDF_PAGES + 1:
+        if nodes > max_nodes:
             raise PdfTextError("PDF-Seitenbaum überschreitet das Sicherheitslimit.")
         node = entry.get_object() if hasattr(entry, "get_object") else entry
         if not isinstance(node, DictionaryObject):
@@ -94,7 +95,14 @@ def _bounded_page_count(reader: object) -> int:
         kids = kids.get_object() if hasattr(kids, "get_object") else kids
         if not isinstance(kids, ArrayObject):
             raise PdfTextError("PDF enthält einen ungültigen Seitenbaum.")
-        if len(kids) > MAX_TOTAL_PDF_PAGES or len(kids) + nodes > 2 * MAX_TOTAL_PDF_PAGES + 1:
+        # Count *all* scheduled entries: processed nodes, entries already
+        # waiting in the LIFO stack, and the children about to be enqueued.
+        # Checking only nodes + len(kids) misses the cumulative pending queue
+        # of deeply nested /Pages trees with dishonest /Count declarations.
+        if (
+            len(kids) > MAX_TOTAL_PDF_PAGES
+            or nodes + len(pending) + len(kids) > max_nodes
+        ):
             raise PdfTextError("PDF-Seitenbaum überschreitet das Sicherheitslimit.")
         pending.extend(kids)
     return pages
