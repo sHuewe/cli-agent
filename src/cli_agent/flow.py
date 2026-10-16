@@ -3127,6 +3127,7 @@ async def _run_flow_internal(
     call_stack: tuple[str, ...],
     namespace: str,
     inherited_excluded_paths: tuple[Path, ...],
+    inherited_retry_policy: ModelRetryPolicy | None,
 ) -> _FlowResultValue | None:
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
@@ -3196,6 +3197,14 @@ async def _run_flow_internal(
     )
 
     for step in flow.steps:
+        # Keep retry inheritance invocation-local: the same cached subflow may
+        # be called by parents with different policies. An explicit policy in
+        # the current flow (or its step) takes precedence over inheritance.
+        effective_retry_policy = (
+            step.retry_policy
+            if step.retry_policy is not None
+            else inherited_retry_policy
+        )
         items = _foreach_items(
             step,
             outputs=outputs,
@@ -3423,6 +3432,7 @@ async def _run_flow_internal(
                     call_stack=next_stack,
                     namespace=child_namespace,
                     inherited_excluded_paths=effective_flow_excluded_paths,
+                    inherited_retry_policy=effective_retry_policy,
                 )
                 if child_result is None:
                     raise ValueError(
@@ -3605,7 +3615,7 @@ async def _run_flow_internal(
                         workspace_access=step.workspace_access,
                         with_data=step.with_data,
                         with_mcp=step.with_mcp,
-                        retry_policy=step.retry_policy,
+                        retry_policy=effective_retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
                         add_web_context=step.add_web_context,
@@ -3629,7 +3639,7 @@ async def _run_flow_internal(
                         workspace_access=step.workspace_access,
                         with_data=step.with_data,
                         with_mcp=step.with_mcp,
-                        retry_policy=step.retry_policy,
+                        retry_policy=effective_retry_policy,
                         response_format=step.response_format,
                         context_files=contexts,
                         add_web_context=step.add_web_context,
@@ -3736,6 +3746,7 @@ async def run_flow(
         call_stack=(),
         namespace="",
         inherited_excluded_paths=(),
+        inherited_retry_policy=None,
     )
 
 

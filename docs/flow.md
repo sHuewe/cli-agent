@@ -481,6 +481,18 @@ globale Policy, behalten step-spezifische Teilangaben die bisherigen Defaults
 `max_delay_seconds = 10`). Wenn weder `[retry]` noch `[steps.retry]` gesetzt ist,
 sind Retries weiterhin deaktiviert.
 
+Bei verschachtelten Subflows wird die effektive Retry-Policy des aufrufenden
+Flows **an das Kind vererbt**, sofern das Kind für den betreffenden Step
+keine eigene Policy definiert. Ein Child-`[retry]` überschreibt die geerbte
+Policy für seine Steps; `[steps.retry]` überschreibt wiederum die globale
+Child-Policy (auch `max_attempts = 1` zum Deaktivieren von Retries).
+Diese Vererbung gilt rekursiv und unabhängig pro Aufruf, auch wenn derselbe
+Subflow mehrfach verwendet wird. Die Einstellungen `model`, `config` und
+Tool-Berechtigungen werden dadurch **nicht** vererbt. Für einen Subflow-Aufruf
+selbst bleibt `[steps.retry]` weiterhin nicht erlaubt; gewünschte Overrides
+gehören in die Child-Flow-Datei.
+
+
 Die Retry-Policy steuert ausschließlich Wiederholungen transient fehlgeschlagener
 **Modellanfragen**. Sie wiederholt niemals einen vollständigen Step und führt
 daher bereits ausgeführte MCP-Tool-Aufrufe nicht erneut aus. `max_attempts` zählt
