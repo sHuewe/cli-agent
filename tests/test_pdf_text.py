@@ -297,3 +297,34 @@ def test_page_tree_rejects_lying_count_without_expanding_pages():
     pages_root[NameObject("/Count")] = NumberObject(2500)
     with pytest.raises(pdf_text.PdfTextError, match="Sicherheitslimit"):
         pdf_text._bounded_page_count(reader)
+
+
+
+def test_page_tree_limits_cumulative_pending_queue(monkeypatch):
+    """A nested /Pages chain must not accumulate an unbounded sibling queue."""
+    from pypdf import PdfReader
+    from pypdf.generic import ArrayObject, DictionaryObject, NameObject, NumberObject
+
+    monkeypatch.setattr(pdf_text, "MAX_TOTAL_PDF_PAGES", 3)
+    reader = PdfReader(io.BytesIO(_pdf("one")))
+    root = reader.trailer["/Root"]["/Pages"]
+    current = root
+    for _ in range(5):
+        child = DictionaryObject({
+            NameObject("/Type"): NameObject("/Pages"),
+            NameObject("/Count"): NumberObject(1),
+            NameObject("/Kids"): ArrayObject(),
+        })
+        # The last entry is traversed first (LIFO); each earlier sibling
+        # remains pending and consumes the cumulative node budget.
+        current[NameObject("/Kids")] = ArrayObject([
+            DictionaryObject({NameObject("/Type"): NameObject("/Page")}),
+            DictionaryObject({NameObject("/Type"): NameObject("/Page")}),
+            child,
+        ])
+        current[NameObject("/Count")] = NumberObject(1)
+        current = child
+    current[NameObject("/Kids")] = ArrayObject()
+
+    with pytest.raises(pdf_text.PdfTextError, match="Seitenbaum.*Sicherheitslimit"):
+        pdf_text._bounded_page_count(reader)
