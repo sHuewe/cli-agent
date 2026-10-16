@@ -45,6 +45,8 @@ Only write, move or delete a file when the user requested a file change.
         path: str,
         start_line: int | None = None,
         end_line: int | None = None,
+        start_page: int | None = None,
+        end_page: int | None = None,
     ) -> str:
         """
         Read one UTF-8 or ISO-8859-1 text file or extract text from a PDF in the project workspace.
@@ -54,7 +56,7 @@ Only write, move or delete a file when the user requested a file change.
         reads may scan up to 64 MB and return at most 1 MB of text. Either bound
         may be omitted. Line ranges are not supported for PDFs.
 
-        PDFs support up to 10 MB, 100 pages, 1,000,000 output characters and
+        PDFs support up to 10 MB, a configured page count (default 100), 1,000,000 output characters and
         20 seconds of extraction time. PDF output includes page markers and
         notices for pages without extractable text. No OCR is used; images and
         diagrams are not interpreted, and table/column layout may be lost.
@@ -66,11 +68,15 @@ Only write, move or delete a file when the user requested a file change.
                 ".." are forbidden.
             start_line: Optional first text line to return, 1-based and inclusive.
             end_line: Optional last text line to return, 1-based and inclusive.
+            start_page: Optional first PDF page, 1-based and inclusive.
+            end_page: Optional last PDF page, 1-based and inclusive.
         """
         return workspace.read_file(
             path,
             start_line=start_line,
             end_line=end_line,
+            start_page=start_page,
+            end_page=end_page,
         )
 
     @mcp.tool()
@@ -255,12 +261,13 @@ def resolve_mcp_config(
     configurations: tuple[McpServerConfig, ...],
     *,
     access: str | None,
+    max_pdf_pages: int = 100,
 ) -> McpServerConfig:
     if access is None:
         return find_mcp_config(configurations)
     return McpServerConfig(
         name="os",
-        config={"allow_write_files": access == "write"},
+        config={"allow_write_files": access == "write", "max_pdf_pages": max_pdf_pages},
     )
 
 
@@ -287,6 +294,7 @@ def main() -> None:
         mcp_config = resolve_mcp_config(
             config.mcp_servers,
             access=args.access,
+            max_pdf_pages=config.max_pdf_pages,
         )
         project_directory = args.project_directory.expanduser().resolve()
         user_protected_paths = tuple(
