@@ -7185,3 +7185,43 @@ def test_subflow_preflight_reports_later_bad_iteration_input(
     assert "iteration=second" in error
     assert "enthält kein Feld" in error
     assert calls == ["seed"]
+
+
+def test_flow_logging_setup_failure_does_not_leak_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "missing.toml", "--workspace", str(tmp_path),
+    ])
+    def fail_load_config():
+        raise RuntimeError("unsafe\x1b[2J\u202efile")
+    monkeypatch.setattr(flow_module, "load_config", fail_load_config)
+    with pytest.raises(SystemExit) as exit_info:
+        flow_module.main()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert "Fehler: RuntimeError" in stderr
+    assert "\\u001b" in stderr and "\\u202e" in stderr
+    assert "Traceback (most recent call last)" not in stderr
+    assert "\x1b" not in stderr and "\u202e" not in stderr
+
+
+def test_flow_logging_configure_failure_does_not_leak_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "missing.toml", "--workspace", str(tmp_path),
+    ])
+    def fail_configure(_config):
+        raise RuntimeError("unsafe\x1b[2J\u202efile")
+    monkeypatch.setattr(flow_module, "configure_logging", fail_configure)
+    with pytest.raises(SystemExit) as exit_info:
+        flow_module.main()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert "Fehler: RuntimeError" in stderr
+    assert "\\u001b" in stderr and "\\u202e" in stderr
+    assert "Traceback (most recent call last)" not in stderr
+    assert "\x1b" not in stderr and "\u202e" not in stderr
