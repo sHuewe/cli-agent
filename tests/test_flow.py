@@ -7369,3 +7369,50 @@ def test_flow_logging_preload_nested_invalid_step_config_reports_child(
     assert "phase=configure-step-logging" in error
     assert "step=child" in error
     assert "child.toml" in error
+
+
+def test_logging_discovery_rejects_excessive_subflow_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "config.toml").write_text(
+        "[logging]\nenabled = false\n", encoding="utf-8"
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    for depth in range(flow_module.MAX_SUBFLOW_DEPTH):
+        (tmp_path / f"level-{depth}.toml").write_text(
+            "version = 1\n"
+            f'[[steps]]\nid = "nested"\nflow = "level-{depth + 1}.toml"\n',
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "level-0.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "Maximale Subflow-Tiefe" in error
+    assert "level-8.toml" not in error
+
+
+def test_flow_cli_validation_error_reports_child_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.broken.output"\n'
+        '[[steps]]\nid = "broken"\nprompt_file = "nonexistent.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child_call"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "parent.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "step=broken" in error
+    assert "child.toml" in error
