@@ -7010,3 +7010,30 @@ def test_flow_cli_debug_includes_traceback(
     output = capsys.readouterr().err
     assert "step=broken" in output
     assert "Traceback (most recent call last)" in output
+
+def test_flow_cli_debug_sanitizes_untrusted_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "broken"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+
+    async def fail_run_once(options, *, dependencies=None):
+        raise RuntimeError("unsafe\x1b[2J\u202efilename")
+
+    monkeypatch.setattr(flow_module, "run_once", fail_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path), "--debug"],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    output = capsys.readouterr().err
+    assert "Traceback (most recent call last)" in output
+    assert "\\u001b" in output
+    assert "\\u202e" in output
+    assert "\x1b" not in output
+    assert "\\u202e" in output
