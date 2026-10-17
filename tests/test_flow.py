@@ -7191,8 +7191,13 @@ def test_flow_logging_setup_failure_does_not_leak_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
     monkeypatch.setattr(flow_module.sys, "argv", [
-        "cli-agent-flow", "validate", "missing.toml", "--workspace", str(tmp_path),
+        "cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path),
     ])
     def fail_load_config():
         raise RuntimeError("unsafe\x1b[2J\u202efile")
@@ -7211,8 +7216,13 @@ def test_flow_logging_configure_failure_does_not_leak_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
     monkeypatch.setattr(flow_module.sys, "argv", [
-        "cli-agent-flow", "validate", "missing.toml", "--workspace", str(tmp_path),
+        "cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path),
     ])
     def fail_configure(_config):
         raise RuntimeError("unsafe\x1b[2J\u202efile")
