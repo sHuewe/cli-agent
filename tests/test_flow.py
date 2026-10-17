@@ -7319,3 +7319,53 @@ def test_flow_cli_checks_effective_logging_after_step_reconfiguration(
         existing_logger.disabled = original_disabled
         existing_logger.setLevel(original_level)
         existing_logger.propagate = original_propagate
+
+
+def test_flow_logging_preload_invalid_step_config_reports_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "broken.toml").write_text("[invalid", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "broken"\n'
+        'config = "broken.toml"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "Konfiguration von Schritt 'broken' ist ungültig" in error
+    assert "phase=configure-step-logging" in error
+    assert "step=broken" in error
+
+
+def test_flow_logging_preload_nested_invalid_step_config_reports_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "broken.toml").write_text("[invalid", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nprompt_file = "prompt.md"\n'
+        'config = "broken.toml"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "nested"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "Konfiguration von Schritt 'child' ist ungültig" in error
+    assert "phase=configure-step-logging" in error
+    assert "step=child" in error
+    assert "child.toml" in error
