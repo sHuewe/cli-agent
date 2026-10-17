@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
+from pathlib import Path
 from contextlib import AsyncExitStack
 from typing import Any, Self
 
@@ -11,6 +13,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
+from .mcp_path_policy import write_path_policy
 from .agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS
 from .agent_types import ServerConfig, ToolRoute, _RuntimeMcpServerConfig
 from .config import McpServerConfig
@@ -276,14 +279,42 @@ class McpLifecycleMixin:
                     environment[WORKSPACE_DIRECTORY_ENV] = str(
                         self.workspace_directory
                     )
+            literal_args = list(getattr(server_config, "literal_args", ()))
+            if built_in and server_config.name in {"os", "data"}:
+                # Keep checkpoint lists off the Windows process command line.
+                # The manifest lives in a private temporary directory outside
+                # the workspace and is removed when the MCP session closes.
+                paths = {"protected_paths": [], "mutation_protected_paths": []}
+                filtered_args = []
+                index = 0
+                while index < len(literal_args):
+                    argument = literal_args[index]
+                    if argument in {"--protected-path", "--mutation-protected-path"}:
+                        if index + 1 >= len(literal_args):
+                            raise ValueError("Fehlender Wert für MCP-Schutzpfad.")
+                        key = (
+                            "protected_paths" if argument == "--protected-path"
+                            else "mutation_protected_paths"
+                        )
+                        paths[key].append(literal_args[index + 1])
+                        index += 2
+                    else:
+                        filtered_args.append(argument)
+                        index += 1
+                literal_args = filtered_args
+                if any(paths.values()):
+                    temp_directory = stack.enter_context(
+                        tempfile.TemporaryDirectory(prefix="cli-agent-mcp-policy-")
+                    )
+                    manifest_path = Path(temp_directory) / "paths.json"
+                    write_path_policy(manifest_path, paths)
+                    literal_args.extend(("--path-policy-file", str(manifest_path)))
             parameters = StdioServerParameters(
                 command=self._resolve_stdio_value(server_config.command),
                 args=[
                     self._resolve_stdio_value(value)
                     for value in server_config.args
-                ] + list(
-                    getattr(server_config, "literal_args", ())
-                ),
+                ] + literal_args,
                 env=environment,
             )
             read_stream, write_stream = await stack.enter_async_context(stdio_client(parameters))

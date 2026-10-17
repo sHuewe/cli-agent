@@ -765,11 +765,16 @@ def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     protected = str(tmp_path / "{config_file}" / "{workspace_directory}.md")
+    checkpoint_paths = tuple(str(tmp_path / f"checkpoint-{index:05d}.json") for index in range(800))
     server = McpServerConfig(
         name="os",
         command="{python}",
         args=("--config", "{config_file}"),
-        literal_args=("--mutation-protected-path", protected),
+        literal_args=tuple(
+            argument
+            for path in (protected, *checkpoint_paths)
+            for argument in ("--mutation-protected-path", path)
+        ),
         built_in=True,
     )
     agent = CliAgent(
@@ -799,6 +804,8 @@ def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
 
     def fake_stdio_client(parameters):
         captured["parameters"] = parameters
+        from cli_agent.mcp_path_policy import read_path_policy
+        captured["policy"] = read_path_policy(Path(parameters.args[-1]))
         return DummyContext()
 
     monkeypatch.setattr("cli_agent.agent_mcp.stdio_client", fake_stdio_client)
@@ -817,7 +824,12 @@ def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
     args = captured["parameters"].args
     assert args[0] == "--config"
     assert args[1] == str(tmp_path / "config.toml")
-    assert args[-2:] == ["--mutation-protected-path", protected]
+    assert args[-2] == "--path-policy-file"
+    assert captured["policy"]["mutation_protected_paths"] == tuple(
+        Path(value) for value in (protected, *checkpoint_paths)
+    )
+    assert len(" ".join(args)) < 32767
+    assert not Path(args[-1]).exists()
 
 
 def test_json_response_format_adds_german_system_instruction(tmp_path: Path) -> None:

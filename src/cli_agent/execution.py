@@ -195,7 +195,7 @@ def os_mcp_server_config(
             )
             + tuple(
                 argument
-                for path in mutation_protected_paths
+                for path in (mutation_protected_paths if access == "write" else ())
                 for argument in (
                     "--mutation-protected-path",
                     str(path),
