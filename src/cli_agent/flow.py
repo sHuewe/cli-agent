@@ -2319,31 +2319,31 @@ def _snapshot_dynamic_checkpoint_candidates(
                         )
                     except ValueError:
                         continue
-                key = _filesystem_path_key(path)
-                # The run-start planner already captured these checkpoints.
-                # Avoid an additional read; their original snapshots remain
-                # authoritative for the known invocation.
-                if key in known_keys or key in fingerprints:
-                    continue
-                try:
-                    size = path.stat().st_size
-                except OSError:
-                    continue
-                if size > MAX_STRUCTURED_OUTPUT_BYTES:
-                    continue
-                total_bytes += size
-                if total_bytes > MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES:
-                    raise ValueError("Run-Start-Checkpoint-Budget überschritten.")
-                try:
-                    content = read_existing_output_text(
-                        workspace,
-                        path,
-                        max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
-                    )
-                except (OSError, ValueError):
-                    continue
-                fingerprints[key] = _checkpoint_fingerprint(content)
-                paths[key] = path
+                    key = _filesystem_path_key(path)
+                    # The run-start planner already captured these checkpoints.
+                    # Avoid an additional read; their original snapshots remain
+                    # authoritative for the known invocation.
+                    if key in known_keys or key in fingerprints:
+                        continue
+                    try:
+                        size = path.stat().st_size
+                    except OSError:
+                        continue
+                    if size > MAX_STRUCTURED_OUTPUT_BYTES:
+                        continue
+                    total_bytes += size
+                    if total_bytes > MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES:
+                        raise ValueError("Run-Start-Checkpoint-Budget überschritten.")
+                    try:
+                        content = read_existing_output_text(
+                            workspace,
+                            path,
+                            max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+                        )
+                    except (OSError, ValueError):
+                        continue
+                    fingerprints[key] = _checkpoint_fingerprint(content)
+                    paths[key] = path
     return fingerprints, tuple(paths.values())
 
 
