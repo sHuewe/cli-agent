@@ -4133,7 +4133,7 @@ def _initial_flow_logging_config(
     flow: FlowDefinition,
     *,
     workspace: Path,
-) -> Path | None:
+) -> tuple[Path, Path, str] | None:
     """Use a step config when no executable step depends on the default.
 
     Inspect the bounded, cached subflow graph so explicit-config-only flows
@@ -4142,7 +4142,7 @@ def _initial_flow_logging_config(
     cache = {_filesystem_path_key(flow.source): flow}
     visited: set[str] = set()
     pending = [flow]
-    first_explicit: Path | None = None
+    first_explicit: tuple[Path, Path, str] | None = None
     while pending:
         current = pending.pop()
         key = _filesystem_path_key(current.source)
@@ -4163,8 +4163,10 @@ def _initial_flow_logging_config(
             elif step.config is None:
                 return None
             elif first_explicit is None:
-                first_explicit = _resolve_config(
-                    step, flow_dir=current.source.parent
+                first_explicit = (
+                    _resolve_config(step, flow_dir=current.source.parent),
+                    current.source,
+                    step.step_id,
                 )
     return first_explicit
 
@@ -4181,12 +4183,36 @@ def main() -> None:
             workspace=workspace,
         )
         _set_flow_diagnostic(phase="configure-logging", flow=flow.source)
-        config_path = (
+        config_source = (
             _initial_flow_logging_config(flow, workspace=workspace)
             if isinstance(flow, FlowDefinition)
             else None
         )
-        config = load_config(config_path) if config_path is not None else load_config()
+        if config_source is None:
+            config = load_config()
+        else:
+            config_path, config_flow, config_step = config_source
+            _set_flow_diagnostic(
+                phase="configure-step-logging",
+                flow=config_flow, step=config_step,
+            )
+            if not config_path.exists():
+                raise ValueError(
+                    f"Konfiguration von Schritt {config_step!r} "
+                    f"existiert nicht: {config_path}"
+                )
+            if not config_path.is_file():
+                raise ValueError(
+                    f"Konfiguration von Schritt {config_step!r} "
+                    f"ist keine Datei: {config_path}"
+                )
+            try:
+                config = load_config(config_path)
+            except Exception as exc:
+                raise ValueError(
+                    f"Konfiguration von Schritt {config_step!r} "
+                    f"ist ungültig: {exc}"
+                ) from exc
         configure_logging(config.logging)
         logging_initialized = True
         _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
