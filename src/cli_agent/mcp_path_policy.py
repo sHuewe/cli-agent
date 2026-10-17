@@ -30,7 +30,7 @@ def write_path_policy(path: Path, data: dict[str, list[str]]) -> None:
     validated = _validate_policy(data)
     serialized = json.dumps(
         {key: [str(value) for value in validated[key]] for key in sorted(_POLICY_KEYS)},
-        ensure_ascii=False,
+        ensure_ascii=True,
     ).encode("utf-8")
     if len(serialized) > MAX_POLICY_BYTES:
         raise ValueError("MCP-Pfad-Policy überschreitet das Größenlimit.")
