@@ -80,7 +80,9 @@ def _set_flow_diagnostic(
 MAX_FLOW_STEPS = 100
 MAX_FOREACH_ITEMS = 1000
 MAX_FLOW_FILE_BYTES = 1_000_000
-MAX_STRUCTURED_OUTPUT_BYTES = 10_000_000
+MAX_STRUCTURED_OUTPUT_BYTES = 100_000_000
+MAX_JSON_INPUT_FILES = 1000
+MAX_JSON_INPUT_TOTAL_BYTES = 100_000_000
 MAX_SUBFLOW_DEPTH = 8
 MAX_FLOW_EXECUTIONS = 10_000
 MAX_SUBFLOW_GRAPH_EXPANSIONS = 10_000
@@ -118,11 +120,26 @@ _DYNAMIC_VALUE_EXPR = re.compile(
     r"(?:\.(?P<step_output_path>[A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?)\}"
 )
+_JSON_INPUT_ITERATE = re.compile(
+    r"(?:input|item)(?:\.[A-Za-z_][A-Za-z0-9_-]*)+"
+    r"(?:\[\](?:\.[A-Za-z_][A-Za-z0-9_-]*)*)*\[\]\Z"
+)
+_JSON_INPUT_TEMPLATE = re.compile(
+    r"\$\{(?:input(?:\.[A-Za-z_][A-Za-z0-9_-]*)+"
+    r"|item(?:\.[A-Za-z_][A-Za-z0-9_-]*)*"
+    r"|iteration\.id|each(?:\.[A-Za-z_][A-Za-z0-9_-]*)*)\}"
+)
 _ITERATION_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 _FOREACH = re.compile(
     r"steps\.([A-Za-z_][A-Za-z0-9_-]*)\.output"
     r"(?:\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\Z"
 )
+
+
+@dataclass(frozen=True)
+class JsonInputSpec:
+    path: str
+    iterate: str | None = None
 
 
 @dataclass(frozen=True)
@@ -145,6 +162,7 @@ class FlowStep:
     variables: dict[str, str]
     global_variables: dict[str, str]
     foreach: str | None
+    json_inputs: dict[str, JsonInputSpec] | None = None
     conversation_items: tuple[Any, ...] | str | None = None
     conversation_final_prompt_file: Path | None = None
     iteration_id: str | None = None
@@ -183,6 +201,7 @@ class _FlowExecutionContext:
     run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
     run_start_checkpoint_paths: tuple[Path, ...] = ()
     run_start_dynamic_checkpoints: dict[tuple[str, str, str], bytes] | None = None
+    completed_json_outputs: dict[str, bytes] | None = None
     preflight_budget: "_SubflowTraversalBudget" | None = None
 
     def __post_init__(self) -> None:
@@ -196,6 +215,8 @@ class _FlowExecutionContext:
             self.run_start_snapshots = {}
         if self.preflight_budget is None:
             self.preflight_budget = _SubflowTraversalBudget()
+        if self.completed_json_outputs is None:
+            self.completed_json_outputs = {}
 
 
 @dataclass
@@ -750,6 +771,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "conversation_items",
         "conversation_final_prompt_file",
         "iteration_id",
+        "json_inputs",
         "flow",
         "input",
     }
@@ -823,7 +845,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "overwrite_output", "workspace_access", "with_data",
                 "with_mcp", "exclude_paths", "retry", "response_format",
                 "approve_tools", "vars", "conversation_items",
-                "conversation_final_prompt_file",
+                "conversation_final_prompt_file", "json_inputs",
             }
             conflicting = sorted(regular_only & set(raw))
             if conflicting:
@@ -1088,6 +1110,83 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
             variables[name] = value
 
+        raw_json_inputs = raw.get("json_inputs", {})
+        if not isinstance(raw_json_inputs, dict):
+            raise ValueError(f"steps[{index}].json_inputs muss eine Tabelle sein.")
+        json_inputs: dict[str, JsonInputSpec] = {}
+        for name, definition in raw_json_inputs.items():
+            if not isinstance(name, str) or _STEP_ID.fullmatch(name) is None:
+                raise ValueError(f"Ungültiger json_inputs-Name: {name!r}.")
+            if name in variables or name in global_variables:
+                raise ValueError(
+                    f"json_inputs-Variable {name!r} kollidiert mit vars."
+                )
+            if not isinstance(definition, dict) or (
+                set(definition) - {"path", "iterate"}
+            ):
+                raise ValueError(
+                    f"steps[{index}].json_inputs.{name} benötigt path und "
+                    "optional iterate."
+                )
+            path_template = _string(
+                definition.get("path"),
+                field=f"steps[{index}].json_inputs.{name}.path",
+            )
+            iterate_value = definition.get("iterate")
+            iterate = (
+                _string(
+                    iterate_value,
+                    field=f"steps[{index}].json_inputs.{name}.iterate",
+                )
+                if iterate_value is not None
+                else None
+            )
+            if iterate is not None and _JSON_INPUT_ITERATE.fullmatch(iterate) is None:
+                raise ValueError(
+                    f"steps[{index}].json_inputs.{name}.iterate muss eine "
+                    "input-/item-Liste mit [] auswählen."
+                )
+            if "${" in _JSON_INPUT_TEMPLATE.sub("", path_template):
+                raise ValueError(
+                    f"steps[{index}].json_inputs.{name}.path enthält "
+                    "nicht unterstützte Platzhalter."
+                )
+            if "${each" in path_template and iterate is None:
+                raise ValueError(
+                    f"steps[{index}].json_inputs.{name}.path verwendet "
+                    "each ohne iterate."
+                )
+            if "${item" in path_template and raw.get("foreach") is None:
+                raise ValueError(
+                    f"steps[{index}].json_inputs.{name}.path verwendet "
+                    "item ohne foreach."
+                )
+            if "${iteration.id}" in path_template and raw.get("foreach") is None:
+                raise ValueError(
+                    f"steps[{index}].json_inputs.{name}.path verwendet "
+                    "iteration.id ohne foreach."
+                )
+            if iterate is not None and iterate.startswith("item.") and raw.get("foreach") is None:
+                raise ValueError(
+                    f"steps[{index}].json_inputs.{name}.iterate verwendet "
+                    "item ohne foreach."
+                )
+            _validate_input_references(
+                [path_template],
+                declared_inputs=inputs,
+                field=f"steps[{index}].json_inputs.{name}.path",
+            )
+            if iterate is not None and iterate.startswith("input."):
+                root_name = iterate[6:].split(".", 1)[0].split("[", 1)[0]
+                if root_name not in inputs:
+                    raise ValueError(
+                        f"steps[{index}].json_inputs.{name}.iterate "
+                        f"verweist auf unbekannten Input {root_name!r}."
+                    )
+            json_inputs[name] = JsonInputSpec(
+                path=path_template, iterate=iterate,
+            )
+
         input_reference_values = list(variables.values())
         if output is not None:
             input_reference_values.append(output)
@@ -1294,6 +1393,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 variables=variables,
                 global_variables=global_variables,
                 foreach=foreach,
+                json_inputs=json_inputs,
                 conversation_items=conversation_items,
                 conversation_final_prompt_file=conversation_final_prompt_file,
                 iteration_id=iteration_id,
@@ -2618,6 +2718,145 @@ def _resolve_config(
     return flow_dir / path
 
 
+def _json_input_items(
+    selector: str,
+    *,
+    flow_input: dict[str, Any],
+    item: Any,
+) -> list[Any]:
+    """Expand a bounded, explicit input.scans[].output.chunks[] selector."""
+    parts = selector.split("[]")
+    head = parts[0]
+    root, _, field = head.partition(".")
+    source = flow_input if root == "input" else item
+    values = [_lookup(source, field, label="json_inputs.iterate")]
+    for index, segment in enumerate(parts[:-1]):
+        if index > 0:
+            nested = segment.lstrip(".")
+            values = [
+                _lookup(value, nested, label="json_inputs.iterate")
+                if nested else value
+                for value in values
+            ]
+        next_values: list[Any] = []
+        for value in values:
+            if not isinstance(value, list):
+                raise ValueError(
+                    f"json_inputs.iterate {selector!r} erwartet Listen."
+                )
+            if len(next_values) + len(value) > MAX_JSON_INPUT_FILES:
+                raise ValueError(
+                    f"json_inputs.iterate überschreitet {MAX_JSON_INPUT_FILES} Dateien."
+                )
+            next_values.extend(value)
+        values = next_values
+    return values
+
+
+def _render_json_input_path(
+    template: str,
+    *,
+    flow_input: dict[str, Any],
+    item: Any,
+    iteration_id: str | None,
+    each: Any,
+) -> str:
+    def replace(match: re.Match[str]) -> str:
+        expr = match.group(0)
+        if expr.startswith("${each"):
+            field = expr[6:-1].lstrip(".")
+            value = _lookup(each, field or None, label="json_inputs.each")
+        else:
+            dynamic = _DYNAMIC_VALUE_EXPR.fullmatch(expr)
+            assert dynamic is not None
+            value = _dynamic_value(
+                dynamic,
+                item=item,
+                iteration_id=iteration_id,
+                conversation_item=None,
+                previous_output=None,
+                outputs={},
+                flow_input=flow_input,
+            )
+        if not isinstance(value, (str, int)) or isinstance(value, bool):
+            raise ValueError(
+                "json_inputs.path darf nur Strings oder Ganzzahlen einsetzen."
+            )
+        return str(value)
+
+    rendered = _JSON_INPUT_TEMPLATE.sub(replace, template)
+    if "${" in rendered:
+        raise ValueError("json_inputs.path enthält unaufgelöste Platzhalter.")
+    return rendered
+
+
+def _resolve_json_inputs(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow_input: dict[str, Any],
+    item: Any,
+    iteration_id: str | None,
+    completed_json_outputs: dict[str, bytes],
+) -> dict[str, str]:
+    """Read only completed JSON outputs of prior steps; never invoke OS tools."""
+    result: dict[str, str] = {}
+    total_bytes = 0
+    total_files = 0
+    for name, spec in (step.json_inputs or {}).items():
+        elements = (
+            _json_input_items(spec.iterate, flow_input=flow_input, item=item)
+            if spec.iterate is not None
+            else [None]
+        )
+        records: list[Any] = []
+        for element in elements:
+            total_files += 1
+            if total_files > MAX_JSON_INPUT_FILES:
+                raise ValueError(
+                    f"json_inputs überschreitet {MAX_JSON_INPUT_FILES} Dateien."
+                )
+            rendered = _render_json_input_path(
+                spec.path,
+                flow_input=flow_input,
+                item=item,
+                iteration_id=iteration_id,
+                each=element,
+            )
+            path = _workspace_path(
+                workspace,
+                Path(rendered),
+                purpose=f"JSON-Input {name!r} von Schritt {step.step_id!r}",
+                must_exist=True,
+            )
+            expected = completed_json_outputs.get(_filesystem_path_key(path))
+            if expected is None:
+                raise ValueError(
+                    f"JSON-Input {name!r} darf nur einen bereits abgeschlossenen "
+                    f"Flow-JSON-Output referenzieren: {path}"
+                )
+            raw = read_existing_output_text(
+                workspace,
+                path,
+                max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+            )
+            if _checkpoint_fingerprint(raw) != expected:
+                raise ValueError(
+                    f"JSON-Input {name!r} wurde seit seiner Erstellung verändert: "
+                    f"{path}"
+                )
+            total_bytes += len(raw.encode("utf-8"))
+            if total_bytes > MAX_JSON_INPUT_TOTAL_BYTES:
+                raise ValueError(
+                    f"json_inputs überschreitet das Gesamtlimit von "
+                    f"{MAX_JSON_INPUT_TOTAL_BYTES} Bytes."
+                )
+            records.append(_parse_structured_output(raw, step_id=step.step_id))
+        value = records if spec.iterate is not None else records[0]
+        result[name] = _json_dumps_preserving_numbers(value)
+    return result
+
+
 def _render_prompt_file(
     step: FlowStep,
     *,
@@ -2630,6 +2869,7 @@ def _render_prompt_file(
     outputs: dict[str, str],
     flow_input: dict[str, Any],
     final_prompt: bool = False,
+    json_input_values: dict[str, str] | None = None,
 ) -> str:
     prompt_path = _workspace_path(
         workspace,
@@ -2645,6 +2885,9 @@ def _render_prompt_file(
     template = PromptTemplate.parse(prompt.content)
     values: dict[str, str] = {}
     for name in template.variables:
+        if name in (json_input_values or {}):
+            values[name] = json_input_values[name]
+            continue
         if name in step.variables:
             raw = step.variables[name]
         elif name in step.global_variables:
@@ -2691,6 +2934,7 @@ def _prompt_for_iteration(
     previous_output: Any = None,
     outputs: dict[str, str] | None = None,
     flow_input: dict[str, Any] | None = None,
+    json_input_values: dict[str, str] | None = None,
 ) -> str:
     assert step.prompt_file is not None
     return _render_prompt_file(
@@ -2703,6 +2947,7 @@ def _prompt_for_iteration(
         previous_output=previous_output,
         outputs=outputs or {},
         flow_input=flow_input or {},
+        json_input_values=json_input_values,
     )
 
 
@@ -2715,6 +2960,7 @@ def _conversation_prompts_for_iteration(
     iteration_id: str | None,
     previous_output: Any,
     flow_input: dict[str, Any],
+    json_input_values: dict[str, str] | None = None,
 ) -> tuple[str, ...] | None:
     conversation_items = _conversation_items_for_iteration(
         step,
@@ -2733,6 +2979,7 @@ def _conversation_prompts_for_iteration(
             previous_output=previous_output,
             outputs=outputs,
             flow_input=flow_input,
+            json_input_values=json_input_values,
         )
         for conversation_item in conversation_items
     ]
@@ -2749,6 +2996,7 @@ def _conversation_prompts_for_iteration(
                 outputs=outputs,
                 flow_input=flow_input,
                 final_prompt=True,
+                json_input_values=json_input_values,
             )
         )
     return tuple(prompts)
@@ -3897,6 +4145,11 @@ async def _run_flow_internal(
                     )
 
             if checkpoint is not None:
+                assert output is not None
+                assert context.completed_json_outputs is not None
+                context.completed_json_outputs[_filesystem_path_key(output)] = (
+                    _checkpoint_fingerprint(checkpoint)
+                )
                 print(
                     sanitize_terminal_text(
                         f"Flow-Schritt {display_name}{suffix}: "
@@ -3983,6 +4236,15 @@ async def _run_flow_internal(
                 namespace=namespace, step=step.step_id,
                 iteration_id=iteration_id, output=output,
             )
+            assert context.completed_json_outputs is not None
+            json_input_values = _resolve_json_inputs(
+                step,
+                workspace=workspace,
+                flow_input=flow_input,
+                item=item,
+                iteration_id=iteration_id,
+                completed_json_outputs=context.completed_json_outputs,
+            )
             conversation_prompts = _conversation_prompts_for_iteration(
                 step,
                 workspace=workspace,
@@ -3991,6 +4253,7 @@ async def _run_flow_internal(
                 iteration_id=iteration_id,
                 previous_output=previous_output,
                 flow_input=flow_input,
+                json_input_values=json_input_values,
             )
             if conversation_prompts is None:
                 prompt = _prompt_for_iteration(
@@ -4001,6 +4264,7 @@ async def _run_flow_internal(
                     previous_output=previous_output,
                     outputs=outputs,
                     flow_input=flow_input,
+                    json_input_values=json_input_values,
                 )
                 result = await run_once(
                     OneShotRunOptions(
@@ -4048,6 +4312,11 @@ async def _run_flow_internal(
                         dump_file_prefix=dump_file_prefix,
                     ),
                     dependencies=context.dependencies,
+                )
+            if output is not None and step.response_format == "json":
+                _parse_structured_output(result.answer, step_id=step.step_id)
+                context.completed_json_outputs[_filesystem_path_key(output)] = (
+                    _checkpoint_fingerprint(result.answer)
                 )
             record_iteration_answer(
                 result.answer,
