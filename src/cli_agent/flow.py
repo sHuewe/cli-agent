@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import glob
 import hashlib
 import json
 import os
@@ -47,6 +48,8 @@ MAX_STRUCTURED_OUTPUT_BYTES = 10_000_000
 MAX_SUBFLOW_DEPTH = 8
 MAX_FLOW_EXECUTIONS = 10_000
 MAX_SUBFLOW_GRAPH_EXPANSIONS = 10_000
+MAX_DYNAMIC_CHECKPOINT_CANDIDATES = 20_000
+MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES = 200_000_000
 
 _STEP_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*\Z")
 _ITEM_EXPR = re.compile(
@@ -143,6 +146,7 @@ class _FlowExecutionContext:
     flow_cache: dict[str, FlowDefinition] | None = None
     run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
     run_start_checkpoint_paths: tuple[Path, ...] = ()
+    run_start_dynamic_checkpoints: dict[str, bytes] | None = None
     preflight_budget: "_SubflowTraversalBudget" | None = None
 
     def __post_init__(self) -> None:
