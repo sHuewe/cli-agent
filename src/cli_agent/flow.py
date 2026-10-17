@@ -43,9 +43,16 @@ from .prompt_template import PromptTemplate
 from .terminal_output import sanitize_terminal_text
 from .agent_types import UserMessageCallback
 
-_flow_diagnostic_context: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "flow_diagnostic_context", default=""
-)
+@dataclass
+class _FlowDiagnosticState:
+    """Mutable state shared with tasks spawned from the current CLI context."""
+
+    details: str = ""
+
+
+_flow_diagnostic_context: contextvars.ContextVar[
+    _FlowDiagnosticState | None
+] = contextvars.ContextVar("flow_diagnostic_context", default=None)
 _flow_logger = logging.getLogger(__name__)
 
 
@@ -61,7 +68,12 @@ def _set_flow_diagnostic(
         parts.append(f"iteration={iteration_id}")
     if output is not None:
         parts.append(f"output={output}")
-    _flow_diagnostic_context.set(" | ".join(parts))
+    state = _flow_diagnostic_context.get()
+    if state is None:
+        state = _FlowDiagnosticState()
+        _flow_diagnostic_context.set(state)
+    # asyncio copies the context but preserves references to mutable values.
+    state.details = " | ".join(parts)
 
 
 MAX_FLOW_STEPS = 100
@@ -4065,7 +4077,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     workspace = args.workspace.expanduser().resolve()
-    _flow_diagnostic_context.set("")
+    _flow_diagnostic_context.set(_FlowDiagnosticState())
     try:
         _set_flow_diagnostic(phase="load-flow", flow=args.flow)
         flow = load_flow(
@@ -4097,7 +4109,8 @@ def main() -> None:
             )
         )
     except Exception as exc:
-        details = _flow_diagnostic_context.get()
+        state = _flow_diagnostic_context.get()
+        details = state.details if state is not None else ""
         if isinstance(exc, OSError):
             operation_path = exc.filename or getattr(exc, "filename2", None)
             if operation_path is not None:
