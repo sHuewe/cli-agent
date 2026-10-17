@@ -3508,21 +3508,30 @@ async def _run_flow_internal(
                 phase="preflight-outputs", flow=flow.source,
                 namespace=namespace, step=step.step_id,
             )
-            preflight_outputs = [
-                _output_for_iteration(
+            preflight_outputs = []
+            for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-resolve-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
+                output = _output_for_iteration(
                     step,
                     workspace=workspace,
                     item=item,
                     iteration_id=iteration_id,
                     flow_input=flow_input,
                 )
-                for item, iteration_id in zip(items, iteration_ids)
-            ]
-            output_keys = [
-                _filesystem_path_key(path)
-                for path in preflight_outputs
-                if path is not None
-            ]
+                preflight_outputs.append(output)
+            output_keys = []
+            for output, iteration_id in zip(preflight_outputs, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-check-output-path", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
+                if output is not None:
+                    output_keys.append(_filesystem_path_key(output))
             if len(output_keys) != len(set(output_keys)):
                 raise ValueError(
                     f"Schritt {step.step_id!r} erzeugt für mehrere "
@@ -3533,6 +3542,11 @@ async def _run_flow_internal(
                 iteration_ids,
             ):
                 assert output is not None
+                _set_flow_diagnostic(
+                    phase="preflight-output-collision", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
                 reserved_input = reserved_inputs.get(
                     _filesystem_path_key(output)
                 )
@@ -3560,6 +3574,11 @@ async def _run_flow_internal(
                 iteration_ids,
             ):
                 assert output is not None
+                _set_flow_diagnostic(
+                    phase="preflight-claim-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
                 _claim_output(
                     claimed_outputs,
                     path=output,
@@ -3571,8 +3590,13 @@ async def _run_flow_internal(
                 )
 
             preflight_checkpoint_fingerprints = []
-            for output in preflight_outputs:
+            for output, iteration_id in zip(preflight_outputs, iteration_ids):
                 assert output is not None
+                _set_flow_diagnostic(
+                    phase="preflight-checkpoint-or-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
                 expected_fingerprint = _run_start_fingerprint(
                     step, output, initial_checkpoint_fingerprints,
                     context.run_start_dynamic_checkpoints,
