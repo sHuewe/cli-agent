@@ -1565,3 +1565,33 @@ def test_history_reset_restores_persisted_and_in_memory_state_if_cleanup_fails(
         filename: agent._safe_dump_path(filename).read_bytes()
         for filename in diagnostic_files
     } == before
+
+def test_windows_dump_filename_respects_total_path_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = CliAgent(tmp_path, RecordingModel(), (), dump_file_prefix="x" * 300)
+    monkeypatch.setattr(agent, "_dump_filename_budget", lambda: 75)
+    filename = agent._dump_filename("main_working_messages.json")
+    assert len(filename.encode("utf-8")) <= 75
+    assert filename.endswith("_main_working_messages.json")
+    assert filename == agent._dump_filename("main_working_messages.json")
+
+
+def test_windows_dump_filename_reports_workspace_path_when_impossible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = CliAgent(tmp_path, RecordingModel(), (), dump_file_prefix="x" * 50)
+    monkeypatch.setattr(agent, "_dump_filename_budget", lambda: 10)
+    with pytest.raises(RuntimeError, match="Workspace-Pfad"):
+        agent._dump_filename("main_working_messages.json")
+
+
+def test_windows_dump_budget_accounts_for_checkout_directory(tmp_path: Path) -> None:
+    agent = CliAgent(tmp_path, RecordingModel(), ())
+    expected = min(
+        240,
+        240 - len(str(tmp_path / ".cli-agent").encode("utf-16-le")) // 2 - 1,
+    )
+    assert agent._dump_filename_budget(windows=True) == expected

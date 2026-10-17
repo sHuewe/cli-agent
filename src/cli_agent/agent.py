@@ -72,6 +72,8 @@ Dateipfade.
 """
 
 MAX_DUMP_FILENAME_BYTES = 240
+# Leave headroom below the legacy Windows MAX_PATH limit, including directory.
+MAX_LEGACY_WINDOWS_DUMP_PATH_CHARS = 240
 DUMP_PREFIX_HASH_HEX_CHARS = 16
 
 
@@ -164,24 +166,51 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             return value
         return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
+    def _dump_filename_budget(self, *, windows: bool | None = None) -> int:
+        """Bound dumps by the complete legacy Windows path, not only basename.
+
+        A workspace may be nested under a long checkout directory. Keep
+        dumps usable without depending on Windows long-path opt-in settings.
+        """
+        if windows is None:
+            windows = os.name == "nt"
+        if not windows:
+            return MAX_DUMP_FILENAME_BYTES
+
+        dump_dir = str(self.workspace_directory / ".cli-agent")
+        # Windows paths are UTF-16; count code units, not Python characters.
+        parent_units = len(dump_dir.encode("utf-16-le")) // 2
+        return min(
+            MAX_DUMP_FILENAME_BYTES,
+            MAX_LEGACY_WINDOWS_DUMP_PATH_CHARS - parent_units - 1,
+        )
+
     def _dump_filename(self, filename: str) -> str:
+        budget = self._dump_filename_budget()
+        filename_bytes = len(filename.encode("utf-8"))
+        if filename_bytes > budget:
+            raise RuntimeError(
+                "LLM-Context-Dump-Dateiname passt nicht zum Workspace-Pfad. "
+                f"Der Ablageordner ist {self.workspace_directory / '.cli-agent'}. "
+                "Verkürze den Workspace-Pfad oder deaktiviere dump_llm_context."
+            )
         if self.dump_file_prefix is None:
             return filename
 
         candidate = f"{self.dump_file_prefix}_{filename}"
-        if len(candidate.encode("utf-8")) <= MAX_DUMP_FILENAME_BYTES:
+        if len(candidate.encode("utf-8")) <= budget:
             return candidate
 
         digest = hashlib.sha256(
             self.dump_file_prefix.encode("utf-8")
         ).hexdigest()[:DUMP_PREFIX_HASH_HEX_CHARS]
         tail = f"_{digest}_{filename}"
-        available_prefix_bytes = (
-            MAX_DUMP_FILENAME_BYTES - len(tail.encode("utf-8"))
-        )
+        available_prefix_bytes = budget - len(tail.encode("utf-8"))
         if available_prefix_bytes <= 0:
             raise RuntimeError(
-                "LLM-Context-Dump-Dateiname überschreitet das interne Längenlimit."
+                "LLM-Context-Dump-Dateiname passt nicht zum Workspace-Pfad. "
+                f"Der Ablageordner ist {self.workspace_directory / '.cli-agent'}. "
+                "Verkürze den Workspace-Pfad oder deaktiviere dump_llm_context."
             )
         shortened_prefix = self._truncate_utf8(
             self.dump_file_prefix,
