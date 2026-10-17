@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextvars
+import logging
 import hashlib
 import json
 import os
 import re
 import sys
 import tomllib
+import traceback
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Callable
@@ -35,10 +38,44 @@ from .file_context import (
     read_existing_output_text,
 )
 from .filesystem_security import path_entry_is_symlink_or_reparse
+from .logging_setup import configure_logging
 from .model import ModelRetryPolicy
 from .prompt_template import PromptTemplate
 from .terminal_output import sanitize_terminal_text
 from .agent_types import UserMessageCallback
+
+@dataclass
+class _FlowDiagnosticState:
+    """Mutable state shared with tasks spawned from the current CLI context."""
+
+    details: str = ""
+
+
+_flow_diagnostic_context: contextvars.ContextVar[
+    _FlowDiagnosticState | None
+] = contextvars.ContextVar("flow_diagnostic_context", default=None)
+_flow_logger = logging.getLogger(__name__)
+
+
+def _set_flow_diagnostic(
+    *, phase: str, flow: Path, namespace: str = "",
+    step: str | None = None, iteration_id: str | None = None,
+    output: Path | None = None,
+) -> None:
+    parts = [f"phase={phase}", f"flow={flow}"]
+    if step is not None:
+        parts.append(f"step={namespace}{step}")
+    if iteration_id is not None:
+        parts.append(f"iteration={iteration_id}")
+    if output is not None:
+        parts.append(f"output={output}")
+    state = _flow_diagnostic_context.get()
+    if state is None:
+        state = _FlowDiagnosticState()
+        _flow_diagnostic_context.set(state)
+    # asyncio copies the context but preserves references to mutable values.
+    state.details = " | ".join(parts)
+
 
 MAX_FLOW_STEPS = 100
 MAX_FOREACH_ITEMS = 1000
@@ -409,6 +446,10 @@ def _reserved_flow_input_paths(
         _filesystem_path_key(flow.source): flow.source,
     }
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="validate-reserved-input", flow=flow.source,
+            step=step.step_id,
+        )
         if step.flow is not None:
             subflow_path = _resolve_subflow_path(
                 step,
@@ -1928,6 +1969,10 @@ def _capture_run_start_invocation(
     budget: _SubflowTraversalBudget,
     call_stack: tuple[str, ...] = (),
 ) -> _FlowResultValue | None:
+    _set_flow_diagnostic(
+        phase="run-start-snapshot", flow=flow.source,
+        namespace=namespace,
+    )
     budget.consume(purpose="Run-Start-Planung")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
@@ -1982,6 +2027,10 @@ def _capture_run_start_invocation(
         protected_paths[path_key] = output
 
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="run-start-step", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+        )
         if step.flow is not None:
             if step.foreach is None:
                 items = [None]
@@ -2018,6 +2067,11 @@ def _capture_run_start_invocation(
             child_results: list[tuple[str, _FlowResultValue]] = []
             complete = True
             for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="run-start-subflow-inputs", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
                 child_input = _render_subflow_inputs(
                     step,
                     item=item,
@@ -2043,6 +2097,11 @@ def _capture_run_start_invocation(
                     budget=budget,
                     call_stack=next_stack,
                 )
+                _set_flow_diagnostic(
+                    phase="run-start-subflow-result", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
                 if child_result is None:
                     complete = False
                     continue
@@ -2065,6 +2124,11 @@ def _capture_run_start_invocation(
             parts: list[str] = []
             payload_bytes = 0
             for iteration_id, result in child_results:
+                _set_flow_diagnostic(
+                    phase="run-start-aggregate-subflow", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
                 payload_bytes = _append_foreach_iteration(
                     step,
                     parts=parts,
@@ -2087,6 +2151,10 @@ def _capture_run_start_invocation(
                 flow_input=flow_input,
             )
             assert output is not None
+            _set_flow_diagnostic(
+                phase="run-start-checkpoint", flow=flow.source,
+                namespace=namespace, step=step.step_id, output=output,
+            )
 
             if _uses_previous_output(step):
                 remember_previous_output(step, output)
@@ -2124,31 +2192,47 @@ def _capture_run_start_invocation(
             items=items,
             flow_input=flow_input,
         )
-        outputs = [
-            _output_for_iteration(
+        outputs: list[Path | None] = []
+        for item, iteration_id in zip(items, iteration_ids):
+            _set_flow_diagnostic(
+                phase="run-start-resolve-output", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id,
+            )
+            output = _output_for_iteration(
                 step,
                 workspace=workspace,
                 item=item,
                 iteration_id=iteration_id,
                 flow_input=flow_input,
             )
-            for item, iteration_id in zip(items, iteration_ids)
-        ]
+            outputs.append(output)
 
-        output_keys = [
-            _filesystem_path_key(output)
-            for output in outputs
-            if output is not None
-        ]
-        if len(output_keys) != len(set(output_keys)):
-            raise ValueError(
-                f"Schritt {step.step_id!r} erzeugt für mehrere "
-                "foreach-Elemente nicht eindeutige Output-Pfade."
+        seen_output_keys: set[str] = set()
+        for iteration_id, output in zip(iteration_ids, outputs):
+            _set_flow_diagnostic(
+                phase="run-start-check-output-path", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
             )
+            if output is None:
+                continue
+            key = _filesystem_path_key(output)
+            if key in seen_output_keys:
+                raise ValueError(
+                    f"Schritt {step.step_id!r} erzeugt für mehrere "
+                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                )
+            seen_output_keys.add(key)
 
         if _uses_previous_output(step):
-            for output in outputs:
+            for iteration_id, output in zip(iteration_ids, outputs):
                 assert output is not None
+                _set_flow_diagnostic(
+                    phase="run-start-previous-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
                 remember_previous_output(step, output)
 
         if not items:
@@ -2169,6 +2253,11 @@ def _capture_run_start_invocation(
         for iteration_id, output in zip(iteration_ids, outputs):
             assert iteration_id is not None
             assert output is not None
+            _set_flow_diagnostic(
+                phase="run-start-checkpoint", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
+            )
             checkpoint = _existing_json_checkpoint(
                 step,
                 workspace=workspace,
@@ -2191,6 +2280,10 @@ def _capture_run_start_invocation(
             available_outputs[step.step_id] = _finish_foreach_output(parts)
             output_json[step.step_id] = True
 
+    _set_flow_diagnostic(
+        phase="run-start-save-snapshot", flow=flow.source,
+        namespace=namespace,
+    )
     snapshot = _RunStartSnapshot(
         checkpoint_fingerprints=fingerprints,
         checkpoint_paths=tuple(checkpoint_paths.values()),
@@ -2775,6 +2868,10 @@ def _collect_reserved_flow_input_paths(
     for step in flow.steps:
         if step.flow is None:
             continue
+        _set_flow_diagnostic(
+            phase="validate-reserved-subflow", flow=flow.source,
+            step=step.step_id,
+        )
         child = _load_subflow_definition(
             step,
             workspace=workspace,
@@ -2865,6 +2962,7 @@ def validate_flow(
     _planned_static_outputs: dict[str, str] | None = None,
     _all_reserved_inputs: dict[str, Path] | None = None,
 ) -> None:
+    _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
     workspace = workspace.expanduser().resolve()
     traversal_budget = _budget or _SubflowTraversalBudget()
     traversal_budget.consume(purpose="Validierung")
@@ -2895,10 +2993,17 @@ def validate_flow(
     effective_flow_excluded_paths = tuple(
         dict.fromkeys((*_inherited_excluded_paths, *flow.excluded_paths))
     )
+    _set_flow_diagnostic(
+        phase="validate-flow-exclusions", flow=flow.source,
+    )
     resolve_excluded_paths(workspace, effective_flow_excluded_paths)
     produced: set[str] = set()
 
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="validate-step", flow=flow.source,
+            step=step.step_id,
+        )
         if step.flow is not None:
             child = _load_subflow_definition(
                 step,
@@ -2917,6 +3022,10 @@ def validate_flow(
                 _budget=traversal_budget,
                 _planned_static_outputs=planned_static_outputs,
                 _all_reserved_inputs=all_reserved_inputs,
+            )
+            _set_flow_diagnostic(
+                phase="validate-step", flow=flow.source,
+                step=step.step_id,
             )
             if step.foreach is not None:
                 match = _FOREACH.fullmatch(step.foreach)
@@ -3154,6 +3263,10 @@ def _preflight_concrete_invocation_outputs(
     output_json = snapshot.output_json if snapshot is not None else {}
 
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="preflight-subflow-batch", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+        )
         if step.flow is not None:
             if step.foreach is None:
                 items = [None]
@@ -3187,6 +3300,11 @@ def _preflight_concrete_invocation_outputs(
             )
             _validate_subflow_interface(step, child)
             for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-render-subflow-inputs",
+                    flow=flow.source, namespace=namespace,
+                    step=step.step_id, iteration_id=iteration_id,
+                )
                 child_input = _render_subflow_inputs(
                     step,
                     item=item,
@@ -3219,6 +3337,10 @@ def _preflight_concrete_invocation_outputs(
             continue
 
         if step.foreach is None:
+            _set_flow_diagnostic(
+                phase="preflight-resolve-output", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+            )
             outputs_to_claim = [
                 (
                     _output_for_iteration(
@@ -3245,32 +3367,45 @@ def _preflight_concrete_invocation_outputs(
                 items=items,
                 flow_input=flow_input,
             )
-            outputs_to_claim = [
-                (
-                    _output_for_iteration(
-                        step,
-                        workspace=workspace,
-                        item=item,
-                        iteration_id=iteration_id,
-                        flow_input=flow_input,
-                    ),
-                    iteration_id,
+            outputs_to_claim = []
+            for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-resolve-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
                 )
-                for item, iteration_id in zip(items, iteration_ids)
-            ]
-            output_keys = [
-                _filesystem_path_key(output)
-                for output, _iteration_id in outputs_to_claim
-                if output is not None
-            ]
-            if len(output_keys) != len(set(output_keys)):
-                raise ValueError(
-                    f"Schritt {step.step_id!r} erzeugt für mehrere "
-                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                output = _output_for_iteration(
+                    step,
+                    workspace=workspace,
+                    item=item,
+                    iteration_id=iteration_id,
+                    flow_input=flow_input,
                 )
+                outputs_to_claim.append((output, iteration_id))
+            seen_output_keys: set[str] = set()
+            for output, iteration_id in outputs_to_claim:
+                _set_flow_diagnostic(
+                    phase="preflight-check-output-path", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
+                if output is None:
+                    continue
+                key = _filesystem_path_key(output)
+                if key in seen_output_keys:
+                    raise ValueError(
+                        f"Schritt {step.step_id!r} erzeugt für mehrere "
+                        "foreach-Elemente nicht eindeutige Output-Pfade."
+                    )
+                seen_output_keys.add(key)
 
         for output, iteration_id in outputs_to_claim:
             assert output is not None
+            _set_flow_diagnostic(
+                phase="preflight-claim-output", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
+            )
             key = _filesystem_path_key(output)
             reserved_input = reserved_inputs.get(key)
             if reserved_input is not None:
@@ -3377,6 +3512,10 @@ async def _run_flow_internal(
         else inherited_retry_policy
     )
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="prepare-step", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+        )
         if step.retry_overrides is not None:
             defaults = flow_retry_policy or ModelRetryPolicy()
             values = step.retry_overrides
@@ -3408,6 +3547,10 @@ async def _run_flow_internal(
         preflight_checkpoint_fingerprints: list[bytes | None] | None = None
 
         if step.flow is not None:
+            _set_flow_diagnostic(
+                phase="preflight-subflow", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+            )
             assert context.flow_cache is not None
             child = _load_subflow_definition(
                 step,
@@ -3422,6 +3565,11 @@ async def _run_flow_internal(
             # detected without any model/tool side effects.
             batch_claims = dict(claimed_outputs)
             for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-render-subflow-inputs",
+                    flow=flow.source, namespace=namespace,
+                    step=step.step_id, iteration_id=iteration_id,
+                )
                 child_input = _render_subflow_inputs(
                     step,
                     item=item,
@@ -3456,31 +3604,51 @@ async def _run_flow_internal(
             and step.foreach is not None
             and step.output is not None
         ):
-            preflight_outputs = [
-                _output_for_iteration(
+            _set_flow_diagnostic(
+                phase="preflight-outputs", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+            )
+            preflight_outputs = []
+            for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-resolve-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
+                output = _output_for_iteration(
                     step,
                     workspace=workspace,
                     item=item,
                     iteration_id=iteration_id,
                     flow_input=flow_input,
                 )
-                for item, iteration_id in zip(items, iteration_ids)
-            ]
-            output_keys = [
-                _filesystem_path_key(path)
-                for path in preflight_outputs
-                if path is not None
-            ]
-            if len(output_keys) != len(set(output_keys)):
-                raise ValueError(
-                    f"Schritt {step.step_id!r} erzeugt für mehrere "
-                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                preflight_outputs.append(output)
+            seen_output_keys: set[str] = set()
+            for output, iteration_id in zip(preflight_outputs, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-check-output-path", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
                 )
+                if output is None:
+                    continue
+                key = _filesystem_path_key(output)
+                if key in seen_output_keys:
+                    raise ValueError(
+                        f"Schritt {step.step_id!r} erzeugt für mehrere "
+                        "foreach-Elemente nicht eindeutige Output-Pfade."
+                    )
+                seen_output_keys.add(key)
             for output, iteration_id in zip(
                 preflight_outputs,
                 iteration_ids,
             ):
                 assert output is not None
+                _set_flow_diagnostic(
+                    phase="preflight-output-collision", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
                 reserved_input = reserved_inputs.get(
                     _filesystem_path_key(output)
                 )
@@ -3508,6 +3676,11 @@ async def _run_flow_internal(
                 iteration_ids,
             ):
                 assert output is not None
+                _set_flow_diagnostic(
+                    phase="preflight-claim-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
                 _claim_output(
                     claimed_outputs,
                     path=output,
@@ -3519,8 +3692,13 @@ async def _run_flow_internal(
                 )
 
             preflight_checkpoint_fingerprints = []
-            for output in preflight_outputs:
+            for output, iteration_id in zip(preflight_outputs, iteration_ids):
                 assert output is not None
+                _set_flow_diagnostic(
+                    phase="preflight-checkpoint-or-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
                 expected_fingerprint = _run_start_fingerprint(
                     step, output, initial_checkpoint_fingerprints,
                     context.run_start_dynamic_checkpoints,
@@ -3571,6 +3749,11 @@ async def _run_flow_internal(
             zip(items, iteration_ids),
             start=1,
         ):
+            _set_flow_diagnostic(
+                phase="execute", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id,
+            )
             context.executed_steps += 1
             if context.executed_steps > MAX_FLOW_EXECUTIONS:
                 raise ValueError(
@@ -3629,6 +3812,11 @@ async def _run_flow_internal(
                     raise ValueError(
                         f"Subflow {child.source} besitzt kein Ergebnis."
                     )
+                _set_flow_diagnostic(
+                    phase="aggregate-subflow-result", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
                 record_iteration_answer(
                     child_result.text,
                     child_result.is_json,
@@ -3646,6 +3834,11 @@ async def _run_flow_internal(
                     iteration_id=iteration_id,
                     flow_input=flow_input,
                 )
+            )
+            _set_flow_diagnostic(
+                phase="resolve-output", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
             )
             if output is not None:
                 reserved_input = reserved_inputs.get(
@@ -3681,6 +3874,11 @@ async def _run_flow_internal(
                     else None
                 )
 
+            _set_flow_diagnostic(
+                phase="checkpoint-or-output-preparation", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
+            )
             if expected_fingerprint is not None:
                 checkpoint = _verified_preflight_checkpoint(
                     step,
@@ -3780,6 +3978,11 @@ async def _run_flow_internal(
                 else local_dump_prefix
             )
 
+            _set_flow_diagnostic(
+                phase="model-or-mcp-execution", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
+            )
             conversation_prompts = _conversation_prompts_for_iteration(
                 step,
                 workspace=workspace,
@@ -3909,12 +4112,14 @@ async def run_flow(
             "aufrufenden Flow ausgeführt werden: "
             + ", ".join(flow.inputs)
         )
+    _set_flow_diagnostic(phase="collect-reserved-inputs", flow=flow.source)
     reserved_inputs = _collect_reserved_flow_input_paths(
         flow,
         workspace=workspace,
         cache=cache,
         budget=_SubflowTraversalBudget(),
     )
+    _set_flow_diagnostic(phase="run-start-snapshot", flow=flow.source)
     run_start_snapshots, run_start_checkpoint_paths = (
         _capture_run_start_snapshots(
             workspace=workspace,
@@ -3930,6 +4135,7 @@ async def run_flow(
             if fingerprint is not None:
                 known_fingerprints[path_key] = fingerprint
 
+    _set_flow_diagnostic(phase="dynamic-checkpoint-discovery", flow=flow.source)
     dynamic_fingerprints, dynamic_paths = (
         _snapshot_dynamic_checkpoint_candidates(
             workspace=workspace,
@@ -3949,6 +4155,7 @@ async def run_flow(
         ),
         run_start_dynamic_checkpoints=dynamic_fingerprints,
     )
+    _set_flow_diagnostic(phase="execute-flow", flow=flow.source)
     await _run_flow_internal(
         flow,
         workspace=workspace,
@@ -3982,6 +4189,11 @@ def build_parser() -> argparse.ArgumentParser:
         sub = subparsers.add_parser(name)
         sub.add_argument("flow", type=Path)
         sub.add_argument(
+            "--debug",
+            action="store_true",
+            help="Bei einem Fehler zusätzlich den vollständigen Traceback ausgeben.",
+        )
+        sub.add_argument(
             "--workspace",
             type=Path,
             default=Path.cwd(),
@@ -3993,14 +4205,106 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _initial_flow_logging_config(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> tuple[Path, Path, str] | None:
+    """Use a step config when no executable step depends on the default.
+
+    Inspect the bounded, cached subflow graph so explicit-config-only flows
+    never read or create an unrelated default user configuration.
+    """
+    cache = {_filesystem_path_key(flow.source): flow}
+    visited: set[str] = set()
+    pending = [(flow, 0)]
+    first_explicit: tuple[Path, Path, str] | None = None
+    while pending:
+        current, depth = pending.pop()
+        if depth >= MAX_SUBFLOW_DEPTH:
+            raise ValueError(
+                f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+            )
+        key = _filesystem_path_key(current.source)
+        if key in visited:
+            continue
+        visited.add(key)
+        if len(visited) > MAX_SUBFLOW_GRAPH_EXPANSIONS:
+            raise ValueError("Subflow-Logging-Konfigurationssuche überschreitet das Limit.")
+        for step in current.steps:
+            _set_flow_diagnostic(
+                phase="discover-logging-config",
+                flow=current.source, step=step.step_id,
+            )
+            if step.flow is not None:
+                if depth + 1 >= MAX_SUBFLOW_DEPTH:
+                    raise ValueError(
+                        f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+                    )
+                pending.append((
+                    _load_subflow_definition(
+                        step,
+                        workspace=workspace,
+                        cache=cache,
+                    ),
+                    depth + 1,
+                ))
+            elif step.config is None:
+                return None
+            elif first_explicit is None:
+                first_explicit = (
+                    _resolve_config(step, flow_dir=current.source.parent),
+                    current.source,
+                    step.step_id,
+                )
+    return first_explicit
+
+
 def main() -> None:
     args = build_parser().parse_args()
     workspace = args.workspace.expanduser().resolve()
+    _flow_diagnostic_context.set(_FlowDiagnosticState())
+    logging_initialized = False
     try:
+        _set_flow_diagnostic(phase="load-flow", flow=args.flow)
         flow = load_flow(
             args.flow,
             workspace=workspace,
         )
+        _set_flow_diagnostic(phase="configure-logging", flow=flow.source)
+        config_source = (
+            _initial_flow_logging_config(flow, workspace=workspace)
+            if isinstance(flow, FlowDefinition)
+            else None
+        )
+        if config_source is None:
+            config = load_config()
+        else:
+            config_path, config_flow, config_step = config_source
+            _set_flow_diagnostic(
+                phase="configure-step-logging",
+                flow=config_flow, step=config_step,
+            )
+            if not config_path.exists():
+                raise ValueError(
+                    f"Konfiguration von Schritt {config_step!r} "
+                    f"existiert nicht: {config_path}"
+                )
+            if not config_path.is_file():
+                raise ValueError(
+                    f"Konfiguration von Schritt {config_step!r} "
+                    f"ist keine Datei: {config_path}"
+                )
+            try:
+                config = load_config(config_path)
+            except Exception as exc:
+                raise ValueError(
+                    f"Konfiguration von Schritt {config_step!r} "
+                    f"ist ungültig: {exc}"
+                ) from exc
+        configure_logging(config.logging)
+        logging_initialized = True
+        _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
         validate_flow(
             flow,
             workspace=workspace,
@@ -4025,14 +4329,48 @@ def main() -> None:
             )
         )
     except Exception as exc:
+        state = _flow_diagnostic_context.get()
+        details = state.details if state is not None else ""
+        if isinstance(exc, OSError):
+            operation_path = exc.filename or getattr(exc, "filename2", None)
+            if operation_path is not None:
+                details += f" | os_path={operation_path}"
+            if exc.errno is not None:
+                details += f" | errno={exc.errno}"
+            if getattr(exc, "winerror", None) is not None:
+                details += f" | winerror={exc.winerror}"
+        message = f"{type(exc).__name__}: {exc}"
+        if details:
+            message += f"\nFlow-Diagnose: {details}"
         print(
-            "Fehler: "
-            + sanitize_terminal_text(
-                f"{type(exc).__name__}: {exc}",
-                multiline=True,
+            "Fehler: " + sanitize_terminal_text(
+                message, multiline=True,
+                escape_invisible_formatting=True,
             ),
             file=sys.stderr,
         )
+        # A failed logging setup may leave no handler. Avoid Python's
+        # lastResort/root-handler fallback, which bypasses terminal sanitization.
+        active_logger = logging.getLogger("cli_agent")
+        if (
+            logging_initialized
+            and active_logger.handlers
+            and active_logger.isEnabledFor(logging.ERROR)
+        ):
+            _flow_logger.error("flow_failed %s", details, exc_info=True)
+        if args.debug:
+            traceback_text = "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )
+            print(
+                sanitize_terminal_text(
+                    traceback_text,
+                    multiline=True,
+                    escape_invisible_formatting=True,
+                ),
+                end="",
+                file=sys.stderr,
+            )
         raise SystemExit(1) from None
 
 

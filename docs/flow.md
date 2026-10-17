@@ -803,3 +803,23 @@ Die erste Version ist bewusst klein:
 
 Diese Einschränkungen halten die Orchestrierungslogik zunächst deterministisch
 und vermeiden neue Capability-Pfade.
+
+
+## Fehlerdiagnose
+
+Bei einem Abbruch meldet `cli-agent-flow` neben dem Exception-Typ auch die
+zuletzt ausgeführte Phase, die betroffene Flow-Datei, den Step und (falls
+vorhanden) die foreach-Iterations-ID sowie den Output-Pfad. Bei
+`OSError` werden zusätzlich `filename`, `errno` und unter Windows
+`winerror` angezeigt. Es werden keine Prompt-Texte oder JSON-Inhalte
+ausgegeben.
+
+Für den vollständigen Python-Traceback:
+
+```sh
+cli-agent-flow run flow/okf/flow_okf_from_doctrine/flow.toml --workspace . --debug
+```
+
+Der Debug-Traceback kann interne Pfade und technische Fehlermeldungen enthalten;
+vor dem Teilen prüfen. Die zusätzlichen Diagnoseausgaben verändern weder
+bestehende Output-Dateien noch die Checkpoint-Wiederaufnahme.

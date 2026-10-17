@@ -6956,3 +6956,607 @@ flow = "child.toml"
     with pytest.raises(ValueError, match="MCP-Auswahl"):
         asyncio.run(run_flow(definition, workspace=tmp_path, dependencies=deps))
     assert executed == []
+
+
+def test_flow_cli_reports_step_phase_on_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "broken"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+
+    async def fail_run_once(options, *, dependencies=None):
+        raise OSError(206, "Filename too long", "C:/bad/very-long-file.json")
+
+    monkeypatch.setattr(flow_module, "run_once", fail_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        flow_module.main()
+    assert exit_info.value.code == 1
+    output = capsys.readouterr().err
+    assert "step=broken" in output
+    assert "phase=model-or-mcp-execution" in output
+    assert "os_path=C:/bad/very-long-file.json" in output
+    assert "errno=206" in output
+    assert "Traceback (most recent call last)" not in output
+
+
+def test_flow_cli_debug_includes_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "broken"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+
+    async def fail_run_once(options, *, dependencies=None):
+        raise RuntimeError("diagnostic test")
+
+    monkeypatch.setattr(flow_module, "run_once", fail_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path), "--debug"],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    output = capsys.readouterr().err
+    assert "step=broken" in output
+    assert "Traceback (most recent call last)" in output
+
+def test_flow_cli_debug_sanitizes_untrusted_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "broken"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+
+    async def fail_run_once(options, *, dependencies=None):
+        raise RuntimeError("unsafe\x1b[2J\u202efilename")
+
+    monkeypatch.setattr(flow_module, "run_once", fail_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path), "--debug"],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    output = capsys.readouterr().err
+    assert "Traceback (most recent call last)" in output
+    assert "\\u001b" in output
+    assert "\\u202e" in output
+    assert "\x1b" not in output
+    assert "\u202e" not in output
+
+
+def test_flow_cli_foreach_preflight_error_reports_iteration_and_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "discover"\nprompt_file = "discover.md"\n'
+        'response_format = "json"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "work.md"\n'
+        'foreach = "steps.discover.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        'output = "out-${iteration.id}.json"\n'
+        'response_format = "json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "out-two.json").write_text('not valid JSON', encoding="utf-8")
+
+    async def fake_run_once(options, *, dependencies=None):
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"},{"id":"two"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("preflight must fail before any work iteration")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        flow_module.main()
+    assert exit_info.value.code == 1
+    output = capsys.readouterr().err
+    assert "step=work" in output
+    assert "iteration=two" in output
+    assert "output=" in output and "out-two.json" in output
+    assert "phase=preflight-checkpoint-or-output" in output
+
+
+
+def test_nested_preflight_reports_specific_foreach_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "seed.md").write_text("seed", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "seed"\nprompt_file = "seed.md"\n'
+        'response_format = "json"\noutput = "seed.json"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "work.md"\n'
+        'response_format = "json"\n'
+        'foreach = "steps.seed.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        'output = "child-${iteration.id}.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\n[[steps]]\nid = "nested"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "seed.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}', encoding="utf-8"
+    )
+    # A malformed checkpoint is rejected during the earlier run-start scan.
+    # Keep it valid and trigger a filesystem failure only in nested preflight.
+    (tmp_path / "child-two.json").write_text('{"ok":2}', encoding="utf-8")
+    original_claim_output = flow_module._claim_output
+
+    def fail_nested_claim(claimed_outputs, *, path, owner, allow_replace=False):
+        if path.name == "child-two.json":
+            raise OSError(206, "Filename too long", str(path))
+        return original_claim_output(
+            claimed_outputs,
+            path=path,
+            owner=owner,
+            allow_replace=allow_replace,
+        )
+
+    monkeypatch.setattr(flow_module, "_claim_output", fail_nested_claim)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    output = capsys.readouterr().err
+    assert "step=nested.once.work" in output
+    assert "iteration=two" in output
+    assert "child-two.json" in output
+    assert "phase=preflight-claim-output" in output
+    assert "errno=206" in output
+
+
+def test_subflow_preflight_reports_later_bad_iteration_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "seed.md").write_text("seed", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["value"]\n'
+        'result = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nprompt_file = "child.md"\n'
+        'response_format = "json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "seed"\nprompt_file = "seed.md"\n'
+        'response_format = "json"\noutput = "seed.json"\n'
+        '[[steps]]\nid = "nested"\nflow = "child.toml"\n'
+        'foreach = "steps.seed.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        '[steps.input]\nvalue = "${item.value}"\n',
+        encoding="utf-8",
+    )
+    # Generate the foreach source during execution, not during the immutable
+    # run-start snapshot. Otherwise input rendering fails before preflight.
+    calls: list[str] = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt != "seed":
+            raise AssertionError("Nested preflight must fail before a child runs")
+        return SimpleNamespace(
+            answer='{"items":[{"id":"first","value":"yes"},{"id":"second"}]}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "phase=preflight-render-subflow-inputs" in error
+    assert "step=nested" in error
+    assert "iteration=second" in error
+    assert "enthält kein Feld" in error
+    assert calls == ["seed"]
+
+
+def test_flow_logging_setup_failure_does_not_leak_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path),
+    ])
+    def fail_load_config():
+        raise RuntimeError("unsafe\x1b[2J\u202efile")
+    monkeypatch.setattr(flow_module, "load_config", fail_load_config)
+    with pytest.raises(SystemExit) as exit_info:
+        flow_module.main()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert "Fehler: RuntimeError" in stderr
+    assert "\\u001b" in stderr and "\\u202e" in stderr
+    assert "Traceback (most recent call last)" not in stderr
+    assert "\x1b" not in stderr and "\u202e" not in stderr
+
+
+def test_flow_logging_configure_failure_does_not_leak_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path),
+    ])
+    def fail_configure(_config):
+        raise RuntimeError("unsafe\x1b[2J\u202efile")
+    monkeypatch.setattr(flow_module, "configure_logging", fail_configure)
+    with pytest.raises(SystemExit) as exit_info:
+        flow_module.main()
+    assert exit_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert "Fehler: RuntimeError" in stderr
+    assert "\\u001b" in stderr and "\\u202e" in stderr
+    assert "Traceback (most recent call last)" not in stderr
+    assert "\x1b" not in stderr and "\u202e" not in stderr
+
+
+def test_flow_cli_uses_explicit_config_without_loading_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "config.toml").write_text(
+        '[logging]\nenabled = false\n', encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "only"\n'
+        'config = "config.toml"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    actual_load_config = flow_module.load_config
+    seen_paths: list[Path | None] = []
+
+    def load_only_explicit(path=None):
+        seen_paths.append(path)
+        if path is None:
+            raise AssertionError("Must not load the default configuration")
+        return actual_load_config(path)
+
+    monkeypatch.setattr(flow_module, "load_config", load_only_explicit)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    flow_module.main()
+    assert seen_paths == [tmp_path / "config.toml"]
+    assert "Flow gültig:" in capsys.readouterr().out
+
+
+def test_flow_cli_checks_effective_logging_after_step_reconfiguration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import logging
+
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    existing_logger = logging.getLogger("cli_agent")
+    original_handlers = list(existing_logger.handlers)
+    original_disabled = existing_logger.disabled
+    original_level = existing_logger.level
+    original_propagate = existing_logger.propagate
+    events: list[str] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record):
+            events.append(record.getMessage())
+
+    capture_handler = CaptureHandler()
+
+    def configure_disabled_initially(_config):
+        existing_logger.handlers = []
+        existing_logger.disabled = True
+
+    async def fail_after_reconfigure(_options, *, dependencies=None):
+        existing_logger.disabled = False
+        existing_logger.setLevel(logging.ERROR)
+        existing_logger.addHandler(capture_handler)
+        raise RuntimeError("step failure")
+
+    monkeypatch.setattr(flow_module, "configure_logging", configure_disabled_initially)
+    monkeypatch.setattr(flow_module, "run_once", fail_after_reconfigure)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    try:
+        with pytest.raises(SystemExit):
+            flow_module.main()
+        assert any("flow_failed" in event and "step=work" in event for event in events)
+        assert "Fehler: RuntimeError" in capsys.readouterr().err
+    finally:
+        existing_logger.handlers = original_handlers
+        existing_logger.disabled = original_disabled
+        existing_logger.setLevel(original_level)
+        existing_logger.propagate = original_propagate
+
+
+def test_flow_logging_preload_invalid_step_config_reports_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "broken.toml").write_text("[invalid", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "broken"\n'
+        'config = "broken.toml"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "Konfiguration von Schritt 'broken' ist ungültig" in error
+    assert "phase=configure-step-logging" in error
+    assert "step=broken" in error
+
+
+def test_flow_logging_preload_nested_invalid_step_config_reports_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "broken.toml").write_text("[invalid", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nprompt_file = "prompt.md"\n'
+        'config = "broken.toml"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "nested"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "Konfiguration von Schritt 'child' ist ungültig" in error
+    assert "phase=configure-step-logging" in error
+    assert "step=child" in error
+    assert "child.toml" in error
+
+
+def test_logging_discovery_rejects_excessive_subflow_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "config.toml").write_text(
+        "[logging]\nenabled = false\n", encoding="utf-8"
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    for depth in range(flow_module.MAX_SUBFLOW_DEPTH):
+        (tmp_path / f"level-{depth}.toml").write_text(
+            "version = 1\n"
+            f'[[steps]]\nid = "nested"\nflow = "level-{depth + 1}.toml"\n',
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "level-0.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "Maximale Subflow-Tiefe" in error
+    assert "level-8.toml" not in error
+
+
+def test_flow_cli_validation_error_reports_child_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.broken.output"\n'
+        '[[steps]]\nid = "broken"\nprompt_file = "nonexistent.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child_call"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "validate", "parent.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "step=broken" in error
+    assert "child.toml" in error
+
+
+def test_duplicate_foreach_output_diagnostic_points_to_colliding_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "seed.md").write_text("seed", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "seed"\nprompt_file = "seed.md"\n'
+        'response_format = "json"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "work.md"\n'
+        'foreach = "steps.seed.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        'output = "route-${item.target}.json"\n'
+        'response_format = "json"\n',
+        encoding="utf-8",
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        if options.prompt == "seed":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"first","target":"same"},'
+                '{"id":"second","target":"same"},'
+                '{"id":"third","target":"unique"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("Duplicate outputs must be detected during preflight")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "iteration=second" in error
+    assert "route-same.json" in error
+    assert "iteration=third" not in error
+
+
+def test_validation_root_exclusions_do_not_report_previous_child_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nprompt_file = "child.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\nexclude_paths = ["../outside-workspace"]\n'
+        '[[steps]]\nid = "nested"\nflow = "child.toml"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "child.md"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "phase=validate-flow-exclusions" in error
+    assert "flow.toml" in error
+    assert "step=nested.child" not in error
+
+
+def test_run_start_invalid_nested_checkpoint_reports_iteration_and_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "seed.md").write_text("seed", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "seed.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}', encoding="utf-8",
+    )
+    (tmp_path / "out-two.json").write_text("{invalid", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "seed"\nprompt_file = "seed.md"\n'
+        'response_format = "json"\noutput = "seed.json"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "work.md"\n'
+        'response_format = "json"\n'
+        'foreach = "steps.seed.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        'output = "out-${iteration.id}.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\n[[steps]]\nid = "nested"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "phase=run-start-checkpoint" in error
+    assert "step=nested.once.work" in error
+    assert "iteration=two" in error
+    assert "out-two.json" in error
+
+
+def test_run_start_nested_duplicate_output_reports_actual_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "seed.md").write_text("seed", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "seed.json").write_text(
+        '{"items":[{"id":"one","target":"same"},'
+        '{"id":"two","target":"same"},'
+        '{"id":"three","target":"unique"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "seed"\nprompt_file = "seed.md"\n'
+        'response_format = "json"\noutput = "seed.json"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "work.md"\n'
+        'response_format = "json"\n'
+        'foreach = "steps.seed.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        'output = "out-${item.target}.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\n[[steps]]\nid = "nested"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "iteration=two" in error
+    assert "out-same.json" in error
+    assert "iteration=three" not in error
