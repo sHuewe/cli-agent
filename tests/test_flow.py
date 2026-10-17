@@ -7416,3 +7416,73 @@ def test_flow_cli_validation_error_reports_child_step(
     error = capsys.readouterr().err
     assert "step=broken" in error
     assert "child.toml" in error
+
+
+def test_duplicate_foreach_output_diagnostic_points_to_colliding_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "seed.md").write_text("seed", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "seed"\nprompt_file = "seed.md"\n'
+        'response_format = "json"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "work.md"\n'
+        'foreach = "steps.seed.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        'output = "route-${item.target}.json"\n'
+        'response_format = "json"\n',
+        encoding="utf-8",
+    )
+
+    async def fake_run_once(options, *, dependencies=None):
+        if options.prompt == "seed":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"first","target":"same"},'
+                '{"id":"second","target":"same"},'
+                '{"id":"third","target":"unique"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("Duplicate outputs must be detected during preflight")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "iteration=second" in error
+    assert "route-same.json" in error
+    assert "iteration=third" not in error
+
+
+def test_validation_root_exclusions_do_not_report_previous_child_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nprompt_file = "child.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\nexclude_paths = ["missing-directory"]\n'
+        '[[steps]]\nid = "nested"\nflow = "child.toml"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "child.md"\n'
+        'workspace_access = "read"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "phase=validate-flow-exclusions" in error
+    assert "flow.toml" in error
+    assert "step=nested.child" not in error
