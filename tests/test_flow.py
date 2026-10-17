@@ -7159,10 +7159,20 @@ def test_subflow_preflight_reports_later_bad_iteration_input(
         '[steps.input]\nvalue = "${item.value}"\n',
         encoding="utf-8",
     )
-    (tmp_path / "seed.json").write_text(
-        '{"items":[{"id":"first","value":"yes"},{"id":"second"}]}',
-        encoding="utf-8",
-    )
+    # Generate the foreach source during execution, not during the immutable
+    # run-start snapshot. Otherwise input rendering fails before preflight.
+    calls: list[str] = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt != "seed":
+            raise AssertionError("Nested preflight must fail before a child runs")
+        return SimpleNamespace(
+            answer='{"items":[{"id":"first","value":"yes"},{"id":"second"}]}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     monkeypatch.setattr(
         flow_module.sys, "argv",
         ["cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path)],
@@ -7174,3 +7184,4 @@ def test_subflow_preflight_reports_later_bad_iteration_input(
     assert "step=nested" in error
     assert "iteration=second" in error
     assert "enthält kein Feld" in error
+    assert calls == ["seed"]
