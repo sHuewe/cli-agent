@@ -7036,4 +7036,4 @@ def test_flow_cli_debug_sanitizes_untrusted_traceback(
     assert "\\u001b" in output
     assert "\\u202e" in output
     assert "\x1b" not in output
-    assert "\\u202e" in output
+    assert "\u202e" not in output
