@@ -7056,7 +7056,7 @@ def test_flow_cli_foreach_preflight_error_reports_iteration_and_output(
         'response_format = "json"\n',
         encoding="utf-8",
     )
-    (tmp_path / "out-two.json").write_text('{"old":true}', encoding="utf-8")
+    (tmp_path / "out-two.json").write_text('not valid JSON', encoding="utf-8")
 
     async def fake_run_once(options, *, dependencies=None):
         if options.prompt == "discover":
