@@ -51,3 +51,36 @@ def test_dynamic_nested_resume_rejects_mutated_or_new_file(tmp_path, monkeypatch
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     with pytest.raises(ValueError, match="existiert bereits" if created else "verändert"):
         asyncio.run(run_flow(load_flow(tmp_path / "parent.toml", workspace=tmp_path), workspace=tmp_path))
+
+def test_dynamic_nested_path_components_resume(tmp_path, monkeypatch):
+    _flow(tmp_path)
+    child = tmp_path / "child.toml"
+    child.write_text(
+        child.read_text(encoding="utf-8").replace(
+            "work/${input.item.id}.json",
+            "work/${input.item.path}.json",
+        ),
+        encoding="utf-8",
+    )
+    nested = tmp_path / "work" / "team" / "one.json"
+    nested.parent.mkdir()
+    nested.write_text('{"ok":1}', encoding="utf-8")
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one","path":"team/one"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("existing nested-path checkpoint must be resumed")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    asyncio.run(
+        run_flow(
+            load_flow(tmp_path / "parent.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        )
+    )
+    assert calls == ["discover"]
