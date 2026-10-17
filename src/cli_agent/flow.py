@@ -2220,6 +2220,7 @@ def _snapshot_dynamic_checkpoint_candidates(
     *,
     workspace: Path,
     cache: dict[str, FlowDefinition],
+    known_checkpoint_paths: tuple[Path, ...] = (),
 ) -> tuple[dict[str, bytes], tuple[Path, ...]]:
     """Snapshot existing outputs for foreach steps whose inputs are not yet known.
 
@@ -2228,6 +2229,7 @@ def _snapshot_dynamic_checkpoint_candidates(
     """
     fingerprints: dict[str, bytes] = {}
     paths: dict[str, Path] = {}
+    known_keys = {_filesystem_path_key(path) for path in known_checkpoint_paths}
     seen_patterns: set[str] = set()
     examined = 0
     total_bytes = 0
@@ -2275,7 +2277,10 @@ def _snapshot_dynamic_checkpoint_candidates(
                 except ValueError:
                     continue
                 key = _filesystem_path_key(path)
-                if key in fingerprints:
+                # The run-start planner already captured these checkpoints.
+                # Avoid an additional read; their original snapshots remain
+                # authoritative for the known invocation.
+                if key in known_keys or key in fingerprints:
                     continue
                 try:
                     size = path.stat().st_size
@@ -3857,7 +3862,11 @@ async def run_flow(
         )
     )
     dynamic_fingerprints, dynamic_paths = (
-        _snapshot_dynamic_checkpoint_candidates(workspace=workspace, cache=cache)
+        _snapshot_dynamic_checkpoint_candidates(
+            workspace=workspace,
+            cache=cache,
+            known_checkpoint_paths=run_start_checkpoint_paths,
+        )
     )
     context = _FlowExecutionContext(
         dependencies=deps,
