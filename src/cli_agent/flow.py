@@ -2219,7 +2219,7 @@ def _snapshot_dynamic_checkpoint_candidates(
     *,
     workspace: Path,
     cache: dict[str, FlowDefinition],
-    known_checkpoint_paths: tuple[Path, ...] = (),
+    known_checkpoint_fingerprints: dict[str, bytes] | None = None,
 ) -> tuple[dict[tuple[str, str, str], bytes], tuple[Path, ...]]:
     """Snapshot startup JSON outputs, scoped to their declaring flow/step.
 
@@ -2229,7 +2229,7 @@ def _snapshot_dynamic_checkpoint_candidates(
     """
     fingerprints: dict[tuple[str, str, str], bytes] = {}
     paths: dict[str, Path] = {}
-    known_keys = {_filesystem_path_key(path) for path in known_checkpoint_paths}
+    known_fingerprints = known_checkpoint_fingerprints or {}
     # Combine identical search templates while retaining all declaring owners.
     owners_by_template: dict[str, list[tuple[str, str]]] = {}
     for flow in cache.values():
@@ -2255,7 +2255,10 @@ def _snapshot_dynamic_checkpoint_candidates(
 
     examined = 0
     total_bytes = 0
-    content_fingerprints: dict[str, bytes] = {}
+    # Known paths were already fingerprinted by the concrete run-start planner.
+    # Reuse their fingerprints but still associate them with matching owners.
+    content_fingerprints: dict[str, bytes] = dict(known_fingerprints)
+    case_insensitive = _filesystem_is_case_insensitive(workspace)
     for template, declaring_steps in owners_by_template.items():
         # Dynamic values can include path separators. Enumerate below the
         # static prefix and verify against the complete declared template.
@@ -2281,7 +2284,10 @@ def _snapshot_dynamic_checkpoint_candidates(
             regex_parts.append("(?s:.*?)")
             cursor = match.end()
         regex_parts.append(re.escape(template[cursor:]))
-        matches_template = re.compile(r"\A" + "".join(regex_parts) + r"\Z")
+        matches_template = re.compile(
+            r"\A" + "".join(regex_parts) + r"\Z",
+            re.IGNORECASE if case_insensitive else 0,
+        )
 
         for directory, subdirectories, filenames in os.walk(
             search_root, followlinks=False
@@ -2318,9 +2324,9 @@ def _snapshot_dynamic_checkpoint_candidates(
                 except ValueError:
                     continue
                 key = _filesystem_path_key(path)
-                # Known run-start snapshots are already authoritative.
-                if key in known_keys:
-                    continue
+                # Preserve each matching owner's mapping even if an earlier
+                # checkpoint or a later step's previous_output already captured
+                # this path. No second read is needed for those paths.
                 fingerprint = content_fingerprints.get(key)
                 if fingerprint is None:
                     try:
@@ -3916,11 +3922,19 @@ async def run_flow(
             cache=cache,
         )
     )
+    known_fingerprints: dict[str, bytes] = {}
+    for snapshot in run_start_snapshots.values():
+        for (_, path_key), fingerprint in snapshot.checkpoint_fingerprints.items():
+            known_fingerprints[path_key] = fingerprint
+        for (_, path_key), fingerprint in snapshot.previous_output_fingerprints.items():
+            if fingerprint is not None:
+                known_fingerprints[path_key] = fingerprint
+
     dynamic_fingerprints, dynamic_paths = (
         _snapshot_dynamic_checkpoint_candidates(
             workspace=workspace,
             cache=cache,
-            known_checkpoint_paths=run_start_checkpoint_paths,
+            known_checkpoint_fingerprints=known_fingerprints,
         )
     )
     context = _FlowExecutionContext(
