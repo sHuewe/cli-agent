@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import glob
 import hashlib
 import json
 import os
@@ -2243,39 +2242,83 @@ def _snapshot_dynamic_checkpoint_candidates(
                 or not _DYNAMIC_VALUE_EXPR.search(step.output)
             ):
                 continue
-            parts: list[str] = []
-            cursor = 0
-            for match in _DYNAMIC_VALUE_EXPR.finditer(step.output):
-                parts.append(glob.escape(step.output[cursor:match.start()]))
-                parts.append("*")
-                cursor = match.end()
-            parts.append(glob.escape(step.output[cursor:]))
-            pattern = "".join(parts)
-            if Path(pattern).is_absolute():
+            template_path = Path(step.output)
+            if template_path.is_absolute():
                 try:
-                    pattern = str(Path(pattern).relative_to(workspace))
+                    template_path = template_path.relative_to(workspace)
                 except ValueError:
                     continue
-            if pattern in seen_patterns:
+            template = template_path.as_posix()
+            if template in seen_patterns:
                 continue
-            seen_patterns.add(pattern)
-            for candidate in workspace.glob(pattern):
-                examined += 1
+            seen_patterns.add(template)
+
+            # A substituted value may include path separators. A glob '*'
+            # only matches one component, so enumerate below the static
+            # directory prefix and verify candidates against the *entire*
+            # declared template instead.
+            matches = list(_DYNAMIC_VALUE_EXPR.finditer(template))
+            if not matches:
+                continue
+            first_prefix = template[:matches[0].start()]
+            if first_prefix.endswith("/"):
+                root = first_prefix.rstrip("/") or "."
+            else:
+                root = first_prefix.rpartition("/")[0] or "."
+            search_root = _workspace_path(
+                workspace,
+                root,
+                purpose="Verzeichnis für dynamische JSON-Checkpoints",
+                must_exist=False,
+            )
+            if not search_root.is_dir():
+                continue
+
+            regex_parts: list[str] = []
+            cursor = 0
+            for match in matches:
+                regex_parts.append(re.escape(template[cursor:match.start()]))
+                regex_parts.append("(?s:.*?)")
+                cursor = match.end()
+            regex_parts.append(re.escape(template[cursor:]))
+            matches_template = re.compile(
+                r"\A" + "".join(regex_parts) + r"\Z"
+            )
+
+            for directory, subdirectories, filenames in os.walk(
+                search_root, followlinks=False
+            ):
+                examined += 1 + len(subdirectories) + len(filenames)
                 if examined > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
                     raise ValueError(
                         "Zu viele dynamische JSON-Checkpoint-Kandidaten beim Run-Start."
                     )
-                if not candidate.is_file():
-                    continue
-                try:
-                    path = _workspace_path(
-                        workspace,
-                        candidate,
-                        purpose="Dynamischer JSON-Checkpoint",
-                        must_exist=True,
-                    )
-                except ValueError:
-                    continue
+                # Do not recurse through symlinks or Windows reparse points.
+                safe_subdirectories = []
+                for dirname in subdirectories:
+                    try:
+                        if not path_entry_is_symlink_or_reparse(
+                            Path(directory) / dirname
+                        ):
+                            safe_subdirectories.append(dirname)
+                    except OSError:
+                        continue
+                subdirectories[:] = safe_subdirectories
+                for filename in filenames:
+                    candidate = Path(directory) / filename
+                    if matches_template.fullmatch(
+                        candidate.relative_to(workspace).as_posix()
+                    ) is None:
+                        continue
+                    try:
+                        path = _workspace_path(
+                            workspace,
+                            candidate,
+                            purpose="Dynamischer JSON-Checkpoint",
+                            must_exist=True,
+                        )
+                    except ValueError:
+                        continue
                 key = _filesystem_path_key(path)
                 # The run-start planner already captured these checkpoints.
                 # Avoid an additional read; their original snapshots remain
