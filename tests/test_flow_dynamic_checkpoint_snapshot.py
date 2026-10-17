@@ -84,3 +84,49 @@ def test_dynamic_nested_path_components_resume(tmp_path, monkeypatch):
         )
     )
     assert calls == ["discover"]
+
+def test_unrelated_dynamic_template_cannot_authorize_static_child(
+    tmp_path, monkeypatch,
+):
+    _flow(tmp_path)
+    (tmp_path / "work" / "fixed.json").write_text(
+        '{"stale":true}', encoding="utf-8"
+    )
+    (tmp_path / "unrelated.md").write_text("unrelated", encoding="utf-8")
+    parent = tmp_path / "parent.toml"
+    parent.write_text(
+        parent.read_text(encoding="utf-8")
+        + '\\n[[steps]]\\nid = "unrelated"\\nprompt_file = "unrelated.md"\\n'
+          'response_format = "json"\\n'
+          'foreach = "steps.discover.output.items"\\n'
+          'output = "work/${item.id}.json"\\n',
+        encoding="utf-8",
+    )
+    child = tmp_path / "child.toml"
+    child.write_text(
+        child.read_text(encoding="utf-8").replace(
+            'output = "work/${input.item.id}.json"',
+            'output = "work/fixed.json"',
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"fixed"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("static child must not adopt another step's checkpoint")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(
+            run_flow(
+                load_flow(parent, workspace=tmp_path),
+                workspace=tmp_path,
+            )
+        )
+    assert calls == ["discover"]
