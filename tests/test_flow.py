@@ -7106,7 +7106,22 @@ def test_nested_preflight_reports_specific_foreach_output(
     (tmp_path / "seed.json").write_text(
         '{"items":[{"id":"one"},{"id":"two"}]}', encoding="utf-8"
     )
-    (tmp_path / "child-two.json").write_text("not-json", encoding="utf-8")
+    # A malformed checkpoint is rejected during the earlier run-start scan.
+    # Keep it valid and trigger a filesystem failure only in nested preflight.
+    (tmp_path / "child-two.json").write_text('{"ok":2}', encoding="utf-8")
+    original_claim_output = flow_module._claim_output
+
+    def fail_nested_claim(claimed_outputs, *, path, owner, allow_replace=False):
+        if path.name == "child-two.json":
+            raise OSError(206, "Filename too long", str(path))
+        return original_claim_output(
+            claimed_outputs,
+            path=path,
+            owner=owner,
+            allow_replace=allow_replace,
+        )
+
+    monkeypatch.setattr(flow_module, "_claim_output", fail_nested_claim)
     monkeypatch.setattr(
         flow_module.sys, "argv",
         ["cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path)],
@@ -7117,3 +7132,5 @@ def test_nested_preflight_reports_specific_foreach_output(
     assert "step=nested.work" in output
     assert "iteration=two" in output
     assert "child-two.json" in output
+    assert "phase=preflight-claim-output" in output
+    assert "errno=206" in output
