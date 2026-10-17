@@ -2215,6 +2215,104 @@ def _capture_run_start_invocation(
     )
 
 
+
+def _snapshot_dynamic_checkpoint_candidates(
+    *,
+    workspace: Path,
+    cache: dict[str, FlowDefinition],
+) -> tuple[dict[str, bytes], tuple[Path, ...]]:
+    """Snapshot existing outputs for foreach steps whose inputs are not yet known.
+
+    Only configured JSON output templates are considered. Never treat a file
+    created during execution as a resumable checkpoint.
+    """
+    fingerprints: dict[str, bytes] = {}
+    paths: dict[str, Path] = {}
+    seen_patterns: set[str] = set()
+    examined = 0
+    total_bytes = 0
+    for flow in cache.values():
+        for step in flow.steps:
+            if (
+                step.flow is not None
+                or step.output is None
+                or step.response_format != "json"
+                or step.overwrite_output
+                or not _DYNAMIC_VALUE_EXPR.search(step.output)
+            ):
+                continue
+            parts: list[str] = []
+            cursor = 0
+            for match in _DYNAMIC_VALUE_EXPR.finditer(step.output):
+                parts.append(glob.escape(step.output[cursor:match.start()]))
+                parts.append("*")
+                cursor = match.end()
+            parts.append(glob.escape(step.output[cursor:]))
+            pattern = "".join(parts)
+            if Path(pattern).is_absolute():
+                try:
+                    pattern = str(Path(pattern).relative_to(workspace))
+                except ValueError:
+                    continue
+            if pattern in seen_patterns:
+                continue
+            seen_patterns.add(pattern)
+            for candidate in workspace.glob(pattern):
+                examined += 1
+                if examined > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
+                    raise ValueError(
+                        "Zu viele dynamische JSON-Checkpoint-Kandidaten beim Run-Start."
+                    )
+                if not candidate.is_file():
+                    continue
+                try:
+                    path = _workspace_path(
+                        workspace,
+                        candidate,
+                        purpose="Dynamischer JSON-Checkpoint",
+                        must_exist=True,
+                    )
+                except ValueError:
+                    continue
+                key = _filesystem_path_key(path)
+                if key in fingerprints:
+                    continue
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                if size > MAX_STRUCTURED_OUTPUT_BYTES:
+                    continue
+                total_bytes += size
+                if total_bytes > MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES:
+                    raise ValueError("Run-Start-Checkpoint-Budget überschritten.")
+                try:
+                    content = read_existing_output_text(
+                        workspace,
+                        path,
+                        max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+                    )
+                except (OSError, ValueError):
+                    continue
+                fingerprints[key] = _checkpoint_fingerprint(content)
+                paths[key] = path
+    return fingerprints, tuple(paths.values())
+
+
+def _run_start_fingerprint(
+    step: FlowStep,
+    output: Path,
+    local: dict[tuple[str, str], bytes],
+    dynamic: dict[str, bytes] | None,
+) -> bytes | None:
+    known = local.get(_checkpoint_snapshot_key(step, output))
+    if known is not None:
+        return known
+    if step.response_format != "json" or step.overwrite_output:
+        return None
+    return (dynamic or {}).get(_filesystem_path_key(output))
+
+
 def _capture_run_start_snapshots(
     *,
     workspace: Path,
@@ -3359,8 +3457,9 @@ async def _run_flow_internal(
             preflight_checkpoint_fingerprints = []
             for output in preflight_outputs:
                 assert output is not None
-                expected_fingerprint = initial_checkpoint_fingerprints.get(
-                    _checkpoint_snapshot_key(step, output)
+                expected_fingerprint = _run_start_fingerprint(
+                    step, output, initial_checkpoint_fingerprints,
+                    context.run_start_dynamic_checkpoints,
                 )
                 if expected_fingerprint is not None:
                     _verified_preflight_checkpoint(
@@ -3508,8 +3607,9 @@ async def _run_flow_internal(
                 expected_fingerprint = preflight_checkpoint_fingerprints[index - 1]
             else:
                 expected_fingerprint = (
-                    initial_checkpoint_fingerprints.get(
-                        _checkpoint_snapshot_key(step, output)
+                    _run_start_fingerprint(
+                        step, output, initial_checkpoint_fingerprints,
+                        context.run_start_dynamic_checkpoints,
                     )
                     if output is not None
                     else None
@@ -3756,6 +3856,9 @@ async def run_flow(
             cache=cache,
         )
     )
+    dynamic_fingerprints, dynamic_paths = (
+        _snapshot_dynamic_checkpoint_candidates(workspace=workspace, cache=cache)
+    )
     context = _FlowExecutionContext(
         dependencies=deps,
         approval_callback=approval_callback,
@@ -3763,7 +3866,10 @@ async def run_flow(
         reserved_inputs=reserved_inputs,
         flow_cache=cache,
         run_start_snapshots=run_start_snapshots,
-        run_start_checkpoint_paths=run_start_checkpoint_paths,
+        run_start_checkpoint_paths=tuple(
+            dict.fromkeys((*run_start_checkpoint_paths, *dynamic_paths))
+        ),
+        run_start_dynamic_checkpoints=dynamic_fingerprints,
     )
     await _run_flow_internal(
         flow,
