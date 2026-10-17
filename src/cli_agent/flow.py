@@ -3330,7 +3330,7 @@ def validate_flow(
                     )
 
         supplied = set(step.variables)
-        available = supplied | set(step.global_variables)
+        available = supplied | set(step.global_variables) | set(step.json_inputs or {})
         known = {
             name
             for current_template in known_templates
