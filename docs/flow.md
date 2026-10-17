@@ -284,6 +284,65 @@ Vorwärtsreferenzen werden bereits beim Laden der Flow-Datei abgewiesen. Bei
 `foreach` kann auch der aggregierte Step-Output mit seinem
 `iterations`-Feld auf diese Weise verwendet werden.
 
+### Deklarierte JSON-Inputs aus vorherigen Flow-Outputs
+
+Ein Modell-Step kann JSON-Outputs vorheriger Schritte, auch aus verschachtelten
+Subflows und deren `foreach`-Iterationen, **durch den Orchestrator** einlesen
+lassen. Dafür ist kein `workspace_access = "read"` nötig. Der neue Parameter
+`json_inputs` wird nur bei Modell-Steps unterstützt:
+
+```toml
+[[steps]]
+id = "route"
+prompt_file = "prompts/route.md"
+response_format = "json"
+workspace_access = "none"
+
+[steps.json_inputs.scan]
+path = "state/chunks/scan-${input.chunk.document_id}-${input.chunk.id}.json"
+```
+
+`route.md` kann den JSON-Wert über `{{var:scan}}` einfügen. Das Template
+darf `${input.field}`, `${item.field}` (bei `foreach`) und
+`${iteration.id}` enthalten. Zusätzlich können Collections deklariert werden:
+
+```toml
+[steps.json_inputs.routes]
+iterate = "input.scans[].output.chunks[]"
+path = "state/routes/${each.document_id}-${each.id}-${input.folder.id}.json"
+```
+
+`iterate` durchläuft ausschließlich Listen unter `input` oder `item`
+und kann mit `[]` mehrere Ebenen abflachen. Pro Element wird der deklarierte
+Pfad mit `${each.field}` aufgelöst; `{{var:routes}}` ist anschließend
+ein JSON-Array. Leere Collections liefern `[]`.
+
+**Sicherheitsgrenze:** Ein `json_inputs.path` darf nur auf eine bereits
+erfolgreich abgeschlossene, von einem vorherigen Flow-Step deklarierte
+**JSON-Output-Datei** zeigen. Diese Freigabe ist laufbezogen und wird
+nicht aus frei gewählten Dateipfaden, einem `add_file_context` oder durch
+LLM-Toolaufrufe abgeleitet. Der Runner prüft Workspace-Grenzen,
+Dateisicherheit, die JSON-Gültigkeit und den Dateifingerprint.
+Ausgetauschte oder noch nicht erzeugte Artefakte werden abgewiesen.
+`exclude_paths` beschränkt weiterhin den OS-MCP des LLM, nicht den
+expliziten Orchestrator-Zugriff.
+
+Die Inputs werden **erst nach der Checkpoint-Entscheidung** für einen
+tatsächlich auszuführenden Modell-Step geladen. Ein gültiger alter Checkpoint
+überspringt diesen Schritt vollständig, ohne neue JSON-Inputs zu verlangen.
+So bleiben vorhandene Dateinamen, JSON-Schemas und Resume-Abläufe kompatibel.
+Inputs dürfen aus einem früheren Schritt desselben Runs stammen, auch wenn
+die Datei beim Run-Start noch nicht vorhanden war.
+
+Grenzen: höchstens 1000 JSON-Dateien und 100 MB UTF-8-Rohdaten pro
+Modellaufruf über alle deklarierten JSON-Inputs. Einzelne strukturierte
+JSON-Outputs und `foreach`-Aggregate dürfen ebenfalls bis zu 100 MB
+umfassen. Diese Grenzen sind technische Sicherheitsgrenzen, keine
+Garantie, dass das Kontextfenster des gewählten Modells ausreicht.
+Die bestehenden zusätzlichen Größenlimits für Run-Start-Snapshots gelten
+weiterhin. `json_inputs` ist bewusst keine allgemeine Dateilesefunktion
+und führt keine Shell- oder OS-Tools aus.
+
 ### Mehrere Conversation-Turns innerhalb eines Steps
 
 Ein Step kann optional mehrere Benutzer-Prompts nacheinander in **derselben**
@@ -688,7 +747,7 @@ Bei `response_format = "json"` wird die Antwort jeder Iteration geparst und
 als echter JSON-Wert unter `output` eingebettet. Bei
 `response_format = "text"` bleibt `output` ein String. Auch per Resume
 geladene Checkpoints werden in derselben Form aggregiert. Der gesamte
-aggregierte Output unterliegt dem strukturierten JSON-Limit von 10 MB.
+aggregierte Output unterliegt dem strukturierten JSON-Limit von 100 MB.
 
 Damit kann ein weiterer `foreach` direkt auf dem Ergebnis eines vorherigen
 `foreach` laufen:
