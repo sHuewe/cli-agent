@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 
+from .mcp_path_policy import read_path_policy
 from .config import McpServerConfig, default_config_file, load_config
 from .data_operations import DataOperationError, DataOperations
 from .logging_setup import configure_logging
@@ -625,6 +626,12 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Workspace path that may be read but not written. May be repeated.",
     )
+    parser.add_argument(
+        "--path-policy-file",
+        type=Path,
+        default=None,
+        help="Private MCP path policy manifest (built-in servers only).",
+    )
     return parser.parse_args()
 
 
@@ -648,11 +655,15 @@ def main() -> None:
     )
     try:
         project_directory = args.project_directory.expanduser().resolve()
+        policy_paths = read_path_policy(getattr(args, "path_policy_file", None))
         user_protected_paths = tuple(
             path.expanduser()
             if path.is_absolute()
             else project_directory / path
-            for path in getattr(args, "protected_path", ())
+            for path in (
+                *getattr(args, "protected_path", ()),
+                *policy_paths["protected_paths"],
+            )
         )
         workspace = None
         if args.access != "none":
@@ -668,7 +679,8 @@ def main() -> None:
                     *user_protected_paths,
                 ),
                 mutation_protected_paths=tuple(
-                    getattr(args, "mutation_protected_path", ())
+                    (*getattr(args, "mutation_protected_path", ()),
+                 *policy_paths["mutation_protected_paths"])
                 ),
             )
         operations = DataOperations(workspace)
