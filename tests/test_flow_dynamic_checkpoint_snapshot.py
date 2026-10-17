@@ -130,3 +130,63 @@ def test_unrelated_dynamic_template_cannot_authorize_static_child(
             )
         )
     assert calls == ["discover"]
+
+
+def test_known_previous_output_is_available_to_dynamic_owner(tmp_path, monkeypatch):
+    _flow(tmp_path)
+    path = tmp_path / "work" / "one.json"
+    path.write_text('{"old":1}', encoding="utf-8")
+    (tmp_path / "later.md").write_text("later {{var:old}}", encoding="utf-8")
+    parent = tmp_path / "parent.toml"
+    parent.write_text(
+        parent.read_text(encoding="utf-8")
+        + '\n[[steps]]\nid = "later"\nprompt_file = "later.md"\n'
+          'response_format = "json"\noutput = "work/one.json"\n'
+          'overwrite_output = true\n'
+          '[steps.vars]\nold = "${previous_output.old}"\n',
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"}]}',
+                web_context_statuses=(),
+            )
+        if options.prompt == "later 1":
+            return SimpleNamespace(answer='{"updated":2}', web_context_statuses=())
+        raise AssertionError("dynamic child must resume, not call model")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    asyncio.run(run_flow(load_flow(parent, workspace=tmp_path), workspace=tmp_path))
+    assert calls == ["discover", "later 1"]
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows filesystem")
+def test_dynamic_checkpoint_case_insensitive_suffix(tmp_path, monkeypatch):
+    _flow(tmp_path)
+    child = tmp_path / "child.toml"
+    child.write_text(
+        child.read_text(encoding="utf-8").replace(
+            'output = "work/${input.item.id}.json"',
+            'output = "work/${input.item.id}.JSON"',
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "work" / "one.json").write_text('{"ok":1}', encoding="utf-8")
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("matching checkpoint should skip model")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    asyncio.run(run_flow(load_flow(tmp_path / "parent.toml", workspace=tmp_path), workspace=tmp_path))
+    assert calls == ["discover"]
