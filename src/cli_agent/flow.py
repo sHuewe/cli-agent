@@ -446,6 +446,10 @@ def _reserved_flow_input_paths(
         _filesystem_path_key(flow.source): flow.source,
     }
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="validate-reserved-input", flow=flow.source,
+            step=step.step_id,
+        )
         if step.flow is not None:
             subflow_path = _resolve_subflow_path(
                 step,
@@ -2812,6 +2816,10 @@ def _collect_reserved_flow_input_paths(
     for step in flow.steps:
         if step.flow is None:
             continue
+        _set_flow_diagnostic(
+            phase="validate-reserved-subflow", flow=flow.source,
+            step=step.step_id,
+        )
         child = _load_subflow_definition(
             step,
             workspace=workspace,
@@ -2902,6 +2910,7 @@ def validate_flow(
     _planned_static_outputs: dict[str, str] | None = None,
     _all_reserved_inputs: dict[str, Path] | None = None,
 ) -> None:
+    _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
     workspace = workspace.expanduser().resolve()
     traversal_budget = _budget or _SubflowTraversalBudget()
     traversal_budget.consume(purpose="Validierung")
@@ -2936,6 +2945,10 @@ def validate_flow(
     produced: set[str] = set()
 
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="validate-step", flow=flow.source,
+            step=step.step_id,
+        )
         if step.flow is not None:
             child = _load_subflow_definition(
                 step,
@@ -2954,6 +2967,10 @@ def validate_flow(
                 _budget=traversal_budget,
                 _planned_static_outputs=planned_static_outputs,
                 _all_reserved_inputs=all_reserved_inputs,
+            )
+            _set_flow_diagnostic(
+                phase="validate-step", flow=flow.source,
+                step=step.step_id,
             )
             if step.foreach is not None:
                 match = _FOREACH.fullmatch(step.foreach)
@@ -4141,10 +4158,14 @@ def _initial_flow_logging_config(
     """
     cache = {_filesystem_path_key(flow.source): flow}
     visited: set[str] = set()
-    pending = [flow]
+    pending = [(flow, 0)]
     first_explicit: tuple[Path, Path, str] | None = None
     while pending:
-        current = pending.pop()
+        current, depth = pending.pop()
+        if depth >= MAX_SUBFLOW_DEPTH:
+            raise ValueError(
+                f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+            )
         key = _filesystem_path_key(current.source)
         if key in visited:
             continue
@@ -4152,14 +4173,23 @@ def _initial_flow_logging_config(
         if len(visited) > MAX_SUBFLOW_GRAPH_EXPANSIONS:
             raise ValueError("Subflow-Logging-Konfigurationssuche überschreitet das Limit.")
         for step in current.steps:
+            _set_flow_diagnostic(
+                phase="discover-logging-config",
+                flow=current.source, step=step.step_id,
+            )
             if step.flow is not None:
-                pending.append(
+                if depth + 1 >= MAX_SUBFLOW_DEPTH:
+                    raise ValueError(
+                        f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+                    )
+                pending.append((
                     _load_subflow_definition(
                         step,
                         workspace=workspace,
                         cache=cache,
-                    )
-                )
+                    ),
+                    depth + 1,
+                ))
             elif step.config is None:
                 return None
             elif first_explicit is None:
