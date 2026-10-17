@@ -4129,21 +4129,66 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _initial_flow_logging_config(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> Path | None:
+    """Use a step config when no executable step depends on the default.
+
+    Inspect the bounded, cached subflow graph so explicit-config-only flows
+    never read or create an unrelated default user configuration.
+    """
+    cache = {_filesystem_path_key(flow.source): flow}
+    visited: set[str] = set()
+    pending = [flow]
+    first_explicit: Path | None = None
+    while pending:
+        current = pending.pop()
+        key = _filesystem_path_key(current.source)
+        if key in visited:
+            continue
+        visited.add(key)
+        if len(visited) > MAX_SUBFLOW_GRAPH_EXPANSIONS:
+            raise ValueError("Subflow-Logging-Konfigurationssuche überschreitet das Limit.")
+        for step in current.steps:
+            if step.flow is not None:
+                pending.append(
+                    _load_subflow_definition(
+                        step,
+                        workspace=workspace,
+                        cache=cache,
+                    )
+                )
+            elif step.config is None:
+                return None
+            elif first_explicit is None:
+                first_explicit = _resolve_config(
+                    step, flow_dir=current.source.parent
+                )
+    return first_explicit
+
+
 def main() -> None:
     args = build_parser().parse_args()
     workspace = args.workspace.expanduser().resolve()
     _flow_diagnostic_context.set(_FlowDiagnosticState())
-    logging_ready = False
+    logging_initialized = False
     try:
-        _set_flow_diagnostic(phase="configure-logging", flow=args.flow)
-        config = load_config()
-        configure_logging(config.logging)
-        logging_ready = config.logging.enabled
         _set_flow_diagnostic(phase="load-flow", flow=args.flow)
         flow = load_flow(
             args.flow,
             workspace=workspace,
         )
+        _set_flow_diagnostic(phase="configure-logging", flow=flow.source)
+        config_path = (
+            _initial_flow_logging_config(flow, workspace=workspace)
+            if isinstance(flow, FlowDefinition)
+            else None
+        )
+        config = load_config(config_path) if config_path is not None else load_config()
+        configure_logging(config.logging)
+        logging_initialized = True
         _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
         validate_flow(
             flow,
@@ -4191,7 +4236,12 @@ def main() -> None:
         )
         # A failed logging setup may leave no handler. Avoid Python's
         # lastResort/root-handler fallback, which bypasses terminal sanitization.
-        if logging_ready:
+        active_logger = logging.getLogger("cli_agent")
+        if (
+            logging_initialized
+            and active_logger.handlers
+            and active_logger.isEnabledFor(logging.ERROR)
+        ):
             _flow_logger.error("flow_failed %s", details, exc_info=True)
         if args.debug:
             traceback_text = "".join(
