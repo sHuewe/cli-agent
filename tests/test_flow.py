@@ -4765,7 +4765,9 @@ id = "${item.id}"
         calls.append(options)
         if options.prompt == "analyze two":
             return SimpleNamespace(answer='{"value":2}', web_context_statuses=())
-        raise AssertionError("downstream existing checkpoint should resume")
+        if options.prompt == "again two":
+            return SimpleNamespace(answer='{"done":2}', web_context_statuses=())
+        raise AssertionError("unexpected agent invocation")
 
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
