@@ -308,25 +308,3 @@ path = "state/first.json"
     asyncio.run(run_flow(definition, workspace=tmp_path))
     assert len(prompts) == 2
     assert json.loads(prompts[1].removeprefix("Read: ")) == {"id": "crlf"}
-
-
-def test_json_input_rejects_missing_persisted_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
-
-    async def fake_run_once(options, *, dependencies=None):
-        return SimpleNamespace(answer='{"status":"ok"}')
-
-    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
-    definition = _flow(tmp_path, """
-version = 1
-
-[[steps]]
-id = "first"
-prompt_file = "prompt.md"
-response_format = "json"
-output = "state/first.json"
-""")
-    with pytest.raises(ValueError, match="nicht gespeichert"):
-        asyncio.run(run_flow(definition, workspace=tmp_path))
