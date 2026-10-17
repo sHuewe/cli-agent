@@ -74,3 +74,19 @@ def test_manifest_cannot_replace_existing_file(tmp_path: Path) -> None:
             "mutation_protected_paths": [],
         })
     assert manifest.read_text(encoding="utf-8") == "do not replace"
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX surrogateescape")
+def test_manifest_preserves_surrogateescaped_posix_path(tmp_path: Path) -> None:
+    import os
+
+    raw_name = b"document-\xff.json"
+    filename = os.fsdecode(raw_name)
+    manifest = tmp_path / "surrogate-paths.json"
+    write_path_policy(manifest, {
+        "protected_paths": [str(tmp_path / filename)],
+        "mutation_protected_paths": [],
+    })
+    assert b"\\udcff" in manifest.read_bytes()
+    restored = read_path_policy(manifest)["protected_paths"][0]
+    assert os.fsencode(restored.name) == raw_name
