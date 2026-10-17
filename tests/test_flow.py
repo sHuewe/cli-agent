@@ -7134,3 +7134,43 @@ def test_nested_preflight_reports_specific_foreach_output(
     assert "child-two.json" in output
     assert "phase=preflight-claim-output" in output
     assert "errno=206" in output
+
+
+def test_subflow_preflight_reports_later_bad_iteration_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "seed.md").write_text("seed", encoding="utf-8")
+    (tmp_path / "child.md").write_text("child", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["value"]\n'
+        'result = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nprompt_file = "child.md"\n'
+        'response_format = "json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "seed"\nprompt_file = "seed.md"\n'
+        'response_format = "json"\noutput = "seed.json"\n'
+        '[[steps]]\nid = "nested"\nflow = "child.toml"\n'
+        'foreach = "steps.seed.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        '[steps.input]\nvalue = "${item.value}"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "seed.json").write_text(
+        '{"items":[{"id":"first","value":"yes"},{"id":"second"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "phase=preflight-render-subflow-inputs" in error
+    assert "step=nested" in error
+    assert "iteration=second" in error
+    assert "enthält kein Feld" in error
