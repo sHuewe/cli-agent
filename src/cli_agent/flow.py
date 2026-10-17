@@ -4133,10 +4133,12 @@ def main() -> None:
     args = build_parser().parse_args()
     workspace = args.workspace.expanduser().resolve()
     _flow_diagnostic_context.set(_FlowDiagnosticState())
+    logging_ready = False
     try:
         _set_flow_diagnostic(phase="configure-logging", flow=args.flow)
         config = load_config()
         configure_logging(config.logging)
+        logging_ready = config.logging.enabled
         _set_flow_diagnostic(phase="load-flow", flow=args.flow)
         flow = load_flow(
             args.flow,
@@ -4187,7 +4189,10 @@ def main() -> None:
             ),
             file=sys.stderr,
         )
-        _flow_logger.error("flow_failed %s", details, exc_info=True)
+        # A failed logging setup may leave no handler. Avoid Python's
+        # lastResort/root-handler fallback, which bypasses terminal sanitization.
+        if logging_ready:
+            _flow_logger.error("flow_failed %s", details, exc_info=True)
         if args.debug:
             traceback_text = "".join(
                 traceback.format_exception(type(exc), exc, exc.__traceback__)
