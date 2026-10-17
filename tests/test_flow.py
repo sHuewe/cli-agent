@@ -7470,7 +7470,7 @@ def test_validation_root_exclusions_do_not_report_previous_child_step(
         encoding="utf-8",
     )
     (tmp_path / "flow.toml").write_text(
-        'version = 1\nexclude_paths = ["missing-directory"]\n'
+        'version = 1\nexclude_paths = ["../outside-workspace"]\n'
         '[[steps]]\nid = "nested"\nflow = "child.toml"\n'
         '[[steps]]\nid = "work"\nprompt_file = "child.md"\n'
         'workspace_access = "read"\n',
@@ -7486,3 +7486,78 @@ def test_validation_root_exclusions_do_not_report_previous_child_step(
     assert "phase=validate-flow-exclusions" in error
     assert "flow.toml" in error
     assert "step=nested.child" not in error
+
+
+def test_run_start_invalid_nested_checkpoint_reports_iteration_and_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "seed.md").write_text("seed", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "seed.json").write_text(
+        '{"items":[{"id":"one"},{"id":"two"}]}', encoding="utf-8",
+    )
+    (tmp_path / "out-two.json").write_text("{invalid", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "seed"\nprompt_file = "seed.md"\n'
+        'response_format = "json"\noutput = "seed.json"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "work.md"\n'
+        'response_format = "json"\n'
+        'foreach = "steps.seed.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        'output = "out-${iteration.id}.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\n[[steps]]\nid = "nested"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "phase=run-start-checkpoint" in error
+    assert "step=nested.once.work" in error
+    assert "iteration=two" in error
+    assert "out-two.json" in error
+
+
+def test_run_start_nested_duplicate_output_reports_actual_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "seed.md").write_text("seed", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "seed.json").write_text(
+        '{"items":[{"id":"one","target":"same"},'
+        '{"id":"two","target":"same"},'
+        '{"id":"three","target":"unique"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "seed"\nprompt_file = "seed.md"\n'
+        'response_format = "json"\noutput = "seed.json"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "work.md"\n'
+        'response_format = "json"\n'
+        'foreach = "steps.seed.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        'output = "out-${item.target}.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\n[[steps]]\nid = "nested"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module.sys, "argv", [
+        "cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path),
+    ])
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    error = capsys.readouterr().err
+    assert "iteration=two" in error
+    assert "out-same.json" in error
+    assert "iteration=three" not in error
