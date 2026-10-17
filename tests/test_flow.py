@@ -7225,3 +7225,87 @@ def test_flow_logging_configure_failure_does_not_leak_traceback(
     assert "\\u001b" in stderr and "\\u202e" in stderr
     assert "Traceback (most recent call last)" not in stderr
     assert "\x1b" not in stderr and "\u202e" not in stderr
+
+
+def test_flow_cli_uses_explicit_config_without_loading_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "config.toml").write_text(
+        '[logging]\nenabled = false\n', encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "only"\n'
+        'config = "config.toml"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    actual_load_config = flow_module.load_config
+    seen_paths: list[Path | None] = []
+
+    def load_only_explicit(path=None):
+        seen_paths.append(path)
+        if path is None:
+            raise AssertionError("Must not load the default configuration")
+        return actual_load_config(path)
+
+    monkeypatch.setattr(flow_module, "load_config", load_only_explicit)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "validate", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    flow_module.main()
+    assert seen_paths == [tmp_path / "config.toml"]
+    assert "Flow gültig:" in capsys.readouterr().out
+
+
+def test_flow_cli_checks_effective_logging_after_step_reconfiguration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import logging
+
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    existing_logger = logging.getLogger("cli_agent")
+    original_handlers = list(existing_logger.handlers)
+    original_disabled = existing_logger.disabled
+    original_level = existing_logger.level
+    original_propagate = existing_logger.propagate
+    events: list[str] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record):
+            events.append(record.getMessage())
+
+    capture_handler = CaptureHandler()
+
+    def configure_disabled_initially(_config):
+        existing_logger.handlers = []
+        existing_logger.disabled = True
+
+    async def fail_after_reconfigure(_options, *, dependencies=None):
+        existing_logger.disabled = False
+        existing_logger.setLevel(logging.ERROR)
+        existing_logger.addHandler(capture_handler)
+        raise RuntimeError("step failure")
+
+    monkeypatch.setattr(flow_module, "configure_logging", configure_disabled_initially)
+    monkeypatch.setattr(flow_module, "run_once", fail_after_reconfigure)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    try:
+        with pytest.raises(SystemExit):
+            flow_module.main()
+        assert any("flow_failed" in event and "step=work" in event for event in events)
+        assert "Fehler: RuntimeError" in capsys.readouterr().err
+    finally:
+        existing_logger.handlers = original_handlers
+        existing_logger.disabled = original_disabled
+        existing_logger.setLevel(original_level)
+        existing_logger.propagate = original_propagate
