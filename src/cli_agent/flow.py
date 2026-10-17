@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextvars
+import logging
 import hashlib
 import json
 import os
 import re
 import sys
 import tomllib
+import traceback
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Callable
@@ -39,6 +42,27 @@ from .model import ModelRetryPolicy
 from .prompt_template import PromptTemplate
 from .terminal_output import sanitize_terminal_text
 from .agent_types import UserMessageCallback
+
+_flow_diagnostic_context: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "flow_diagnostic_context", default=""
+)
+_flow_logger = logging.getLogger(__name__)
+
+
+def _set_flow_diagnostic(
+    *, phase: str, flow: Path, namespace: str = "",
+    step: str | None = None, iteration_id: str | None = None,
+    output: Path | None = None,
+) -> None:
+    parts = [f"phase={phase}", f"flow={flow}"]
+    if step is not None:
+        parts.append(f"step={namespace}{step}")
+    if iteration_id is not None:
+        parts.append(f"iteration={iteration_id}")
+    if output is not None:
+        parts.append(f"output={output}")
+    _flow_diagnostic_context.set(" | ".join(parts))
+
 
 MAX_FLOW_STEPS = 100
 MAX_FOREACH_ITEMS = 1000
@@ -3377,6 +3401,10 @@ async def _run_flow_internal(
         else inherited_retry_policy
     )
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="prepare-step", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+        )
         if step.retry_overrides is not None:
             defaults = flow_retry_policy or ModelRetryPolicy()
             values = step.retry_overrides
@@ -3408,6 +3436,10 @@ async def _run_flow_internal(
         preflight_checkpoint_fingerprints: list[bytes | None] | None = None
 
         if step.flow is not None:
+            _set_flow_diagnostic(
+                phase="preflight-subflow", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+            )
             assert context.flow_cache is not None
             child = _load_subflow_definition(
                 step,
@@ -3456,6 +3488,10 @@ async def _run_flow_internal(
             and step.foreach is not None
             and step.output is not None
         ):
+            _set_flow_diagnostic(
+                phase="preflight-outputs", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+            )
             preflight_outputs = [
                 _output_for_iteration(
                     step,
@@ -3584,6 +3620,11 @@ async def _run_flow_internal(
                 else ""
             )
             display_name = namespace + step.step_id
+            _set_flow_diagnostic(
+                phase="execute", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id,
+            )
             print(
                 sanitize_terminal_text(
                     f"Flow-Schritt {display_name}{suffix}",
@@ -3647,6 +3688,11 @@ async def _run_flow_internal(
                     flow_input=flow_input,
                 )
             )
+            _set_flow_diagnostic(
+                phase="resolve-output", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
+            )
             if output is not None:
                 reserved_input = reserved_inputs.get(
                     _filesystem_path_key(output)
@@ -3681,6 +3727,11 @@ async def _run_flow_internal(
                     else None
                 )
 
+            _set_flow_diagnostic(
+                phase="checkpoint-or-output-preparation", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
+            )
             if expected_fingerprint is not None:
                 checkpoint = _verified_preflight_checkpoint(
                     step,
@@ -3780,6 +3831,11 @@ async def _run_flow_internal(
                 else local_dump_prefix
             )
 
+            _set_flow_diagnostic(
+                phase="model-or-mcp-execution", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
+            )
             conversation_prompts = _conversation_prompts_for_iteration(
                 step,
                 workspace=workspace,
@@ -3909,12 +3965,14 @@ async def run_flow(
             "aufrufenden Flow ausgeführt werden: "
             + ", ".join(flow.inputs)
         )
+    _set_flow_diagnostic(phase="collect-reserved-inputs", flow=flow.source)
     reserved_inputs = _collect_reserved_flow_input_paths(
         flow,
         workspace=workspace,
         cache=cache,
         budget=_SubflowTraversalBudget(),
     )
+    _set_flow_diagnostic(phase="run-start-snapshot", flow=flow.source)
     run_start_snapshots, run_start_checkpoint_paths = (
         _capture_run_start_snapshots(
             workspace=workspace,
@@ -3930,6 +3988,7 @@ async def run_flow(
             if fingerprint is not None:
                 known_fingerprints[path_key] = fingerprint
 
+    _set_flow_diagnostic(phase="dynamic-checkpoint-discovery", flow=flow.source)
     dynamic_fingerprints, dynamic_paths = (
         _snapshot_dynamic_checkpoint_candidates(
             workspace=workspace,
@@ -3949,6 +4008,7 @@ async def run_flow(
         ),
         run_start_dynamic_checkpoints=dynamic_fingerprints,
     )
+    _set_flow_diagnostic(phase="execute-flow", flow=flow.source)
     await _run_flow_internal(
         flow,
         workspace=workspace,
@@ -3982,6 +4042,11 @@ def build_parser() -> argparse.ArgumentParser:
         sub = subparsers.add_parser(name)
         sub.add_argument("flow", type=Path)
         sub.add_argument(
+            "--debug",
+            action="store_true",
+            help="Bei einem Fehler zusätzlich den vollständigen Traceback ausgeben.",
+        )
+        sub.add_argument(
             "--workspace",
             type=Path,
             default=Path.cwd(),
@@ -3996,11 +4061,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     workspace = args.workspace.expanduser().resolve()
+    _flow_diagnostic_context.set("")
     try:
+        _set_flow_diagnostic(phase="load-flow", flow=args.flow)
         flow = load_flow(
             args.flow,
             workspace=workspace,
         )
+        _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
         validate_flow(
             flow,
             workspace=workspace,
@@ -4025,14 +4093,28 @@ def main() -> None:
             )
         )
     except Exception as exc:
+        details = _flow_diagnostic_context.get()
+        if isinstance(exc, OSError):
+            operation_path = exc.filename or getattr(exc, "filename2", None)
+            if operation_path is not None:
+                details += f" | os_path={operation_path}"
+            if exc.errno is not None:
+                details += f" | errno={exc.errno}"
+            if getattr(exc, "winerror", None) is not None:
+                details += f" | winerror={exc.winerror}"
+        message = f"{type(exc).__name__}: {exc}"
+        if details:
+            message += f"\nFlow-Diagnose: {details}"
         print(
-            "Fehler: "
-            + sanitize_terminal_text(
-                f"{type(exc).__name__}: {exc}",
-                multiline=True,
+            "Fehler: " + sanitize_terminal_text(
+                message, multiline=True,
+                escape_invisible_formatting=True,
             ),
             file=sys.stderr,
         )
+        _flow_logger.error("flow_failed %s", details, exc_info=exc)
+        if args.debug:
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
         raise SystemExit(1) from None
 
 
