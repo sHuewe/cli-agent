@@ -3490,6 +3490,11 @@ async def _run_flow_internal(
             # detected without any model/tool side effects.
             batch_claims = dict(claimed_outputs)
             for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-render-subflow-inputs",
+                    flow=flow.source, namespace=namespace,
+                    step=step.step_id, iteration_id=iteration_id,
+                )
                 child_input = _render_subflow_inputs(
                     step,
                     item=item,
