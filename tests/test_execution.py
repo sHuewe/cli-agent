@@ -882,3 +882,37 @@ def test_run_once_propagates_effective_workspace_access_to_agent(
     )
 
     assert captured["workspace_access"] == "read"
+
+
+def test_read_only_os_mcp_does_not_expand_mutation_checkpoint_arguments(
+    tmp_path: Path,
+) -> None:
+    checkpoints = tuple(
+        tmp_path / f"checkpoint-{index:04d}.json"
+        for index in range(600)
+    )
+    config = apply_workspace_access_override(
+        _config(),
+        workspace_access="read",
+        mutation_protected_paths=checkpoints,
+    )
+    server = config.mcp_servers[0]
+    assert server.name == "os"
+    assert server.allow_write_files() is False
+    assert "--mutation-protected-path" not in server.literal_args
+
+
+def test_write_os_mcp_retains_all_checkpoint_guards(
+    tmp_path: Path,
+) -> None:
+    checkpoints = tuple(
+        tmp_path / f"checkpoint-{index:04d}.json"
+        for index in range(600)
+    )
+    config = apply_workspace_access_override(
+        _config(),
+        workspace_access="write",
+        mutation_protected_paths=checkpoints,
+    )
+    server = config.mcp_servers[0]
+    assert server.literal_args.count("--mutation-protected-path") == 600
