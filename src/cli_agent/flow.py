@@ -1969,6 +1969,10 @@ def _capture_run_start_invocation(
     budget: _SubflowTraversalBudget,
     call_stack: tuple[str, ...] = (),
 ) -> _FlowResultValue | None:
+    _set_flow_diagnostic(
+        phase="run-start-snapshot", flow=flow.source,
+        namespace=namespace,
+    )
     budget.consume(purpose="Run-Start-Planung")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
@@ -2023,6 +2027,10 @@ def _capture_run_start_invocation(
         protected_paths[path_key] = output
 
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="run-start-step", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+        )
         if step.flow is not None:
             if step.foreach is None:
                 items = [None]
@@ -2059,6 +2067,11 @@ def _capture_run_start_invocation(
             child_results: list[tuple[str, _FlowResultValue]] = []
             complete = True
             for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="run-start-subflow-inputs", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
                 child_input = _render_subflow_inputs(
                     step,
                     item=item,
@@ -2084,6 +2097,11 @@ def _capture_run_start_invocation(
                     budget=budget,
                     call_stack=next_stack,
                 )
+                _set_flow_diagnostic(
+                    phase="run-start-subflow-result", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
                 if child_result is None:
                     complete = False
                     continue
@@ -2106,6 +2124,11 @@ def _capture_run_start_invocation(
             parts: list[str] = []
             payload_bytes = 0
             for iteration_id, result in child_results:
+                _set_flow_diagnostic(
+                    phase="run-start-aggregate-subflow", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
                 payload_bytes = _append_foreach_iteration(
                     step,
                     parts=parts,
@@ -2128,6 +2151,10 @@ def _capture_run_start_invocation(
                 flow_input=flow_input,
             )
             assert output is not None
+            _set_flow_diagnostic(
+                phase="run-start-checkpoint", flow=flow.source,
+                namespace=namespace, step=step.step_id, output=output,
+            )
 
             if _uses_previous_output(step):
                 remember_previous_output(step, output)
@@ -2165,31 +2192,47 @@ def _capture_run_start_invocation(
             items=items,
             flow_input=flow_input,
         )
-        outputs = [
-            _output_for_iteration(
+        outputs: list[Path | None] = []
+        for item, iteration_id in zip(items, iteration_ids):
+            _set_flow_diagnostic(
+                phase="run-start-resolve-output", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id,
+            )
+            output = _output_for_iteration(
                 step,
                 workspace=workspace,
                 item=item,
                 iteration_id=iteration_id,
                 flow_input=flow_input,
             )
-            for item, iteration_id in zip(items, iteration_ids)
-        ]
+            outputs.append(output)
 
-        output_keys = [
-            _filesystem_path_key(output)
-            for output in outputs
-            if output is not None
-        ]
-        if len(output_keys) != len(set(output_keys)):
-            raise ValueError(
-                f"Schritt {step.step_id!r} erzeugt für mehrere "
-                "foreach-Elemente nicht eindeutige Output-Pfade."
+        seen_output_keys: set[str] = set()
+        for iteration_id, output in zip(iteration_ids, outputs):
+            _set_flow_diagnostic(
+                phase="run-start-check-output-path", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
             )
+            if output is None:
+                continue
+            key = _filesystem_path_key(output)
+            if key in seen_output_keys:
+                raise ValueError(
+                    f"Schritt {step.step_id!r} erzeugt für mehrere "
+                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                )
+            seen_output_keys.add(key)
 
         if _uses_previous_output(step):
-            for output in outputs:
+            for iteration_id, output in zip(iteration_ids, outputs):
                 assert output is not None
+                _set_flow_diagnostic(
+                    phase="run-start-previous-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
                 remember_previous_output(step, output)
 
         if not items:
@@ -2210,6 +2253,11 @@ def _capture_run_start_invocation(
         for iteration_id, output in zip(iteration_ids, outputs):
             assert iteration_id is not None
             assert output is not None
+            _set_flow_diagnostic(
+                phase="run-start-checkpoint", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
+            )
             checkpoint = _existing_json_checkpoint(
                 step,
                 workspace=workspace,
@@ -2232,6 +2280,10 @@ def _capture_run_start_invocation(
             available_outputs[step.step_id] = _finish_foreach_output(parts)
             output_json[step.step_id] = True
 
+    _set_flow_diagnostic(
+        phase="run-start-save-snapshot", flow=flow.source,
+        namespace=namespace,
+    )
     snapshot = _RunStartSnapshot(
         checkpoint_fingerprints=fingerprints,
         checkpoint_paths=tuple(checkpoint_paths.values()),
@@ -3330,20 +3382,22 @@ def _preflight_concrete_invocation_outputs(
                     flow_input=flow_input,
                 )
                 outputs_to_claim.append((output, iteration_id))
-            output_keys = []
+            seen_output_keys: set[str] = set()
             for output, iteration_id in outputs_to_claim:
                 _set_flow_diagnostic(
                     phase="preflight-check-output-path", flow=flow.source,
                     namespace=namespace, step=step.step_id,
                     iteration_id=iteration_id, output=output,
                 )
-                if output is not None:
-                    output_keys.append(_filesystem_path_key(output))
-            if len(output_keys) != len(set(output_keys)):
-                raise ValueError(
-                    f"Schritt {step.step_id!r} erzeugt für mehrere "
-                    "foreach-Elemente nicht eindeutige Output-Pfade."
-                )
+                if output is None:
+                    continue
+                key = _filesystem_path_key(output)
+                if key in seen_output_keys:
+                    raise ValueError(
+                        f"Schritt {step.step_id!r} erzeugt für mehrere "
+                        "foreach-Elemente nicht eindeutige Output-Pfade."
+                    )
+                seen_output_keys.add(key)
 
         for output, iteration_id in outputs_to_claim:
             assert output is not None
