@@ -3227,6 +3227,11 @@ def _preflight_concrete_invocation_outputs(
             )
             _validate_subflow_interface(step, child)
             for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-render-subflow-inputs",
+                    flow=flow.source, namespace=namespace,
+                    step=step.step_id, iteration_id=iteration_id,
+                )
                 child_input = _render_subflow_inputs(
                     step,
                     item=item,
@@ -3259,6 +3264,10 @@ def _preflight_concrete_invocation_outputs(
             continue
 
         if step.foreach is None:
+            _set_flow_diagnostic(
+                phase="preflight-resolve-output", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+            )
             outputs_to_claim = [
                 (
                     _output_for_iteration(
@@ -3285,24 +3294,30 @@ def _preflight_concrete_invocation_outputs(
                 items=items,
                 flow_input=flow_input,
             )
-            outputs_to_claim = [
-                (
-                    _output_for_iteration(
-                        step,
-                        workspace=workspace,
-                        item=item,
-                        iteration_id=iteration_id,
-                        flow_input=flow_input,
-                    ),
-                    iteration_id,
+            outputs_to_claim = []
+            for item, iteration_id in zip(items, iteration_ids):
+                _set_flow_diagnostic(
+                    phase="preflight-resolve-output", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
                 )
-                for item, iteration_id in zip(items, iteration_ids)
-            ]
-            output_keys = [
-                _filesystem_path_key(output)
-                for output, _iteration_id in outputs_to_claim
-                if output is not None
-            ]
+                output = _output_for_iteration(
+                    step,
+                    workspace=workspace,
+                    item=item,
+                    iteration_id=iteration_id,
+                    flow_input=flow_input,
+                )
+                outputs_to_claim.append((output, iteration_id))
+            output_keys = []
+            for output, iteration_id in outputs_to_claim:
+                _set_flow_diagnostic(
+                    phase="preflight-check-output-path", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id, output=output,
+                )
+                if output is not None:
+                    output_keys.append(_filesystem_path_key(output))
             if len(output_keys) != len(set(output_keys)):
                 raise ValueError(
                     f"Schritt {step.step_id!r} erzeugt für mehrere "
@@ -3311,6 +3326,11 @@ def _preflight_concrete_invocation_outputs(
 
         for output, iteration_id in outputs_to_claim:
             assert output is not None
+            _set_flow_diagnostic(
+                phase="preflight-claim-output", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id, output=output,
+            )
             key = _filesystem_path_key(output)
             reserved_input = reserved_inputs.get(key)
             if reserved_input is not None:
