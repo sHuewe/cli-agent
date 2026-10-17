@@ -96,10 +96,10 @@ def test_unrelated_dynamic_template_cannot_authorize_static_child(
     parent = tmp_path / "parent.toml"
     parent.write_text(
         parent.read_text(encoding="utf-8")
-        + '\\n[[steps]]\\nid = "unrelated"\\nprompt_file = "unrelated.md"\\n'
-          'response_format = "json"\\n'
-          'foreach = "steps.discover.output.items"\\n'
-          'output = "work/${item.id}.json"\\n',
+        + '\n[[steps]]\nid = "unrelated"\nprompt_file = "unrelated.md"\n'
+          'response_format = "json"\n'
+          'foreach = "steps.discover.output.items"\n'
+          'output = "work/${item.id}.json"\n',
         encoding="utf-8",
     )
     child = tmp_path / "child.toml"
