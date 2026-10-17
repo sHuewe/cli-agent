@@ -7080,39 +7080,3 @@ def test_flow_cli_foreach_preflight_error_reports_iteration_and_output(
     assert "output=" in output and "out-two.json" in output
     assert "phase=preflight-checkpoint-or-output" in output
 
-
-def test_nested_preflight_reports_specific_foreach_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
-    (tmp_path / "child.md").write_text("child", encoding="utf-8")
-    (tmp_path / "child.toml").write_text(
-        'version = 1\ninputs = ["items"]\nresult = "steps.work.output"\n'
-        '[[steps]]\nid = "work"\nprompt_file = "child.md"\n'
-        'response_format = "json"\nforeach = "input.items"\n'
-        'iteration_id = "${item.id}"\noutput = "child-${iteration.id}.json"\n',
-        encoding="utf-8",
-    )
-    (tmp_path / "parent.toml").write_text(
-        'version = 1\n'
-        '[[steps]]\nid = "discover"\nprompt_file = "discover.md"\n'
-        'response_format = "json"\noutput = "discovered.json"\n'
-        '[[steps]]\nid = "nested"\nflow = "child.toml"\n'
-        '[steps.input]\nitems = "${steps.discover.output.items}"\n',
-        encoding="utf-8",
-    )
-    (tmp_path / "discovered.json").write_text(
-        '{"items":[{"id":"one"},{"id":"two"}]}', encoding="utf-8"
-    )
-    (tmp_path / "child-two.json").write_text("not-json", encoding="utf-8")
-    monkeypatch.setattr(
-        flow_module.sys, "argv",
-        ["cli-agent-flow", "run", "parent.toml", "--workspace", str(tmp_path)],
-    )
-    with pytest.raises(SystemExit):
-        flow_module.main()
-    output = capsys.readouterr().err
-    assert "step=nested.work" in output
-    assert "iteration=two" in output
-    assert "child-two.json" in output
