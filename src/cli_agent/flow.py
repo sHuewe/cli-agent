@@ -3178,6 +3178,10 @@ def _preflight_concrete_invocation_outputs(
     output_json = snapshot.output_json if snapshot is not None else {}
 
     for step in flow.steps:
+        _set_flow_diagnostic(
+            phase="preflight-subflow-batch", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+        )
         if step.flow is not None:
             if step.foreach is None:
                 items = [None]
@@ -4112,7 +4116,7 @@ def main() -> None:
             ),
             file=sys.stderr,
         )
-        _flow_logger.error("flow_failed %s", details, exc_info=exc)
+        _flow_logger.debug("flow_failed %s", details, exc_info=True)
         if args.debug:
             traceback.print_exception(type(exc), exc, exc.__traceback__)
         raise SystemExit(1) from None
