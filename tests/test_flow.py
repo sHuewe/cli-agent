@@ -7129,7 +7129,7 @@ def test_nested_preflight_reports_specific_foreach_output(
     with pytest.raises(SystemExit):
         flow_module.main()
     output = capsys.readouterr().err
-    assert "step=nested.work" in output
+    assert "step=nested.once.work" in output
     assert "iteration=two" in output
     assert "child-two.json" in output
     assert "phase=preflight-claim-output" in output
