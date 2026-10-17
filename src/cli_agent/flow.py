@@ -4315,22 +4315,18 @@ async def _run_flow_internal(
                 )
             if output is not None and step.response_format == "json":
                 _parse_structured_output(result.answer, step_id=step.step_id)
-                # The output reader normalizes CRLF/CR on every platform.
-                # Fingerprint that persisted representation rather than the
-                # raw model answer, so normal line endings cannot make a
-                # freshly written JSON artifact appear tampered with.
-                persisted_json = _existing_json_output(
-                    step,
-                    workspace=workspace,
-                    output=output,
+                # OutputTarget writes UTF-8 text with unmodified newlines.
+                # read_existing_output_text subsequently normalizes them and
+                # strips an optional UTF-8 BOM. Match exactly that canonical
+                # representation without an extra filesystem read: existing
+                # one-shot execution mocks need not write an output file.
+                canonical_json = (
+                    result.answer.removeprefix("\ufeff")
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n")
                 )
-                if persisted_json is None:
-                    raise ValueError(
-                        f"JSON-Output von Schritt {step.step_id!r} wurde "
-                        f"nicht gespeichert: {output}"
-                    )
                 context.completed_json_outputs[_filesystem_path_key(output)] = (
-                    _checkpoint_fingerprint(persisted_json)
+                    _checkpoint_fingerprint(canonical_json)
                 )
             record_iteration_answer(
                 result.answer,
