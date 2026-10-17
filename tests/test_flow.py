@@ -7472,8 +7472,7 @@ def test_validation_root_exclusions_do_not_report_previous_child_step(
     (tmp_path / "flow.toml").write_text(
         'version = 1\nexclude_paths = ["../outside-workspace"]\n'
         '[[steps]]\nid = "nested"\nflow = "child.toml"\n'
-        '[[steps]]\nid = "work"\nprompt_file = "child.md"\n'
-        'workspace_access = "read"\n',
+        '[[steps]]\nid = "work"\nprompt_file = "child.md"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(
