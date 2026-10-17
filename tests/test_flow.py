@@ -6956,3 +6956,57 @@ flow = "child.toml"
     with pytest.raises(ValueError, match="MCP-Auswahl"):
         asyncio.run(run_flow(definition, workspace=tmp_path, dependencies=deps))
     assert executed == []
+
+
+def test_flow_cli_reports_step_phase_on_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "broken"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+
+    async def fail_run_once(options, *, dependencies=None):
+        raise OSError(206, "Filename too long", "C:/bad/very-long-file.json")
+
+    monkeypatch.setattr(flow_module, "run_once", fail_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        flow_module.main()
+    assert exit_info.value.code == 1
+    output = capsys.readouterr().err
+    assert "step=broken" in output
+    assert "phase=model-or-mcp-execution" in output
+    assert "os_path=C:/bad/very-long-file.json" in output
+    assert "errno=206" in output
+    assert "Traceback (most recent call last)" not in output
+
+
+def test_flow_cli_debug_includes_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "broken"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+
+    async def fail_run_once(options, *, dependencies=None):
+        raise RuntimeError("diagnostic test")
+
+    monkeypatch.setattr(flow_module, "run_once", fail_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path), "--debug"],
+    )
+    with pytest.raises(SystemExit):
+        flow_module.main()
+    output = capsys.readouterr().err
+    assert "step=broken" in output
+    assert "Traceback (most recent call last)" in output
