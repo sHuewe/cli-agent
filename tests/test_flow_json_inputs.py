@@ -206,13 +206,13 @@ def test_json_input_validation_rejects_unsafe_templates(
 ) -> None:
     (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
     snippet = (
-        "[steps.json_inputs.data]\\n"
-        'path = "state/data.json"\\n'
-        if field == "iterate" else "[steps.json_inputs.data]\\n"
+        "[steps.json_inputs.data]\n"
+        'path = "state/data.json"\n'
+        if field == "iterate" else "[steps.json_inputs.data]\n"
     )
     snippet += field + " = " + value
     with pytest.raises(ValueError, match="json_inputs"):
-        _flow(tmp_path, 'version = 1\\n[[steps]]\\nid = "one"\\nprompt_file = "prompt.md"\\n' + snippet)
+        _flow(tmp_path, 'version = 1\n[[steps]]\nid = "one"\nprompt_file = "prompt.md"\n' + snippet)
 
 
 def test_json_input_rejects_modified_output(
@@ -224,7 +224,7 @@ def test_json_input_rejects_modified_output(
     path.write_text('{"id":1}', encoding="utf-8")
     spec = flow_module.JsonInputSpec(path="state.json")
     from dataclasses import replace
-    basic = _flow(tmp_path, 'version = 1\\n[[steps]]\\nid = "one"\\nprompt_file = "prompt.md"')
+    basic = _flow(tmp_path, 'version = 1\n[[steps]]\nid = "one"\nprompt_file = "prompt.md"')
     step = replace(basic.steps[0], json_inputs={"data": spec})
     fingerprint = flow_module._checkpoint_fingerprint('{"id":2}')
     with pytest.raises(ValueError, match="verändert"):
@@ -247,7 +247,7 @@ def test_json_input_total_size_is_limited(
     path.write_text(raw, encoding="utf-8")
     from dataclasses import replace
     step = replace(
-        _flow(tmp_path, 'version = 1\\n[[steps]]\\nid = "one"\\nprompt_file = "prompt.md"').steps[0],
+        _flow(tmp_path, 'version = 1\n[[steps]]\nid = "one"\nprompt_file = "prompt.md"').steps[0],
         json_inputs={"data": flow_module.JsonInputSpec(path="state.json")},
     )
     monkeypatch.setattr(flow_module, "MAX_JSON_INPUT_TOTAL_BYTES", 4)
