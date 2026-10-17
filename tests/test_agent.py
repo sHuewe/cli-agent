@@ -799,6 +799,8 @@ def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
 
     def fake_stdio_client(parameters):
         captured["parameters"] = parameters
+        from cli_agent.mcp_path_policy import read_path_policy
+        captured["policy"] = read_path_policy(Path(parameters.args[-1]))
         return DummyContext()
 
     monkeypatch.setattr("cli_agent.agent_mcp.stdio_client", fake_stdio_client)
@@ -817,7 +819,9 @@ def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
     args = captured["parameters"].args
     assert args[0] == "--config"
     assert args[1] == str(tmp_path / "config.toml")
-    assert args[-2:] == ["--mutation-protected-path", protected]
+    assert args[-2] == "--path-policy-file"
+    assert captured["policy"]["mutation_protected_paths"] == (Path(protected),)
+    assert not Path(args[-1]).exists()
 
 
 def test_json_response_format_adds_german_system_instruction(tmp_path: Path) -> None:
