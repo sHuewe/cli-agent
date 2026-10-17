@@ -2941,6 +2941,9 @@ def validate_flow(
     effective_flow_excluded_paths = tuple(
         dict.fromkeys((*_inherited_excluded_paths, *flow.excluded_paths))
     )
+    _set_flow_diagnostic(
+        phase="validate-flow-exclusions", flow=flow.source,
+    )
     resolve_excluded_paths(workspace, effective_flow_excluded_paths)
     produced: set[str] = set()
 
@@ -3566,20 +3569,22 @@ async def _run_flow_internal(
                     flow_input=flow_input,
                 )
                 preflight_outputs.append(output)
-            output_keys = []
+            seen_output_keys: set[str] = set()
             for output, iteration_id in zip(preflight_outputs, iteration_ids):
                 _set_flow_diagnostic(
                     phase="preflight-check-output-path", flow=flow.source,
                     namespace=namespace, step=step.step_id,
                     iteration_id=iteration_id, output=output,
                 )
-                if output is not None:
-                    output_keys.append(_filesystem_path_key(output))
-            if len(output_keys) != len(set(output_keys)):
-                raise ValueError(
-                    f"Schritt {step.step_id!r} erzeugt für mehrere "
-                    "foreach-Elemente nicht eindeutige Output-Pfade."
-                )
+                if output is None:
+                    continue
+                key = _filesystem_path_key(output)
+                if key in seen_output_keys:
+                    raise ValueError(
+                        f"Schritt {step.step_id!r} erzeugt für mehrere "
+                        "foreach-Elemente nicht eindeutige Output-Pfade."
+                    )
+                seen_output_keys.add(key)
             for output, iteration_id in zip(
                 preflight_outputs,
                 iteration_ids,
@@ -3690,6 +3695,11 @@ async def _run_flow_internal(
             zip(items, iteration_ids),
             start=1,
         ):
+            _set_flow_diagnostic(
+                phase="execute", flow=flow.source,
+                namespace=namespace, step=step.step_id,
+                iteration_id=iteration_id,
+            )
             context.executed_steps += 1
             if context.executed_steps > MAX_FLOW_EXECUTIONS:
                 raise ValueError(
@@ -3703,11 +3713,6 @@ async def _run_flow_internal(
                 else ""
             )
             display_name = namespace + step.step_id
-            _set_flow_diagnostic(
-                phase="execute", flow=flow.source,
-                namespace=namespace, step=step.step_id,
-                iteration_id=iteration_id,
-            )
             print(
                 sanitize_terminal_text(
                     f"Flow-Schritt {display_name}{suffix}",
