@@ -4131,7 +4131,18 @@ def main() -> None:
         )
         _flow_logger.debug("flow_failed %s", details, exc_info=True)
         if args.debug:
-            traceback.print_exception(type(exc), exc, exc.__traceback__)
+            traceback_text = "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )
+            print(
+                sanitize_terminal_text(
+                    traceback_text,
+                    multiline=True,
+                    escape_invisible_formatting=True,
+                ),
+                end="",
+                file=sys.stderr,
+            )
         raise SystemExit(1) from None
 
 
