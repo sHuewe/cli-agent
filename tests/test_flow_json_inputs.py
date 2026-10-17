@@ -264,3 +264,69 @@ def test_json_input_total_size_is_limited(
 
 def test_structured_json_limit_is_100_mb() -> None:
     assert flow_module.MAX_STRUCTURED_OUTPUT_BYTES == 100_000_000
+
+
+def test_json_input_accepts_persisted_crlf_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("Read: {{var:data}}", encoding="utf-8")
+    prompts: list[str] = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        prompts.append(options.prompt)
+        if len(prompts) == 1:
+            answer = '{\\r\\n  "id": "crlf"\\r\\n}'
+        else:
+            answer = '{"status":"ok"}'
+        if options.output is not None:
+            options.output.parent.mkdir(parents=True, exist_ok=True)
+            options.output.write_bytes(answer.encode("utf-8"))
+        return SimpleNamespace(answer=answer)
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = _flow(tmp_path, """
+version = 1
+
+[[steps]]
+id = "first"
+prompt_file = "prompt.md"
+response_format = "json"
+output = "state/first.json"
+
+[steps.vars]
+data = "initial"
+
+[[steps]]
+id = "second"
+prompt_file = "prompt.md"
+response_format = "json"
+output = "state/second.json"
+
+[steps.json_inputs.data]
+path = "state/first.json"
+""")
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+    assert len(prompts) == 2
+    assert json.loads(prompts[1].removeprefix("Read: ")) == {"id": "crlf"}
+
+
+def test_json_input_rejects_missing_persisted_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(answer='{"status":"ok"}')
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    definition = _flow(tmp_path, """
+version = 1
+
+[[steps]]
+id = "first"
+prompt_file = "prompt.md"
+response_format = "json"
+output = "state/first.json"
+""")
+    with pytest.raises(ValueError, match="nicht gespeichert"):
+        asyncio.run(run_flow(definition, workspace=tmp_path))
