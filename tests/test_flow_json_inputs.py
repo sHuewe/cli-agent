@@ -275,7 +275,7 @@ def test_json_input_accepts_persisted_crlf_output(
     async def fake_run_once(options, *, dependencies=None):
         prompts.append(options.prompt)
         if len(prompts) == 1:
-            answer = '{\\r\\n  "id": "crlf"\\r\\n}'
+            answer = '{\r\n  "id": "crlf"\r\n}'
         else:
             answer = '{"status":"ok"}'
         if options.output is not None:
