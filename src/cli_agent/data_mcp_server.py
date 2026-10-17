@@ -678,9 +678,9 @@ def main() -> None:
                     effective_config_file,
                     *user_protected_paths,
                 ),
-                mutation_protected_paths=tuple(
-                    (*getattr(args, "mutation_protected_path", ()),
-                 *policy_paths["mutation_protected_paths"])
+                mutation_protected_paths=(
+                    *getattr(args, "mutation_protected_path", ()),
+                    *policy_paths["mutation_protected_paths"],
                 ),
             )
         operations = DataOperations(workspace)
