@@ -145,7 +145,7 @@ class _FlowExecutionContext:
     flow_cache: dict[str, FlowDefinition] | None = None
     run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
     run_start_checkpoint_paths: tuple[Path, ...] = ()
-    run_start_dynamic_checkpoints: dict[str, bytes] | None = None
+    run_start_dynamic_checkpoints: dict[tuple[str, str, str], bytes] | None = None
     preflight_budget: "_SubflowTraversalBudget" | None = None
 
     def __post_init__(self) -> None:
@@ -2220,18 +2220,18 @@ def _snapshot_dynamic_checkpoint_candidates(
     workspace: Path,
     cache: dict[str, FlowDefinition],
     known_checkpoint_paths: tuple[Path, ...] = (),
-) -> tuple[dict[str, bytes], tuple[Path, ...]]:
-    """Snapshot existing outputs for foreach steps whose inputs are not yet known.
+) -> tuple[dict[tuple[str, str, str], bytes], tuple[Path, ...]]:
+    """Snapshot startup JSON outputs, scoped to their declaring flow/step.
 
-    Only configured JSON output templates are considered. Never treat a file
-    created during execution as a resumable checkpoint.
+    File fingerprints are only available to the exact dynamic output template
+    that declared them. A different (including static) step must never adopt
+    those files merely because it resolves to the same path.
     """
-    fingerprints: dict[str, bytes] = {}
+    fingerprints: dict[tuple[str, str, str], bytes] = {}
     paths: dict[str, Path] = {}
     known_keys = {_filesystem_path_key(path) for path in known_checkpoint_paths}
-    seen_patterns: set[str] = set()
-    examined = 0
-    total_bytes = 0
+    # Combine identical search templates while retaining all declaring owners.
+    owners_by_template: dict[str, list[tuple[str, str]]] = {}
     for flow in cache.values():
         for step in flow.steps:
             if (
@@ -2249,82 +2249,80 @@ def _snapshot_dynamic_checkpoint_candidates(
                 except ValueError:
                     continue
             template = template_path.as_posix()
-            if template in seen_patterns:
-                continue
-            seen_patterns.add(template)
-
-            # A substituted value may include path separators. A glob '*'
-            # only matches one component, so enumerate below the static
-            # directory prefix and verify candidates against the *entire*
-            # declared template instead.
-            matches = list(_DYNAMIC_VALUE_EXPR.finditer(template))
-            if not matches:
-                continue
-            first_prefix = template[:matches[0].start()]
-            if first_prefix.endswith("/"):
-                root = first_prefix.rstrip("/") or "."
-            else:
-                root = first_prefix.rpartition("/")[0] or "."
-            search_root = _workspace_path(
-                workspace,
-                root,
-                purpose="Verzeichnis für dynamische JSON-Checkpoints",
-                must_exist=False,
-            )
-            if not search_root.is_dir():
-                continue
-
-            regex_parts: list[str] = []
-            cursor = 0
-            for match in matches:
-                regex_parts.append(re.escape(template[cursor:match.start()]))
-                regex_parts.append("(?s:.*?)")
-                cursor = match.end()
-            regex_parts.append(re.escape(template[cursor:]))
-            matches_template = re.compile(
-                r"\A" + "".join(regex_parts) + r"\Z"
+            owners_by_template.setdefault(template, []).append(
+                (_filesystem_path_key(flow.source), step.step_id)
             )
 
-            for directory, subdirectories, filenames in os.walk(
-                search_root, followlinks=False
-            ):
-                examined += 1 + len(subdirectories) + len(filenames)
-                if examined > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
-                    raise ValueError(
-                        "Zu viele dynamische JSON-Checkpoint-Kandidaten beim Run-Start."
+    examined = 0
+    total_bytes = 0
+    content_fingerprints: dict[str, bytes] = {}
+    for template, declaring_steps in owners_by_template.items():
+        # Dynamic values can include path separators. Enumerate below the
+        # static prefix and verify against the complete declared template.
+        matches = list(_DYNAMIC_VALUE_EXPR.finditer(template))
+        first_prefix = template[:matches[0].start()]
+        if first_prefix.endswith("/"):
+            root = first_prefix.rstrip("/") or "."
+        else:
+            root = first_prefix.rpartition("/")[0] or "."
+        search_root = _workspace_path(
+            workspace,
+            root,
+            purpose="Verzeichnis für dynamische JSON-Checkpoints",
+            must_exist=False,
+        )
+        if not search_root.is_dir():
+            continue
+
+        regex_parts: list[str] = []
+        cursor = 0
+        for match in matches:
+            regex_parts.append(re.escape(template[cursor:match.start()]))
+            regex_parts.append("(?s:.*?)")
+            cursor = match.end()
+        regex_parts.append(re.escape(template[cursor:]))
+        matches_template = re.compile(r"\A" + "".join(regex_parts) + r"\Z")
+
+        for directory, subdirectories, filenames in os.walk(
+            search_root, followlinks=False
+        ):
+            examined += 1 + len(subdirectories) + len(filenames)
+            if examined > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
+                raise ValueError(
+                    "Zu viele dynamische JSON-Checkpoint-Kandidaten beim Run-Start."
+                )
+            # Do not follow symlinks or Windows reparse points.
+            safe_subdirectories = []
+            for dirname in subdirectories:
+                try:
+                    if not path_entry_is_symlink_or_reparse(
+                        Path(directory) / dirname
+                    ):
+                        safe_subdirectories.append(dirname)
+                except OSError:
+                    continue
+            subdirectories[:] = safe_subdirectories
+            for filename in filenames:
+                candidate = Path(directory) / filename
+                if matches_template.fullmatch(
+                    candidate.relative_to(workspace).as_posix()
+                ) is None:
+                    continue
+                try:
+                    path = _workspace_path(
+                        workspace,
+                        candidate,
+                        purpose="Dynamischer JSON-Checkpoint",
+                        must_exist=True,
                     )
-                # Do not recurse through symlinks or Windows reparse points.
-                safe_subdirectories = []
-                for dirname in subdirectories:
-                    try:
-                        if not path_entry_is_symlink_or_reparse(
-                            Path(directory) / dirname
-                        ):
-                            safe_subdirectories.append(dirname)
-                    except OSError:
-                        continue
-                subdirectories[:] = safe_subdirectories
-                for filename in filenames:
-                    candidate = Path(directory) / filename
-                    if matches_template.fullmatch(
-                        candidate.relative_to(workspace).as_posix()
-                    ) is None:
-                        continue
-                    try:
-                        path = _workspace_path(
-                            workspace,
-                            candidate,
-                            purpose="Dynamischer JSON-Checkpoint",
-                            must_exist=True,
-                        )
-                    except ValueError:
-                        continue
-                    key = _filesystem_path_key(path)
-                    # The run-start planner already captured these checkpoints.
-                    # Avoid an additional read; their original snapshots remain
-                    # authoritative for the known invocation.
-                    if key in known_keys or key in fingerprints:
-                        continue
+                except ValueError:
+                    continue
+                key = _filesystem_path_key(path)
+                # Known run-start snapshots are already authoritative.
+                if key in known_keys:
+                    continue
+                fingerprint = content_fingerprints.get(key)
+                if fingerprint is None:
                     try:
                         size = path.stat().st_size
                     except OSError:
@@ -2342,8 +2340,11 @@ def _snapshot_dynamic_checkpoint_candidates(
                         )
                     except (OSError, ValueError):
                         continue
-                    fingerprints[key] = _checkpoint_fingerprint(content)
+                    fingerprint = _checkpoint_fingerprint(content)
+                    content_fingerprints[key] = fingerprint
                     paths[key] = path
+                for flow_key, step_id in declaring_steps:
+                    fingerprints[(flow_key, step_id, key)] = fingerprint
     return fingerprints, tuple(paths.values())
 
 
@@ -2351,14 +2352,23 @@ def _run_start_fingerprint(
     step: FlowStep,
     output: Path,
     local: dict[tuple[str, str], bytes],
-    dynamic: dict[str, bytes] | None,
+    dynamic: dict[tuple[str, str, str], bytes] | None,
+    *,
+    flow_source: Path,
 ) -> bytes | None:
     known = local.get(_checkpoint_snapshot_key(step, output))
     if known is not None:
         return known
-    if step.response_format != "json" or step.overwrite_output:
+    if (
+        step.response_format != "json"
+        or step.overwrite_output
+        or step.output is None
+        or not _DYNAMIC_VALUE_EXPR.search(step.output)
+    ):
         return None
-    return (dynamic or {}).get(_filesystem_path_key(output))
+    return (dynamic or {}).get(
+        (_filesystem_path_key(flow_source), step.step_id, _filesystem_path_key(output))
+    )
 
 
 def _capture_run_start_snapshots(
@@ -3508,6 +3518,7 @@ async def _run_flow_internal(
                 expected_fingerprint = _run_start_fingerprint(
                     step, output, initial_checkpoint_fingerprints,
                     context.run_start_dynamic_checkpoints,
+                    flow_source=flow.source,
                 )
                 if expected_fingerprint is not None:
                     _verified_preflight_checkpoint(
@@ -3658,6 +3669,7 @@ async def _run_flow_internal(
                     _run_start_fingerprint(
                         step, output, initial_checkpoint_fingerprints,
                         context.run_start_dynamic_checkpoints,
+                        flow_source=flow.source,
                     )
                     if output is not None
                     else None
