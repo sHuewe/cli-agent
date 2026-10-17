@@ -204,6 +204,15 @@ für ausgeführte Step-Iterationen über den gesamten Flow-Baum. Dadurch können
 verschachtelte `foreach`-/Subflow-Kombinationen nicht unbeschränkt
 multiplizieren.
 
+Dynamische JSON-Checkpoints in verschachtelten `foreach`-Subflows werden
+auch dann wiederverwendet, wenn ihre Iterations-IDs erst während des Laufs
+bekannt werden: Der Runner erfasst dazu beim **gesamten Run-Start**
+vorhandene Dateien, die zu deklarierten JSON-Output-Mustern passen.
+Nur unveränderte Startdateien können als Checkpoints dienen. Nach dem Start
+neu angelegte Dateien sind keine Checkpoints und führen weiterhin zu einem
+Output-Konflikt. Die Aufnahme ist hinsichtlich Dateianzahl und Gesamtgröße
+begrenzt und bleibt auf Output-Pfade innerhalb des Workspace beschränkt.
+
 Child-interne JSON-Checkpoints behalten ihre normale Semantik. Der Subflow-Step
 selbst erzeugt in dieser ersten Version keinen zusätzlichen Parent-Checkpoint;
 für Resume sollten die relevanten Child-Steps daher wie gewohnt

@@ -4765,15 +4765,16 @@ id = "${item.id}"
         calls.append(options)
         if options.prompt == "analyze two":
             return SimpleNamespace(answer='{"value":2}', web_context_statuses=())
-        raise AssertionError("downstream existing file must not become a checkpoint")
+        if options.prompt == "again two":
+            return SimpleNamespace(answer='{"done":2}', web_context_statuses=())
+        raise AssertionError("unexpected agent invocation")
 
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="existiert bereits"):
-        asyncio.run(run_flow(definition, workspace=tmp_path))
+    asyncio.run(run_flow(definition, workspace=tmp_path))
 
-    assert [call.prompt for call in calls] == ["analyze two"]
+    assert [call.prompt for call in calls] == ["analyze two", "again two"]
 
 
 def test_previous_output_requires_json_overwrite_output_and_output_file(
@@ -6245,13 +6246,12 @@ item = "${item}"
                 answer='{"items":[{"id":"one"}]}',
                 web_context_statuses=(),
             )
-        raise AssertionError("unknown child invocation must not adopt stale checkpoint")
+        raise AssertionError("existing dynamic checkpoint must skip model")
 
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="existiert bereits"):
-        asyncio.run(run_flow(definition, workspace=tmp_path))
+    asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == ["discover"]
 
