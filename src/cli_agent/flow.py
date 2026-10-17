@@ -38,6 +38,7 @@ from .file_context import (
     read_existing_output_text,
 )
 from .filesystem_security import path_entry_is_symlink_or_reparse
+from .logging_setup import configure_logging
 from .model import ModelRetryPolicy
 from .prompt_template import PromptTemplate
 from .terminal_output import sanitize_terminal_text
@@ -3735,6 +3736,11 @@ async def _run_flow_internal(
                     raise ValueError(
                         f"Subflow {child.source} besitzt kein Ergebnis."
                     )
+                _set_flow_diagnostic(
+                    phase="aggregate-subflow-result", flow=flow.source,
+                    namespace=namespace, step=step.step_id,
+                    iteration_id=iteration_id,
+                )
                 record_iteration_answer(
                     child_result.text,
                     child_result.is_json,
@@ -4128,6 +4134,9 @@ def main() -> None:
     workspace = args.workspace.expanduser().resolve()
     _flow_diagnostic_context.set(_FlowDiagnosticState())
     try:
+        _set_flow_diagnostic(phase="configure-logging", flow=args.flow)
+        config = load_config()
+        configure_logging(config.logging)
         _set_flow_diagnostic(phase="load-flow", flow=args.flow)
         flow = load_flow(
             args.flow,
@@ -4178,7 +4187,7 @@ def main() -> None:
             ),
             file=sys.stderr,
         )
-        _flow_logger.debug("flow_failed %s", details, exc_info=True)
+        _flow_logger.error("flow_failed %s", details, exc_info=True)
         if args.debug:
             traceback_text = "".join(
                 traceback.format_exception(type(exc), exc, exc.__traceback__)
