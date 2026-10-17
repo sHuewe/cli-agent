@@ -7037,3 +7037,45 @@ def test_flow_cli_debug_sanitizes_untrusted_traceback(
     assert "\\u202e" in output
     assert "\x1b" not in output
     assert "\u202e" not in output
+
+
+def test_flow_cli_foreach_preflight_error_reports_iteration_and_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
+    (tmp_path / "work.md").write_text("work", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "discover"\nprompt_file = "discover.md"\n'
+        'response_format = "json"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "work.md"\n'
+        'foreach = "steps.discover.output.items"\n'
+        'iteration_id = "${item.id}"\n'
+        'output = "out-${iteration.id}.json"\n'
+        'response_format = "json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "out-two.json").write_text('{"old":true}', encoding="utf-8")
+
+    async def fake_run_once(options, *, dependencies=None):
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"},{"id":"two"}]}',
+                web_context_statuses=(),
+            )
+        raise AssertionError("preflight must fail before any work iteration")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        flow_module.sys, "argv",
+        ["cli-agent-flow", "run", "flow.toml", "--workspace", str(tmp_path)],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        flow_module.main()
+    assert exit_info.value.code == 1
+    output = capsys.readouterr().err
+    assert "step=work" in output
+    assert "iteration=two" in output
+    assert "output=" in output and "out-two.json" in output
+    assert "phase=preflight-checkpoint-or-output" in output
