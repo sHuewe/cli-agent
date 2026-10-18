@@ -169,18 +169,22 @@ def group_assigned_items(
                 key = serializer(entry)
                 if key not in evidence_seen and all(key != k for k, _ in new_evidence):
                     new_evidence.append((key, entry))
-            increment = byte_count(item) + bool(current["coverage_items"])
-            increment += sum(
-                byte_count(entry) + bool(current["evidence_ranges"]) + index
-                for index, (_, entry) in enumerate(new_evidence)
-            )
-            if current_size + increment > max_concept_bytes:
+            candidate = {
+                **current,
+                "coverage_items": [*current["coverage_items"], item],
+                "evidence_ranges": [
+                    *current["evidence_ranges"],
+                    *(entry for _, entry in new_evidence),
+                ],
+            }
+            size = byte_count(candidate)
+            if size > max_concept_bytes:
                 return -1
             current["coverage_items"].append(item)
             current["evidence_ranges"].extend(entry for _, entry in new_evidence)
             evidence_seen.update(key for key, _ in new_evidence)
-            current_size += increment
-            return increment
+            current_size = size
+            return size
 
         for item in items:
             if add_item(item) < 0:
