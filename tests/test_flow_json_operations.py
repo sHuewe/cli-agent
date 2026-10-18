@@ -142,3 +142,41 @@ def test_batch_result_limit_is_enforced_incrementally(
             value=list(range(30)),
             batch_size=1,
         )
+
+
+def test_batch_unicode_uses_emitted_utf8_size() -> None:
+    # Escaping this string would exceed the limit; UTF-8 output fits.
+    source = ["é" * 200]
+    result = transform_json(
+        kind="batch", value=source, max_batch_bytes=1024,
+    )
+    assert result["batches"][0]["items"] == source
+    assert len(json.dumps(
+        result["batches"][0], ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")) <= 1024
+
+
+def test_batch_uses_exact_flow_serializer_for_numbers() -> None:
+    from cli_agent.flow import _JsonNumber, _json_dumps_preserving_numbers
+
+    source = [_JsonNumber("1e-200")] * 5
+    result = transform_json(
+        kind="batch", value=source, max_batch_bytes=1024,
+        serializer=_json_dumps_preserving_numbers,
+    )
+    assert len(result["batches"]) == 1
+    serialized = _json_dumps_preserving_numbers(result)
+    assert '"items":[1e-200,1e-200' in serialized
+
+
+def test_batch_utf8_boundary_accounts_for_id_and_payload() -> None:
+    from cli_agent.flow import _json_dumps_preserving_numbers
+
+    source = ["é" * 490, "é" * 490]
+    result = transform_json(
+        kind="batch", value=source, max_batch_bytes=1024,
+        serializer=_json_dumps_preserving_numbers,
+    )
+    assert len(result["batches"]) == 2
+    for batch in result["batches"]:
+        assert len(_json_dumps_preserving_numbers(batch).encode("utf-8")) <= 1024
