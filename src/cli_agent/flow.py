@@ -37,6 +37,7 @@ from .file_context import (
     prepare_prompt_file,
     read_existing_output_text,
 )
+from .flow_json_operations import transform_json
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .logging_setup import configure_logging
 from .model import ModelRetryPolicy
@@ -163,6 +164,7 @@ class FlowStep:
     global_variables: dict[str, str]
     foreach: str | None
     json_inputs: dict[str, JsonInputSpec] | None = None
+    json_operation: dict[str, Any] | None = None
     conversation_items: tuple[Any, ...] | str | None = None
     conversation_final_prompt_file: Path | None = None
     iteration_id: str | None = None
@@ -492,6 +494,8 @@ def _reserved_flow_input_paths(
                 ),
             )
 
+        if step.json_operation is not None:
+            continue
         assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
@@ -772,6 +776,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "conversation_final_prompt_file",
         "iteration_id",
         "json_inputs",
+        "json_operation",
         "flow",
         "input",
     }
@@ -813,13 +818,39 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "keine dynamischen Flow-Platzhalter enthalten."
             )
         prompt_value = raw.get("prompt_file")
+        raw_json_operation = raw.get("json_operation")
+        if raw_json_operation is not None:
+            if (
+                not isinstance(raw_json_operation, dict)
+                or set(raw_json_operation) - {
+                    "kind", "input", "batch_size", "max_batch_bytes"
+                }
+                or raw_json_operation.get("kind") not in {"batch", "flatten"}
+                or not isinstance(raw_json_operation.get("input"), str)
+                or not _STEP_ID.fullmatch(raw_json_operation["input"])
+            ):
+                raise ValueError(
+                    f"steps[{index}].json_operation muss kind=batch|flatten "
+                    "und den Namen eines json_inputs enthalten."
+                )
+            size = raw_json_operation.get("batch_size", 5)
+            max_bytes = raw_json_operation.get("max_batch_bytes", 80000)
+            if (
+                type(size) is not int or not 1 <= size <= 1000
+                or type(max_bytes) is not int or not 1024 <= max_bytes <= 10000000
+            ):
+                raise ValueError("Ungültige JSON-Batch-Limits.")
+            if child_flow is not None or prompt_value is not None:
+                raise ValueError(
+                    "json_operation darf weder prompt_file noch flow kombinieren."
+                )
         if child_flow is not None and prompt_value is not None:
             raise ValueError(
                 f"steps[{index}] darf nicht gleichzeitig flow und prompt_file setzen."
             )
-        if child_flow is None and prompt_value is None:
+        if child_flow is None and prompt_value is None and raw_json_operation is None:
             raise ValueError(
-                f"steps[{index}] benötigt prompt_file oder flow."
+                f"steps[{index}] benötigt prompt_file, flow oder json_operation."
             )
         prompt_file = (
             Path(_string(prompt_value, field=f"steps[{index}].prompt_file"))
@@ -838,6 +869,22 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
             flow_input[name] = value
 
+        if raw_json_operation is not None:
+            forbidden = {
+                "config", "model", "context_file", "add_file_context",
+                "add_web_context", "workspace_access", "with_data", "with_mcp",
+                "retry", "approve_tools", "vars", "conversation_items",
+                "conversation_final_prompt_file", "exclude_paths",
+            }
+            if forbidden & set(raw):
+                raise ValueError(
+                    "json_operation darf keine Modell-, Tool- oder "
+                    "Workspace-Optionen konfigurieren."
+                )
+            if raw.get("response_format", "json") != "json":
+                raise ValueError("json_operation benötigt response_format=json.")
+            if "output" not in raw or raw.get("foreach") is not None:
+                raise ValueError("json_operation benötigt output ohne foreach.")
         if child_flow is not None:
             regular_only = {
                 "config", "model", "prompt_file", "context_file",
@@ -845,7 +892,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "overwrite_output", "workspace_access", "with_data",
                 "with_mcp", "exclude_paths", "retry", "response_format",
                 "approve_tools", "vars", "conversation_items",
-                "conversation_final_prompt_file", "json_inputs",
+                "conversation_final_prompt_file", "json_inputs", "json_operation",
             }
             conflicting = sorted(regular_only & set(raw))
             if conflicting:
@@ -1027,7 +1074,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "oder 'write'."
             )
 
-        response_format_value = raw.get("response_format", "text")
+        response_format_value = raw.get(
+            "response_format", "json" if raw_json_operation is not None else "text"
+        )
         if response_format_value not in {"text", "json"}:
             raise ValueError(
                 f"steps[{index}].response_format muss 'text' oder 'json' sein."
@@ -1185,6 +1234,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     )
             json_inputs[name] = JsonInputSpec(
                 path=path_template, iterate=iterate,
+            )
+        if (
+            raw_json_operation is not None
+            and raw_json_operation["input"] not in json_inputs
+        ):
+            raise ValueError(
+                f"steps[{index}].json_operation.input muss ein json_inputs-Name sein."
             )
 
         input_reference_values = list(variables.values())
@@ -1394,6 +1450,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 global_variables=global_variables,
                 foreach=foreach,
                 json_inputs=json_inputs,
+                json_operation=dict(raw_json_operation) if raw_json_operation else None,
                 conversation_items=conversation_items,
                 conversation_final_prompt_file=conversation_final_prompt_file,
                 iteration_id=iteration_id,
@@ -3287,6 +3344,30 @@ def validate_flow(
             produced.add(step.step_id)
             continue
 
+        if step.json_operation is not None:
+            assert step.output is not None
+            if step.workspace_access != "none" or step.response_format != "json":
+                raise ValueError("JSON-Operation benötigt workspace_access=none und JSON.")
+            if step.foreach is not None:
+                raise ValueError("JSON-Operation unterstützt kein foreach.")
+            if _INPUT_EXPR.search(step.output) is None:
+                static_output = _output_for_iteration(
+                    step, workspace=workspace, item=None,
+                )
+                assert static_output is not None
+                key = _filesystem_path_key(static_output)
+                if key in all_reserved_inputs:
+                    raise ValueError("JSON-Output kollidiert mit reservierter Eingabe.")
+                _prepare_flow_output(
+                    step, workspace=workspace, output=static_output,
+                )
+                previous = planned_static_outputs.get(key)
+                if previous is not None and not step.overwrite_output:
+                    raise ValueError("JSON-Output kollidiert mit geplantem Output.")
+                planned_static_outputs[key] = f"{flow.source.name}:{step.step_id}"
+            produced.add(step.step_id)
+            continue
+
         assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
@@ -4187,6 +4268,45 @@ async def _run_flow_internal(
                     ) from exc
                 raise
 
+            if step.json_operation is not None:
+                assert output is not None
+                assert context.completed_json_outputs is not None
+                _set_flow_diagnostic(
+                    phase="json-operation", flow=flow.source,
+                    namespace=namespace, step=step.step_id, output=output,
+                )
+                json_values = _resolve_json_inputs(
+                    step,
+                    workspace=workspace,
+                    flow_input=flow_input,
+                    item=item,
+                    iteration_id=iteration_id,
+                    completed_json_outputs=context.completed_json_outputs,
+                )
+                operation = step.json_operation
+                source = _parse_structured_output(
+                    json_values[operation["input"]], step_id=step.step_id,
+                )
+                transformed = transform_json(
+                    kind=operation["kind"],
+                    value=source,
+                    batch_size=operation.get("batch_size", 5),
+                    max_batch_bytes=operation.get("max_batch_bytes", 80000),
+                    serializer=_json_dumps_preserving_numbers,
+                )
+                answer = _json_dumps_preserving_numbers(transformed)
+                if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+                    raise ValueError("JSON-Operation überschreitet Output-Größenlimit.")
+                target = prepare_output_target(
+                    workspace, output, overwrite=step.overwrite_output,
+                )
+                target.write_text(answer)
+                context.completed_json_outputs[_filesystem_path_key(output)] = (
+                    _checkpoint_fingerprint(answer)
+                )
+                record_iteration_answer(answer, True, iteration_id)
+                continue
+
             contexts = _contexts_for_step(
                 step,
                 workspace=workspace,
@@ -4528,6 +4648,8 @@ def _initial_flow_logging_config(
                     ),
                     depth + 1,
                 ))
+            elif step.json_operation is not None:
+                continue
             elif step.config is None:
                 return None
             elif first_explicit is None:

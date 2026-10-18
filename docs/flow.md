@@ -882,3 +882,29 @@ cli-agent-flow run flow/okf/flow_okf_from_doctrine/flow.toml --workspace . --deb
 Der Debug-Traceback kann interne Pfade und technische Fehlermeldungen enthalten;
 vor dem Teilen prüfen. Die zusätzlichen Diagnoseausgaben verändern weder
 bestehende Output-Dateien noch die Checkpoint-Wiederaufnahme.
+
+
+### Deterministische JSON-Operationen ohne Modellaufruf
+
+Ein Step mit `[steps.json_operation]` verarbeitet bereits abgeschlossene Flow-JSON-Artefakte ohne LLM, MCP-Server oder Workspace-Zugriff. Die Quelldateien müssen über `[steps.json_inputs.<name>]` deklariert sein; der Runner überprüft ihren Herkunfts- und Dateifingerprint. Für neue Outputs gelten dieselben Kollisions- und Checkpoint-Regeln wie für Modell-Steps.
+
+```toml
+[[steps]]
+id = "batch_routes"
+output = "state/route-batches.json"
+overwrite_output = false
+
+[steps.json_operation]
+kind = "batch"
+input = "routes"
+batch_size = 5
+max_batch_bytes = 80000
+
+[steps.json_inputs.routes]
+iterate = "input.scans[].output.chunks[]"
+path = "state/routes/${each.document_id}-${each.id}-${input.folder.id}.json"
+```
+
+Das Ergebnis enthält `{"batches":[{"id":"b0001","items":[...]},...],"total_items":N}` und lässt sich mit `foreach = "steps.batch_routes.output.batches"` abarbeiten. Die Batch-Grenze wird sowohl durch die Anzahl von Einträgen als auch durch `max_batch_bytes` (1.024 bis 10.000.000) begrenzt. Ist bereits ein einzelner Eintrag zu groß, bricht die Operation explizit ab, statt stillschweigend Daten wegzulassen.
+
+Die zweite Operation `kind = "flatten"` akzeptiert eine JSON-Liste von Listen und gibt `{"items":[...]}` in unveränderter Reihenfolge zurück. Beide Operationen sind vollständig deterministisch und benötigen `output` mit JSON-Format. Sie erlauben keine Modell-, Tool-, Prompt- oder Workspace-Optionen.
