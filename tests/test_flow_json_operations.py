@@ -221,7 +221,7 @@ def test_batch_routes_uses_one_fragment_for_small_route() -> None:
 def test_batch_routes_rejects_indivisible_item() -> None:
     source = [{"document_id": "m001", "chunk_id": "c001", "folder_id": "f",
                "knowledge_items": [{"description": "x" * 2000}]}]
-    with pytest.raises(ValueError, match="einzelner Eintrag"):
+    with pytest.raises(ValueError, match="Ein einzelner Eintrag"):
         transform_json(kind="batch_routes", value=source, max_batch_bytes=1024)
 
 
