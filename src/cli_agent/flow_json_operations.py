@@ -2,19 +2,25 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 MAX_BATCHES = 1000
 MAX_RESULT_BYTES = 100_000_000
 
 
-def _serialized_size(value: Any) -> int:
-    return len(
-        json.dumps(
-            value, ensure_ascii=True, allow_nan=False,
+def _serialized_size(
+    value: Any, *, serializer: Callable[[Any], str] | None = None,
+) -> int:
+    # The Flow Runner preserves JSON number literals and emits raw UTF-8.
+    # Measure with that exact serializer rather than json.dumps defaults.
+    serialized = (
+        serializer(value) if serializer is not None
+        else json.dumps(
+            value, ensure_ascii=False, allow_nan=False,
             separators=(",", ":"),
-        ).encode("utf-8")
+        )
     )
+    return len(serialized.encode("utf-8"))
 
 
 def transform_json(
@@ -23,7 +29,11 @@ def transform_json(
     value: Any,
     batch_size: int = 5,
     max_batch_bytes: int = 80_000,
+    serializer: Callable[[Any], str] | None = None,
 ) -> dict[str, Any]:
+    def size(item: Any) -> int:
+        return _serialized_size(item, serializer=serializer)
+
     if not isinstance(value, list):
         raise ValueError("JSON-Operation benötigt eine JSON-Liste.")
     if kind == "flatten":
@@ -34,7 +44,7 @@ def transform_json(
             if len(result) + len(entry) > 1_000_000:
                 raise ValueError("flatten überschreitet das Elementlimit.")
             result.extend(entry)
-        if _serialized_size({"items": result}) > MAX_RESULT_BYTES:
+        if size({"items": result}) > MAX_RESULT_BYTES:
             raise ValueError("flatten überschreitet das JSON-Ergebnislimit.")
         return {"items": result}
     if kind != "batch":
@@ -47,8 +57,8 @@ def transform_json(
     current: list[Any] = []
     count = 0
     next_id = "b0001"
-    current_size = _serialized_size({"id": next_id, "items": []})
-    result_size = _serialized_size({"batches": [], "total_items": len(value)})
+    current_size = size({"id": next_id, "items": []})
+    result_size = size({"batches": [], "total_items": len(value)})
 
     def finish() -> None:
         nonlocal current, current_size, result_size, next_id
@@ -63,10 +73,10 @@ def transform_json(
         batches.append({"id": next_id, "items": current})
         current = []
         next_id = f"b{len(batches)+1:04d}"
-        current_size = _serialized_size({"id": next_id, "items": []})
+        current_size = size({"id": next_id, "items": []})
 
     for entry in value:
-        entry_size = _serialized_size(entry)
+        entry_size = size(entry)
         required = entry_size + (1 if current else 0)
         if current and (
             count >= batch_size or current_size + required > max_batch_bytes
