@@ -494,6 +494,8 @@ def _reserved_flow_input_paths(
                 ),
             )
 
+        if step.json_operation is not None:
+            continue
         assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
@@ -3342,6 +3344,30 @@ def validate_flow(
             produced.add(step.step_id)
             continue
 
+        if step.json_operation is not None:
+            assert step.output is not None
+            if step.workspace_access != "none" or step.response_format != "json":
+                raise ValueError("JSON-Operation benötigt workspace_access=none und JSON.")
+            if step.foreach is not None:
+                raise ValueError("JSON-Operation unterstützt kein foreach.")
+            if _INPUT_EXPR.search(step.output) is None:
+                static_output = _output_for_iteration(
+                    step, workspace=workspace, item=None,
+                )
+                assert static_output is not None
+                key = _filesystem_path_key(static_output)
+                if key in all_reserved_inputs:
+                    raise ValueError("JSON-Output kollidiert mit reservierter Eingabe.")
+                _prepare_flow_output(
+                    step, workspace=workspace, output=static_output,
+                )
+                previous = planned_static_outputs.get(key)
+                if previous is not None and not step.overwrite_output:
+                    raise ValueError("JSON-Output kollidiert mit geplantem Output.")
+                planned_static_outputs[key] = f"{flow.source.name}:{step.step_id}"
+            produced.add(step.step_id)
+            continue
+
         assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
@@ -4242,6 +4268,44 @@ async def _run_flow_internal(
                     ) from exc
                 raise
 
+            if step.json_operation is not None:
+                assert output is not None
+                assert context.completed_json_outputs is not None
+                _set_flow_diagnostic(
+                    phase="json-operation", flow=flow.source,
+                    namespace=namespace, step=step.step_id, output=output,
+                )
+                json_values = _resolve_json_inputs(
+                    step,
+                    workspace=workspace,
+                    flow_input=flow_input,
+                    item=item,
+                    iteration_id=iteration_id,
+                    completed_json_outputs=context.completed_json_outputs,
+                )
+                operation = step.json_operation
+                source = _parse_structured_output(
+                    json_values[operation["input"]], step_id=step.step_id,
+                )
+                transformed = transform_json(
+                    kind=operation["kind"],
+                    value=source,
+                    batch_size=operation.get("batch_size", 5),
+                    max_batch_bytes=operation.get("max_batch_bytes", 80000),
+                )
+                answer = _json_dumps_preserving_numbers(transformed)
+                if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+                    raise ValueError("JSON-Operation überschreitet Output-Größenlimit.")
+                target = prepare_output_target(
+                    workspace, output, overwrite=step.overwrite_output,
+                )
+                target.write_text(answer)
+                context.completed_json_outputs[_filesystem_path_key(output)] = (
+                    _checkpoint_fingerprint(answer)
+                )
+                record_iteration_answer(answer, True, iteration_id)
+                continue
+
             contexts = _contexts_for_step(
                 step,
                 workspace=workspace,
@@ -4583,6 +4647,8 @@ def _initial_flow_logging_config(
                     ),
                     depth + 1,
                 ))
+            elif step.json_operation is not None:
+                continue
             elif step.config is None:
                 return None
             elif first_explicit is None:
