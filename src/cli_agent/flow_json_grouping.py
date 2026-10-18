@@ -130,89 +130,129 @@ def group_assigned_items(
         return len(serializer(value).encode("utf-8"))
 
     concepts: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
     used_paths: set[str] = set()
+    reserved_ids = set(topic_map)
+    reserved_paths = paths
 
-    def new_concept(topic: dict[str, Any], part: int) -> dict[str, Any]:
-        topic_id = topic["id"]
-        path = topic["path"]
-        title = topic["title"]
-        if part > 1:
-            topic_id += f"-p{part:03d}"
-            path = path[:-3] + f"-part-{part}.md"
-            title += f" (Teil {part})"
-        return {
-            "id": topic_id,
-            "folder_id": folder_id,
-            "path": path,
-            "type": topic["type"],
-            "title": title,
-            "description": topic["description"],
-            "tags": topic.get("tags", []),
-            "related": [],
-            "evidence_ranges": [],
-            "coverage_items": [],
-        }
+    def new_concept(
+        topic: dict[str, Any], part: int,
+    ) -> tuple[dict[str, Any], int]:
+        # Generated part IDs and paths must not shadow a later registry topic.
+        # Reserve every declared topic, even topics processed after this one.
+        while True:
+            topic_id = topic["id"]
+            path = topic["path"]
+            title = topic["title"]
+            if part > 1:
+                topic_id += f"-p{part:03d}"
+                path = path[:-3] + f"-part-{part}.md"
+                title += f" (Teil {part})"
+            if (
+                topic_id not in used_ids
+                and path.casefold() not in used_paths
+                and (
+                    part == 1
+                    or (
+                        topic_id not in reserved_ids
+                        and path.casefold() not in reserved_paths
+                    )
+                )
+            ):
+                return {
+                    "id": topic_id,
+                    "folder_id": folder_id,
+                    "path": path,
+                    "type": topic["type"],
+                    "title": title,
+                    "description": topic["description"],
+                    "tags": topic.get("tags", []),
+                    "related": [],
+                    "evidence_ranges": [],
+                    "coverage_items": [],
+                }, part
+            if part == 1:
+                raise ValueError("Kollidierende globale Topic-ID oder Topic-Pfad.")
+            part += 1
+
+    def append_concept(concept: dict[str, Any], measured_size: int) -> None:
+        # Enforce the count before growing the result (also within one topic).
+        if len(concepts) >= MAX_CONCEPTS:
+            raise ValueError("Zu viele resultierende Konzepte.")
+        concept_id = concept["id"]
+        path_key = concept["path"].casefold()
+        if concept_id in used_ids or path_key in used_paths:
+            raise ValueError("Kollidierende Konzept-ID oder Konzeptpfad.")
+        # One final serialization per complete concept validates the running
+        # byte counter; it does not re-serialize the growing prefix per item.
+        if measured_size != byte_count(concept):
+            raise ValueError("Inkonsistente JSON-Konzept-Größenberechnung.")
+        if measured_size > max_concept_bytes:
+            raise ValueError("Konzept überschreitet das Byte-Limit.")
+        used_ids.add(concept_id)
+        used_paths.add(path_key)
+        concepts.append(concept)
 
     for topic_id, items in grouped.items():
         if not items:
             continue
         topic = topic_map[topic_id]
         part = 1
-        current = new_concept(topic, part)
+        current, part = new_concept(topic, part)
         current_size = byte_count(current)
         evidence_seen: set[str] = set()
 
-        def add_item(item: dict[str, Any]) -> int:
+        def add_item(
+            item: dict[str, Any],
+            item_size: int,
+            evidence_parts: list[tuple[str, dict[str, Any], int]],
+        ) -> bool:
             nonlocal current_size
             new_evidence: list[tuple[str, dict[str, Any]]] = []
-            for entry in item["evidence_ranges"]:
-                key = serializer(entry)
-                if key not in evidence_seen and all(key != k for k, _ in new_evidence):
-                    new_evidence.append((key, entry))
-            candidate = {
-                **current,
-                "coverage_items": [*current["coverage_items"], item],
-                "evidence_ranges": [
-                    *current["evidence_ranges"],
-                    *(entry for _, entry in new_evidence),
-                ],
-            }
-            size = byte_count(candidate)
-            if size > max_concept_bytes:
-                return -1
+            new_keys: set[str] = set()
+            # Exact accounting for the compact JSON object: [] already belongs
+            # to the base size; each additional array item adds its serialized
+            # bytes and one comma, except the first entry in each array.
+            candidate_size = (
+                current_size + item_size + (1 if current["coverage_items"] else 0)
+            )
+            for key, entry, encoded_size in evidence_parts:
+                if key in evidence_seen or key in new_keys:
+                    continue
+                candidate_size += encoded_size + (
+                    1 if current["evidence_ranges"] or new_evidence else 0
+                )
+                new_evidence.append((key, entry))
+                new_keys.add(key)
+            if candidate_size > max_concept_bytes:
+                return False
             current["coverage_items"].append(item)
             current["evidence_ranges"].extend(entry for _, entry in new_evidence)
-            evidence_seen.update(key for key, _ in new_evidence)
-            current_size = size
-            return size
+            evidence_seen.update(new_keys)
+            current_size = candidate_size
+            return True
 
         for item in items:
-            if add_item(item) < 0:
+            item_size = byte_count(item)
+            evidence_parts = [
+                (encoded, entry, len(encoded.encode("utf-8")))
+                for entry in item["evidence_ranges"]
+                for encoded in (serializer(entry),)
+            ]
+            if not add_item(item, item_size, evidence_parts):
                 if not current["coverage_items"]:
                     raise ValueError(
                         f"Knowledge Item {item['id']} überschreitet max_concept_bytes."
                     )
-                if current["path"].casefold() in used_paths:
-                    raise ValueError("Kollidierender Konzeptpfad.")
-                used_paths.add(current["path"].casefold())
-                concepts.append(current)
-                part += 1
-                current = new_concept(topic, part)
+                append_concept(current, current_size)
+                current, part = new_concept(topic, part + 1)
                 current_size = byte_count(current)
                 evidence_seen.clear()
-                if add_item(item) < 0:
+                if not add_item(item, item_size, evidence_parts):
                     raise ValueError(
                         f"Knowledge Item {item['id']} überschreitet max_concept_bytes."
                     )
-        if current["path"].casefold() in used_paths:
-            raise ValueError("Kollidierender Konzeptpfad.")
-        used_paths.add(current["path"].casefold())
-        concepts.append(current)
-        if len(concepts) > MAX_CONCEPTS:
-            raise ValueError("Zu viele resultierende Konzepte.")
-    for concept in concepts:
-        if byte_count(concept) > max_concept_bytes:
-            raise ValueError("Konzept überschreitet das Byte-Limit.")
+        append_concept(current, current_size)
 
     return {
         "folder": folder,
