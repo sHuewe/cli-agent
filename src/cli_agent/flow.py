@@ -38,6 +38,7 @@ from .file_context import (
     read_existing_output_text,
 )
 from .flow_json_operations import transform_json
+from .flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .logging_setup import configure_logging
 from .model import ModelRetryPolicy
@@ -823,14 +824,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes"
+                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "flatten"}
+                or raw_json_operation.get("kind") not in {"batch", "flatten", "group_items", "verify_coverage"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
                 raise ValueError(
-                    f"steps[{index}].json_operation muss kind=batch|flatten "
+                    f"steps[{index}].json_operation benötigt kind=batch|flatten|group_items|verify_coverage "
                     "und den Namen eines json_inputs enthalten."
                 )
             size = raw_json_operation.get("batch_size", 5)
@@ -840,6 +841,18 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 or type(max_bytes) is not int or not 1024 <= max_bytes <= 10000000
             ):
                 raise ValueError("Ungültige JSON-Batch-Limits.")
+            if (type(raw_json_operation.get("max_concept_bytes", 80000)) is not int
+                    or not 1024 <= raw_json_operation.get("max_concept_bytes", 80000) <= 10000000):
+                raise ValueError("Ungültiges max_concept_bytes.")
+            required_sources = (
+                {"routes", "assignments", "topics"}
+                if raw_json_operation["kind"] == "group_items" else
+                {"plan", "results"}
+                if raw_json_operation["kind"] == "verify_coverage" else set()
+            )
+            if required_sources and (raw_json_operation["input"] != sorted(required_sources)[0]
+                                     or not required_sources <= set(raw.get("json_inputs", {}))):
+                raise ValueError("JSON-Gruppierungsoperation benötigt die vorgesehenen json_inputs.")
             if child_flow is not None or prompt_value is not None:
                 raise ValueError(
                     "json_operation darf weder prompt_file noch flow kombinieren."
@@ -4287,13 +4300,27 @@ async def _run_flow_internal(
                 source = _parse_structured_output(
                     json_values[operation["input"]], step_id=step.step_id,
                 )
-                transformed = transform_json(
-                    kind=operation["kind"],
-                    value=source,
-                    batch_size=operation.get("batch_size", 5),
-                    max_batch_bytes=operation.get("max_batch_bytes", 80000),
-                    serializer=_json_dumps_preserving_numbers,
-                )
+                if operation["kind"] == "group_items":
+                    transformed = group_assigned_items(
+                        routes=_parse_structured_output(json_values["routes"], step_id=step.step_id),
+                        assignments=_parse_structured_output(json_values["assignments"], step_id=step.step_id),
+                        topic_plan=_parse_structured_output(json_values["topics"], step_id=step.step_id),
+                        max_concept_bytes=operation.get("max_concept_bytes", 80000),
+                        serializer=_json_dumps_preserving_numbers,
+                    )
+                elif operation["kind"] == "verify_coverage":
+                    transformed = verify_assigned_coverage(
+                        plan=_parse_structured_output(json_values["plan"], step_id=step.step_id),
+                        results=_parse_structured_output(json_values["results"], step_id=step.step_id),
+                    )
+                else:
+                    transformed = transform_json(
+                        kind=operation["kind"],
+                        value=source,
+                        batch_size=operation.get("batch_size", 5),
+                        max_batch_bytes=operation.get("max_batch_bytes", 80000),
+                        serializer=_json_dumps_preserving_numbers,
+                    )
                 answer = _json_dumps_preserving_numbers(transformed)
                 if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
                     raise ValueError("JSON-Operation überschreitet Output-Größenlimit.")
