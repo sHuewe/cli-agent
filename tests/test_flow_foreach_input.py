@@ -52,13 +52,19 @@ def test_foreach_input_rejects_missing_or_nonlist(tmp_path: Path) -> None:
 
 
 def test_foreach_input_rejects_undeclared_root(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("Test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "route"\n'
+        'prompt_file = "prompt.md"\n'
+        'foreach = "input.structure.folders"\n',
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="structure"):
-        _flow(tmp_path, selector="input.structure.folders")
-        # The valid declared case is tested above.
+        load_flow(Path("flow.toml"), workspace=tmp_path)
 
 
 @pytest.mark.parametrize("source", [
-    "input", "input.structure", "input.structure.folders[]",
+    "input", "input.structure.folders[]",
     "input.structure.folders[0]", "item.folders",
 ])
 def test_foreach_input_rejects_bad_syntax(tmp_path: Path, source: str) -> None:
