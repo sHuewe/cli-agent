@@ -105,3 +105,40 @@ def test_json_step_rejects_llm_and_tool_options(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="json_operation"):
         load_flow(Path("flow.toml"), workspace=tmp_path)
+
+
+def test_batch_byte_limit_includes_json_envelope() -> None:
+    result = transform_json(
+        kind="batch",
+        value=["x" * 900, "y" * 900],
+        batch_size=5,
+        max_batch_bytes=1024,
+    )
+    assert len(result["batches"]) == 2
+    for batch in result["batches"]:
+        assert len(json.dumps(batch, separators=(",", ":")).encode("utf-8")) <= 1024
+
+
+def test_batch_count_is_bounded_before_unbounded_allocation() -> None:
+    import cli_agent.flow_json_operations as module
+
+    with pytest.raises(ValueError, match="Batch-Anzahllimit"):
+        module.transform_json(
+            kind="batch",
+            value=list(range(module.MAX_BATCHES + 1)),
+            batch_size=1,
+        )
+
+
+def test_batch_result_limit_is_enforced_incrementally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cli_agent.flow_json_operations as module
+
+    monkeypatch.setattr(module, "MAX_RESULT_BYTES", 200)
+    with pytest.raises(ValueError, match="Ergebnislimit"):
+        module.transform_json(
+            kind="batch",
+            value=list(range(30)),
+            batch_size=1,
+        )
