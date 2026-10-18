@@ -146,3 +146,90 @@ def test_coverage_checks_actual_repair_results() -> None:
     ])
     assert failed["status"] == "needs_attention"
     assert failed["missing_item_ids"] == ["m001:c001:fact001"]
+
+
+def test_split_ids_avoid_reserved_topic_ids_and_paths() -> None:
+    routes, assignments, topics = source_fixture()
+    routes[0]["knowledge_items"][0]["description"] = "A" * 1300
+    routes[0]["knowledge_items"][1]["description"] = "B" * 1300
+    topics["topics"].append({
+        "id": "t001-p002", "path": "domain/another.md",
+        "type": "concept", "title": "Other", "description": "Other topic",
+        "tags": [],
+    })
+    result = build(routes, assignments, topics, max_bytes=1900)
+    assert [concept["id"] for concept in result["concepts"]] == [
+        "t001", "t001-p003"
+    ]
+
+
+def test_split_paths_avoid_reserved_topic_paths() -> None:
+    routes, assignments, topics = source_fixture()
+    routes[0]["knowledge_items"][0]["description"] = "A" * 1300
+    routes[0]["knowledge_items"][1]["description"] = "B" * 1300
+    topics["topics"].append({
+        "id": "t002", "path": "domain/requirements-part-2.md",
+        "type": "concept", "title": "Other", "description": "Other topic",
+        "tags": [],
+    })
+    result = build(routes, assignments, topics, max_bytes=1900)
+    assert result["concepts"][1]["path"] == "domain/requirements-part-3.md"
+
+
+def test_max_concepts_checked_before_appending_each_part(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cli_agent.flow_json_grouping as grouping
+
+    routes, assignments, topics = source_fixture()
+    for i in range(10):
+        source = dict(routes[0]["knowledge_items"][0])
+        source["id"] = f"c001:extra{i:03d}"
+        source["description"] = "X" * 1300
+        routes[0]["knowledge_items"].append(source)
+        assignments[0]["assignments"].append({
+            "item_id": f"m001:c001:extra{i:03d}", "topic_id": "t001"
+        })
+    monkeypatch.setattr(grouping, "MAX_CONCEPTS", 2)
+    with pytest.raises(ValueError, match="Zu viele resultierende Konzepte"):
+        build(routes, assignments, topics, max_bytes=1900)
+
+
+def test_group_serialization_is_linear_in_item_count() -> None:
+    routes, assignments, topics = source_fixture()
+    routes[0]["knowledge_items"] = []
+    assignments[0]["assignments"] = []
+    for i in range(500):
+        routes[0]["knowledge_items"].append({
+            "id": f"c001:fact{i:04d}", "kind": "fact",
+            "name": "Fact", "description": "A", "normative": False,
+            "evidence_ranges": [],
+        })
+        assignments[0]["assignments"].append({
+            "item_id": f"m001:c001:fact{i:04d}", "topic_id": "t001",
+        })
+
+    calls = 0
+
+    def counted(value: object) -> str:
+        nonlocal calls
+        calls += 1
+        return dump(value)
+
+    result = group_assigned_items(
+        routes=routes, assignments=assignments, topic_plan=topics,
+        max_concept_bytes=200_000, serializer=counted,
+    )
+    assert result["total_items"] == 500
+    assert calls < 1500
+
+
+def test_incremental_sizes_match_exact_json_for_duplicates_and_unicode() -> None:
+    routes, assignments, topics = source_fixture()
+    routes[0]["knowledge_items"][0]["description"] = "é\u20ac漢"
+    routes[0]["knowledge_items"][1]["evidence_ranges"] = (
+        routes[0]["knowledge_items"][0]["evidence_ranges"]
+    )
+    result = build(routes, assignments, topics, max_bytes=1024)
+    for concept in result["concepts"]:
+        assert len(dump(concept).encode("utf-8")) <= 1024
