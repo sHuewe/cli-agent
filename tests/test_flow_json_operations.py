@@ -180,3 +180,75 @@ def test_batch_utf8_boundary_accounts_for_id_and_payload() -> None:
     assert len(result["batches"]) == 2
     for batch in result["batches"]:
         assert len(_json_dumps_preserving_numbers(batch).encode("utf-8")) <= 1024
+
+
+def test_batch_routes_splits_large_route_without_losing_items() -> None:
+    route = {
+        "document_id": "m001", "chunk_id": "c003", "folder_id": "foundations",
+        "candidate_concepts": [{"id": "topic001", "description": "x" * 400}],
+        "knowledge_items": [
+            {"id": f"c003:rule{i:03d}", "description": "é" * 300}
+            for i in range(7)
+        ],
+        "warnings": ["warning-" + "x" * 250],
+        "source_metadata": {"version": 1},
+    }
+    result = transform_json(
+        kind="batch_routes", value=[route], batch_size=3,
+        max_batch_bytes=1024,
+    )
+    fragments = [item for batch in result["batches"] for item in batch["items"]]
+    assert len(fragments) > 1
+    for fragment in fragments:
+        assert fragment["document_id"] == "m001"
+        assert fragment["chunk_id"] == "c003"
+        assert fragment["folder_id"] == "foundations"
+        assert fragment["source_metadata"] == route["source_metadata"]
+    for field in ("candidate_concepts", "knowledge_items", "warnings"):
+        assert [item for fragment in fragments for item in fragment[field]] == route[field]
+    for batch in result["batches"]:
+        assert len(json.dumps(batch, ensure_ascii=False, separators=(",", ":")).encode()) <= 1024
+
+
+def test_batch_routes_uses_one_fragment_for_small_route() -> None:
+    source = [{"document_id": "m001", "chunk_id": "c001", "folder_id": "f",
+               "knowledge_items": [{"id": "c001:rule001", "name": "Rule"}]}]
+    result = transform_json(kind="batch_routes", value=source)
+    assert len(result["batches"]) == 1
+    assert result["batches"][0]["items"][0]["knowledge_items"] == source[0]["knowledge_items"]
+
+
+def test_batch_routes_rejects_indivisible_item() -> None:
+    source = [{"document_id": "m001", "chunk_id": "c001", "folder_id": "f",
+               "knowledge_items": [{"description": "x" * 2000}]}]
+    with pytest.raises(ValueError, match="Ein einzelner Eintrag"):
+        transform_json(kind="batch_routes", value=source, max_batch_bytes=1024)
+
+
+def test_batch_routes_rejects_oversized_metadata() -> None:
+    source = [{"document_id": "m001", "chunk_id": "c001", "folder_id": "f",
+               "custom": "x" * 2000, "knowledge_items": []}]
+    with pytest.raises(ValueError, match="Routing-Metadaten"):
+        transform_json(kind="batch_routes", value=source, max_batch_bytes=1024)
+
+
+def test_batch_routes_rejects_malformed_records() -> None:
+    with pytest.raises(ValueError, match="Routing-Objekte"):
+        transform_json(kind="batch_routes", value=[2])
+    with pytest.raises(ValueError, match="knowledge_items"):
+        transform_json(kind="batch_routes", value=[
+            {"document_id": "m001", "chunk_id": "c001", "folder_id": "f",
+             "knowledge_items": {}}
+        ])
+
+
+def test_batch_routes_enforces_fragment_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cli_agent.flow_json_operations as module
+
+    monkeypatch.setattr(module, "MAX_ROUTE_FRAGMENTS", 2)
+    source = [{"document_id": "m001", "chunk_id": "c001", "folder_id": "f",
+               "knowledge_items": [
+                   {"id": str(i), "description": "x" * 600} for i in range(4)
+               ]}]
+    with pytest.raises(ValueError, match="Fragment-Anzahllimit"):
+        transform_json(kind="batch_routes", value=source, max_batch_bytes=1024)
