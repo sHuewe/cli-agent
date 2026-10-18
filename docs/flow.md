@@ -247,6 +247,35 @@ Run-Start-Checkpoints bzw. `previous_output` übernommen. Damit schränkt die
 Run-Start-Regel dynamische `foreach`-Flows nicht ein, verhindert aber, dass
 Laufzeit-Seiteneffekte versehentlich als Resume-Zustand interpretiert werden.
 
+### `foreach` direkt über Flow-Inputs
+
+Neben `foreach = "steps.<id>.output.<pfad>"` können Schritte auch über
+bereits übergebene Listen des aktuellen Flows iterieren:
+
+```toml
+version = 1
+inputs = ["structure"]
+
+[[steps]]
+id = "route"
+prompt_file = "prompts/route.md"
+foreach = "input.structure.folders"
+iteration_id = "${item.id}"
+response_format = "json"
+output = "state/route-${iteration.id}.json"
+
+[steps.vars]
+folder = "${item}"
+```
+
+Hierfür ist kein vorgeschalteter LLM-Schritt zur unveränderten Wiedergabe der
+Liste erforderlich. `input.<pfad>` unterstützt verschachtelte Objektfelder
+und muss zu einer JSON-Liste führen; fehlende Felder und Nicht-Listen werden
+abgewiesen. Der erste Feldname muss als Flow-Input deklariert sein. Es gelten
+weiterhin die vorhandenen Grenzen für Elementanzahl, Iterations-IDs und
+Ausgabedateien. Für JSON-Checkpoints und Resume gelten dieselben Regeln wie
+bei `foreach` über vorherige Step-Outputs.
+
 ### Outputs vorheriger Schritte in Variablen
 
 Ein späterer Step kann den Output eines bereits abgeschlossenen Steps direkt in
