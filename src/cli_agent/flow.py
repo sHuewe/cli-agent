@@ -4292,6 +4292,7 @@ async def _run_flow_internal(
                     value=source,
                     batch_size=operation.get("batch_size", 5),
                     max_batch_bytes=operation.get("max_batch_bytes", 80000),
+                    serializer=_json_dumps_preserving_numbers,
                 )
                 answer = _json_dumps_preserving_numbers(transformed)
                 if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
