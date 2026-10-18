@@ -826,12 +826,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 or set(raw_json_operation) - {
                     "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "flatten", "group_items", "verify_coverage"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
                 raise ValueError(
-                    f"steps[{index}].json_operation benötigt kind=batch|flatten|group_items|verify_coverage "
+                    f"steps[{index}].json_operation benötigt kind=batch|batch_routes|flatten|group_items|verify_coverage "
                     "und den Namen eines json_inputs enthalten."
                 )
             size = raw_json_operation.get("batch_size", 5)
