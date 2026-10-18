@@ -138,6 +138,22 @@ _FOREACH = re.compile(
 )
 
 
+# Foreach may also consume an existing list from the current flow invocation.
+_INPUT_FOREACH = re.compile(
+    r"input\.([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*)\Z"
+)
+
+
+def _foreach_output_source(source: str) -> str | None:
+    """Return the producing step ID, or None for a flow-input list."""
+    match = _FOREACH.fullmatch(source)
+    if match is not None:
+        return match.group(1)
+    if _INPUT_FOREACH.fullmatch(source):
+        return None
+    raise ValueError(f"Ungültige foreach-Quelle: {source!r}.")
+
+
 @dataclass(frozen=True)
 class JsonInputSpec:
     path: str
@@ -1392,18 +1408,26 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 field=f"steps[{index}].iteration_id",
             )
         if foreach is not None:
-            match = _FOREACH.fullmatch(foreach)
-            if match is None:
-                raise ValueError(
-                    f"steps[{index}].foreach muss auf "
-                    "steps.<id>.output[.<pfad>] verweisen."
+            input_match = _INPUT_FOREACH.fullmatch(foreach)
+            if input_match is not None:
+                _validate_input_references(
+                    ["${" + foreach + "}"],
+                    declared_inputs=inputs,
+                    field=f"steps[{index}].foreach",
                 )
-            source_id = match.group(1)
-            if source_id not in known_ids:
-                raise ValueError(
-                    f"steps[{index}].foreach darf nur auf einen "
-                    f"vorherigen Schritt verweisen: {source_id!r}."
-                )
+            else:
+                match = _FOREACH.fullmatch(foreach)
+                if match is None:
+                    raise ValueError(
+                        f"steps[{index}].foreach muss auf "
+                        "steps.<id>.output[.<pfad>] oder input.<pfad> verweisen."
+                    )
+                source_id = match.group(1)
+                if source_id not in known_ids:
+                    raise ValueError(
+                        f"steps[{index}].foreach darf nur auf einen "
+                        f"vorherigen Schritt verweisen: {source_id!r}."
+                    )
         else:
             dynamic_values = [*variables.values(), *flow_input_strings]
             if output is not None:
@@ -2206,14 +2230,13 @@ def _capture_run_start_invocation(
                 items = [None]
                 iteration_ids: list[str | None] = [None]
             else:
-                match = _FOREACH.fullmatch(step.foreach)
-                assert match is not None
-                source_id = match.group(1)
-                if source_id not in available_outputs:
+                source_id = _foreach_output_source(step.foreach)
+                if source_id is not None and source_id not in available_outputs:
                     continue
                 items = _foreach_items(
                     step,
                     outputs=available_outputs,
+                    flow_input=flow_input,
                 )
                 iteration_ids = _iteration_ids(
                     step,
@@ -2340,10 +2363,8 @@ def _capture_run_start_invocation(
                 output_json[step.step_id] = True
             continue
 
-        match = _FOREACH.fullmatch(step.foreach)
-        assert match is not None
-        source_id = match.group(1)
-        if source_id not in available_outputs:
+        source_id = _foreach_output_source(step.foreach)
+        if source_id is not None and source_id not in available_outputs:
             if _uses_previous_output(step):
                 raise ValueError(
                     f"previous_output von foreach-Schritt {step.step_id!r} "
@@ -2356,6 +2377,7 @@ def _capture_run_start_invocation(
         items = _foreach_items(
             step,
             outputs=available_outputs,
+            flow_input=flow_input,
         )
         iteration_ids = _iteration_ids(
             step,
@@ -2742,27 +2764,36 @@ def _foreach_items(
     step: FlowStep,
     *,
     outputs: dict[str, Any],
+    flow_input: dict[str, Any],
 ) -> list[Any]:
     if step.foreach is None:
         return [None]
 
-    match = _FOREACH.fullmatch(step.foreach)
-    assert match is not None
-    source_id, path = match.groups()
-    if source_id not in outputs:
-        raise ValueError(
-            f"foreach-Quelle {source_id!r} besitzt keinen "
-            "verfügbaren Output."
+    input_match = _INPUT_FOREACH.fullmatch(step.foreach)
+    if input_match is not None:
+        items = _lookup(
+            flow_input,
+            input_match.group(1),
+            label="Flow-Input",
         )
-    parsed = _parse_structured_output(
-        outputs[source_id],
-        step_id=source_id,
-    )
-    items = _lookup(
-        parsed,
-        path,
-        label=f"Output von Schritt {source_id!r}",
-    )
+    else:
+        match = _FOREACH.fullmatch(step.foreach)
+        assert match is not None
+        source_id, path = match.groups()
+        if source_id not in outputs:
+            raise ValueError(
+                f"foreach-Quelle {source_id!r} besitzt keinen "
+                "verfügbaren Output."
+            )
+        parsed = _parse_structured_output(
+            outputs[source_id],
+            step_id=source_id,
+        )
+        items = _lookup(
+            parsed,
+            path,
+            label=f"Output von Schritt {source_id!r}",
+        )
     if not isinstance(items, list):
         raise ValueError(
             f"foreach-Quelle {step.foreach!r} ist keine Liste."
@@ -3346,10 +3377,8 @@ def validate_flow(
                 step=step.step_id,
             )
             if step.foreach is not None:
-                match = _FOREACH.fullmatch(step.foreach)
-                assert match is not None
-                source_id = match.group(1)
-                if source_id not in produced:
+                source_id = _foreach_output_source(step.foreach)
+                if source_id is not None and source_id not in produced:
                     raise ValueError(
                         f"foreach-Quelle {source_id!r} ist nicht vor "
                         f"Schritt {step.step_id!r} verfügbar."
@@ -3540,10 +3569,8 @@ def validate_flow(
             )
 
         if step.foreach is not None:
-            match = _FOREACH.fullmatch(step.foreach)
-            assert match is not None
-            source_id = match.group(1)
-            if source_id not in produced:
+            source_id = _foreach_output_source(step.foreach)
+            if source_id is not None and source_id not in produced:
                 raise ValueError(
                     f"foreach-Quelle {source_id!r} ist nicht vor "
                     f"Schritt {step.step_id!r} verfügbar."
@@ -3614,14 +3641,13 @@ def _preflight_concrete_invocation_outputs(
                 items = [None]
                 iteration_ids: list[str | None] = [None]
             else:
-                match = _FOREACH.fullmatch(step.foreach)
-                assert match is not None
-                source_id = match.group(1)
-                if source_id not in available_outputs:
+                source_id = _foreach_output_source(step.foreach)
+                if source_id is not None and source_id not in available_outputs:
                     continue
                 items = _foreach_items(
                     step,
                     outputs=available_outputs,
+                    flow_input=flow_input,
                 )
                 iteration_ids = _iteration_ids(
                     step,
@@ -3695,14 +3721,13 @@ def _preflight_concrete_invocation_outputs(
                 )
             ]
         else:
-            match = _FOREACH.fullmatch(step.foreach)
-            assert match is not None
-            source_id = match.group(1)
-            if source_id not in available_outputs:
+            source_id = _foreach_output_source(step.foreach)
+            if source_id is not None and source_id not in available_outputs:
                 continue
             items = _foreach_items(
                 step,
                 outputs=available_outputs,
+                flow_input=flow_input,
             )
             iteration_ids = _iteration_ids(
                 step,
@@ -3878,6 +3903,7 @@ async def _run_flow_internal(
         items = _foreach_items(
             step,
             outputs=outputs,
+            flow_input=flow_input,
         )
         iteration_ids = _iteration_ids(
             step,
