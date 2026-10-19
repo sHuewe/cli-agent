@@ -91,11 +91,13 @@ def _read_source(root: Path, relative: str, *, mode: str) -> str:
     if path.suffix.lower() in {".md", ".txt"}:
         return path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".pdf":
-        from pypdf import PdfReader
-        reader = PdfReader(str(path), strict=False)
-        if len(reader.pages) > 100:
-            raise ValueError("PDF überschreitet das Seitenlimit (100).")
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+        # Use the subprocess-bound extractor also for offline indexing and
+        # runtime freshness checks. Never parse untrusted PDFs in the agent.
+        from .pdf_text import PdfTextError, read_pdf_text
+        try:
+            return read_pdf_text(path)
+        except PdfTextError as exc:
+            raise ValueError("PDF konnte nicht sicher als Text gelesen werden.") from exc
     raise ValueError("Nicht unterstützter Knowledge-Dateityp.")
 
 
@@ -229,7 +231,21 @@ class EmbeddingProvider:
             vectors = data.get("embeddings")
         else:
             entries = data.get("data")
-            vectors = [item.get("embedding") for item in sorted(entries, key=lambda x: x["index"])] if isinstance(entries, list) else None
+            # OpenAI-compatible embeddings return the original input position
+            # for each vector. Reject duplicates, gaps, booleans, negative or
+            # out-of-range indices instead of silently misassigning vectors.
+            if not isinstance(entries, list) or len(entries) != len(texts):
+                raise RuntimeError("Embedding-Antwort hat eine ungültige Anzahl Vektoren.")
+            indices = [entry.get("index") if isinstance(entry, dict) else None for entry in entries]
+            if (
+                any(type(index) is not int for index in indices)
+                or sorted(indices) != list(range(len(texts)))
+            ):
+                raise RuntimeError("Embedding-Antwort enthält ungültige oder doppelte Indizes.")
+            vectors = [entry["embedding"] for entry in sorted(entries, key=lambda x: x["index"])
+                       if "embedding" in entry]
+            if len(vectors) != len(texts):
+                raise RuntimeError("Embedding-Antwort enthält Einträge ohne Vektor.")
         if not isinstance(vectors, list) or len(vectors) != len(texts):
             raise RuntimeError("Embedding-Antwort hat eine ungültige Anzahl Vektoren.")
         dim = None
