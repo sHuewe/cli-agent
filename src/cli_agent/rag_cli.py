@@ -12,7 +12,7 @@ from typing import Sequence
 
 from .admin_config import load_admin_config
 from .config import VectorKnowledgeConfig
-from .knowledge_vector import build_index
+from .knowledge_vector import build_index, update_index
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,10 +63,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-files", type=int, default=10000, metavar="N",
         help="Maximale Anzahl zu indexierender OKF-Concepts (Default: 10000).",
     )
+    update_db = commands.add_parser(
+        "update-vector-db",
+        help="Bestehenden SQLite-Vektorindex inkrementell aktualisieren.",
+        description="Verwendet unveränderte Concept-Vektoren erneut, aktualisiert geänderte und entfernt nicht mehr erreichbare Concepts.",
+    )
+    # Both commands accept the same source/model/backend arguments.
+    for action in init_db._actions:
+        if action.dest in {"help", "command"}:
+            continue
+        kwargs = {
+            "dest": action.dest,
+            "default": action.default,
+            "required": action.required,
+            "help": action.help,
+        }
+        if action.type is not None:
+            kwargs["type"] = action.type
+        if action.choices is not None:
+            kwargs["choices"] = action.choices
+        update_db.add_argument(*action.option_strings, **kwargs)
     return parser
 
 
-async def init_vector_db(args: argparse.Namespace) -> int:
+async def init_vector_db(args: argparse.Namespace, *, incremental: bool = False) -> int:
     """Build the index using the same backend as the configured Knowledge-Loop."""
     root = args.okf_repo.expanduser().resolve()
     database = args.sqlite_file.expanduser().resolve()
@@ -103,13 +123,21 @@ async def init_vector_db(args: argparse.Namespace) -> int:
         max_files=args.max_files,
     )
     admin = load_admin_config()
-    count = await build_index(
-        vector,
-        root=root,
-        path=database,
-        network=admin.network,
-        credential_rules=admin.model_credentials,
-    )
+    kwargs = {
+        "root": root,
+        "path": database,
+        "network": admin.network,
+        "credential_rules": admin.model_credentials,
+    }
+    if incremental:
+        result = await update_index(vector, **kwargs)
+        print(
+            f"SQLite-Knowledge-Index aktualisiert: {database} "
+            f"(neu: {result.added}, geändert: {result.changed}, "
+            f"unverändert: {result.unchanged}, entfernt: {result.removed})."
+        )
+        return result.total
+    count = await build_index(vector, **kwargs)
     print(f"SQLite-Knowledge-Index erstellt: {database} ({count} OKF-Concepts).")
     return count
 
@@ -118,8 +146,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        if args.command == "init-vector-db":
-            asyncio.run(init_vector_db(args))
+        if args.command in {"init-vector-db", "update-vector-db"}:
+            asyncio.run(init_vector_db(args, incremental=args.command == "update-vector-db"))
         else:
             parser.error("Unbekanntes cli-agent-rag-Kommando.")
     except (OSError, ValueError, RuntimeError) as exc:
