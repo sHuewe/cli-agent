@@ -89,7 +89,7 @@ def read_bounded_regular_file(
         ) != expected_identity:
             raise ValueError("Die Datei wurde während des Öffnens ausgetauscht.")
         if opened.st_size > max_bytes:
-            raise ValueError(f"Datei ist mit {opened.st_size} Bytes größer als das Limit von {max_bytes} Bytes.")
+            raise ValueError(f"Datei ist mit {opened.st_size} Bytes größer als das konfigurierte Leselimit von {max_bytes} Bytes.")
         if os.name != "posix":
             target = root.joinpath(*parts)
             if path_entry_is_symlink_or_reparse(target):
