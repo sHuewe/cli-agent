@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import closing
 import sqlite3
 from pathlib import Path
 
@@ -262,7 +263,7 @@ async def test_incremental_update_reuses_vectors_and_handles_all_changes(tmp_pat
     monkeypatch.setattr(EmbeddingProvider, "embed", embed)
     await build_index(config, root=root, path=path, network=NetworkConfig())
     batches.clear()
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         original = connection.execute(
             "SELECT vector FROM chunks WHERE source='keep.md'"
         ).fetchall()
@@ -273,7 +274,7 @@ async def test_incremental_update_reuses_vectors_and_handles_all_changes(tmp_pat
     assert (result.added, result.changed, result.unchanged, result.removed) == (1, 1, 1, 1)
     assert len(batches) == 2
     assert not any("keep.md" in text for text in batches)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         assert connection.execute("SELECT vector FROM chunks WHERE source='keep.md'").fetchall() == original
         assert {row[0] for row in connection.execute("SELECT path FROM sources")} == {"keep.md", "change.md", "add.md"}
     batches.clear()
