@@ -749,3 +749,28 @@ def test_history_reset_also_resets_last_usage(tmp_path: Path) -> None:
     assert agent.history == []
     assert agent._last_main_loop_ran is False
     assert agent._last_main_usage is None
+
+
+def test_nested_knowledge_usage_not_double_counted_as_main(tmp_path: Path, monkeypatch):
+    from cli_agent.agent import CliAgent
+
+    main_first = TokenUsage(input_tokens=100, output_tokens=10, total_tokens=110)
+    knowledge = TokenUsage(input_tokens=500, output_tokens=50, total_tokens=550)
+    main_last = TokenUsage(input_tokens=200, output_tokens=20, total_tokens=220)
+    model = UsageRecordingModel([])
+    agent = make_agent(tmp_path, model)
+
+    async def fake_base_loop(self, **kwargs):
+        phase = kwargs["phase"]
+        if phase == "main":
+            model.usage_history.append(main_first)
+            await self._run_model_loop(phase="knowledge")
+            model.usage_history.append(main_last)
+        else:
+            model.usage_history.append(knowledge)
+        return "ok"
+
+    monkeypatch.setattr(CliAgent, "_run_model_loop", fake_base_loop)
+    asyncio.run(agent._run_model_loop(phase="main"))
+    assert agent._last_main_usage == LoopTokenUsage.from_requests([main_first, main_last])
+    assert agent._last_knowledge_usage == LoopTokenUsage.from_requests([knowledge])
