@@ -316,3 +316,29 @@ async def test_incremental_update_requires_existing_compatible_index(tmp_path):
     config = VectorKnowledgeConfig(mode="raw", source=str(root), database=str(tmp_path / "missing.sqlite"))
     with pytest.raises(ValueError, match="init-vector-db"):
         await update_index(config, root=root, path=tmp_path / "missing.sqlite", network=NetworkConfig())
+
+
+@pytest.mark.asyncio
+async def test_stale_vector_hits_do_not_hide_valid_lower_ranked_results(tmp_path, monkeypatch):
+    from cli_agent.knowledge_vector import EmbeddingProvider
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "stale.md").write_text("stale original", encoding="utf-8")
+    (root / "valid.md").write_text("valid original", encoding="utf-8")
+    path = tmp_path / "index.sqlite"
+    config = VectorKnowledgeConfig(
+        mode="raw", source=str(root), database=str(path), search_limit=1,
+    )
+
+    async def embed(self, texts):
+        return [[1.0, 0.0] if "stale" in value else [0.0, 1.0] for value in texts]
+
+    monkeypatch.setattr(EmbeddingProvider, "embed", embed)
+    await build_index(config, root=root, path=path, network=NetworkConfig())
+    (root / "stale.md").write_text("changed content", encoding="utf-8")
+    session = VectorKnowledgeSession(config, root=root, path=path, network=NetworkConfig())
+    try:
+        results = await session.search("stale query")
+        assert [item["path"] for item in results["entries"]] == ["valid.md"]
+    finally:
+        session.close()
