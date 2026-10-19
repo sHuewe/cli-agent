@@ -683,3 +683,20 @@ def test_external_stdio_omits_workspace_directory_without_workspace_access(
 
     assert captured["environment"]["CLI_AGENT_WORKSPACE_ACCESS"] == "none"
     assert "CLI_AGENT_WORKSPACE_DIRECTORY" not in captured["environment"]
+
+
+def test_internal_reentry_can_be_disabled_and_reenabled_without_connection(tmp_path: Path):
+    async def exercise():
+        agent = make_agent(tmp_path)
+        await agent.start()
+        try:
+            agent._register_knowledge_reentry_tool()
+            route = agent._tool_routes["knowledge_reentry__request_additional_knowledge"]
+            assert await agent.disable_server("knowledge_reentry")
+            assert "knowledge_reentry" not in agent._active_servers
+            assert await agent.enable_server("knowledge_reentry")
+            assert "knowledge_reentry" in agent._active_servers
+            assert agent._tool_routes["knowledge_reentry__request_additional_knowledge"] is route
+        finally:
+            await agent.close()
+    asyncio.run(exercise())
