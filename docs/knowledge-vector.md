@@ -137,7 +137,9 @@ The default embedding provider is Ollama at `http://localhost:11434`.
 Specify an alternative endpoint with `--base-url`. For an OpenAI-compatible
 embedding API, use `--provider openai --base-url https://host.example/v1`,
 optionally adding `--api-key-env NAME` (and the required administrative
-credential allowlist). `--max-files N` limits indexed OKF Concepts.
+credential allowlist). `--max-files N` limits indexed OKF Concepts. `--max-read-bytes N` must
+match `[okf].max_read_bytes` used by the runtime (default 2,560,000 bytes).
+The effective limit is stored in index metadata and checked at runtime.
 
 The SQLite output must reside outside the OKF repository. It is generated
 through the same validated OKF traversal, embedding provider and SQLite
@@ -157,7 +159,7 @@ cli-agent-rag update-vector-db \
   --sqlite-file "C:/knowledge/indexes/my-okf.sqlite"
 ```
 
-The command requires an existing, compatible schema-v3 index. It computes
+The command requires an existing, compatible schema-v4 index. It computes
 SHA-256 fingerprints for all currently reachable OKF Concepts and:
 - retains the existing stored vectors for unchanged Concepts;
 - embeds only changed or newly reachable Concepts;
@@ -176,9 +178,9 @@ The summary reports added, changed, unchanged, and removed Concept counts.
 ## Index identity and stale-result bounds
 
 The database records the normalized embedding base URL in addition to model,
-provider and dimension. Runtime retrieval and incremental updates reject a
+provider, dimension and the effective OKF read limit. Runtime retrieval and incremental updates reject a
 different endpoint, even if the model name and vector dimension match. This
-prevents mixing unrelated embedding spaces. Existing schema-v2 indexes must
+prevents mixing unrelated embedding spaces. Existing schema-v2 and schema-v3 indexes must
 be rebuilt with `init-vector-db`.
 
 Runtime retrieval validates a bounded over-fetch set (up to 100 candidate
@@ -186,3 +188,11 @@ Concepts, and normally at most five times `search_limit` with a minimum of
 10). This avoids unbounded original-file reads when an index is stale.
 Some valid lower-ranked results may be omitted if too many higher-ranked
 Concepts are stale; run `update-vector-db` in that case.
+
+## Verified source reads
+
+Offline indexing and runtime fingerprint checks read OKF Concepts through
+bounded file descriptors. On POSIX, directory traversal uses no-follow
+semantics so replacing a validated path with a symlink cannot redirect the
+embedding input. Only valid OKF Concept markdown is accepted; the same
+frontmatter rules and configured byte limit apply to the source content.
