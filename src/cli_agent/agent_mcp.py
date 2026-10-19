@@ -90,6 +90,8 @@ class McpLifecycleMixin:
                     self._active_servers.add(server_config.name)
             if self._okf_options is not None:
                 await self._start_knowledge_server(stack)
+            if self._vector_config is not None:
+                await self._start_vector_knowledge()
             self.history = []
             system_prompt = self._build_system_prompt()
             if self.logging_config.log_model_messages:
@@ -99,6 +101,9 @@ class McpLifecycleMixin:
         except BaseException:
             await stack.aclose()
             self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._server_untrusted_instructions.clear(); self._active_servers.clear()
+            if self._vector_session is not None:
+                self._vector_session.close()
+                self._vector_session = None
             self._knowledge_session = None; self._knowledge_tools.clear(); self._knowledge_routes.clear(); self._knowledge_instructions = None; self.history.clear()
             raise
 
@@ -229,6 +234,48 @@ class McpLifecycleMixin:
         stack.push_async_callback(knowledge_stack.aclose); self._knowledge_session = session; self._knowledge_tools = knowledge_tools; self._knowledge_routes = knowledge_routes; self._knowledge_instructions = instructions
         logger.info("knowledge_server_connected repository=%s tools=%s", options.repository, json.dumps([tool["function"]["name"] for tool in knowledge_tools], ensure_ascii=False))
 
+    async def _start_vector_knowledge(self) -> None:
+        config = self._vector_config
+        if config is None:
+            return
+        try:
+            root = source_root(
+                config,
+                okf_root=self._okf_options.repository if self._okf_options else None,
+                config_file=self.config_file,
+            )
+            path = db_path(config, config_file=self.config_file)
+            session = VectorKnowledgeSession(
+                config, root=root, path=path,
+                network=self.network, credential_rules=self._model_credential_rules,
+            )
+            self._vector_session = session
+            runtime = _RuntimeMcpServerConfig(name="vector", built_in=True)
+            search_tool = {"type": "function", "function": {
+                "name": "vector__knowledge_search",
+                "description": "Search the indexed knowledge source for relevant document candidates. Read returned paths before selecting them.",
+                "parameters": {"type": "object", "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 2000}
+                }, "required": ["query"], "additionalProperties": False},
+            }}
+            self._knowledge_tools.append(search_tool)
+            self._knowledge_routes["vector__knowledge_search"] = (session, "knowledge_search", runtime)
+            if config.mode == "raw":
+                read_tool = {"type": "function", "function": {
+                    "name": "vector__knowledge_read",
+                    "description": "Read exactly one indexed raw document selected from search hits.",
+                    "parameters": {"type": "object", "properties": {
+                        "path": {"type": "string", "minLength": 1}
+                    }, "required": ["path"], "additionalProperties": False},
+                }}
+                self._knowledge_tools.append(read_tool)
+                self._knowledge_routes["vector__knowledge_read"] = (session, "knowledge_read", runtime)
+        except Exception:
+            if config.required:
+                raise
+            logger.exception("vector_knowledge_disabled")
+            self._vector_session = None
+
     @staticmethod
     def _stdio_environment(*, built_in: bool = False) -> dict[str, str]:
         safe_names = ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP", "LANG", "LC_ALL", "PYTHONIOENCODING")
@@ -346,5 +393,8 @@ class McpLifecycleMixin:
     async def close(self) -> None:
         if self._exit_stack is None: return
         stack = self._exit_stack; self._exit_stack = None
+        if self._vector_session is not None:
+            self._vector_session.close()
+            self._vector_session = None
         self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._server_untrusted_instructions.clear(); self._active_servers.clear(); self._knowledge_session = None; self._knowledge_tools.clear(); self._knowledge_routes.clear(); self._knowledge_instructions = None; self.history.clear()
         await stack.aclose()
