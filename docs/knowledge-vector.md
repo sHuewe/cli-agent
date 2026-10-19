@@ -1,4 +1,4 @@
-# Optional vector and hybrid knowledge retrieval
+# Optional OKF vector retrieval
 
 The existing OKF-only mode remains unchanged if `[knowledge.vector]` is absent:
 no embedding service, index or additional Python dependency is required.
@@ -8,7 +8,6 @@ no embedding service, index or additional Python dependency is required.
 | Mode | Configuration | Strategy |
 | --- | --- | --- |
 | OKF only | `[okf]` | Root index followed by LLM-controlled OKF navigation |
-| Vector only | `[knowledge.vector]` with `mode = "raw"` | Automatic vector similarity search followed by validated reads |
 | Hybrid | `[okf]` and `[knowledge.vector]` with `mode = "okf"` | Automatic candidate search over reachable OKF Concepts, then OKF navigation |
 
 The initial vector search is performed **before** the retrieval LLM is invoked.
@@ -61,34 +60,29 @@ security review is required before deploying an external vector store.
 
 ## Index setup
 
-Configure a distinct folder containing source documents:
+Configure the existing OKF repository and optional vector index:
 
 ```toml
+[okf]
+repository = "C:/knowledge/my-okf"
+
 [knowledge.vector]
-mode = "raw"
-source = "C:/knowledge/docs"
-database = "C:/knowledge/indexes/docs.sqlite"
+mode = "okf"
+database = "C:/knowledge/indexes/my-okf.sqlite"
 provider = "ollama"
 base_url = "http://localhost:11434"
 model = "embeddinggemma"
 required = true
 ```
 
-Then run:
+Build the database explicitly using `cli-agent-rag init-vector-db` or
+`cli-agent-knowledge index --config C:/config/cli-agent.toml`.
+Only reachable, validated OKF Concepts are indexed. The standalone RAW
+file-folder mode has been removed. Index building remains a separate offline
+operator action, never an LLM tool.
 
-```shell
-cli-agent-knowledge index --config C:/config/cli-agent.toml
-```
-
-To index OKF, configure `[okf]` normally, set `mode = "okf"`, and omit
-`source`. The indexer starts from the root `index.md` and follows only
-valid OKF navigation links. Non-OKF Markdown is not indexed in hybrid mode.
-
-The indexer reads Markdown, UTF-8 plain text and extractable PDF text in raw mode.
-PDF OCR is not supported. Embedded files and images are not interpreted. The
-database is written separately from the agent run, then atomically replaced.
-If sources change, repeat indexing. Results from changed/deleted documents
-are discarded, and reads validate source fingerprints again.
+The database is created temporarily and atomically replaced after success.
+Changed or removed documents are filtered using their source fingerprints.
 
 ## Embeddings
 
