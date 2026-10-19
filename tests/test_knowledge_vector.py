@@ -181,13 +181,13 @@ async def test_embedding_rejects_invalid_vectors(monkeypatch):
 
 def test_okf_indexing_only_reachable_valid_concepts(tmp_path):
     from cli_agent.knowledge_vector import _okf_paths
-    (tmp_path / "index.md").write_text("# Knowledge\\n[Service](service.md)", encoding="utf-8")
+    (tmp_path / "index.md").write_text("# Knowledge\n[Service](service.md)", encoding="utf-8")
     (tmp_path / "service.md").write_text(
-        "---\\ntype: concept\\ntitle: Service\\n---\\n# Service",
+        "---\ntype: concept\ntitle: Service\n---\n# Service",
         encoding="utf-8",
     )
     (tmp_path / "hidden.md").write_text(
-        "---\\ntype: concept\\n---\\nNot in index",
+        "---\ntype: concept\n---\nNot in index",
         encoding="utf-8",
     )
     assert _okf_paths(tmp_path, max_files=10) == ["service.md"]
