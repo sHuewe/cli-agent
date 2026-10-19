@@ -297,6 +297,8 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     transport = str(values.get("transport", "stdio")).strip().lower()
     if not name:
         raise ValueError("Jeder [[mcp_servers]]-Eintrag benötigt einen Namen.")
+    if name.casefold() == "knowledge_reentry":
+        raise ValueError("Der MCP-Servername 'knowledge_reentry' ist für ein internes Agent-Tool reserviert.")
     if transport not in {"stdio", "streamable_http"}:
         raise ValueError(f"Nicht unterstützter MCP-Transport für {name!r}: {transport!r}.")
 
