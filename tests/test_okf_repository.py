@@ -432,3 +432,24 @@ def test_discovery_rejects_replaced_symlink_before_read(tmp_path, monkeypatch):
     repository = OkfRepository.from_directory(tmp_path)
     # Discovery must not read the secret even when path is swapped after resolve.
     assert repository.knowledge_index()["internal_links"] == []
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows junction-specific regression")
+def test_okf_read_rejects_junction_parent(tmp_path: Path):
+    import subprocess
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text(_concept(title="Private"), encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "index.md").write_text("Root", encoding="utf-8")
+    junction = root / "linked"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        capture_output=True, check=False,
+    )
+    if result.returncode:
+        pytest.skip("Cannot create test junction")
+    repository = OkfRepository.from_directory(root)
+    with pytest.raises(OkfRepositoryError):
+        repository.knowledge_read("linked/secret.md")
