@@ -265,6 +265,8 @@ def _vector_config(values: dict[str, Any], *, has_okf: bool) -> VectorKnowledgeC
         raise ValueError("Ungültiger Knowledge-Modus oder Embedding-Provider.")
     if mode == "okf" and not has_okf:
         raise ValueError("Vektor-Modus okf erfordert [okf].")
+    if mode == "raw" and has_okf:
+        raise ValueError("Für OKF + Vektor-RAG muss mode = \"okf\" gewählt werden.")
     source = values.get("source")
     if mode == "raw" and (not isinstance(source, str) or not source.strip()):
         raise ValueError("Im Raw-Modus muss knowledge.vector.source gesetzt werden.")
