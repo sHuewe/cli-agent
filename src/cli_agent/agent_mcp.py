@@ -92,6 +92,8 @@ class McpLifecycleMixin:
                 await self._start_knowledge_server(stack)
             if self._vector_config is not None:
                 await self._start_vector_knowledge()
+            if self._knowledge_session is not None or self._vector_session is not None:
+                self._register_knowledge_reentry_tool()
             self.history = []
             system_prompt = self._build_system_prompt()
             if self.logging_config.log_model_messages:
@@ -275,6 +277,32 @@ class McpLifecycleMixin:
                 raise
             logger.exception("vector_knowledge_disabled")
             self._vector_session = None
+
+    def _register_knowledge_reentry_tool(self) -> None:
+        from types import SimpleNamespace
+
+        class _ReentrySession:
+            def __init__(self, agent):
+                self.agent = agent
+
+            async def call_tool(self, name, arguments):
+                if name != "request_additional_knowledge":
+                    return SimpleNamespace(structuredContent={"error": "Unbekanntes Tool"}, content=[], isError=True)
+                return await self.agent._request_additional_knowledge(arguments["question"])
+
+        server = _RuntimeMcpServerConfig(name="knowledge_reentry", built_in=True)
+        exposed = "knowledge_reentry__request_additional_knowledge"
+        tool = {"type": "function", "function": {
+            "name": exposed,
+            "description": "Nur wenn während der Hauptaufgabe wirklich neue, erforderliche Wissenslücken auftreten: ergänzendes projektspezifisches Knowledge recherchieren. Nicht zur Bestätigung bereits bekannter Fakten oder für wiederholte Fragen verwenden. Maximal zweimal pro Benutzeranfrage.",
+            "parameters": {"type": "object", "properties": {
+                "question": {"type": "string", "minLength": 1, "maxLength": 2000}
+            }, "required": ["question"], "additionalProperties": False},
+        }}
+        self._server_configs[server.name] = server
+        self._server_tools[server.name] = [tool]
+        self._tool_routes[exposed] = (_ReentrySession(self), "request_additional_knowledge", server)
+        self._active_servers.add(server.name)
 
     @staticmethod
     def _stdio_environment(*, built_in: bool = False) -> dict[str, str]:
