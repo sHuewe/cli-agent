@@ -69,6 +69,7 @@ def _windows_open_pinned_file(root: Path, relative_parts: tuple[str, ...], stack
         )
 
     file_read_attributes = 0x0080
+    file_list_directory = 0x0001
     generic_read = 0x80000000
     file_share_read = 0x00000001
     open_existing = 3
@@ -90,7 +91,7 @@ def _windows_open_pinned_file(root: Path, relative_parts: tuple[str, ...], stack
     def open_component(path: str, *, directory: bool) -> int:
         handle = create_file(
             path,
-            file_read_attributes if directory else generic_read,
+            (file_read_attributes | file_list_directory) if directory else generic_read,
             # Do not allow concurrently opened write-capable handles on a
             # pinned parent directory: FSCTL_SET_REPARSE_POINT can otherwise
             # retarget it without renaming it.
