@@ -60,3 +60,22 @@ def test_knowledge_prompt_matches_available_backends(mode):
     else:
         assert "initial_search" in prompt
     assert "vector__knowledge_search" in prompt
+
+
+@pytest.mark.asyncio
+async def test_disabled_okf_hybrid_does_not_call_embedding_or_knowledge_loop():
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Harness(ConversationMixin):
+        pass
+
+    agent = Harness()
+    agent._okf_options = SimpleNamespace(required=True)
+    agent._okf_enabled = False
+    agent._vector_config = SimpleNamespace(mode="okf", required=True)
+    agent._vector_session = SimpleNamespace(search=AsyncMock(side_effect=AssertionError("Embedding service must not be contacted")))
+    agent._knowledge_session = object()
+    agent._run_model_loop = AsyncMock(side_effect=AssertionError("Knowledge loop must not run"))
+    assert await agent._collect_knowledge("A private OKF question") is None
+    agent._vector_session.search.assert_not_awaited()
+    agent._run_model_loop.assert_not_awaited()
