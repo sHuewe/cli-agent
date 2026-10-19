@@ -95,9 +95,11 @@ timeout = 120
 # -----------------------------------------------------------------------------
 # Optional vector / hybrid retrieval (disabled unless configured)
 # -----------------------------------------------------------------------------
-# The vector index is created separately:
-#   cli-agent-knowledge index --config C:/path/to/config.toml
-# Re-run after adding/changing/deleting source documents. Pure OKF without this
+# Index creation/update are manual offline operations, never LLM tools:
+#   cli-agent-rag init-vector-db --okf-repo C:/knowledge/okf --embedding-model embeddinggemma --sqlite-file C:/knowledge/indexes/okf.sqlite
+#   cli-agent-rag update-vector-db --okf-repo C:/knowledge/okf --embedding-model embeddinggemma --sqlite-file C:/knowledge/indexes/okf.sqlite
+# Indexing is outside the LLM loop's trust boundary and follows model-host Admin-Policy.
+# See docs/knowledge-vector.md for the security model and mode-specific setup. Pure OKF without this
 # section remains unchanged and needs neither an index nor an embedding model.
 #
 # For raw Markdown/TXT/PDF documents, no [okf] section is required:
@@ -119,3 +121,12 @@ timeout = 120
 # base_url = "https://llm.intern.example/v1"
 # api_key_env = "EMBEDDING_API_KEY"
 # External embedding hosts and credential env names follow the model Admin-Policy.
+
+# Example OKF + vector configuration (uncomment with [okf] above):
+# [knowledge.vector]
+# mode = "okf"
+# database = "C:/knowledge/indexes/okf.sqlite"
+# provider = "ollama"
+# base_url = "http://localhost:11434"
+# model = "embeddinggemma"
+# required = true
