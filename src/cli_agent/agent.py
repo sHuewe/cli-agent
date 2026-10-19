@@ -111,6 +111,8 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self._vector_config = knowledge_vector
         self._model_credential_rules = model_credential_rules
         self._vector_session: VectorKnowledgeSession | None = None
+        self._knowledge_reentry_calls = 0
+        self._knowledge_reentry_seen: set[str] = set()
         self.history: list[dict[str, Any]] = []
         self._dumped_history_json: str | None = None
         self._exit_stack: AsyncExitStack | None = None
@@ -127,6 +129,40 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self._knowledge_tools: list[dict[str, Any]] = []
         self._knowledge_routes: dict[str, ToolRoute] = {}
         self._knowledge_instructions: str | None = None
+
+    async def _request_additional_knowledge(self, question: str):
+        from types import SimpleNamespace
+
+        if not isinstance(question, str) or not question.strip() or len(question) > 2000:
+            return SimpleNamespace(
+                structuredContent={"status": "error", "reason": "Ungültige Knowledge-Frage."},
+                content=[], isError=True,
+            )
+        normalized = " ".join(question.casefold().split())
+        if normalized in self._knowledge_reentry_seen:
+            return SimpleNamespace(
+                structuredContent={"status": "no_new_information", "reason": "Diese Knowledge-Frage wurde bereits gestellt."},
+                content=[], isError=False,
+            )
+        if self._knowledge_reentry_calls >= 2:
+            return SimpleNamespace(
+                structuredContent={"status": "limit_reached", "reason": "Maximal zwei zusätzliche Knowledge-Abfragen pro Anfrage."},
+                content=[], isError=False,
+            )
+        self._knowledge_reentry_calls += 1
+        self._knowledge_reentry_seen.add(normalized)
+        try:
+            result = await self._collect_knowledge(question)
+            return SimpleNamespace(
+                structuredContent={"status": "ok" if result is not None else "no_new_information", "knowledge": result},
+                content=[], isError=False,
+            )
+        except Exception:
+            logger.exception("additional_knowledge_failed")
+            return SimpleNamespace(
+                structuredContent={"status": "error", "reason": "Zusätzliche Knowledge-Recherche fehlgeschlagen."},
+                content=[], isError=True,
+            )
 
     def _normalize_okf_config(self, config: OkfConfigLike | str | Path | None) -> _OkfOptions | None:
         if config is None:
