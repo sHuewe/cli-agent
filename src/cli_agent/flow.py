@@ -2538,15 +2538,17 @@ def _snapshot_dynamic_checkpoint_candidates(
                 (_filesystem_path_key(flow.source), step.step_id)
             )
 
-    examined = 0
-    total_bytes = 0
-    # Known paths were already fingerprinted by the concrete run-start planner.
-    # Reuse their fingerprints but still associate them with matching owners.
-    content_fingerprints: dict[str, bytes] = dict(known_fingerprints)
+    # A busy flow can have many dynamic templates under the same state
+    # directory. Walking that directory once per template repeatedly counts
+    # unrelated files and exhausts the candidate limit even for a modest
+    # number of real checkpoint files. Group templates by their search root.
+    patterns_by_root: dict[
+        str, tuple[Path, list[tuple[re.Pattern[str], list[tuple[str, str]]]]]
+    ] = {}
     case_insensitive = _filesystem_is_case_insensitive(workspace)
     for template, declaring_steps in owners_by_template.items():
-        # Dynamic values can include path separators. Enumerate below the
-        # static prefix and verify against the complete declared template.
+        # Dynamic values may contain separators. Keep the same conservative
+        # static-prefix root and full-template matching rules as before.
         matches = list(_DYNAMIC_VALUE_EXPR.finditer(template))
         first_prefix = template[:matches[0].start()]
         if first_prefix.endswith("/"):
@@ -2573,32 +2575,58 @@ def _snapshot_dynamic_checkpoint_candidates(
             r"\A" + "".join(regex_parts) + r"\Z",
             re.IGNORECASE if case_insensitive else 0,
         )
+        root_key = _filesystem_path_key(search_root)
+        if root_key not in patterns_by_root:
+            patterns_by_root[root_key] = (search_root, [])
+        patterns_by_root[root_key][1].append(
+            (matches_template, declaring_steps)
+        )
 
+    # Also deduplicate entries when different template roots overlap (e.g.
+    # state/ and state/concepts/). Preserve the global resource limit for
+    # DISTINCT examined filesystem entries, including unrelated entries.
+    examined_paths: set[str] = set()
+    total_bytes = 0
+    content_fingerprints: dict[str, bytes] = dict(known_fingerprints)
+    for search_root, patterns in patterns_by_root.values():
         for directory, subdirectories, filenames in os.walk(
             search_root, followlinks=False
         ):
-            examined += 1 + len(subdirectories) + len(filenames)
-            if examined > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
-                raise ValueError(
-                    "Zu viele dynamische JSON-Checkpoint-Kandidaten beim Run-Start."
-                )
-            # Do not follow symlinks or Windows reparse points.
+            folder = Path(directory)
+            for entry in (
+                folder,
+                *(folder / dirname for dirname in subdirectories),
+                *(folder / filename for filename in filenames),
+            ):
+                key = _filesystem_path_key(entry)
+                if key not in examined_paths:
+                    examined_paths.add(key)
+                    if len(examined_paths) > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
+                        raise ValueError(
+                            "Zu viele eindeutige dynamische JSON-Checkpoint-"
+                            "Kandidaten beim Run-Start."
+                        )
+
+            # Never follow symlinks or Windows reparse points.
             safe_subdirectories = []
             for dirname in subdirectories:
                 try:
-                    if not path_entry_is_symlink_or_reparse(
-                        Path(directory) / dirname
-                    ):
+                    if not path_entry_is_symlink_or_reparse(folder / dirname):
                         safe_subdirectories.append(dirname)
                 except OSError:
                     continue
             subdirectories[:] = safe_subdirectories
+
             for filename in filenames:
-                candidate = Path(directory) / filename
-                if matches_template.fullmatch(
-                    candidate.relative_to(workspace).as_posix()
-                ) is None:
+                candidate = folder / filename
+                relative = candidate.relative_to(workspace).as_posix()
+                declaring_steps: list[tuple[str, str]] = []
+                for matcher, owners in patterns:
+                    if matcher.fullmatch(relative):
+                        declaring_steps.extend(owners)
+                if not declaring_steps:
                     continue
+
                 try:
                     path = _workspace_path(
                         workspace,
@@ -2609,9 +2637,9 @@ def _snapshot_dynamic_checkpoint_candidates(
                 except ValueError:
                     continue
                 key = _filesystem_path_key(path)
-                # Preserve each matching owner's mapping even if an earlier
-                # checkpoint or a later step's previous_output already captured
-                # this path. No second read is needed for those paths.
+                # Keep template/declaring-step ownership strict. An unrelated
+                # step (including a static-output step) must not adopt a
+                # checkpoint merely because its path happens to coincide.
                 fingerprint = content_fingerprints.get(key)
                 if fingerprint is None:
                     try:
@@ -2634,7 +2662,7 @@ def _snapshot_dynamic_checkpoint_candidates(
                     fingerprint = _checkpoint_fingerprint(content)
                     content_fingerprints[key] = fingerprint
                     paths[key] = path
-                for flow_key, step_id in declaring_steps:
+                for flow_key, step_id in dict.fromkeys(declaring_steps):
                     fingerprints[(flow_key, step_id, key)] = fingerprint
     return fingerprints, tuple(paths.values())
 
