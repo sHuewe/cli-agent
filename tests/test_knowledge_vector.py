@@ -47,15 +47,30 @@ def test_store_search_hybrid_and_provenance(tmp_path):
     try:
         store.create()
         store.replace_documents([
-            ("service.md", "Token validation", [("Bearer token validation", [1.0, 0.0])]),
-            ("database.md", "Storage", [("SQL table", [0.0, 1.0])]),
+            ("service.md", hashlib.sha256(b"Token validation").hexdigest(), [[1.0, 0.0]]),
+            ("database.md", hashlib.sha256(b"Storage").hexdigest(), [[0.0, 1.0]]),
         ])
         store.configure(root=tmp_path, mode="raw", provider="ollama", model="emb", dim=2)
         assert store.check(root=tmp_path, mode="raw", provider="ollama", model="emb") == 2
-        assert store.search([1.0, 0.0], "Bearer token", limit=1)[0]["path"] == "service.md"
+        assert store.search([1.0, 0.0], limit=1)[0]["path"] == "service.md"
         with pytest.raises(ValueError):
             store.check(root=tmp_path, mode="raw", provider="ollama", model="changed")
         assert store.source_sha("service.md") == hashlib.sha256(b"Token validation").hexdigest()
+        schema = {
+            row["name"]: {column["name"] for column in store.db.execute(f"PRAGMA table_info({row['name']})")}
+            for row in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert schema["sources"] == {"path", "sha256"}
+        assert schema["chunks"] == {"id", "source", "vector"}
+        assert schema["metadata"] == {"key", "value"}
+        assert "chunks_fts" not in schema
+        assert "content" not in schema["sources"]
+        assert "body" not in schema["chunks"]
+        with pytest.raises(ValueError):
+            store.search([0.0, 0.0])
+        with pytest.raises(ValueError):
+            store.search([1.0])
+
     finally:
         store.close()
 
@@ -91,6 +106,13 @@ async def test_index_and_read_fail_closed_on_changes(tmp_path, monkeypatch):
     from cli_agent.knowledge_vector import EmbeddingProvider
     monkeypatch.setattr(EmbeddingProvider, "embed", fake_embed)
     assert await build_index(config, root=root, path=index_path, network=NetworkConfig()) == 1
+    with sqlite3.connect(index_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] > 0
+        assert db.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 1
+        assert db.execute("SELECT name FROM sqlite_master WHERE name='chunks_fts'").fetchone() is None
+        # No document or chunk text, even inside stored schema definitions.
+        assert b"Token validation" not in index_path.read_bytes()
+        assert b"# Service" not in index_path.read_bytes()
     session = VectorKnowledgeSession(config, root=root, path=index_path, network=NetworkConfig())
     try:
         result = await session.search("Token validation")
@@ -191,3 +213,32 @@ def test_okf_indexing_only_reachable_valid_concepts(tmp_path):
         encoding="utf-8",
     )
     assert _okf_paths(tmp_path, max_files=10) == ["service.md"]
+
+
+def test_vectors_map_to_concepts_and_use_best_chunk_score(tmp_path):
+    store = SQLiteKnowledgeStore(tmp_path / "index.sqlite", readonly=False)
+    try:
+        store.create()
+        store.replace_documents([
+            ("first.md", hashlib.sha256(b"first").hexdigest(), [[1.0, 0.0], [0.0, 1.0]]),
+            ("second.md", hashlib.sha256(b"second").hexdigest(), [[-1.0, 0.0]]),
+        ])
+        hits = store.search([1.0, 0.0], limit=2)
+        assert [hit["path"] for hit in hits] == ["first.md", "second.md"]
+        assert len(hits) == 2
+        assert hits[0]["score"] == 1.0
+    finally:
+        store.close()
+
+
+def test_old_schema_version_rejected(tmp_path):
+    store = SQLiteKnowledgeStore(tmp_path / "old.sqlite", readonly=False)
+    try:
+        store.create()
+        store.configure(root=tmp_path, mode="okf", provider="ollama", model="embed", dim=2)
+        store.db.execute("UPDATE metadata SET value='1' WHERE key='schema'")
+        store.db.commit()
+        with pytest.raises(ValueError, match="neu indexieren"):
+            store.check(root=tmp_path, mode="okf", provider="ollama", model="embed")
+    finally:
+        store.close()
