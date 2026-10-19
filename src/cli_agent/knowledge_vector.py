@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -28,6 +29,7 @@ from .network_policy import NetworkConfig, validate_http_url
 MAX_SOURCE_BYTES = 2_560_000
 MAX_SEARCH_QUERY = 2000
 MAX_SEARCH_RESULTS = 20
+MAX_STALE_CANDIDATES = 100
 MAX_BATCH = 32
 
 
@@ -177,10 +179,27 @@ def _decode(blob: bytes) -> tuple[float, ...]:
     return struct.unpack(f"<{len(blob) // 4}f", blob)
 
 
+def _embedding_endpoint_identity(base_url: str) -> str:
+    """Canonical endpoint identity; never persist secrets or query parameters."""
+    parsed = urlsplit(base_url)
+    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        raise ValueError("Embedding-Endpunkt darf keine Credentials, Query oder Fragmente enthalten.")
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if not hostname or scheme not in {"http", "https"}:
+        raise ValueError("Ungültiger Embedding-Endpunkt.")
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    port = parsed.port
+    if port is not None and port != (80 if scheme == "http" else 443):
+        host += f":{port}"
+    return urlunsplit((scheme, host, parsed.path.rstrip("/"), "", ""))
+
+
 class EmbeddingProvider:
     def __init__(self, config: VectorKnowledgeConfig, network: NetworkConfig, credential_rules: tuple[Any, ...] = ()) -> None:
         self.config = config
         self.base_url = validate_http_url(config.base_url, allowed_hosts=network.model_allowed_hosts, purpose="Embedding-Modell").rstrip("/")
+        self.endpoint_identity = _embedding_endpoint_identity(self.base_url)
         if config.provider == "openai":
             _validate_api_key_env(ModelConfig(provider="openai", base_url=self.base_url, api_key_env=config.api_key_env), credential_rules)
         elif config.api_key_env:
@@ -268,15 +287,20 @@ class SQLiteKnowledgeStore:
     def metadata(self) -> dict[str, str]:
         return {r["key"]: r["value"] for r in self.db.execute("SELECT key,value FROM metadata")}
 
-    def configure(self, *, root: Path, mode: str, provider: str, model: str, dim: int) -> None:
-        values = {"root": str(root), "mode": mode, "provider": provider, "model": model, "dimension": str(dim), "schema": "2"}
+    def configure(self, *, root: Path, mode: str, provider: str, model: str, endpoint: str, dim: int) -> None:
+        values = {"root": str(root), "mode": mode, "provider": provider, "model": model,
+                  "endpoint": endpoint, "dimension": str(dim), "schema": "3"}
         self.db.executemany("INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)", values.items())
 
-    def check(self, *, root: Path, mode: str, provider: str, model: str) -> int:
+    def check(self, *, root: Path, mode: str, provider: str, model: str, endpoint: str) -> int:
         meta = self.metadata()
-        expected = {"root": str(root), "mode": mode, "provider": provider, "model": model, "schema": "2"}
+        expected = {"root": str(root), "mode": mode, "provider": provider, "model": model,
+                    "endpoint": endpoint, "schema": "3"}
         if any(meta.get(k) != v for k, v in expected.items()):
-            raise ValueError("Knowledge-Index passt nicht zu Quelle/Modell; neu indexieren.")
+            raise ValueError(
+                "Knowledge-Index passt nicht zu Quelle/Embedding-Modell/Endpunkt; "
+                "bitte mit init-vector-db neu indexieren."
+            )
         dim = int(meta["dimension"])
         if not 1 <= dim <= 8192:
             raise ValueError("Ungültige Vektordimension im Index.")
@@ -331,9 +355,9 @@ class SQLiteKnowledgeStore:
         row = self.db.execute("SELECT sha256 FROM sources WHERE path=?", (path,)).fetchone()
         return row["sha256"] if row is not None else None
 
-    def search(self, vector: list[float], *, limit: int | None = 5) -> list[dict[str, Any]]:
+    def search(self, vector: list[float], *, limit: int = 5) -> list[dict[str, Any]]:
         """Rank concepts by their best chunk cosine similarity, without lexical data."""
-        if limit is not None and not 1 <= limit <= MAX_SEARCH_RESULTS:
+        if not 1 <= limit <= MAX_STALE_CANDIDATES:
             raise ValueError("Ungültiges Knowledge-Suchlimit.")
         # Verify the supplied query vector before evaluating any stored vectors.
         _encode(vector)
@@ -356,7 +380,7 @@ class SQLiteKnowledgeStore:
         ranked = sorted(
             best_similarity.items(),
             key=lambda item: (-item[1], item[0]),
-        )[:limit] if limit is not None else sorted(best_similarity.items(), key=lambda item: (-item[1], item[0]))
+        )[:limit]
         return [
             {"path": source, "score": round(score, 5), "next_tool": "knowledge_read"}
             for source, score in ranked
@@ -391,7 +415,8 @@ async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, 
         try:
             store.create()
             store.replace_documents(records)
-            store.configure(root=root, mode=config.mode, provider=config.provider, model=config.model, dim=next(iter(dimensions)))
+            store.configure(root=root, mode=config.mode, provider=config.provider, model=config.model,
+                            endpoint=provider.endpoint_identity, dim=next(iter(dimensions)))
             store.db.commit()
         finally:
             store.close()
@@ -414,7 +439,7 @@ async def update_index(
     network: NetworkConfig,
     credential_rules: tuple[Any, ...] = (),
 ) -> IndexUpdateResult:
-    """Atomically update a schema-v2 index, embedding only changed documents.
+    """Atomically update a schema-v3 index, embedding only changed documents.
 
     Unchanged chunks are copied as raw binary vectors from the existing index.
     New and changed Concepts are embedded against their current source text.
@@ -426,10 +451,14 @@ async def update_index(
             "Zuerst cli-agent-rag init-vector-db ausführen."
         )
 
+    # Validate endpoint identity even for a no-change run. This prevents mixing
+    # stored vectors and query vectors from different embedding deployments.
+    provider = EmbeddingProvider(config, network, credential_rules)
     old = SQLiteKnowledgeStore(path)
     try:
         dimension = old.check(
-            root=root, mode=config.mode, provider=config.provider, model=config.model
+            root=root, mode=config.mode, provider=config.provider,
+            model=config.model, endpoint=provider.endpoint_identity,
         )
         # Check both the configuration and structural validity of the old index
         # before using it as the source for unchanged embeddings.
@@ -468,10 +497,6 @@ async def update_index(
 
         # Construct and validate the complete new DB before publication. If an
         # embedding request fails, the currently published index is untouched.
-        provider = (
-            EmbeddingProvider(config, network, credential_rules)
-            if changed_records else None
-        )
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
             prefix="cli-agent-knowledge-", dir=path.parent
@@ -482,7 +507,8 @@ async def update_index(
                 new_store.create()
                 new_store.configure(
                     root=root, mode=config.mode, provider=config.provider,
-                    model=config.model, dim=dimension,
+                    model=config.model, endpoint=provider.endpoint_identity,
+                    dim=dimension,
                 )
                 for relative, fingerprint in unchanged_records:
                     new_store.copy_unchanged_source(
@@ -494,7 +520,6 @@ async def update_index(
                         (relative, fingerprint),
                     )
                     for pos in range(0, len(chunks), MAX_BATCH):
-                        assert provider is not None
                         batch = await provider.embed(chunks[pos:pos + MAX_BATCH])
                         for vector in batch:
                             if len(vector) != dimension:
@@ -530,9 +555,16 @@ class VectorKnowledgeSession:
     def __init__(self, config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig, credential_rules: tuple[Any, ...] = ()) -> None:
         self.config = config
         self.root = root
-        self.store = SQLiteKnowledgeStore(path)
-        self.dimension = self.store.check(root=root, mode=config.mode, provider=config.provider, model=config.model)
         self.embedder = EmbeddingProvider(config, network, credential_rules)
+        self.store = SQLiteKnowledgeStore(path)
+        try:
+            self.dimension = self.store.check(
+                root=root, mode=config.mode, provider=config.provider,
+                model=config.model, endpoint=self.embedder.endpoint_identity,
+            )
+        except Exception:
+            self.store.close()
+            raise
 
     def close(self) -> None:
         self.store.close()
@@ -543,7 +575,13 @@ class VectorKnowledgeSession:
         vector = (await self.embedder.embed([query]))[0]
         if len(vector) != self.dimension:
             raise ValueError("Embedding-Modell passt nicht zur Indexdimension.")
-        candidates = self.store.search(vector, limit=None)
+        # Bound expensive source re-reads even if a large part of the index is
+        # stale. Searching all stored vectors is the current SQLite backend's
+        # expected cost; validating all source files is not.
+        candidate_limit = min(
+            MAX_STALE_CANDIDATES, max(10, self.config.search_limit * 5)
+        )
+        candidates = self.store.search(vector, limit=candidate_limit)
         # Hide stale/deleted documents and confirm the selected root again.
         hits = []
         for item in candidates:
