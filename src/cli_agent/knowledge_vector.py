@@ -9,8 +9,6 @@ from __future__ import annotations
 import hashlib
 import math
 import os
-import stat
-from contextlib import ExitStack
 import sqlite3
 import struct
 import tempfile
@@ -72,62 +70,14 @@ def _source_file(root: Path, relative: str) -> Path:
 
 
 def _read_verified_okf_bytes(root: Path, relative: str, *, max_read_bytes: int) -> bytes:
-    """Read a root-relative Concept using a bounded verified file descriptor.
-
-    On POSIX each directory entry is opened relative to its parent directory
-    descriptor with O_NOFOLLOW. This avoids check-then-reopen symlink races.
-    On Windows we check the opened handle's identity against the validated
-    entry and reject reparse points, before exposing any bytes.
-    """
-    if max_read_bytes < 1:
-        raise ValueError("Das OKF-Leselimit muss positiv sein.")
+    """Read an OKF Concept through the shared bounded descriptor reader."""
+    from .filesystem_security import read_bounded_regular_file
     validated = _source_file(root, relative)
-    expected = validated.stat()
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-    with ExitStack() as stack:
-        if os.name == "posix":
-            safe_dir_flags = flags | os.O_DIRECTORY | os.O_NOFOLLOW
-            parent_fd = os.open(root, safe_dir_flags)
-            stack.callback(os.close, parent_fd)
-            parts = Path(relative).parts
-            for component in parts[:-1]:
-                child_fd = os.open(component, safe_dir_flags, dir_fd=parent_fd)
-                stack.callback(os.close, child_fd)
-                parent_fd = child_fd
-            fd = os.open(parts[-1], flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
-        else:
-            # Where dir_fd/O_NOFOLLOW are unavailable, enforce identity and
-            # reparse-point checks on the opened descriptor as well.
-            from .filesystem_security import path_entry_is_symlink_or_reparse
-            current = root
-            for component in Path(relative).parts:
-                current = current / component
-                if path_entry_is_symlink_or_reparse(current):
-                    raise ValueError("OKF-Pfad enthält einen Link oder Reparse-Point.")
-            fd = os.open(validated, flags | getattr(os, "O_NOINHERIT", 0))
-        stack.callback(os.close, fd)
-        opened = os.fstat(fd)
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or opened.st_nlink != 1
-            or (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino)
-        ):
-            raise ValueError("OKF-Datei wurde ausgetauscht oder ist nicht regulär.")
-        if opened.st_size > max_read_bytes:
-            raise ValueError("OKF-Datei überschreitet das konfigurierte Leselimit.")
-        if os.name != "posix":
-            # A pathname must still identify the same regular file after open.
-            from .filesystem_security import path_entry_is_symlink_or_reparse
-            if path_entry_is_symlink_or_reparse(validated):
-                raise ValueError("OKF-Pfad wurde zu einem Reparse-Point geändert.")
-            now = validated.stat()
-            if (now.st_dev, now.st_ino) != (opened.st_dev, opened.st_ino):
-                raise ValueError("OKF-Pfad wurde während des Öffnens geändert.")
-        # Bounded even if the file grows after fstat.
-        data = os.read(fd, max_read_bytes + 1)
-        if len(data) > max_read_bytes:
-            raise ValueError("OKF-Datei überschreitet das konfigurierte Leselimit.")
-        return data
+    identity = validated.stat()
+    return read_bounded_regular_file(
+        root, relative, max_bytes=max_read_bytes,
+        expected_identity=(identity.st_dev, identity.st_ino),
+    )
 
 
 def _read_source(
