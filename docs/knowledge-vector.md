@@ -170,7 +170,10 @@ SHA-256 fingerprints for all currently reachable OKF Concepts and:
 - excludes deleted/unreachable Concepts from the new index.
 
 The replacement database is assembled next to the old index and atomically
-published only after all necessary embeddings succeed. A no-change run does not
+published only after all necessary embeddings succeed. Changed documents are
+read and embedded one at a time; only paths and hashes are retained during
+the initial scan. If a changed document changes again while indexing, the
+update aborts without replacing the existing database. A no-change run does not
 rewrite the database or call the embedding endpoint. Changes to the embedding
 model/provider, normalized endpoint URL or vector dimension require `init-vector-db` to rebuild.
 The summary reports added, changed, unchanged, and removed Concept counts.
