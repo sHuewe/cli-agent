@@ -110,3 +110,84 @@ def test_chunking_bounded():
     assert len(chunks) > 2
     assert chunks[0] != ""
     assert chunks[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["ollama", "openai"])
+async def test_embedding_provider_contracts(monkeypatch, provider):
+    import httpx
+    from cli_agent.knowledge_vector import EmbeddingProvider
+
+    seen = []
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            if provider == "ollama":
+                return {"embeddings": [[1.0, 2.0], [3.0, 4.0]]}
+            return {"data": [
+                {"index": 1, "embedding": [3.0, 4.0]},
+                {"index": 0, "embedding": [1.0, 2.0]},
+            ]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, url, **kwargs):
+            seen.append((url, kwargs["json"]))
+            return Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: Client())
+    config = VectorKnowledgeConfig(
+        provider=provider, model="embed", base_url=(
+            "http://localhost:11434/v1" if provider == "openai"
+            else "http://localhost:11434"
+        ),
+    )
+    embedding = EmbeddingProvider(config, NetworkConfig())
+    result = await embedding.embed(["a", "b"])
+    assert result == [[1.0, 2.0], [3.0, 4.0]]
+    assert seen[0][0].endswith("/embeddings" if provider == "openai" else "/api/embed")
+
+
+@pytest.mark.asyncio
+async def test_embedding_rejects_invalid_vectors(monkeypatch):
+    import httpx
+    from cli_agent.knowledge_vector import EmbeddingProvider
+    class Response:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"embeddings": [[float("nan")]]}
+    class Client:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def post(self, *args, **kwargs):
+            return Response()
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: Client())
+    provider = EmbeddingProvider(VectorKnowledgeConfig(), NetworkConfig())
+    with pytest.raises(ValueError):
+        await provider.embed(["input"])
+    with pytest.raises(ValueError):
+        await provider.embed([])
+
+
+def test_okf_indexing_only_reachable_valid_concepts(tmp_path):
+    from cli_agent.knowledge_vector import _okf_paths
+    (tmp_path / "index.md").write_text("# Knowledge\\n[Service](service.md)", encoding="utf-8")
+    (tmp_path / "service.md").write_text(
+        "---\\ntype: concept\\ntitle: Service\\n---\\n# Service",
+        encoding="utf-8",
+    )
+    (tmp_path / "hidden.md").write_text(
+        "---\\ntype: concept\\n---\\nNot in index",
+        encoding="utf-8",
+    )
+    assert _okf_paths(tmp_path, max_files=10) == ["service.md"]
