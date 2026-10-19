@@ -108,3 +108,27 @@ through the same validated OKF traversal, embedding provider and SQLite
 indexer as `cli-agent-knowledge index`. The existing command stays available;
 future RAG-specific management operations can be introduced as new
 `cli-agent-rag` subcommands.
+
+## Incremental updates
+
+After an initial `init-vector-db` run, use identical repository, embedding
+provider/model, and output database arguments with `update-vector-db`:
+
+```shell
+cli-agent-rag update-vector-db \
+  --okf-repo "C:/knowledge/my-okf" \
+  --embedding-model "embeddinggemma" \
+  --sqlite-file "C:/knowledge/indexes/my-okf.sqlite"
+```
+
+The command requires an existing, compatible schema-v2 index. It computes
+SHA-256 fingerprints for all currently reachable OKF Concepts and:
+- retains the existing stored vectors for unchanged Concepts;
+- embeds only changed or newly reachable Concepts;
+- excludes deleted/unreachable Concepts from the new index.
+
+The replacement database is assembled next to the old index and atomically
+published only after all necessary embeddings succeed. A no-change run does not
+rewrite the database or call the embedding endpoint. Changes to the embedding
+model/provider or vector dimension require `init-vector-db` to rebuild.
+The summary reports added, changed, unchanged, and removed Concept counts.
