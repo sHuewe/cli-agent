@@ -241,6 +241,8 @@ class McpLifecycleMixin:
         if config is None:
             return
         try:
+            if config.mode == "okf" and self._knowledge_session is None:
+                raise RuntimeError("Hybrid-RAG erfordert einen verfügbaren OKF-Server.")
             root = source_root(
                 config,
                 okf_root=self._okf_options.repository if self._okf_options else None,
