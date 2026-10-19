@@ -309,7 +309,18 @@ class ConversationMixin:
         options = self._okf_options
         vector_config = getattr(self, "_vector_config", None)
         active_okf = options is not None and getattr(self, "_okf_enabled", True)
-        active_vector = vector_config is not None and self._vector_session is not None
+        # An OKF-backed vector index supplements OKF navigation; it must not
+        # stay usable after the operator disables OKF for this session.
+        hybrid_okf_disabled = (
+            vector_config is not None
+            and vector_config.mode == "okf"
+            and not getattr(self, "_okf_enabled", True)
+        )
+        active_vector = (
+            vector_config is not None
+            and self._vector_session is not None
+            and not hybrid_okf_disabled
+        )
         if not active_okf and not active_vector:
             return None
         required = bool((options and active_okf and options.required) or (vector_config and vector_config.required))
