@@ -42,7 +42,17 @@ class McpLifecycleMixin:
         if enabled:
             if not was_enabled:
                 server_config = self._server_configs.get(server_name)
-                if server_config is not None and self._exit_stack is not None:
+                # The in-process knowledge reentry adapter has no stdio/HTTP
+                # connection to restart. Its route remains registered while
+                # disabled; only the active-server flag needs to change.
+                if server_name == "knowledge_reentry":
+                    if (
+                        server_config is None
+                        or not getattr(server_config, "built_in", False)
+                        or "knowledge_reentry__request_additional_knowledge" not in self._tool_routes
+                    ):
+                        raise RuntimeError("Interner Knowledge-Reentry-Adapter ist nicht verfügbar.")
+                elif server_config is not None and self._exit_stack is not None:
                     started = await self._start_server(server_config, self._exit_stack)
                     if started is False:
                         return False
