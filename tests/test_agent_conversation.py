@@ -39,7 +39,7 @@ class ConversationHarness(ConversationMixin):
         del has_reference_context
         return "system"
 
-    def _build_knowledge_system_prompt(self):
+    def _build_knowledge_system_prompt(self, *, vector_active=None, tools=None):
         return "knowledge-system"
 
     def _model_tools(self):
