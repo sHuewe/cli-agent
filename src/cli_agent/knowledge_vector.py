@@ -34,19 +34,11 @@ MAX_BATCH = 32
 
 
 def source_root(config: VectorKnowledgeConfig, *, okf_root: Path | None, config_file: Path | None) -> Path:
-    if config.mode == "okf":
-        if okf_root is None:
-            raise ValueError("knowledge.vector.mode='okf' erfordert [okf].repository.")
-        return okf_root.resolve()
-    if not config.source:
-        raise ValueError("knowledge.vector.source ist im raw-Modus erforderlich.")
-    root = Path(config.source).expanduser()
-    if not root.is_absolute():
-        root = (config_file.parent if config_file else Path.cwd()) / root
-    root = root.resolve()
-    if not root.is_dir():
-        raise ValueError(f"Knowledge-Quellordner existiert nicht: {root}")
-    return root
+    if config.mode != "okf":
+        raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
+    if okf_root is None:
+        raise ValueError("knowledge.vector.mode='okf' erfordert [okf].repository.")
+    return okf_root.resolve()
 
 
 def db_path(config: VectorKnowledgeConfig, *, config_file: Path | None) -> Path:
@@ -80,42 +72,15 @@ def _source_file(root: Path, relative: str) -> Path:
 
 
 def _read_source(root: Path, relative: str, *, mode: str) -> str:
-    path = _source_file(root, relative)
-    if mode == "okf":
-        from .okf_mcp_server.repository import OkfRepository
-        repository = OkfRepository.from_directory(root, max_read_bytes=MAX_SOURCE_BYTES)
-        result = repository.knowledge_read(relative)
-        if result["kind"] != "concept":
-            raise ValueError("Nur OKF-Concepts können indexiert werden.")
-        return result["content"]
-    if path.suffix.lower() in {".md", ".txt"}:
-        return path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".pdf":
-        # Use the subprocess-bound extractor also for offline indexing and
-        # runtime freshness checks. Never parse untrusted PDFs in the agent.
-        from .pdf_text import PdfTextError, read_pdf_text
-        try:
-            return read_pdf_text(path)
-        except PdfTextError as exc:
-            raise ValueError("PDF konnte nicht sicher als Text gelesen werden.") from exc
-    raise ValueError("Nicht unterstützter Knowledge-Dateityp.")
-
-
-def _raw_paths(root: Path, *, max_files: int) -> list[str]:
-    paths: list[str] = []
-    for path in sorted(root.rglob("*")):
-        if path.is_symlink():
-            continue
-        if path.is_file() and path.suffix.lower() in {".md", ".txt", ".pdf"}:
-            relative = path.relative_to(root).as_posix()
-            try:
-                _source_file(root, relative)
-            except (OSError, ValueError):
-                continue
-            paths.append(relative)
-            if len(paths) > max_files:
-                raise ValueError("Zu viele Dateien; max_files überschritten.")
-    return paths
+    if mode != "okf":
+        raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
+    _source_file(root, relative)
+    from .okf_mcp_server.repository import OkfRepository
+    repository = OkfRepository.from_directory(root, max_read_bytes=MAX_SOURCE_BYTES)
+    result = repository.knowledge_read(relative)
+    if result["kind"] != "concept":
+        raise ValueError("Nur OKF-Concepts können indexiert werden.")
+    return result["content"]
 
 
 def _okf_paths(root: Path, *, max_files: int) -> list[str]:
@@ -170,7 +135,7 @@ def _chunks(text: str, *, size: int = 1800, overlap: int = 200) -> list[str]:
 
 
 def _encode(vector: list[float]) -> bytes:
-    if not vector or len(vector) > 8192 or any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in vector):
+    if not vector or len(vector) > 8192 or any(type(v) not in (int, float) or not math.isfinite(v) for v in vector):
         raise ValueError("Embedding enthält ungültige Werte.")
     return struct.pack(f"<{len(vector)}f", *vector)
 
@@ -385,6 +350,7 @@ class SQLiteKnowledgeStore:
         best_similarity: dict[str, float] = {}
         for row in self.db.execute("SELECT source,vector FROM chunks"):
             saved = _decode(row["vector"])
+            _encode(list(saved))  # Reject non-finite or otherwise invalid persisted floats.
             if len(saved) != len(vector):
                 raise ValueError("Embedding-Dimension stimmt nicht mit dem Index überein.")
             saved_norm = math.sqrt(sum(value * value for value in saved))
@@ -407,7 +373,9 @@ class SQLiteKnowledgeStore:
 
 async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig, credential_rules: tuple[Any, ...] = ()) -> int:
     provider = EmbeddingProvider(config, network, credential_rules)
-    paths = _okf_paths(root, max_files=config.max_files) if config.mode == "okf" else _raw_paths(root, max_files=config.max_files)
+    if config.mode != "okf":
+        raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
+    paths = _okf_paths(root, max_files=config.max_files)
     # Persist each completed batch directly to a *temporary* database.
     # The live index is replaced only after every embedding request succeeds.
     import tempfile
@@ -491,11 +459,9 @@ async def update_index(
             row["path"]: row["sha256"]
             for row in old.db.execute("SELECT path,sha256 FROM sources")
         }
-        paths = (
-            _okf_paths(root, max_files=config.max_files)
-            if config.mode == "okf"
-            else _raw_paths(root, max_files=config.max_files)
-        )
+        if config.mode != "okf":
+            raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
+        paths = _okf_paths(root, max_files=config.max_files)
 
         # Only retain identifiers and checksums for changed files. Holding
         # pre-split contents for the whole corpus can exhaust memory.
@@ -589,6 +555,8 @@ class VectorKnowledgeSession:
     """Read-only tool adapter used exclusively inside the Knowledge phase."""
 
     def __init__(self, config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig, credential_rules: tuple[Any, ...] = ()) -> None:
+        if config.mode != "okf":
+            raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
         self.config = config
         self.root = root
         self.embedder = EmbeddingProvider(config, network, credential_rules)
@@ -635,14 +603,6 @@ class VectorKnowledgeSession:
         try:
             if name == "knowledge_search":
                 data = await self.search(arguments["query"])
-            elif name == "knowledge_read" and self.config.mode == "raw":
-                path = arguments["path"]
-                if not isinstance(path, str) or self.store.source_sha(path) is None:
-                    raise ValueError("Dokument nicht im Knowledge-Index.")
-                content = _read_source(self.root, path, mode="raw")
-                if hashlib.sha256(content.encode("utf-8")).hexdigest() != self.store.source_sha(path):
-                    raise ValueError("Quelle wurde geändert; bitte neu indexieren.")
-                data = {"path": path, "kind": "concept", "content": content, "internal_links": []}
             else:
                 raise ValueError("Nicht unterstütztes Knowledge-Tool.")
             return SimpleNamespace(structuredContent=data, content=[], isError=False)
