@@ -114,7 +114,7 @@ class OkfConfig:
 
 @dataclass(frozen=True)
 class VectorKnowledgeConfig:
-    mode: str = "raw"  # raw or okf
+    mode: str = "okf"  # OKF-only semantic candidate search
     source: str | None = None
     database: str = "knowledge.sqlite"
     provider: str = "ollama"
@@ -259,19 +259,15 @@ def _vector_config(values: dict[str, Any], *, has_okf: bool) -> VectorKnowledgeC
     allowed = {"mode", "source", "database", "provider", "model", "base_url", "api_key_env", "search_limit", "max_files", "required"}
     if set(values) - allowed:
         raise ValueError("[knowledge.vector] enthält unbekannte Optionen.")
-    mode = values.get("mode", "okf" if has_okf else "raw")
+    mode = values.get("mode", "okf")
     provider = values.get("provider", "ollama")
-    if mode not in {"raw", "okf"} or provider not in {"ollama", "openai"}:
-        raise ValueError("Ungültiger Knowledge-Modus oder Embedding-Provider.")
-    if mode == "okf" and not has_okf:
-        raise ValueError("Vektor-Modus okf erfordert [okf].")
-    if mode == "raw" and has_okf:
-        raise ValueError("Für OKF + Vektor-RAG muss mode = \"okf\" gewählt werden.")
+    if mode != "okf" or provider not in {"ollama", "openai"}:
+        raise ValueError("Nur OKF-basierte Vektorsuche mit Ollama/OpenAI wird unterstützt.")
+    if not has_okf:
+        raise ValueError("Vektor-RAG erfordert eine [okf]-Konfiguration.")
     source = values.get("source")
-    if mode == "raw" and (not isinstance(source, str) or not source.strip()):
-        raise ValueError("Im Raw-Modus muss knowledge.vector.source gesetzt werden.")
-    if mode == "okf" and source is not None:
-        raise ValueError("Im OKF-Modus bestimmt [okf].repository die Quelle.")
+    if source is not None:
+        raise ValueError("knowledge.vector.source ist nicht erlaubt; Quelle ist [okf].repository.")
     for key in ("database", "model", "base_url"):
         if not isinstance(values.get(key, "x"), str) or not values.get(key, "x").strip():
             raise ValueError(f"knowledge.vector.{key} darf nicht leer sein.")
