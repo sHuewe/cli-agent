@@ -410,3 +410,25 @@ def test_knowledge_read_reports_truncated_internal_links(tmp_path: Path) -> None
 
     assert len(result["internal_links"]) == 1
     assert result["warning"] == "Interne Links wurden auf 1 Einträge begrenzt."
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX symlink swap")
+def test_discovery_rejects_replaced_symlink_before_read(tmp_path, monkeypatch):
+    import cli_agent.filesystem_security as security
+    (tmp_path / "index.md").write_text("[Concept](concept.md)", encoding="utf-8")
+    concept = tmp_path / "concept.md"
+    concept.write_text(_concept(), encoding="utf-8")
+    outside = tmp_path.parent / "secret-swapped-okf.md"
+    outside.write_text(_concept(title="SECRET"), encoding="utf-8")
+    original_open = security.os.open
+
+    def swapped_open(path, flags, *args, **kwargs):
+        if path == "concept.md" and "dir_fd" in kwargs:
+            concept.unlink()
+            concept.symlink_to(outside)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(security.os, "open", swapped_open)
+    repository = OkfRepository.from_directory(tmp_path)
+    # Discovery must not read the secret even when path is swapped after resolve.
+    assert repository.knowledge_index()["internal_links"] == []
