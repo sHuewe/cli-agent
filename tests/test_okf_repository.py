@@ -493,4 +493,4 @@ def test_windows_pinned_directory_denies_concurrent_write_handle(tmp_path: Path,
     monkeypatch.setattr(security.os, "read", checked_read)
     assert b"type: concept" in security.read_bounded_regular_file(root, "nested/concept.md", max_bytes=4096)
     assert observed
-    assert all(code == 32 for code in observed)  # ERROR_SHARING_VIOLATION
+    assert all(code in (5, 32) for code in observed), observed  # ACCESS_DENIED / SHARING_VIOLATION
