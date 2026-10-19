@@ -283,6 +283,9 @@ class McpLifecycleMixin:
     def _register_knowledge_reentry_tool(self) -> None:
         from types import SimpleNamespace
 
+        if "knowledge_reentry" in self._server_configs or "knowledge_reentry" in self._server_tools:
+            raise RuntimeError("Der interne MCP-Servername knowledge_reentry ist bereits belegt.")
+
         class _ReentrySession:
             def __init__(self, agent):
                 self.agent = agent
