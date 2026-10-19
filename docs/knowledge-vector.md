@@ -8,7 +8,7 @@ no embedding service, index or additional Python dependency is required.
 | Mode | Configuration | Strategy |
 | --- | --- | --- |
 | OKF only | `[okf]` | Root index followed by LLM-controlled OKF navigation |
-| Vector only | `[knowledge.vector]` with `mode = "raw"` | Automatic embedding search, lexical FTS5 ranking, then validated reads |
+| Vector only | `[knowledge.vector]` with `mode = "raw"` | Automatic vector similarity search followed by validated reads |
 | Hybrid | `[okf]` and `[knowledge.vector]` with `mode = "okf"` | Automatic candidate search over reachable OKF Concepts, then OKF navigation |
 
 The initial vector search is performed **before** the retrieval LLM is invoked.
@@ -63,9 +63,12 @@ Be aware that remote embeddings send indexed source content to that endpoint.
 
 ## Storage and security
 
-The initial backend is SQLite, with FTS5 plus exact vector comparison and
-reciprocal-rank-style hybrid scoring. The index is a local cache containing
-**source text and numerical embeddings**; protect it accordingly. SQLite
+The initial backend is SQLite, using exact cosine similarity between embedding
+vectors. No FTS5 index or source / chunk text is persisted. SQLite stores only
+concept paths, SHA-256 source fingerprints, vectors and index metadata
+(including the embedding model and dimension). Multiple vectors may map to
+one OKF Concept; the best chunk similarity ranks each Concept. The index can
+still contain information inferred from embeddings; protect it accordingly. SQLite
 is not an authorization boundary. Reads are restricted to the configured
 source root, validated against the index and performed by read-only
 knowledge tools. Symlink and hardlink aliases are rejected.
