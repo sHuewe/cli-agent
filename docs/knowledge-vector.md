@@ -17,6 +17,48 @@ tool. Vectors identify candidate files; the retrieval model must explicitly read
 and select documents using host-issued selection tokens. Knowledge remains
 untrusted data. Main-agent tools are never made available to the retrieval loop.
 
+## Trust boundary: offline indexing versus LLM execution
+
+**Creating or updating a vector database is a separate, explicitly initiated
+local CLI operation. It is not part of the LLM agent/Knowledge-Loop trust
+boundary.** Run `cli-agent-rag init-vector-db` or `update-vector-db` from a
+shell. Neither command is registered as an MCP tool or exposed to the
+Knowledge-Loop or main LLM. The LLM cannot trigger indexing, choose arbitrary
+source directories, alter the index, or re-embed documents through these
+read-only retrieval interfaces.
+
+The boundary has two distinct phases:
+
+1. **Offline indexing (operator-controlled):** The CLI validates an explicitly
+   supplied OKF root, walks reachable OKF links, reads Concepts, and sends
+   their text to the configured embedding service. It then writes an SQLite
+   index holding only paths, SHA-256 fingerprints, vectors, and model metadata.
+   Any remote embedding endpoint therefore receives source text during
+   indexing; host allowlisting and credential policy still apply. The
+   indexing process is not an LLM agent and interprets no document text as
+   instructions.
+2. **Runtime retrieval (LLM-controlled selection, host-enforced reads):**
+   The agent opens the existing SQLite index read-only. The initial semantic
+   lookup is automatic, without LLM involvement. The Knowledge-Loop can
+   request further read-only searches and reads; the host validates read
+   paths, source fingerprints and OKF tool/navigation rules. Retrieved text
+   is untrusted reference data. Only host-issued selection tokens for
+   successfully read Concepts can be passed to the main agent.
+
+The main agent's bounded `request_additional_knowledge` function **only
+repeats runtime retrieval**, never indexing. Database creation and update
+remain external operator actions. SQLite search results are candidate
+locators, not access grants or trusted instructions.
+
+**Operational limitations:** The runtime must have access to the original OKF
+root and the same embedding model/provider and vector dimension used when
+building the index. An OKF root selected by the user may be outside the
+workspace; this is deliberate and may cause its text to be sent to the
+configured embedding service. Rebuilding after changes in the OKF navigation
+graph is recommended even when individual Concept files did not change;
+the index itself is not an authorization or policy boundary. Separate
+security review is required before deploying an external vector store.
+
 ## Index setup
 
 Configure a distinct folder containing source documents:
