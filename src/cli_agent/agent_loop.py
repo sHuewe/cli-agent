@@ -133,7 +133,7 @@ async def run_model_loop(
                                     "existieren. `root_index` ist nur eine "
                                     "Navigationshilfe. Wenn die Anfrage "
                                     "anwendbar ist, rufe jetzt genau ein "
-                                    "angebotenes OKF-Tool auf. Andernfalls "
+                                    "angebotenes Knowledge-Tool auf. Andernfalls "
                                     "liefere `found_content: false` mit "
                                     "`reason_code: not_applicable`."
                                 ),
@@ -200,7 +200,7 @@ async def run_model_loop(
                         else:
                             correction_action = (
                                 "Es existiert noch kein gültiger Token. "
-                                "Nutze jetzt die OKF-Tools, bevor du erneut "
+                                "Nutze jetzt die Knowledge-Tools, bevor du erneut "
                                 "eine positive Auswahl ausgibst."
                             )
                         messages.append(
