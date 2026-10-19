@@ -330,3 +330,54 @@ async def test_okf_only_vector_index_rejects_raw_and_builds_reachable_concepts(t
     assert (stats.added, stats.changed, stats.unchanged, stats.removed) == (0, 0, 1, 0)
     with pytest.raises(ValueError, match="OKF"):
         await build_index(VectorKnowledgeConfig(mode="raw"), root=root, path=db, network=NetworkConfig())
+
+
+def test_okf_verified_read_enforces_configured_limit(tmp_path):
+    from cli_agent.knowledge_vector import _read_source
+    (tmp_path / "concept.md").write_text(
+        "---\ntype: concept\n---\n# A\n" + "content " * 100, encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="Leselimit"):
+        _read_source(tmp_path, "concept.md", mode="okf", max_read_bytes=64)
+    assert "content" in _read_source(
+        tmp_path, "concept.md", mode="okf", max_read_bytes=4096
+    )
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX symlink race regression")
+def test_okf_verified_read_blocks_swapped_symlink(tmp_path, monkeypatch):
+    import cli_agent.knowledge_vector as module
+    root = tmp_path / "okf"
+    root.mkdir()
+    document = root / "concept.md"
+    document.write_text("---\ntype: concept\n---\nSafe", encoding="utf-8")
+    external = tmp_path / "secret.md"
+    external.write_text("---\ntype: concept\n---\nPRIVATE", encoding="utf-8")
+    original = module._source_file
+    def swap(root_path, relative):
+        validated = original(root_path, relative)
+        document.unlink()
+        document.symlink_to(external)
+        return validated
+    monkeypatch.setattr(module, "_source_file", swap)
+    with pytest.raises(OSError):
+        module._read_source(root, "concept.md", mode="okf")
+
+
+@pytest.mark.asyncio
+async def test_okf_read_limit_is_bound_to_index_metadata(tmp_path, monkeypatch):
+    from cli_agent.knowledge_vector import EmbeddingProvider, update_index
+    root = tmp_path / "okf"
+    root.mkdir()
+    (root / "index.md").write_text("[A](a.md)", encoding="utf-8")
+    (root / "a.md").write_text("---\ntype: concept\n---\nA", encoding="utf-8")
+    index = tmp_path / "vectors.sqlite"
+    config = VectorKnowledgeConfig(mode="okf")
+    async def embed(self, texts):
+        return [[1.0, 0.0] for _ in texts]
+    monkeypatch.setattr(EmbeddingProvider, "embed", embed)
+    await build_index(config, root=root, path=index, network=NetworkConfig(), okf_max_read_bytes=512)
+    with pytest.raises(ValueError, match="neu indexieren"):
+        VectorKnowledgeSession(config, root=root, path=index, network=NetworkConfig(), okf_max_read_bytes=2048)
+    with pytest.raises(ValueError, match="neu indexieren"):
+        await update_index(config, root=root, path=index, network=NetworkConfig(), okf_max_read_bytes=2048)
