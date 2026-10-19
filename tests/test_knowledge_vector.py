@@ -51,11 +51,11 @@ def test_store_search_hybrid_and_provenance(tmp_path):
             ("service.md", hashlib.sha256(b"Token validation").hexdigest(), [[1.0, 0.0]]),
             ("database.md", hashlib.sha256(b"Storage").hexdigest(), [[0.0, 1.0]]),
         ])
-        store.configure(root=tmp_path, mode="raw", provider="ollama", model="emb", dim=2)
-        assert store.check(root=tmp_path, mode="raw", provider="ollama", model="emb") == 2
+        store.configure(root=tmp_path, mode="raw", provider="ollama", model="emb", endpoint="http://localhost:11434", dim=2)
+        assert store.check(root=tmp_path, mode="raw", provider="ollama", model="emb", endpoint="http://localhost:11434") == 2
         assert store.search([1.0, 0.0], limit=1)[0]["path"] == "service.md"
         with pytest.raises(ValueError):
-            store.check(root=tmp_path, mode="raw", provider="ollama", model="changed")
+            store.check(root=tmp_path, mode="raw", provider="ollama", model="changed", endpoint="http://localhost:11434")
         assert store.source_sha("service.md") == hashlib.sha256(b"Token validation").hexdigest()
         schema = {
             row["name"]: {column["name"] for column in store.db.execute(f"PRAGMA table_info({row['name']})")}
@@ -236,11 +236,11 @@ def test_old_schema_version_rejected(tmp_path):
     store = SQLiteKnowledgeStore(tmp_path / "old.sqlite", readonly=False)
     try:
         store.create()
-        store.configure(root=tmp_path, mode="okf", provider="ollama", model="embed", dim=2)
-        store.db.execute("UPDATE metadata SET value='1' WHERE key='schema'")
+        store.configure(root=tmp_path, mode="okf", provider="ollama", model="embed", endpoint="http://localhost:11434", dim=2)
+        store.db.execute("UPDATE metadata SET value='2' WHERE key='schema'")
         store.db.commit()
         with pytest.raises(ValueError, match="neu indexieren"):
-            store.check(root=tmp_path, mode="okf", provider="ollama", model="embed")
+            store.check(root=tmp_path, mode="okf", provider="ollama", model="embed", endpoint="http://localhost:11434")
     finally:
         store.close()
 
@@ -340,5 +340,64 @@ async def test_stale_vector_hits_do_not_hide_valid_lower_ranked_results(tmp_path
     try:
         results = await session.search("stale query")
         assert [item["path"] for item in results["entries"]] == ["valid.md"]
+    finally:
+        session.close()
+
+
+def test_embedding_endpoint_metadata_rejects_changed_host(tmp_path):
+    store = SQLiteKnowledgeStore(tmp_path / "index.sqlite", readonly=False)
+    try:
+        store.create()
+        store.configure(
+            root=tmp_path, mode="okf", provider="openai", model="embed",
+            endpoint="https://first.example/v1", dim=2,
+        )
+        assert store.check(
+            root=tmp_path, mode="okf", provider="openai", model="embed",
+            endpoint="https://first.example/v1",
+        ) == 2
+        with pytest.raises(ValueError, match="neu indexieren"):
+            store.check(
+                root=tmp_path, mode="okf", provider="openai", model="embed",
+                endpoint="https://second.example/v1",
+            )
+    finally:
+        store.close()
+
+
+def test_embedding_endpoint_identity_normalization():
+    from cli_agent.knowledge_vector import _embedding_endpoint_identity
+    assert _embedding_endpoint_identity("HTTPS://EXAMPLE.ORG:443/v1/") == "https://example.org/v1"
+    assert _embedding_endpoint_identity("http://localhost:11434/") == "http://localhost:11434"
+    with pytest.raises(ValueError):
+        _embedding_endpoint_identity("https://example.org/v1?secret=x")
+
+
+@pytest.mark.asyncio
+async def test_stale_result_validation_has_fixed_budget(tmp_path, monkeypatch):
+    from cli_agent.knowledge_vector import EmbeddingProvider
+    root = tmp_path / "docs"
+    root.mkdir()
+    path = tmp_path / "vectors.sqlite"
+    config = VectorKnowledgeConfig(mode="raw", source=str(root), database=str(path), search_limit=1)
+    async def embed(self, texts):
+        return [[1.0, 0.0] for _ in texts]
+    monkeypatch.setattr(EmbeddingProvider, "embed", embed)
+    for i in range(20):
+        (root / f"{i:02}.md").write_text(f"old-{i}", encoding="utf-8")
+    await build_index(config, root=root, path=path, network=NetworkConfig())
+    for i in range(20):
+        (root / f"{i:02}.md").write_text(f"new-{i}", encoding="utf-8")
+    import cli_agent.knowledge_vector as module
+    original = module._read_source
+    called = []
+    def counted(*args, **kwargs):
+        called.append(args[1])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module, "_read_source", counted)
+    session = VectorKnowledgeSession(config, root=root, path=path, network=NetworkConfig())
+    try:
+        assert (await session.search("search"))["entries"] == []
+        assert len(called) == 10
     finally:
         session.close()
