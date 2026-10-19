@@ -190,3 +190,90 @@ def test_dynamic_checkpoint_case_insensitive_suffix(tmp_path, monkeypatch):
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     asyncio.run(run_flow(load_flow(tmp_path / "parent.toml", workspace=tmp_path), workspace=tmp_path))
     assert calls == ["discover"]
+
+
+def test_dynamic_discovery_does_not_recount_same_directory_per_template(
+    tmp_path, monkeypatch,
+):
+    _flow(tmp_path)
+    child = tmp_path / "child.toml"
+    child.write_text(
+        child.read_text(encoding="utf-8") +
+        '\n[[steps]]\nid = "verify"\nprompt_file = "work.md"\n'
+        'response_format = "json"\n'
+        'output = "work/verify-${input.item.id}.json"\n'
+        'overwrite_output = false\n',
+        encoding="utf-8",
+    )
+    for i in range(24):
+        (tmp_path / "work" / f"unrelated-{i}.txt").write_text("not JSON", encoding="utf-8")
+    monkeypatch.setattr(flow_module, "MAX_DYNAMIC_CHECKPOINT_CANDIDATES", 35)
+    # Two dynamic output templates share the same directory. There are
+    # fewer than 35 distinct entries, although two walks used to exceed 35.
+    fingerprints, paths = flow_module._snapshot_dynamic_checkpoint_candidates(
+        workspace=tmp_path,
+        cache={"child": load_flow(child, workspace=tmp_path)},
+    )
+    assert fingerprints == {}
+    assert paths == ()
+
+
+def test_dynamic_discovery_distinct_entry_limit_still_enforced(
+    tmp_path, monkeypatch,
+):
+    _flow(tmp_path)
+    for i in range(24):
+        (tmp_path / "work" / f"unrelated-{i}.txt").write_text("not JSON", encoding="utf-8")
+    monkeypatch.setattr(flow_module, "MAX_DYNAMIC_CHECKPOINT_CANDIDATES", 10)
+    with pytest.raises(ValueError, match="Zu viele eindeutige"):
+        flow_module._snapshot_dynamic_checkpoint_candidates(
+            workspace=tmp_path,
+            cache={"child": load_flow(tmp_path / "child.toml", workspace=tmp_path)},
+        )
+
+
+def test_dynamic_discovery_overlapping_roots_count_paths_once(
+    tmp_path, monkeypatch,
+):
+    _flow(tmp_path)
+    (tmp_path / "work" / "nested").mkdir()
+    for i in range(15):
+        (tmp_path / "work" / "nested" / f"unrelated-{i}.txt").write_text(
+            "x", encoding="utf-8"
+        )
+    child = tmp_path / "child.toml"
+    child.write_text(
+        child.read_text(encoding="utf-8") +
+        '\n[[steps]]\nid = "nested"\nprompt_file = "work.md"\n'
+        'response_format = "json"\n'
+        'output = "work/nested/check-${input.item.id}.json"\n'
+        'overwrite_output = false\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_module, "MAX_DYNAMIC_CHECKPOINT_CANDIDATES", 20)
+    fingerprints, paths = flow_module._snapshot_dynamic_checkpoint_candidates(
+        workspace=tmp_path,
+        cache={"child": load_flow(child, workspace=tmp_path)},
+    )
+    assert fingerprints == {}
+    assert paths == ()
+
+
+def test_dynamic_discovery_counts_symlink_entries_not_targets(
+    tmp_path, monkeypatch,
+):
+    _flow(tmp_path)
+    target = tmp_path / "work" / "target.txt"
+    target.write_text("data", encoding="utf-8")
+    try:
+        for i in range(12):
+            (tmp_path / "work" / f"link-{i}.txt").symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("Creating file symlinks is not permitted on this platform")
+
+    monkeypatch.setattr(flow_module, "MAX_DYNAMIC_CHECKPOINT_CANDIDATES", 10)
+    with pytest.raises(ValueError, match="Zu viele eindeutige"):
+        flow_module._snapshot_dynamic_checkpoint_candidates(
+            workspace=tmp_path,
+            cache={"child": load_flow(tmp_path / "child.toml", workspace=tmp_path)},
+        )
