@@ -31,6 +31,108 @@ def regular_file_has_multiple_links(path: Path) -> bool:
 
 
 
+
+def _windows_open_pinned_file(root: Path, relative_parts: tuple[str, ...], stack: ExitStack) -> int:
+    """Pin each ancestor against replacement and refuse Windows reparse points.
+
+    Unlike stat-then-open, parent directory handles deny FILE_SHARE_DELETE.
+    CreateFileW opens each next component with OPEN_REPARSE_POINT, so a
+    concurrently substituted junction or symlink is inspected, never followed.
+    The returned CRT fd owns the final Win32 HANDLE.
+    """
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+    attributes_for_handle = kernel32.GetFileInformationByHandleEx
+    attributes_for_handle.argtypes = (
+        wintypes.HANDLE, wintypes.INT, ctypes.c_void_p, wintypes.DWORD,
+    )
+    attributes_for_handle.restype = wintypes.BOOL
+
+    class FileAttributeTagInfo(ctypes.Structure):
+        _fields_ = (
+            ("FileAttributes", wintypes.DWORD),
+            ("ReparseTag", wintypes.DWORD),
+        )
+
+    file_read_attributes = 0x0080
+    generic_read = 0x80000000
+    file_share_read = 0x00000001
+    file_share_write = 0x00000002
+    open_existing = 3
+    file_flag_backup_semantics = 0x02000000
+    file_flag_open_reparse_point = 0x00200000
+    file_attribute_directory = 0x00000010
+    file_attribute_reparse_point = 0x00000400
+    file_attribute_tag_info = 9
+    invalid_handle = ctypes.c_void_p(-1).value
+
+    root_path = PureWindowsPath(str(root.absolute()))
+    if not root_path.is_absolute() or not root_path.anchor:
+        raise ValueError("OKF-Root muss ein absoluter Windows-Pfad sein.")
+    # Pin from the volume/share root, not just the configured OKF root.
+    # Otherwise a junction in an ancestor of that root could be swapped too.
+    components = (*root_path.parts[1:], *relative_parts)
+    current = root_path.anchor
+
+    def open_component(path: str, *, directory: bool) -> int:
+        handle = create_file(
+            path,
+            file_read_attributes if directory else generic_read,
+            file_share_read | file_share_write if directory else file_share_read,
+            None,
+            open_existing,
+            file_flag_open_reparse_point
+            | (file_flag_backup_semantics if directory else 0),
+            None,
+        )
+        if handle == invalid_handle or handle is None:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            info = FileAttributeTagInfo()
+            if not attributes_for_handle(
+                handle, file_attribute_tag_info, ctypes.byref(info),
+                ctypes.sizeof(info),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if info.FileAttributes & file_attribute_reparse_point:
+                raise ValueError("OKF-Dateipfad enthält einen Windows-Reparse-Point.")
+            is_dir = bool(info.FileAttributes & file_attribute_directory)
+            if is_dir != directory:
+                raise ValueError("OKF-Dateipfad hat einen ungültigen Dateityp.")
+        except Exception:
+            close_handle(handle)
+            raise
+        return handle
+
+    anchor_handle = open_component(current, directory=True)
+    stack.callback(close_handle, anchor_handle)
+    for component in components[:-1]:
+        current = str(PureWindowsPath(current) / component)
+        directory_handle = open_component(current, directory=True)
+        stack.callback(close_handle, directory_handle)
+    current = str(PureWindowsPath(current) / components[-1])
+    final_handle = open_component(current, directory=False)
+    try:
+        return msvcrt.open_osfhandle(
+            final_handle, os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        )
+    except Exception:
+        close_handle(final_handle)
+        raise
+
+
 def read_bounded_regular_file(
     root: Path,
     relative: str,
@@ -71,13 +173,10 @@ def read_bounded_regular_file(
                 parts[-1], read_flags | os.O_NOFOLLOW | os.O_NONBLOCK,
                 dir_fd=parent_fd,
             )
+        elif os.name == "nt":
+            file_fd = _windows_open_pinned_file(root, parts, stack)
         else:
-            current = root
-            for part in parts:
-                current = current / part
-                if path_entry_is_symlink_or_reparse(current):
-                    raise ValueError("Dateipfad enthält einen Link oder Reparse-Point.")
-            file_fd = os.open(root.joinpath(*parts), read_flags | getattr(os, "O_NOINHERIT", 0))
+            raise OSError("Sicheres Öffnen ist auf diesem Betriebssystem nicht verfügbar.")
         stack.callback(os.close, file_fd)
         opened = os.fstat(file_fd)
         if not stat.S_ISREG(opened.st_mode):
@@ -90,13 +189,8 @@ def read_bounded_regular_file(
             raise ValueError("Die Datei wurde während des Öffnens ausgetauscht.")
         if opened.st_size > max_bytes:
             raise ValueError(f"Datei ist mit {opened.st_size} Bytes größer als das konfigurierte Leselimit von {max_bytes} Bytes.")
-        if os.name != "posix":
-            target = root.joinpath(*parts)
-            if path_entry_is_symlink_or_reparse(target):
-                raise ValueError("Dateipfad ist ein Reparse-Point.")
-            current = target.stat()
-            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
-                raise ValueError("Die Datei wurde während des Öffnens ausgetauscht.")
+        # Windows ancestors and the final file are pinned in the same stack;
+        # checking the pathname again would reintroduce a race.
 
         # Bound total bytes even when file size grows between fstat and read.
         chunks: list[bytes] = []
