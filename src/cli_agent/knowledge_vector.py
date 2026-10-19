@@ -390,44 +390,51 @@ class SQLiteKnowledgeStore:
 async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig, credential_rules: tuple[Any, ...] = ()) -> int:
     provider = EmbeddingProvider(config, network, credential_rules)
     paths = _okf_paths(root, max_files=config.max_files) if config.mode == "okf" else _raw_paths(root, max_files=config.max_files)
-    # All embedding calls succeed before replacing the on-disk index.
-    records: list[tuple[str, str, list[list[float]]]] = []
-    dimensions: set[int] = set()
-    for relative in paths:
-        content = _read_source(root, relative, mode=config.mode)
-        source_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        split = _chunks(content)
-        vectors: list[list[float]] = []
-        for pos in range(0, len(split), MAX_BATCH):
-            batch = await provider.embed(split[pos:pos + MAX_BATCH])
-            vectors.extend(batch)
-        for vector in vectors:
-            dimensions.add(len(vector))
-        # Only the fingerprint and vectors cross into the persistence layer.
-        records.append((relative, source_sha256, vectors))
-    if not dimensions or len(dimensions) != 1:
-        raise ValueError("Knowledge-Quelle enthält keine indexierbaren Texte oder inkompatible Embeddings.")
+    # Persist each completed batch directly to a *temporary* database.
+    # The live index is replaced only after every embedding request succeeds.
     import tempfile
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="cli-agent-knowledge-", dir=path.parent) as temp:
         new_path = Path(temp) / "index.sqlite"
         store = SQLiteKnowledgeStore(new_path, readonly=False)
+        indexed = 0
+        dim: int | None = None
         try:
             store.create()
-            store.replace_documents(records)
-            store.configure(root=root, mode=config.mode, provider=config.provider, model=config.model,
-                            endpoint=provider.endpoint_identity, dim=next(iter(dimensions)))
+            for relative in paths:
+                content = _read_source(root, relative, mode=config.mode)
+                source_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                store.db.execute(
+                    "INSERT INTO sources(path,sha256) VALUES (?,?)",
+                    (relative, source_sha256),
+                )
+                # Never accumulate embeddings from multiple source documents.
+                split = _chunks(content)
+                for pos in range(0, len(split), MAX_BATCH):
+                    for vector in await provider.embed(split[pos:pos + MAX_BATCH]):
+                        if dim is None:
+                            dim = len(vector)
+                        elif len(vector) != dim:
+                            raise ValueError("Inkonsistente Embedding-Dimensionen.")
+                        store.db.execute(
+                            "INSERT INTO chunks(source,vector) VALUES (?,?)",
+                            (relative, _encode(vector)),
+                        )
+                indexed += 1
+            if dim is None:
+                raise ValueError("Knowledge-Quelle enthält keine indexierbaren Texte.")
+            store.configure(
+                root=root, mode=config.mode, provider=config.provider,
+                model=config.model, endpoint=provider.endpoint_identity, dim=dim,
+            )
             store.db.commit()
         finally:
             store.close()
-        # The writer is closed before atomically replacing the read-only index.
-        # Separate WAL sidecars must never belong to the published database.
         for suffix in ("-wal", "-shm"):
-            sidecar = Path(str(new_path) + suffix)
-            if sidecar.exists():
+            if Path(str(new_path) + suffix).exists():
                 raise RuntimeError("Index-Datenbank besitzt noch aktive WAL-Dateien.")
         os.replace(new_path, path)
-    return len(records)
+    return indexed
 
 
 
