@@ -262,6 +262,7 @@ class McpLifecycleMixin:
             session = VectorKnowledgeSession(
                 config, root=root, path=path,
                 network=self.network, credential_rules=self._model_credential_rules,
+                okf_max_read_bytes=self._okf_options.max_read_bytes,
             )
             self._vector_session = session
             runtime = _RuntimeMcpServerConfig(name="vector", built_in=True)
