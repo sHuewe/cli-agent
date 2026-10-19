@@ -323,15 +323,15 @@ class ConversationMixin:
         )
         if not active_okf and not active_vector:
             return None
-        required = bool((options and active_okf and options.required) or (vector_config and vector_config.required))
+        okf_required = bool(options and active_okf and options.required)
+        vector_required = bool(vector_config and vector_config.required and not hybrid_okf_disabled)
+        required = okf_required or (vector_required and active_vector)
         if active_okf and self._knowledge_session is None:
-            if required:
+            if okf_required:
                 raise RuntimeError("Der konfigurierte OKF-Wissensserver ist nicht verfügbar.")
             return None
-        if vector_config is not None and not active_vector:
-            if required:
-                raise RuntimeError("Der konfigurierte Vektorindex ist nicht verfügbar.")
-            return None
+        if vector_config is not None and not active_vector and vector_required:
+            raise RuntimeError("Der konfigurierte Vektorindex ist nicht verfügbar.")
 
         try:
             seen_calls = set()
@@ -361,14 +361,31 @@ class ConversationMixin:
                     allowed_calls.setdefault(path, set()).update(names)
 
             if active_vector:
-                initial_search = await self._vector_session.search(prompt)
-                knowledge_request_data["initial_search"] = initial_search
-                for path, names in _knowledge_allowed_calls(
-                    type("_Result", (), {"structuredContent": initial_search})()
-                ).items():
-                    allowed_calls.setdefault(path, set()).update(names)
-                seen_calls.add(_knowledge_call_key("knowledge_search", {"query": prompt}))
+                try:
+                    initial_search = await self._vector_session.search(prompt)
+                except Exception:
+                    if vector_required or not active_okf:
+                        raise
+                    logger.warning("optional_vector_search_failed_fallback_to_okf", exc_info=True)
+                    active_vector = False
+                else:
+                    knowledge_request_data["initial_search"] = initial_search
+                    for path, names in _knowledge_allowed_calls(
+                        type("_Result", (), {"structuredContent": initial_search})()
+                    ).items():
+                        allowed_calls.setdefault(path, set()).update(names)
+                    seen_calls.add(_knowledge_call_key("knowledge_search", {"query": prompt}))
 
+            # Never advertise optional vector tools when the vector index has
+            # failed or was not started. OKF navigation remains available.
+            run_tools = [
+                tool for tool in self._knowledge_tools
+                if active_vector or not tool["function"]["name"].startswith("vector__")
+            ]
+            run_routes = {
+                name: route for name, route in self._knowledge_routes.items()
+                if active_vector or not name.startswith("vector__")
+            }
             knowledge_state = _KnowledgeRunState(
                 seen_calls=seen_calls,
                 allowed_calls=allowed_calls,
@@ -381,7 +398,7 @@ class ConversationMixin:
             messages = [
                 {
                     "role": "system",
-                    "content": self._build_knowledge_system_prompt(),
+                    "content": self._build_knowledge_system_prompt(vector_active=active_vector, tools=run_tools),
                 },
                 *copy.deepcopy(self.history),
                 {"role": "user", "content": knowledge_request},
@@ -389,8 +406,8 @@ class ConversationMixin:
 
             result = await self._run_model_loop(
                 messages=messages,
-                tools=self._knowledge_tools,
-                routes=self._knowledge_routes,
+                tools=run_tools,
+                routes=run_routes,
                 enabled_server_names=None,
                 max_tool_calls=options.max_tool_calls if options else 100,
                 max_concept_reads=options.max_concept_reads if options else 80,
