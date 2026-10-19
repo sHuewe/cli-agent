@@ -154,7 +154,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         try:
             result = await self._collect_knowledge(question)
             return SimpleNamespace(
-                structuredContent={"status": "ok" if result is not None else "no_new_information", "knowledge": result},
+                structuredContent={"status": "ok" if result is not None else "no_new_information", "knowledge": json.loads(result) if result is not None else None},
                 content=[], isError=False,
             )
         except Exception:
