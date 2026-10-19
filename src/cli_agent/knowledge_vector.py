@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import stat
+from contextlib import ExitStack
 import sqlite3
 import struct
 import tempfile
@@ -66,26 +68,87 @@ def _source_file(root: Path, relative: str) -> Path:
         raise ValueError("Knowledge-Pfad liegt nicht in der konfigurierten Quelle.")
     if regular_file_has_multiple_links(resolved):
         raise ValueError("Knowledge-Dateien mit Hardlinks sind nicht erlaubt.")
-    if resolved.stat().st_size > MAX_SOURCE_BYTES:
-        raise ValueError("Knowledge-Datei überschreitet das Größenlimit.")
     return resolved
 
 
-def _read_source(root: Path, relative: str, *, mode: str) -> str:
+def _read_verified_okf_bytes(root: Path, relative: str, *, max_read_bytes: int) -> bytes:
+    """Read a root-relative Concept using a bounded verified file descriptor.
+
+    On POSIX each directory entry is opened relative to its parent directory
+    descriptor with O_NOFOLLOW. This avoids check-then-reopen symlink races.
+    On Windows we check the opened handle's identity against the validated
+    entry and reject reparse points, before exposing any bytes.
+    """
+    if max_read_bytes < 1:
+        raise ValueError("Das OKF-Leselimit muss positiv sein.")
+    validated = _source_file(root, relative)
+    expected = validated.stat()
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    with ExitStack() as stack:
+        if os.name == "posix":
+            safe_dir_flags = flags | os.O_DIRECTORY | os.O_NOFOLLOW
+            parent_fd = os.open(root, safe_dir_flags)
+            stack.callback(os.close, parent_fd)
+            parts = Path(relative).parts
+            for component in parts[:-1]:
+                child_fd = os.open(component, safe_dir_flags, dir_fd=parent_fd)
+                stack.callback(os.close, child_fd)
+                parent_fd = child_fd
+            fd = os.open(parts[-1], flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+        else:
+            # Where dir_fd/O_NOFOLLOW are unavailable, enforce identity and
+            # reparse-point checks on the opened descriptor as well.
+            from .filesystem_security import path_entry_is_symlink_or_reparse
+            current = root
+            for component in Path(relative).parts:
+                current = current / component
+                if path_entry_is_symlink_or_reparse(current):
+                    raise ValueError("OKF-Pfad enthält einen Link oder Reparse-Point.")
+            fd = os.open(validated, flags | getattr(os, "O_NOINHERIT", 0))
+        stack.callback(os.close, fd)
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino)
+        ):
+            raise ValueError("OKF-Datei wurde ausgetauscht oder ist nicht regulär.")
+        if opened.st_size > max_read_bytes:
+            raise ValueError("OKF-Datei überschreitet das konfigurierte Leselimit.")
+        if os.name != "posix":
+            # A pathname must still identify the same regular file after open.
+            from .filesystem_security import path_entry_is_symlink_or_reparse
+            if path_entry_is_symlink_or_reparse(validated):
+                raise ValueError("OKF-Pfad wurde zu einem Reparse-Point geändert.")
+            now = validated.stat()
+            if (now.st_dev, now.st_ino) != (opened.st_dev, opened.st_ino):
+                raise ValueError("OKF-Pfad wurde während des Öffnens geändert.")
+        # Bounded even if the file grows after fstat.
+        data = os.read(fd, max_read_bytes + 1)
+        if len(data) > max_read_bytes:
+            raise ValueError("OKF-Datei überschreitet das konfigurierte Leselimit.")
+        return data
+
+
+def _read_source(
+    root: Path, relative: str, *, mode: str,
+    max_read_bytes: int = MAX_SOURCE_BYTES,
+) -> str:
     if mode != "okf":
         raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
-    _source_file(root, relative)
-    from .okf_mcp_server.repository import OkfRepository
-    repository = OkfRepository.from_directory(root, max_read_bytes=MAX_SOURCE_BYTES)
-    result = repository.knowledge_read(relative)
-    if result["kind"] != "concept":
+    if Path(relative).name in {"index.md", "log.md"} or Path(relative).suffix.lower() != ".md":
         raise ValueError("Nur OKF-Concepts können indexiert werden.")
-    return result["content"]
+    content = _read_verified_okf_bytes(root, relative, max_read_bytes=max_read_bytes).decode("utf-8")
+    # Apply the same restrictive OKF frontmatter parser as the MCP server,
+    # without reopening the pathname after the verified descriptor read.
+    from .okf_mcp_server.repository_support import RepositoryMetadataMixin
+    RepositoryMetadataMixin._parse_frontmatter(content)
+    return content
 
 
-def _okf_paths(root: Path, *, max_files: int) -> list[str]:
+def _okf_paths(root: Path, *, max_files: int, max_read_bytes: int = MAX_SOURCE_BYTES) -> list[str]:
     from .okf_mcp_server.repository import OkfRepository
-    repo = OkfRepository.from_directory(root, max_read_bytes=MAX_SOURCE_BYTES, max_index_entries=2000)
+    repo = OkfRepository.from_directory(root, max_read_bytes=max_read_bytes, max_index_entries=2000)
     queue = [(".", "knowledge_index")]
     seen: set[tuple[str, str]] = set()
     concepts: set[str] = set()
@@ -270,15 +333,18 @@ class SQLiteKnowledgeStore:
     def metadata(self) -> dict[str, str]:
         return {r["key"]: r["value"] for r in self.db.execute("SELECT key,value FROM metadata")}
 
-    def configure(self, *, root: Path, mode: str, provider: str, model: str, endpoint: str, dim: int) -> None:
+    def configure(self, *, root: Path, mode: str, provider: str, model: str, endpoint: str, dim: int,
+                  max_read_bytes: int = MAX_SOURCE_BYTES) -> None:
         values = {"root": str(root), "mode": mode, "provider": provider, "model": model,
-                  "endpoint": endpoint, "dimension": str(dim), "schema": "3"}
+                  "endpoint": endpoint, "dimension": str(dim),
+                  "okf_max_read_bytes": str(max_read_bytes), "schema": "4"}
         self.db.executemany("INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)", values.items())
 
-    def check(self, *, root: Path, mode: str, provider: str, model: str, endpoint: str) -> int:
+    def check(self, *, root: Path, mode: str, provider: str, model: str, endpoint: str,
+              max_read_bytes: int = MAX_SOURCE_BYTES) -> int:
         meta = self.metadata()
         expected = {"root": str(root), "mode": mode, "provider": provider, "model": model,
-                    "endpoint": endpoint, "schema": "3"}
+                    "endpoint": endpoint, "okf_max_read_bytes": str(max_read_bytes), "schema": "4"}
         if any(meta.get(k) != v for k, v in expected.items()):
             raise ValueError(
                 "Knowledge-Index passt nicht zu Quelle/Embedding-Modell/Endpunkt; "
@@ -371,11 +437,12 @@ class SQLiteKnowledgeStore:
         ]
 
 
-async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig, credential_rules: tuple[Any, ...] = ()) -> int:
+async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig,
+                      credential_rules: tuple[Any, ...] = (), okf_max_read_bytes: int = MAX_SOURCE_BYTES) -> int:
     provider = EmbeddingProvider(config, network, credential_rules)
     if config.mode != "okf":
         raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
-    paths = _okf_paths(root, max_files=config.max_files)
+    paths = _okf_paths(root, max_files=config.max_files, max_read_bytes=okf_max_read_bytes)
     # Persist each completed batch directly to a *temporary* database.
     # The live index is replaced only after every embedding request succeeds.
     import tempfile
@@ -388,7 +455,7 @@ async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, 
         try:
             store.create()
             for relative in paths:
-                content = _read_source(root, relative, mode=config.mode)
+                content = _read_source(root, relative, mode=config.mode, max_read_bytes=okf_max_read_bytes)
                 source_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 store.db.execute(
                     "INSERT INTO sources(path,sha256) VALUES (?,?)",
@@ -412,6 +479,7 @@ async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, 
             store.configure(
                 root=root, mode=config.mode, provider=config.provider,
                 model=config.model, endpoint=provider.endpoint_identity, dim=dim,
+                max_read_bytes=okf_max_read_bytes,
             )
             store.db.commit()
         finally:
@@ -431,6 +499,7 @@ async def update_index(
     path: Path,
     network: NetworkConfig,
     credential_rules: tuple[Any, ...] = (),
+    okf_max_read_bytes: int = MAX_SOURCE_BYTES,
 ) -> IndexUpdateResult:
     """Atomically update a schema-v3 index, embedding only changed documents.
 
@@ -452,6 +521,7 @@ async def update_index(
         dimension = old.check(
             root=root, mode=config.mode, provider=config.provider,
             model=config.model, endpoint=provider.endpoint_identity,
+            max_read_bytes=okf_max_read_bytes,
         )
         # Check both the configuration and structural validity of the old index
         # before using it as the source for unchanged embeddings.
@@ -461,14 +531,14 @@ async def update_index(
         }
         if config.mode != "okf":
             raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
-        paths = _okf_paths(root, max_files=config.max_files)
+        paths = _okf_paths(root, max_files=config.max_files, max_read_bytes=okf_max_read_bytes)
 
         # Only retain identifiers and checksums for changed files. Holding
         # pre-split contents for the whole corpus can exhaust memory.
         changed_records: list[tuple[str, str]] = []
         unchanged_records: list[tuple[str, str]] = []
         for relative in paths:
-            content = _read_source(root, relative, mode=config.mode)
+            content = _read_source(root, relative, mode=config.mode, max_read_bytes=okf_max_read_bytes)
             fingerprint = hashlib.sha256(content.encode("utf-8")).hexdigest()
             if existing.get(relative) == fingerprint:
                 unchanged_records.append((relative, fingerprint))
@@ -501,7 +571,7 @@ async def update_index(
                 new_store.configure(
                     root=root, mode=config.mode, provider=config.provider,
                     model=config.model, endpoint=provider.endpoint_identity,
-                    dim=dimension,
+                    dim=dimension, max_read_bytes=okf_max_read_bytes,
                 )
                 for relative, fingerprint in unchanged_records:
                     new_store.copy_unchanged_source(
@@ -510,7 +580,7 @@ async def update_index(
                 for relative, fingerprint in changed_records:
                     # Re-read one source at a time; nothing but its fingerprint
                     # was retained from the initial change-detection pass.
-                    content = _read_source(root, relative, mode=config.mode)
+                    content = _read_source(root, relative, mode=config.mode, max_read_bytes=okf_max_read_bytes)
                     if hashlib.sha256(content.encode("utf-8")).hexdigest() != fingerprint:
                         raise ValueError(
                             "Knowledge-Quelle wurde während der Indexierung "
@@ -554,17 +624,20 @@ async def update_index(
 class VectorKnowledgeSession:
     """Read-only tool adapter used exclusively inside the Knowledge phase."""
 
-    def __init__(self, config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig, credential_rules: tuple[Any, ...] = ()) -> None:
+    def __init__(self, config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig,
+                 credential_rules: tuple[Any, ...] = (), okf_max_read_bytes: int = MAX_SOURCE_BYTES) -> None:
         if config.mode != "okf":
             raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
         self.config = config
         self.root = root
+        self.okf_max_read_bytes = okf_max_read_bytes
         self.embedder = EmbeddingProvider(config, network, credential_rules)
         self.store = SQLiteKnowledgeStore(path)
         try:
             self.dimension = self.store.check(
                 root=root, mode=config.mode, provider=config.provider,
                 model=config.model, endpoint=self.embedder.endpoint_identity,
+                max_read_bytes=okf_max_read_bytes,
             )
         except Exception:
             self.store.close()
@@ -590,7 +663,7 @@ class VectorKnowledgeSession:
         hits = []
         for item in candidates:
             try:
-                current = _read_source(self.root, item["path"], mode=self.config.mode)
+                current = _read_source(self.root, item["path"], mode=self.config.mode, max_read_bytes=self.okf_max_read_bytes)
             except (OSError, ValueError):
                 continue
             if hashlib.sha256(current.encode("utf-8")).hexdigest() == self.store.source_sha(item["path"]):
