@@ -489,3 +489,46 @@ def test_readonly_sqlite_uri_handles_query_and_fragment_in_filename(tmp_path):
     finally:
         reader.close()
     assert not (tmp_path / "vectors").exists()
+
+
+def test_raw_pdf_uses_bounded_extractor(tmp_path, monkeypatch):
+    from cli_agent.knowledge_vector import _read_source
+    import cli_agent.pdf_text as pdf_text
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "sample.pdf").write_bytes(b"%PDF-1.4\nplaceholder")
+    called = []
+    def bounded(path):
+        called.append(path)
+        return "bounded text"
+    monkeypatch.setattr(pdf_text, "read_pdf_text", bounded)
+    assert _read_source(root, "sample.pdf", mode="raw") == "bounded text"
+    assert called == [root / "sample.pdf"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("indices", [
+    [0, 0], [1, 2], [-1, 1], [True, 1], ["0", 1], [0, None],
+])
+async def test_openai_embedding_rejects_bad_indices(monkeypatch, indices):
+    import httpx
+    from cli_agent.knowledge_vector import EmbeddingProvider
+    class Response:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"data": [{"index": ix, "embedding": [1.0, 0.0]} for ix in indices]}
+    class Client:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def post(self, *args, **kwargs):
+            return Response()
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: Client())
+    provider = EmbeddingProvider(
+        VectorKnowledgeConfig(provider="openai", model="embed", base_url="http://localhost:11434/v1"),
+        NetworkConfig(),
+    )
+    with pytest.raises(RuntimeError, match="Indizes"):
+        await provider.embed(["first", "second"])
