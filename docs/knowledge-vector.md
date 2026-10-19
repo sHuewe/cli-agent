@@ -80,3 +80,28 @@ when knowledge is available. It launches a separate Knowledge-Loop using the
 same retrieval mode and has a limit of two additional questions per user turn.
 Repeated normalized questions are rejected. Retrieved data never becomes
 trusted system instructions.
+
+## Standalone RAG CLI
+
+`cli-agent-rag` is a separate command with expandable subcommands. To create
+or replace a SQLite vector index from a selected OKF repository without
+modifying the agent configuration:
+
+```shell
+cli-agent-rag init-vector-db \
+  --okf-repo "C:/knowledge/my-okf" \
+  --embedding-model "embeddinggemma" \
+  --sqlite-file "C:/knowledge/indexes/my-okf.sqlite"
+```
+
+The default embedding provider is Ollama at `http://localhost:11434`.
+Specify an alternative endpoint with `--base-url`. For an OpenAI-compatible
+embedding API, use `--provider openai --base-url https://host.example/v1`,
+optionally adding `--api-key-env NAME` (and the required administrative
+credential allowlist). `--max-files N` limits indexed OKF Concepts.
+
+The SQLite output must reside outside the OKF repository. It is generated
+through the same validated OKF traversal, embedding provider and SQLite
+indexer as `cli-agent-knowledge index`. The existing command stays available;
+future RAG-specific management operations can be introduced as new
+`cli-agent-rag` subcommands.
