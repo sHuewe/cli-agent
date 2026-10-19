@@ -101,3 +101,26 @@ def test_main_prints_usage_error_without_traceback(capsys):
               "--embedding-model", "embed", "--sqlite-file", "vectors.sqlite"])
     assert error.value.code == 1
     assert "cli-agent-rag:" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_update_vector_db_routes_to_incremental_indexer(tmp_path, monkeypatch, capsys):
+    from cli_agent.knowledge_vector import IndexUpdateResult
+    repo = tmp_path / "okf"
+    repo.mkdir()
+    (repo / "index.md").write_text("# Knowledge", encoding="utf-8")
+    update = AsyncMock(return_value=IndexUpdateResult(added=1, changed=2, unchanged=3, removed=4))
+    build = AsyncMock()
+    monkeypatch.setattr("cli_agent.rag_cli.update_index", update)
+    monkeypatch.setattr("cli_agent.rag_cli.build_index", build)
+    monkeypatch.setattr("cli_agent.rag_cli.load_admin_config",
+                        lambda: argparse.Namespace(network=object(), model_credentials=()))
+    args = build_parser().parse_args([
+        "update-vector-db", "--okf-repo", str(repo),
+        "--embedding-model", "embeddinggemma",
+        "--sqlite-file", str(tmp_path / "vectors.sqlite"),
+    ])
+    assert await init_vector_db(args, incremental=True) == 6
+    update.assert_awaited_once()
+    build.assert_not_awaited()
+    assert "unverändert: 3" in capsys.readouterr().out
