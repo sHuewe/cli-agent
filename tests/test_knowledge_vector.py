@@ -283,3 +283,50 @@ async def test_openai_embedding_rejects_bad_indices(monkeypatch, indices):
     )
     with pytest.raises(RuntimeError, match="Indizes"):
         await provider.embed(["first", "second"])
+
+
+def test_boolean_embeddings_and_non_finite_stored_vectors_are_rejected(tmp_path):
+    import struct
+    from cli_agent.knowledge_vector import _encode
+    with pytest.raises(ValueError, match="ungültige"):
+        _encode([True, 0.5])
+    store = SQLiteKnowledgeStore(tmp_path / "corrupt.sqlite", readonly=False)
+    try:
+        store.create()
+        store.replace_documents([("service.md", hashlib.sha256(b"doc").hexdigest(), [[1.0, 0.0]])])
+        store.db.execute(
+            "UPDATE chunks SET vector=?",
+            (struct.pack("<2f", float("nan"), 0.0),),
+        )
+        store.db.commit()
+        with pytest.raises(ValueError, match="ungültige"):
+            store.search([1.0, 0.0])
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_okf_only_vector_index_rejects_raw_and_builds_reachable_concepts(tmp_path, monkeypatch):
+    from cli_agent.knowledge_vector import EmbeddingProvider, update_index
+    root = tmp_path / "okf"
+    root.mkdir()
+    (root / "index.md").write_text("# Knowledge\n[Service](service.md)", encoding="utf-8")
+    (root / "service.md").write_text(
+        "---\ntype: concept\ntitle: Service\n---\n# Service\nInformation", encoding="utf-8",
+    )
+    db = tmp_path / "index.sqlite"
+    config = VectorKnowledgeConfig(mode="okf", database=str(db))
+    async def embed(self, texts):
+        return [[1.0, 0.0] for _ in texts]
+    monkeypatch.setattr(EmbeddingProvider, "embed", embed)
+    assert await build_index(config, root=root, path=db, network=NetworkConfig()) == 1
+    session = VectorKnowledgeSession(config, root=root, path=db, network=NetworkConfig())
+    try:
+        entries = (await session.search("service"))["entries"]
+        assert [x["path"] for x in entries] == ["service.md"]
+    finally:
+        session.close()
+    stats = await update_index(config, root=root, path=db, network=NetworkConfig())
+    assert (stats.added, stats.changed, stats.unchanged, stats.removed) == (0, 0, 1, 0)
+    with pytest.raises(ValueError, match="OKF"):
+        await build_index(VectorKnowledgeConfig(mode="raw"), root=root, path=db, network=NetworkConfig())
