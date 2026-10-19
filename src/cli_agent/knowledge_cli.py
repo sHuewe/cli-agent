@@ -32,6 +32,7 @@ async def _run_index(config_file):
     count = await build_index(
         vector, root=root, path=db,
         network=admin.network, credential_rules=admin.model_credentials,
+        okf_max_read_bytes=config.okf.max_read_bytes,
     )
     print(f"Knowledge-Index aktualisiert: {count} Quelldokumente; Datenbank: {db}")
 
