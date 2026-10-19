@@ -2598,7 +2598,12 @@ def _snapshot_dynamic_checkpoint_candidates(
                 *(folder / dirname for dirname in subdirectories),
                 *(folder / filename for filename in filenames),
             ):
-                key = _filesystem_path_key(entry)
+                # Count directory ENTRIES, not resolved targets: many
+                # symlinks to a single file must still consume the budget.
+                # abspath/normpath are lexical here (unlike Path.resolve).
+                key = os.path.normpath(os.path.abspath(entry))
+                if case_insensitive:
+                    key = key.casefold()
                 if key not in examined_paths:
                     examined_paths.add(key)
                     if len(examined_paths) > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
