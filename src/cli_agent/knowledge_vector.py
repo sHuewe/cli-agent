@@ -331,9 +331,9 @@ class SQLiteKnowledgeStore:
         row = self.db.execute("SELECT sha256 FROM sources WHERE path=?", (path,)).fetchone()
         return row["sha256"] if row is not None else None
 
-    def search(self, vector: list[float], *, limit: int = 5) -> list[dict[str, Any]]:
+    def search(self, vector: list[float], *, limit: int | None = 5) -> list[dict[str, Any]]:
         """Rank concepts by their best chunk cosine similarity, without lexical data."""
-        if not 1 <= limit <= MAX_SEARCH_RESULTS:
+        if limit is not None and not 1 <= limit <= MAX_SEARCH_RESULTS:
             raise ValueError("Ungültiges Knowledge-Suchlimit.")
         # Verify the supplied query vector before evaluating any stored vectors.
         _encode(vector)
@@ -356,7 +356,7 @@ class SQLiteKnowledgeStore:
         ranked = sorted(
             best_similarity.items(),
             key=lambda item: (-item[1], item[0]),
-        )[:limit]
+        )[:limit] if limit is not None else sorted(best_similarity.items(), key=lambda item: (-item[1], item[0]))
         return [
             {"path": source, "score": round(score, 5), "next_tool": "knowledge_read"}
             for source, score in ranked
@@ -543,7 +543,7 @@ class VectorKnowledgeSession:
         vector = (await self.embedder.embed([query]))[0]
         if len(vector) != self.dimension:
             raise ValueError("Embedding-Modell passt nicht zur Indexdimension.")
-        candidates = self.store.search(vector, limit=self.config.search_limit)
+        candidates = self.store.search(vector, limit=None)
         # Hide stale/deleted documents and confirm the selected root again.
         hits = []
         for item in candidates:
@@ -553,6 +553,8 @@ class VectorKnowledgeSession:
                 continue
             if hashlib.sha256(current.encode("utf-8")).hexdigest() == self.store.source_sha(item["path"]):
                 hits.append(item)
+                if len(hits) >= self.config.search_limit:
+                    break
         return {"query": query, "entries": hits}
 
     async def call_tool(self, name: str, arguments: dict[str, Any]):
