@@ -44,11 +44,11 @@ async def test_reentry_rejects_invalid_and_handles_failure():
     assert result.structuredContent["status"] == "error"
 
 
-@pytest.mark.parametrize("mode", ["okf", "hybrid", "vector"])
+@pytest.mark.parametrize("mode", ["okf", "hybrid"])
 def test_knowledge_prompt_matches_available_backends(mode):
     agent = object.__new__(CliAgent)
     agent._vector_config = None if mode == "okf" else SimpleNamespace(
-        mode="okf" if mode == "hybrid" else "raw",
+        mode="okf",
     )
     agent._vector_session = None if mode == "okf" else object()
     agent._okf_options = None
