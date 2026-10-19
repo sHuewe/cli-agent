@@ -79,3 +79,33 @@ async def test_disabled_okf_hybrid_does_not_call_embedding_or_knowledge_loop():
     assert await agent._collect_knowledge("A private OKF question") is None
     agent._vector_session.search.assert_not_awaited()
     agent._run_model_loop.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_optional_hybrid_vector_start_failure_uses_okf_only():
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Harness(ConversationMixin):
+        pass
+
+    agent = Harness()
+    agent._okf_options = SimpleNamespace(required=True, max_tool_calls=4, max_concept_reads=3)
+    agent._okf_enabled = True
+    agent._vector_config = SimpleNamespace(mode="okf", required=False)
+    agent._vector_session = None
+    agent._knowledge_session = object()
+    agent._knowledge_tools = [{"function": {"name": "okf__knowledge_read"}}, {"function": {"name": "vector__knowledge_search"}}]
+    agent._knowledge_routes = {
+        "okf__knowledge_index": (SimpleNamespace(call_tool=AsyncMock(return_value=SimpleNamespace(
+            structuredContent={"kind": "index", "path": ".", "entries": []}, isError=False, content=[]
+        ))), "knowledge_index", SimpleNamespace(name="okf")),
+        "vector__knowledge_search": (object(), "knowledge_search", SimpleNamespace(name="vector")),
+    }
+    agent.history = []
+    agent._build_knowledge_system_prompt = lambda **kwargs: "okf-only" if not kwargs["vector_active"] else "hybrid"
+    agent._dump_value = lambda *args: None
+    agent._run_model_loop = AsyncMock(return_value='{"found_content":false,"selected_okf_tokens":[],"warnings":[],"reason_code":"not_applicable"}')
+    assert await agent._collect_knowledge("question") is None
+    kwargs = agent._run_model_loop.await_args.kwargs
+    assert kwargs["messages"][0]["content"] == "okf-only"
+    assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["okf__knowledge_read"]
