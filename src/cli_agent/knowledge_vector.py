@@ -1,4 +1,4 @@
-"""Optional offline-indexed vector / lexical retrieval, without extra dependencies.
+"""Optional offline-indexed semantic vector retrieval, without extra dependencies.
 
 Neither the query model nor the retrieval model receives filesystem paths with
 unrestricted read permissions. The index is a candidate locator, never a
@@ -11,7 +11,6 @@ import math
 import os
 import sqlite3
 import struct
-from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -241,26 +240,25 @@ class SQLiteKnowledgeStore:
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS sources (
-                path TEXT PRIMARY KEY, sha256 TEXT NOT NULL, content TEXT NOT NULL
+                path TEXT PRIMARY KEY, sha256 TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY, source TEXT NOT NULL,
-                body TEXT NOT NULL, vector BLOB NOT NULL,
+                vector BLOB NOT NULL,
                 FOREIGN KEY(source) REFERENCES sources(path)
             );
-            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(body);
         """)
 
     def metadata(self) -> dict[str, str]:
         return {r["key"]: r["value"] for r in self.db.execute("SELECT key,value FROM metadata")}
 
     def configure(self, *, root: Path, mode: str, provider: str, model: str, dim: int) -> None:
-        values = {"root": str(root), "mode": mode, "provider": provider, "model": model, "dimension": str(dim), "schema": "1"}
+        values = {"root": str(root), "mode": mode, "provider": provider, "model": model, "dimension": str(dim), "schema": "2"}
         self.db.executemany("INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)", values.items())
 
     def check(self, *, root: Path, mode: str, provider: str, model: str) -> int:
         meta = self.metadata()
-        expected = {"root": str(root), "mode": mode, "provider": provider, "model": model, "schema": "1"}
+        expected = {"root": str(root), "mode": mode, "provider": provider, "model": model, "schema": "2"}
         if any(meta.get(k) != v for k, v in expected.items()):
             raise ValueError("Knowledge-Index passt nicht zu Quelle/Modell; neu indexieren.")
         dim = int(meta["dimension"])
@@ -268,68 +266,68 @@ class SQLiteKnowledgeStore:
             raise ValueError("Ungültige Vektordimension im Index.")
         return dim
 
-    def replace_documents(self, records: list[tuple[str, str, list[tuple[str, list[float]]]]]) -> None:
+    def replace_documents(self, records: list[tuple[str, str, list[list[float]]]]) -> None:
+        """Store only concept identifiers, source fingerprints and embedding vectors.
+
+        Raw document/Chunk text is used only by the indexing process to compute
+        embeddings and fingerprints, never passed to or persisted by this store.
+        """
         with self.db:
-            self.db.execute("DELETE FROM chunks_fts")
             self.db.execute("DELETE FROM chunks")
             self.db.execute("DELETE FROM sources")
-            for path, content, chunks in records:
-                sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
-                self.db.execute("INSERT INTO sources VALUES (?,?,?)", (path, sha, content))
-                for text, vector in chunks:
-                    cursor = self.db.execute("INSERT INTO chunks(source,body,vector) VALUES(?,?,?)", (path, text, _encode(vector)))
-                    self.db.execute("INSERT INTO chunks_fts(rowid,body) VALUES (?,?)", (cursor.lastrowid, text))
+            for path, sha256, vectors in records:
+                self.db.execute("INSERT INTO sources(path,sha256) VALUES (?,?)", (path, sha256))
+                for vector in vectors:
+                    self.db.execute(
+                        "INSERT INTO chunks(source,vector) VALUES (?,?)",
+                        (path, _encode(vector)),
+                    )
 
     def source_sha(self, path: str) -> str | None:
         row = self.db.execute("SELECT sha256 FROM sources WHERE path=?", (path,)).fetchone()
         return row["sha256"] if row is not None else None
 
-    def search(self, vector: list[float], query: str, *, limit: int = 5) -> list[dict[str, Any]]:
-        if not 1 <= limit <= MAX_SEARCH_RESULTS or not query.strip() or len(query) > MAX_SEARCH_QUERY:
-            raise ValueError("Ungültige Knowledge-Suchparameter.")
-        dim = len(vector)
+    def search(self, vector: list[float], *, limit: int = 5) -> list[dict[str, Any]]:
+        """Rank concepts by their best chunk cosine similarity, without lexical data."""
+        if not 1 <= limit <= MAX_SEARCH_RESULTS:
+            raise ValueError("Ungültiges Knowledge-Suchlimit.")
+        # Verify the supplied query vector before evaluating any stored vectors.
+        _encode(vector)
         norm = math.sqrt(sum(value * value for value in vector))
         if norm == 0:
             raise ValueError("Embedding hat Norm 0.")
-        lexical: dict[int, int] = {}
-        # FTS5 input tokens are safely quoted, not interpreted as FTS expressions.
-        import re
-        words = re.findall(r"\w+", query, re.UNICODE)[:15]
-        if words:
-            expression = " OR ".join('"' + token.replace('"', '""') + '"' for token in words)
-            try:
-                for rank, row in enumerate(self.db.execute(
-                    "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT 50", (expression,)
-                )):
-                    lexical[row["rowid"]] = rank
-            except sqlite3.OperationalError:
-                pass
-        semantic: list[tuple[float, int, str]] = []
-        rows = self.db.execute("SELECT id,source,vector FROM chunks")
-        for row in rows:
+        best_similarity: dict[str, float] = {}
+        for row in self.db.execute("SELECT source,vector FROM chunks"):
             saved = _decode(row["vector"])
-            if len(saved) != dim:
+            if len(saved) != len(vector):
                 raise ValueError("Embedding-Dimension stimmt nicht mit dem Index überein.")
-            saved_norm = math.sqrt(sum(v*v for v in saved))
-            similarity = sum(a*b for a,b in zip(saved, vector)) / (norm*saved_norm) if saved_norm else -1.0
-            semantic.append((similarity, row["id"], row["source"]))
-        semantic.sort(key=lambda item: item[0], reverse=True)
-        scores: dict[str, float] = {}
-        for rank, (_, chunk_id, source) in enumerate(semantic[:max(50, limit * 10)]):
-            scores[source] = scores.get(source, 0.0) + 1.0 / (60 + rank + 1)
-            if chunk_id in lexical:
-                scores[source] += 1.0 / (60 + lexical[chunk_id] + 1)
-        return [{"path": path, "score": round(score, 5), "next_tool": "knowledge_read"} for path, score in sorted(scores.items(), key=lambda pair: pair[1], reverse=True)[:limit]]
+            saved_norm = math.sqrt(sum(value * value for value in saved))
+            similarity = (
+                sum(a * b for a, b in zip(saved, vector)) / (norm * saved_norm)
+                if saved_norm else -1.0
+            )
+            source = row["source"]
+            if source not in best_similarity or similarity > best_similarity[source]:
+                best_similarity[source] = similarity
+        ranked = sorted(
+            best_similarity.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:limit]
+        return [
+            {"path": source, "score": round(score, 5), "next_tool": "knowledge_read"}
+            for source, score in ranked
+        ]
 
 
 async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig, credential_rules: tuple[Any, ...] = ()) -> int:
     provider = EmbeddingProvider(config, network, credential_rules)
     paths = _okf_paths(root, max_files=config.max_files) if config.mode == "okf" else _raw_paths(root, max_files=config.max_files)
     # All embedding calls succeed before replacing the on-disk index.
-    records = []
+    records: list[tuple[str, str, list[list[float]]]] = []
     dimensions: set[int] = set()
     for relative in paths:
         content = _read_source(root, relative, mode=config.mode)
+        source_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
         split = _chunks(content)
         vectors: list[list[float]] = []
         for pos in range(0, len(split), MAX_BATCH):
@@ -337,7 +335,8 @@ async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, 
             vectors.extend(batch)
         for vector in vectors:
             dimensions.add(len(vector))
-        records.append((relative, content, list(zip(split, vectors))))
+        # Only the fingerprint and vectors cross into the persistence layer.
+        records.append((relative, source_sha256, vectors))
     if not dimensions or len(dimensions) != 1:
         raise ValueError("Knowledge-Quelle enthält keine indexierbaren Texte oder inkompatible Embeddings.")
     import tempfile
@@ -381,7 +380,7 @@ class VectorKnowledgeSession:
         vector = (await self.embedder.embed([query]))[0]
         if len(vector) != self.dimension:
             raise ValueError("Embedding-Modell passt nicht zur Indexdimension.")
-        candidates = self.store.search(vector, query, limit=self.config.search_limit)
+        candidates = self.store.search(vector, limit=self.config.search_limit)
         # Hide stale/deleted documents and confirm the selected root again.
         hits = []
         for item in candidates:
