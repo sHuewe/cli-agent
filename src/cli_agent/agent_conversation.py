@@ -155,6 +155,8 @@ class ConversationMixin:
         if self.logging_config.log_prompts:
             logger.info("user_prompt=%s", prompt)
 
+        self._knowledge_reentry_calls = 0
+        self._knowledge_reentry_seen.clear()
         knowledge = await self._collect_knowledge(prompt)
         reference_context = self._build_reference_context_message(knowledge=knowledge)
         working_messages = [
