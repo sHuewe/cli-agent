@@ -102,18 +102,6 @@ timeout = 120
 # See docs/knowledge-vector.md for the security model and mode-specific setup. Pure OKF without this
 # section remains unchanged and needs neither an index nor an embedding model.
 #
-# For raw Markdown/TXT/PDF documents, no [okf] section is required:
-# [knowledge.vector]
-# mode = "raw"
-# source = "C:/dev/knowledge/documents"
-# database = "C:/dev/knowledge/vector.sqlite" # OUTSIDE source directory
-# provider = "ollama"  # or "openai"
-# base_url = "http://localhost:11434"
-# model = "embeddinggemma"
-# search_limit = 5
-# max_files = 10000
-# required = true
-#
 # For hybrid OKF + vectors, configure [okf] above and set mode = "okf".
 # The indexer then indexes reachable, validated OKF concepts only.
 # For OpenAI-compatible /v1 endpoint:
