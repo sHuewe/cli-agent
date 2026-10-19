@@ -11,6 +11,8 @@ import math
 import os
 import sqlite3
 import struct
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -222,6 +224,20 @@ class EmbeddingProvider:
         return vectors
 
 
+@dataclass(frozen=True)
+class IndexUpdateResult:
+    """Counts of changed source Concepts from one atomic update run."""
+
+    added: int
+    changed: int
+    unchanged: int
+    removed: int
+
+    @property
+    def total(self) -> int:
+        return self.added + self.changed + self.unchanged
+
+
 class SQLiteKnowledgeStore:
     def __init__(self, path: Path, *, readonly: bool = True) -> None:
         self.path = path
@@ -282,6 +298,34 @@ class SQLiteKnowledgeStore:
                         "INSERT INTO chunks(source,vector) VALUES (?,?)",
                         (path, _encode(vector)),
                     )
+
+    def copy_unchanged_source(
+        self,
+        old_store: "SQLiteKnowledgeStore",
+        *,
+        path: str,
+        sha256: str,
+        dimension: int,
+    ) -> None:
+        """Copy only binary vectors from a validated prior index.
+
+        A matching source hash guarantees the current original document is
+        unchanged. Do not decode or persist the document text here.
+        """
+        self.db.execute(
+            "INSERT INTO sources(path,sha256) VALUES (?,?)", (path, sha256)
+        )
+        for row in old_store.db.execute(
+            "SELECT vector FROM chunks WHERE source=? ORDER BY id", (path,)
+        ):
+            blob = row["vector"]
+            if not isinstance(blob, bytes) or len(blob) != dimension * 4:
+                raise ValueError("Ungültiger Vektor im bisherigen Knowledge-Index.")
+            # Fail closed on corrupted or non-finite persisted vectors.
+            _encode(list(_decode(blob)))
+            self.db.execute(
+                "INSERT INTO chunks(source,vector) VALUES (?,?)", (path, blob)
+            )
 
     def source_sha(self, path: str) -> str | None:
         row = self.db.execute("SELECT sha256 FROM sources WHERE path=?", (path,)).fetchone()
@@ -359,6 +403,125 @@ async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, 
                 raise RuntimeError("Index-Datenbank besitzt noch aktive WAL-Dateien.")
         os.replace(new_path, path)
     return len(records)
+
+
+
+async def update_index(
+    config: VectorKnowledgeConfig,
+    *,
+    root: Path,
+    path: Path,
+    network: NetworkConfig,
+    credential_rules: tuple[Any, ...] = (),
+) -> IndexUpdateResult:
+    """Atomically update a schema-v2 index, embedding only changed documents.
+
+    Unchanged chunks are copied as raw binary vectors from the existing index.
+    New and changed Concepts are embedded against their current source text.
+    Removed/unreachable Concepts are left out of the replacement index.
+    """
+    if not path.is_file():
+        raise ValueError(
+            "Es existiert noch kein SQLite-Vektorindex. "
+            "Zuerst cli-agent-rag init-vector-db ausführen."
+        )
+
+    old = SQLiteKnowledgeStore(path)
+    try:
+        dimension = old.check(
+            root=root, mode=config.mode, provider=config.provider, model=config.model
+        )
+        # Check both the configuration and structural validity of the old index
+        # before using it as the source for unchanged embeddings.
+        existing = {
+            row["path"]: row["sha256"]
+            for row in old.db.execute("SELECT path,sha256 FROM sources")
+        }
+        paths = (
+            _okf_paths(root, max_files=config.max_files)
+            if config.mode == "okf"
+            else _raw_paths(root, max_files=config.max_files)
+        )
+
+        changed_records: list[tuple[str, str, list[str]]] = []
+        unchanged_records: list[tuple[str, str]] = []
+        for relative in paths:
+            content = _read_source(root, relative, mode=config.mode)
+            fingerprint = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if existing.get(relative) == fingerprint:
+                unchanged_records.append((relative, fingerprint))
+            else:
+                changed_records.append((relative, fingerprint, _chunks(content)))
+
+        added = sum(1 for relative, _, _ in changed_records if relative not in existing)
+        changed = len(changed_records) - added
+        removed = len(set(existing).difference(paths))
+        stats = IndexUpdateResult(
+            added=added,
+            changed=changed,
+            unchanged=len(unchanged_records),
+            removed=removed,
+        )
+        if not changed_records and not removed:
+            # No embeddings are requested and the database is not rewritten.
+            return stats
+
+        # Construct and validate the complete new DB before publication. If an
+        # embedding request fails, the currently published index is untouched.
+        provider = (
+            EmbeddingProvider(config, network, credential_rules)
+            if changed_records else None
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="cli-agent-knowledge-", dir=path.parent
+        ) as temp:
+            new_path = Path(temp) / "index.sqlite"
+            new_store = SQLiteKnowledgeStore(new_path, readonly=False)
+            try:
+                new_store.create()
+                new_store.configure(
+                    root=root, mode=config.mode, provider=config.provider,
+                    model=config.model, dim=dimension,
+                )
+                for relative, fingerprint in unchanged_records:
+                    new_store.copy_unchanged_source(
+                        old, path=relative, sha256=fingerprint, dimension=dimension
+                    )
+                for relative, fingerprint, chunks in changed_records:
+                    new_store.db.execute(
+                        "INSERT INTO sources(path,sha256) VALUES (?,?)",
+                        (relative, fingerprint),
+                    )
+                    for pos in range(0, len(chunks), MAX_BATCH):
+                        assert provider is not None
+                        batch = await provider.embed(chunks[pos:pos + MAX_BATCH])
+                        for vector in batch:
+                            if len(vector) != dimension:
+                                raise ValueError(
+                                    "Embedding-Dimension hat sich geändert; "
+                                    "bitte mit init-vector-db neu indexieren."
+                                )
+                            new_store.db.execute(
+                                "INSERT INTO chunks(source,vector) VALUES (?,?)",
+                                (relative, _encode(vector)),
+                            )
+                new_store.db.commit()
+            finally:
+                new_store.close()
+
+            # WAL sidecars must not survive publication of the new database.
+            for suffix in ("-wal", "-shm"):
+                if Path(str(new_path) + suffix).exists():
+                    raise RuntimeError("Aktualisierter Index enthält aktive WAL-Dateien.")
+
+            # Release the old reader before replacing the file (Windows).
+            old.close()
+            os.replace(new_path, path)
+        return stats
+    finally:
+        # Closing twice is harmless for sqlite3, and also handles no-op/error.
+        old.close()
 
 
 class VectorKnowledgeSession:
