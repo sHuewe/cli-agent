@@ -63,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-files", type=int, default=10000, metavar="N",
         help="Maximale Anzahl zu indexierender OKF-Concepts (Default: 10000).",
     )
+    init_db.add_argument(
+        "--max-read-bytes", type=int, default=2_560_000, metavar="N",
+        help="Effektives OKF-Leselimit in Bytes, identisch zu [okf].max_read_bytes.",
+    )
     update_db = commands.add_parser(
         "update-vector-db",
         help="Bestehenden SQLite-Vektorindex inkrementell aktualisieren.",
@@ -99,6 +103,8 @@ async def init_vector_db(args: argparse.Namespace, *, incremental: bool = False)
         )
     if not isinstance(args.embedding_model, str) or not args.embedding_model.strip():
         raise ValueError("--embedding-model darf nicht leer sein.")
+    if args.max_read_bytes < 1:
+        raise ValueError("--max-read-bytes muss positiv sein.")
     if args.max_files < 1 or args.max_files > 100000:
         raise ValueError("--max-files muss zwischen 1 und 100000 liegen.")
     if args.provider == "openai" and not args.base_url:
@@ -111,7 +117,7 @@ async def init_vector_db(args: argparse.Namespace, *, incremental: bool = False)
     # Validate the OKF marker before contacting the embedding endpoint.
     from .okf_mcp_server.repository import OkfRepository
 
-    OkfRepository.from_directory(root)
+    OkfRepository.from_directory(root, max_read_bytes=args.max_read_bytes)
 
     vector = VectorKnowledgeConfig(
         mode="okf",
@@ -128,6 +134,7 @@ async def init_vector_db(args: argparse.Namespace, *, incremental: bool = False)
         "path": database,
         "network": admin.network,
         "credential_rules": admin.model_credentials,
+        "okf_max_read_bytes": args.max_read_bytes,
     }
     if incremental:
         result = await update_index(vector, **kwargs)
