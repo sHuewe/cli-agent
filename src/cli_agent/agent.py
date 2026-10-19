@@ -22,7 +22,7 @@ from .agent_knowledge import (
 )
 from .agent_mcp import McpLifecycleMixin
 from .agent_permissions import WRITE_TOOLS
-from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT, VECTOR_KNOWLEDGE_PROMPT, HYBRID_OKF_KNOWLEDGE_PROMPT
+from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT, HYBRID_OKF_KNOWLEDGE_PROMPT
 from .knowledge_vector import VectorKnowledgeSession, source_root, db_path
 from .agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageCallback
 from .config import LoggingConfig, McpServerConfig
@@ -535,8 +535,8 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             vector_active = self._vector_session is not None
         if tools is None:
             tools = self._knowledge_tools
-        mode = "okf" if not vector_active else ("hybrid" if self._vector_config.mode == "okf" else "vector")
-        prompt = {"okf": KNOWLEDGE_SYSTEM_PROMPT, "vector": VECTOR_KNOWLEDGE_PROMPT, "hybrid": HYBRID_OKF_KNOWLEDGE_PROMPT}[mode]
+        mode = "hybrid" if vector_active else "okf"
+        prompt = HYBRID_OKF_KNOWLEDGE_PROMPT if mode == "hybrid" else KNOWLEDGE_SYSTEM_PROMPT
         parts = [prompt, "Aktuell verfügbare Knowledge-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(tool["function"]["name"] for tool in tools)]
         if self._okf_options is not None:
             parts.append(f"Lies höchstens {self._okf_options.max_concept_reads} Concepts. Nach Erreichen dieses Limits rufst du keine Tools mehr auf und triffst die finale Auswahl ausschließlich aus den bereits vergebenen Tokens.")
