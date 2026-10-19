@@ -91,3 +91,31 @@ timeout = 120
 # max_read_bytes = 2560000
 # compress_min_chars = 20000
 # required = true
+
+# -----------------------------------------------------------------------------
+# Optional vector / hybrid retrieval (disabled unless configured)
+# -----------------------------------------------------------------------------
+# The vector index is created separately:
+#   cli-agent-knowledge index --config C:/path/to/config.toml
+# Re-run after adding/changing/deleting source documents. Pure OKF without this
+# section remains unchanged and needs neither an index nor an embedding model.
+#
+# For raw Markdown/TXT/PDF documents, no [okf] section is required:
+# [knowledge.vector]
+# mode = "raw"
+# source = "C:/dev/knowledge/documents"
+# database = "C:/dev/knowledge/vector.sqlite" # OUTSIDE source directory
+# provider = "ollama"  # or "openai"
+# base_url = "http://localhost:11434"
+# model = "embeddinggemma"
+# search_limit = 5
+# max_files = 10000
+# required = true
+#
+# For hybrid OKF + vectors, configure [okf] above and set mode = "okf".
+# The indexer then indexes reachable, validated OKF concepts only.
+# For OpenAI-compatible /v1 endpoint:
+# provider = "openai"
+# base_url = "https://llm.intern.example/v1"
+# api_key_env = "EMBEDDING_API_KEY"
+# External embedding hosts and credential env names follow the model Admin-Policy.
