@@ -385,7 +385,7 @@ def apply_named_mcp_overrides(
         if not isinstance(raw_name, str) or not raw_name.strip():
             raise ValueError("--with-mcp benötigt einen nicht-leeren MCP-Servernamen.")
         name = raw_name.strip()
-        if name.casefold() in {OS_MCP_SERVER_NAME, DATA_MCP_SERVER_NAME} or (
+        if name.casefold() in {OS_MCP_SERVER_NAME, DATA_MCP_SERVER_NAME, "knowledge_reentry"} or (
             name.casefold() == "okf" and config.okf is not None
         ):
             raise ValueError(
