@@ -6,9 +6,7 @@ source of authoritative document content.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import json
 import math
 import os
 import sqlite3
@@ -17,7 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
 
@@ -26,7 +23,6 @@ from .filesystem_security import regular_file_has_multiple_links
 from .model_factory import _validate_api_key_env
 from .config import ModelConfig
 from .network_policy import NetworkConfig, validate_http_url
-from .pdf_text import extract_pdf_text
 
 MAX_SOURCE_BYTES = 2_560_000
 MAX_SEARCH_QUERY = 2000
@@ -103,8 +99,6 @@ def _read_source(root: Path, relative: str, *, mode: str) -> str:
 def _raw_paths(root: Path, *, max_files: int) -> list[str]:
     paths: list[str] = []
     for path in sorted(root.rglob("*")):
-        if len(paths) >= max_files:
-            raise ValueError("Zu viele Dateien; max_files überschritten.")
         if path.is_symlink():
             continue
         if path.is_file() and path.suffix.lower() in {".md", ".txt", ".pdf"}:
@@ -114,6 +108,8 @@ def _raw_paths(root: Path, *, max_files: int) -> list[str]:
             except (OSError, ValueError):
                 continue
             paths.append(relative)
+            if len(paths) > max_files:
+                raise ValueError("Zu viele Dateien; max_files überschritten.")
     return paths
 
 
@@ -319,7 +315,7 @@ class SQLiteKnowledgeStore:
             semantic.append((similarity, row["id"], row["source"]))
         semantic.sort(key=lambda item: item[0], reverse=True)
         scores: dict[str, float] = {}
-        for rank, (_, chunk_id, source) in enumerate(semantic):
+        for rank, (_, chunk_id, source) in enumerate(semantic[:max(50, limit * 10)]):
             scores[source] = scores.get(source, 0.0) + 1.0 / (60 + rank + 1)
             if chunk_id in lexical:
                 scores[source] += 1.0 / (60 + lexical[chunk_id] + 1)
@@ -356,8 +352,12 @@ async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, 
             store.db.commit()
         finally:
             store.close()
-        # Never overwrite an index currently being queried; readers have a
-        # consistent snapshot and new runs open the replacement file.
+        # The writer is closed before atomically replacing the read-only index.
+        # Separate WAL sidecars must never belong to the published database.
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(new_path) + suffix)
+            if sidecar.exists():
+                raise RuntimeError("Index-Datenbank besitzt noch aktive WAL-Dateien.")
         os.replace(new_path, path)
     return len(records)
 
