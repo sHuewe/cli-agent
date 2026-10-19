@@ -274,16 +274,6 @@ class McpLifecycleMixin:
             }}
             self._knowledge_tools.append(search_tool)
             self._knowledge_routes["vector__knowledge_search"] = (session, "knowledge_search", runtime)
-            if config.mode == "raw":
-                read_tool = {"type": "function", "function": {
-                    "name": "vector__knowledge_read",
-                    "description": "Read exactly one indexed raw document selected from search hits.",
-                    "parameters": {"type": "object", "properties": {
-                        "path": {"type": "string", "minLength": 1}
-                    }, "required": ["path"], "additionalProperties": False},
-                }}
-                self._knowledge_tools.append(read_tool)
-                self._knowledge_routes["vector__knowledge_read"] = (session, "knowledge_read", runtime)
         except Exception:
             if config.required:
                 raise
