@@ -9,8 +9,7 @@ import pytest
 
 from cli_agent.config import VectorKnowledgeConfig, load_config
 from cli_agent.knowledge_vector import (
-    SQLiteKnowledgeStore, VectorKnowledgeSession, _chunks, _source_file,
-    _raw_paths, build_index,
+    SQLiteKnowledgeStore, VectorKnowledgeSession, _chunks, build_index,
 )
 from cli_agent.network_policy import NetworkConfig
 
