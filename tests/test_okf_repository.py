@@ -453,3 +453,44 @@ def test_okf_read_rejects_junction_parent(tmp_path: Path):
     repository = OkfRepository.from_directory(root)
     with pytest.raises(OkfRepositoryError):
         repository.knowledge_read("linked/secret.md")
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows pinned handle write-sharing regression")
+def test_windows_pinned_directory_denies_concurrent_write_handle(tmp_path: Path, monkeypatch):
+    import ctypes
+    from ctypes import wintypes
+    import cli_agent.filesystem_security as security
+    root = tmp_path / "okf"
+    root.mkdir()
+    (root / "index.md").write_text("Root", encoding="utf-8")
+    directory = root / "nested"
+    directory.mkdir()
+    (directory / "concept.md").write_text(_concept(), encoding="utf-8")
+
+    original_open = security.os.open
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel32.CreateFileW
+    create.argtypes = (
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+        ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    )
+    create.restype = wintypes.HANDLE
+    observed = []
+
+    def checked_read(fd, length):
+        handle = create(
+            str(directory), 0x40000000, 0x1 | 0x2 | 0x4,
+            None, 3, 0x02000000, None,
+        )
+        if handle == ctypes.c_void_p(-1).value:
+            observed.append(ctypes.get_last_error())
+        else:
+            kernel32.CloseHandle(handle)
+            observed.append(0)
+        return original_read(fd, length)
+
+    original_read = security.os.read
+    monkeypatch.setattr(security.os, "read", checked_read)
+    assert b"type: concept" in security.read_bounded_regular_file(root, "nested/concept.md", max_bytes=4096)
+    assert observed
+    assert all(code == 32 for code in observed)  # ERROR_SHARING_VIOLATION
