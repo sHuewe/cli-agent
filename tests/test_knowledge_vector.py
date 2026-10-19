@@ -401,3 +401,31 @@ async def test_stale_result_validation_has_fixed_budget(tmp_path, monkeypatch):
         assert len(called) == 10
     finally:
         session.close()
+
+
+@pytest.mark.asyncio
+async def test_full_reindex_keeps_previous_db_on_late_embedding_failure(tmp_path, monkeypatch):
+    from cli_agent.knowledge_vector import EmbeddingProvider
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "a.md").write_text("first document", encoding="utf-8")
+    db = tmp_path / "index.sqlite"
+    config = VectorKnowledgeConfig(mode="raw", source=str(root), database=str(db))
+
+    async def working(self, texts):
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(EmbeddingProvider, "embed", working)
+    await build_index(config, root=root, path=db, network=NetworkConfig())
+    original_bytes = db.read_bytes()
+    (root / "b.md").write_text("later document", encoding="utf-8")
+
+    async def failing(self, texts):
+        if "later document" in texts[0]:
+            raise RuntimeError("late embedding failure")
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(EmbeddingProvider, "embed", failing)
+    with pytest.raises(RuntimeError, match="late embedding failure"):
+        await build_index(config, root=root, path=db, network=NetworkConfig())
+    assert db.read_bytes() == original_bytes
