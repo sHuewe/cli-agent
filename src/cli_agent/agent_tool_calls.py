@@ -80,7 +80,7 @@ async def process_tool_calls(
                 tool_call,
                 exposed_name,
                 "Im Knowledge-Lauf ist pro Modellantwort genau ein "
-                "OKF-Tool-Aufruf zulässig. Werte zunächst das Ergebnis "
+                "Knowledge-Tool-Aufruf zulässig. Werte zunächst das Ergebnis "
                 "des ersten Aufrufs aus und entscheide danach, ob ein "
                 "weiterer Aufruf erforderlich ist.",
             )
@@ -262,7 +262,7 @@ async def process_tool_calls(
                 requested_path,
                 set(),
             )
-            if original_name not in allowed_tools:
+            if original_name != "knowledge_search" and original_name not in allowed_tools:
                 tool_message = agent._append_tool_error(
                     messages,
                     tool_call,
