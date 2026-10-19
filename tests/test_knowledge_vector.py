@@ -429,3 +429,62 @@ async def test_full_reindex_keeps_previous_db_on_late_embedding_failure(tmp_path
     with pytest.raises(RuntimeError, match="late embedding failure"):
         await build_index(config, root=root, path=db, network=NetworkConfig())
     assert db.read_bytes() == original_bytes
+
+
+@pytest.mark.asyncio
+async def test_update_streams_changed_sources_and_aborts_on_midrun_change(tmp_path, monkeypatch):
+    from cli_agent.knowledge_vector import EmbeddingProvider, update_index
+    import cli_agent.knowledge_vector as module
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "a.md").write_text("original a", encoding="utf-8")
+    (root / "b.md").write_text("original b", encoding="utf-8")
+    db = tmp_path / "index.sqlite"
+    config = VectorKnowledgeConfig(mode="raw", source=str(root), database=str(db))
+
+    async def embed(self, texts):
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(EmbeddingProvider, "embed", embed)
+    await build_index(config, root=root, path=db, network=NetworkConfig())
+    previous = db.read_bytes()
+    (root / "a.md").write_text("changed a", encoding="utf-8")
+    (root / "b.md").write_text("changed b", encoding="utf-8")
+    original_read = module._read_source
+    reads = {}
+
+    def changing_read(source_root, relative, **kwargs):
+        reads[relative] = reads.get(relative, 0) + 1
+        if relative == "b.md" and reads[relative] == 2:
+            (root / "b.md").write_text("changed once more", encoding="utf-8")
+        return original_read(source_root, relative, **kwargs)
+
+    monkeypatch.setattr(module, "_read_source", changing_read)
+    with pytest.raises(ValueError, match="während der Indexierung"):
+        await update_index(config, root=root, path=db, network=NetworkConfig())
+    assert db.read_bytes() == previous
+    assert reads["a.md"] == 2
+    assert reads["b.md"] == 2
+
+
+def test_readonly_sqlite_uri_handles_query_and_fragment_in_filename(tmp_path):
+    path = tmp_path / "vectors?source#one%.sqlite"
+    writer = SQLiteKnowledgeStore(path, readonly=False)
+    try:
+        writer.create()
+        writer.configure(
+            root=tmp_path, mode="raw", provider="ollama",
+            model="embed", endpoint="http://localhost:11434", dim=2,
+        )
+        writer.db.commit()
+    finally:
+        writer.close()
+    reader = SQLiteKnowledgeStore(path)
+    try:
+        assert reader.check(
+            root=tmp_path, mode="raw", provider="ollama",
+            model="embed", endpoint="http://localhost:11434",
+        ) == 2
+    finally:
+        reader.close()
+    assert not (tmp_path / "vectors").exists()
