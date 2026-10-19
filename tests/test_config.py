@@ -319,3 +319,14 @@ def test_pdf_page_limit_rejects_invalid_config(tmp_path, value):
     config_path.write_text(f"[pdf]\nmax_pdf_pages = {value}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="max_pdf_pages"):
         load_config(config_path)
+
+
+@pytest.mark.parametrize("name", ["knowledge_reentry", "KNOWLEDGE_REENTRY"])
+def test_internal_knowledge_reentry_mcp_name_reserved(tmp_path: Path, name: str) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        f'[[mcp_servers]]\nname = "{name}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="knowledge_reentry"):
+        load_config(config_file)
