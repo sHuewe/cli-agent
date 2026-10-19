@@ -524,7 +524,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         return "\n\n".join(parts)
 
     def _build_knowledge_system_prompt(self) -> str:
-        mode = "okf" if self._vector_config is None else ("hybrid" if self._vector_config.mode == "okf" else "vector")
+        mode = "okf" if self._vector_session is None else ("hybrid" if self._vector_config.mode == "okf" else "vector")
         prompt = {"okf": KNOWLEDGE_SYSTEM_PROMPT, "vector": VECTOR_KNOWLEDGE_PROMPT, "hybrid": HYBRID_OKF_KNOWLEDGE_PROMPT}[mode]
         parts = [prompt, "Aktuell verfügbare Knowledge-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(tool["function"]["name"] for tool in self._knowledge_tools)]
         if self._okf_options is not None:
