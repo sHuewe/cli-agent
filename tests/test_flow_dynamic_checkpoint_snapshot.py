@@ -257,3 +257,23 @@ def test_dynamic_discovery_overlapping_roots_count_paths_once(
     )
     assert fingerprints == {}
     assert paths == ()
+
+
+def test_dynamic_discovery_counts_symlink_entries_not_targets(
+    tmp_path, monkeypatch,
+):
+    _flow(tmp_path)
+    target = tmp_path / "work" / "target.txt"
+    target.write_text("data", encoding="utf-8")
+    try:
+        for i in range(12):
+            (tmp_path / "work" / f"link-{i}.txt").symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("Creating file symlinks is not permitted on this platform")
+
+    monkeypatch.setattr(flow_module, "MAX_DYNAMIC_CHECKPOINT_CANDIDATES", 10)
+    with pytest.raises(ValueError, match="Zu viele eindeutige"):
+        flow_module._snapshot_dynamic_checkpoint_candidates(
+            workspace=tmp_path,
+            cache={"child": load_flow(tmp_path / "child.toml", workspace=tmp_path)},
+        )
