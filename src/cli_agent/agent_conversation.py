@@ -155,6 +155,8 @@ class ConversationMixin:
         if self.logging_config.log_prompts:
             logger.info("user_prompt=%s", prompt)
 
+        self._knowledge_reentry_calls = 0
+        self._knowledge_reentry_seen = set()
         knowledge = await self._collect_knowledge(prompt)
         reference_context = self._build_reference_context_message(knowledge=knowledge)
         working_messages = [
@@ -305,86 +307,98 @@ class ConversationMixin:
 
     async def _collect_knowledge(self, prompt: str) -> str | None:
         options = self._okf_options
-        if options is None or not getattr(self, "_okf_enabled", True):
+        vector_config = getattr(self, "_vector_config", None)
+        active_okf = options is not None and getattr(self, "_okf_enabled", True)
+        # An OKF-backed vector index supplements OKF navigation; it must not
+        # stay usable after the operator disables OKF for this session.
+        hybrid_okf_disabled = (
+            vector_config is not None
+            and vector_config.mode == "okf"
+            and not getattr(self, "_okf_enabled", True)
+        )
+        active_vector = (
+            vector_config is not None
+            and self._vector_session is not None
+            and not hybrid_okf_disabled
+        )
+        if not active_okf and not active_vector:
             return None
-        if self._knowledge_session is None:
-            if options.required:
-                raise RuntimeError(
-                    "Die Aufgabe wurde nicht bearbeitet, weil der konfigurierte "
-                    "OKF-Wissensserver nicht verfügbar ist."
-                )
+        okf_required = bool(options and active_okf and options.required)
+        vector_required = bool(vector_config and vector_config.required and not hybrid_okf_disabled)
+        required = okf_required or (vector_required and active_vector)
+        if active_okf and self._knowledge_session is None:
+            if okf_required:
+                raise RuntimeError("Der konfigurierte OKF-Wissensserver ist nicht verfügbar.")
             return None
+        if vector_config is not None and not active_vector and vector_required:
+            raise RuntimeError("Der konfigurierte Vektorindex ist nicht verfügbar.")
 
         try:
-            root_route = self._knowledge_routes.get("okf__knowledge_index")
-            if root_route is None:
-                raise RuntimeError(
-                    "Das OKF-Tool 'knowledge_index' ist nicht verfügbar."
+            seen_calls = set()
+            allowed_calls = {}
+            knowledge_request_data: dict[str, Any] = {"original_user_request": prompt}
+            if active_okf:
+                root_route = self._knowledge_routes.get("okf__knowledge_index")
+                if root_route is None:
+                    raise RuntimeError("Das OKF-Tool 'knowledge_index' ist nicht verfügbar.")
+                root_session, root_tool_name, _ = root_route
+                root_arguments = {"path": "."}
+                root_result = await await_mcp_operation(
+                    root_session.call_tool(root_tool_name, root_arguments),
+                    timeout_seconds=MCP_TOOL_CALL_TIMEOUT_SECONDS,
+                    operation="MCP-Tool 'okf__knowledge_index'",
                 )
+                if bool(getattr(root_result, "isError", False)):
+                    raise RuntimeError("OKF-Root-Index konnte nicht gelesen werden.")
+                root_result_text = tool_result_text(root_result)
+                try:
+                    root_index: Any = json.loads(root_result_text)
+                except json.JSONDecodeError:
+                    root_index = root_result_text
+                knowledge_request_data["root_index"] = root_index
+                seen_calls.add(_knowledge_call_key(root_tool_name, root_arguments))
+                for path, names in _knowledge_allowed_calls(root_result).items():
+                    allowed_calls.setdefault(path, set()).update(names)
 
-            root_session, root_tool_name, _ = root_route
-            root_arguments = {"path": "."}
-            if self.logging_config.log_tool_calls:
-                logger.info(
-                    "tool_call phase=knowledge name=knowledge_index arguments=%s",
-                    json.dumps(root_arguments, ensure_ascii=False),
-                )
-            root_result = await await_mcp_operation(
-                root_session.call_tool(
-                    root_tool_name,
-                    root_arguments,
-                ),
-                timeout_seconds=MCP_TOOL_CALL_TIMEOUT_SECONDS,
-                operation="MCP-Tool 'okf__knowledge_index'",
-            )
-            root_result_text = tool_result_text(root_result)
-            logger.info(
-                "tool_result phase=knowledge name=knowledge_index "
-                "is_error=%s raw_length=%d final_length=%d compressed=false",
-                bool(getattr(root_result, "isError", False)),
-                len(root_result_text),
-                len(root_result_text),
-            )
-            if self.logging_config.log_tool_results:
-                logger.info(
-                    "tool_result_content phase=knowledge "
-                    "name=knowledge_index content=%s",
-                    root_result_text,
-                )
-            if bool(getattr(root_result, "isError", False)):
-                raise RuntimeError(
-                    "Der Root-Index des OKF-Repositories konnte nicht gelesen "
-                    f"werden: {root_result_text}"
-                )
+            if active_vector:
+                try:
+                    initial_search = await self._vector_session.search(prompt)
+                except Exception:
+                    if vector_required or not active_okf:
+                        raise
+                    logger.warning("optional_vector_search_failed_fallback_to_okf", exc_info=True)
+                    active_vector = False
+                else:
+                    knowledge_request_data["initial_search"] = initial_search
+                    for path, names in _knowledge_allowed_calls(
+                        type("_Result", (), {"structuredContent": initial_search})()
+                    ).items():
+                        allowed_calls.setdefault(path, set()).update(names)
+                    seen_calls.add(_knowledge_call_key("knowledge_search", {"query": prompt}))
 
-            try:
-                root_index: Any = json.loads(root_result_text)
-            except json.JSONDecodeError:
-                root_index = root_result_text
-
+            # Never advertise optional vector tools when the vector index has
+            # failed or was not started. OKF navigation remains available.
+            run_tools = [
+                tool for tool in self._knowledge_tools
+                if active_vector or not tool["function"]["name"].startswith("vector__")
+            ]
+            run_routes = {
+                name: route for name, route in self._knowledge_routes.items()
+                if active_vector or not name.startswith("vector__")
+            }
             knowledge_state = _KnowledgeRunState(
-                seen_calls={
-                    _knowledge_call_key(root_tool_name, root_arguments),
-                },
-                allowed_calls=_knowledge_allowed_calls(root_result),
+                seen_calls=seen_calls,
+                allowed_calls=allowed_calls,
             )
-
-            knowledge_request = json.dumps(
-                {
-                    "original_user_request": prompt,
-                    "root_index": root_index,
-                    "selection_state": {
-                        "valid_tokens": [],
-                        "found_content_true_allowed": False,
-                    },
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
+            knowledge_request_data["selection_state"] = {
+                "valid_tokens": [],
+                "found_content_true_allowed": False,
+            }
+            knowledge_request = json.dumps(knowledge_request_data, ensure_ascii=False, indent=2)
             messages = [
                 {
                     "role": "system",
-                    "content": self._build_knowledge_system_prompt(),
+                    "content": self._build_knowledge_system_prompt(vector_active=active_vector, tools=run_tools),
                 },
                 *copy.deepcopy(self.history),
                 {"role": "user", "content": knowledge_request},
@@ -392,11 +406,11 @@ class ConversationMixin:
 
             result = await self._run_model_loop(
                 messages=messages,
-                tools=self._knowledge_tools,
-                routes=self._knowledge_routes,
+                tools=run_tools,
+                routes=run_routes,
                 enabled_server_names=None,
-                max_tool_calls=options.max_tool_calls,
-                max_concept_reads=options.max_concept_reads,
+                max_tool_calls=options.max_tool_calls if options else 100,
+                max_concept_reads=options.max_concept_reads if options else 80,
                 phase="knowledge",
                 knowledge_state=knowledge_state,
             )
@@ -415,7 +429,7 @@ class ConversationMixin:
                 if reason_code == "not_applicable":
                     return None
                 if reason_code == "not_found":
-                    if options.required:
+                    if required:
                         return json.dumps(selection, ensure_ascii=False)
                     return None
                 if reason_code == "retrieval_incomplete":
@@ -442,10 +456,10 @@ class ConversationMixin:
                     "error": f"{type(exc).__name__}: {exc}",
                 },
             )
-            if options.required:
+            if required:
                 raise RuntimeError(
                     "Die Aufgabe wurde nicht bearbeitet, weil der konfigurierte "
-                    "OKF-Wissensvorlauf fehlgeschlagen ist."
+                    "Knowledge-Wissensvorlauf fehlgeschlagen ist."
                 ) from exc
             logger.error(
                 "knowledge_collection_failed_optional error_type=%s",

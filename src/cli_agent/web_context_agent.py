@@ -87,6 +87,7 @@ class WebContextCliAgent(CliAgent):
         self._last_knowledge_usage: LoopTokenUsage | None = None
         self._last_main_loop_ran = False
         self._last_knowledge_loop_ran = False
+        self._knowledge_usage_indices: set[int] = set()
 
     @staticmethod
     def _format_token_count(value: int) -> str:
@@ -139,7 +140,21 @@ class WebContextCliAgent(CliAgent):
             return await super()._run_model_loop(**kwargs)
         finally:
             usage_history = getattr(self.model_client, "usage_history", None)
-            usage = None if start_index is None or not isinstance(usage_history, list) else LoopTokenUsage.from_requests(usage_history[start_index:])
+            usage = None
+            if start_index is not None and isinstance(usage_history, list):
+                if phase == "knowledge":
+                    # Nested retrieval runs can execute while the main loop is
+                    # waiting for a tool result. Attribute these requests only
+                    # to Knowledge, not a second time to Main.
+                    self._knowledge_usage_indices.update(
+                        range(start_index, len(usage_history))
+                    )
+                phase_usages = [
+                    request
+                    for index, request in enumerate(usage_history[start_index:], start=start_index)
+                    if phase != "main" or index not in self._knowledge_usage_indices
+                ]
+                usage = LoopTokenUsage.from_requests(phase_usages)
             if phase == "main":
                 if usage is not None and self._last_main_usage is not None:
                     self._last_main_usage = self._last_main_usage.merged_with(usage)

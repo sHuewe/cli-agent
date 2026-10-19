@@ -766,6 +766,8 @@ async def run(args: argparse.Namespace) -> None:
             else _show_mcp_user_message
         ),
         okf=config.okf,
+        knowledge_vector=config.knowledge_vector,
+        model_credential_rules=admin_config.model_credentials,
         file_contexts=file_contexts,
         response_format=getattr(args, "response_format", "text"),
         workspace_access=args.os_access,

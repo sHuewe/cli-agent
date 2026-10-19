@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..filesystem_security import regular_file_has_multiple_links
+from ..filesystem_security import read_bounded_regular_file
 from .workspace import WorkspacePathError, WorkspaceRoot
 from .repository_support import OkfRepositoryError, RepositoryMetadataMixin
 
@@ -269,36 +269,19 @@ class OkfRepository(RepositoryMetadataMixin):
             raise OkfRepositoryError(str(exc)) from exc
 
     def _read_text(self, file_path: Path) -> str:
+        relative = self.workspace.relative(file_path)
         try:
-            if regular_file_has_multiple_links(file_path):
-                raise OkfRepositoryError(
-                    "OKF-Dateien mit mehreren Hardlinks werden aus "
-                    "Sicherheitsgründen nicht gelesen: "
-                    f"{self.workspace.relative(file_path)}"
-                )
-            size = file_path.stat().st_size
-        except OkfRepositoryError:
-            raise
-        except OSError as exc:
-            raise OkfRepositoryError(
-                "Dateigröße konnte nicht sicher gelesen werden: "
-                f"{self.workspace.relative(file_path)}"
-            ) from exc
-        if size > self.max_read_bytes:
-            raise OkfRepositoryError(
-                f"OKF-Datei ist mit {size} Bytes größer als das konfigurierte "
-                f"Limit von {self.max_read_bytes} Bytes: "
-                f"{self.workspace.relative(file_path)}"
+            data = read_bounded_regular_file(
+                self.workspace.directory, relative,
+                max_bytes=self.max_read_bytes,
             )
+        except (OSError, ValueError) as exc:
+            raise OkfRepositoryError(
+                f"OKF-Datei konnte nicht sicher gelesen werden: {relative}: {exc}"
+            ) from exc
         try:
-            return file_path.read_text(encoding="utf-8")
+            return data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise OkfRepositoryError(
-                "OKF-Datei ist kein gültiger UTF-8-Text: "
-                f"{self.workspace.relative(file_path)}"
-            ) from exc
-        except OSError as exc:
-            raise OkfRepositoryError(
-                "OKF-Datei konnte nicht gelesen werden: "
-                f"{self.workspace.relative(file_path)}"
+                f"OKF-Datei ist kein gültiger UTF-8-Text: {relative}"
             ) from exc

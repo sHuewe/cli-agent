@@ -42,7 +42,17 @@ class McpLifecycleMixin:
         if enabled:
             if not was_enabled:
                 server_config = self._server_configs.get(server_name)
-                if server_config is not None and self._exit_stack is not None:
+                # The in-process knowledge reentry adapter has no stdio/HTTP
+                # connection to restart. Its route remains registered while
+                # disabled; only the active-server flag needs to change.
+                if server_name == "knowledge_reentry":
+                    if (
+                        server_config is None
+                        or not getattr(server_config, "built_in", False)
+                        or "knowledge_reentry__request_additional_knowledge" not in self._tool_routes
+                    ):
+                        raise RuntimeError("Interner Knowledge-Reentry-Adapter ist nicht verfügbar.")
+                elif server_config is not None and self._exit_stack is not None:
                     started = await self._start_server(server_config, self._exit_stack)
                     if started is False:
                         return False
@@ -90,6 +100,10 @@ class McpLifecycleMixin:
                     self._active_servers.add(server_config.name)
             if self._okf_options is not None:
                 await self._start_knowledge_server(stack)
+            if self._vector_config is not None:
+                await self._start_vector_knowledge()
+            if self._knowledge_session is not None or self._vector_session is not None:
+                self._register_knowledge_reentry_tool()
             self.history = []
             system_prompt = self._build_system_prompt()
             if self.logging_config.log_model_messages:
@@ -99,6 +113,9 @@ class McpLifecycleMixin:
         except BaseException:
             await stack.aclose()
             self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._server_untrusted_instructions.clear(); self._active_servers.clear()
+            if self._vector_session is not None:
+                self._vector_session.close()
+                self._vector_session = None
             self._knowledge_session = None; self._knowledge_tools.clear(); self._knowledge_routes.clear(); self._knowledge_instructions = None; self.history.clear()
             raise
 
@@ -229,6 +246,70 @@ class McpLifecycleMixin:
         stack.push_async_callback(knowledge_stack.aclose); self._knowledge_session = session; self._knowledge_tools = knowledge_tools; self._knowledge_routes = knowledge_routes; self._knowledge_instructions = instructions
         logger.info("knowledge_server_connected repository=%s tools=%s", options.repository, json.dumps([tool["function"]["name"] for tool in knowledge_tools], ensure_ascii=False))
 
+    async def _start_vector_knowledge(self) -> None:
+        config = self._vector_config
+        if config is None:
+            return
+        try:
+            if config.mode == "okf" and self._knowledge_session is None:
+                raise RuntimeError("Hybrid-RAG erfordert einen verfügbaren OKF-Server.")
+            root = source_root(
+                config,
+                okf_root=self._okf_options.repository if self._okf_options else None,
+                config_file=self.config_file,
+            )
+            path = db_path(config, config_file=self.config_file)
+            session = VectorKnowledgeSession(
+                config, root=root, path=path,
+                network=self.network, credential_rules=self._model_credential_rules,
+                okf_max_read_bytes=self._okf_options.max_read_bytes,
+            )
+            self._vector_session = session
+            runtime = _RuntimeMcpServerConfig(name="vector", built_in=True)
+            search_tool = {"type": "function", "function": {
+                "name": "vector__knowledge_search",
+                "description": "Search the indexed knowledge source for relevant document candidates. Read returned paths before selecting them.",
+                "parameters": {"type": "object", "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 2000}
+                }, "required": ["query"], "additionalProperties": False},
+            }}
+            self._knowledge_tools.append(search_tool)
+            self._knowledge_routes["vector__knowledge_search"] = (session, "knowledge_search", runtime)
+        except Exception:
+            if config.required:
+                raise
+            logger.exception("vector_knowledge_disabled")
+            self._vector_session = None
+
+    def _register_knowledge_reentry_tool(self) -> None:
+        from types import SimpleNamespace
+
+        if "knowledge_reentry" in self._server_configs or "knowledge_reentry" in self._server_tools:
+            raise RuntimeError("Der interne MCP-Servername knowledge_reentry ist bereits belegt.")
+
+        class _ReentrySession:
+            def __init__(self, agent):
+                self.agent = agent
+
+            async def call_tool(self, name, arguments):
+                if name != "request_additional_knowledge":
+                    return SimpleNamespace(structuredContent={"error": "Unbekanntes Tool"}, content=[], isError=True)
+                return await self.agent._request_additional_knowledge(arguments["question"])
+
+        server = _RuntimeMcpServerConfig(name="knowledge_reentry", built_in=True)
+        exposed = "knowledge_reentry__request_additional_knowledge"
+        tool = {"type": "function", "function": {
+            "name": exposed,
+            "description": "Nur wenn während der Hauptaufgabe wirklich neue, erforderliche Wissenslücken auftreten: ergänzendes projektspezifisches Knowledge recherchieren. Nicht zur Bestätigung bereits bekannter Fakten oder für wiederholte Fragen verwenden. Maximal zweimal pro Benutzeranfrage.",
+            "parameters": {"type": "object", "properties": {
+                "question": {"type": "string", "minLength": 1, "maxLength": 2000}
+            }, "required": ["question"], "additionalProperties": False},
+        }}
+        self._server_configs[server.name] = server
+        self._server_tools[server.name] = [tool]
+        self._tool_routes[exposed] = (_ReentrySession(self), "request_additional_knowledge", server)
+        self._active_servers.add(server.name)
+
     @staticmethod
     def _stdio_environment(*, built_in: bool = False) -> dict[str, str]:
         safe_names = ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP", "LANG", "LC_ALL", "PYTHONIOENCODING")
@@ -346,5 +427,8 @@ class McpLifecycleMixin:
     async def close(self) -> None:
         if self._exit_stack is None: return
         stack = self._exit_stack; self._exit_stack = None
+        if self._vector_session is not None:
+            self._vector_session.close()
+            self._vector_session = None
         self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._server_untrusted_instructions.clear(); self._active_servers.clear(); self._knowledge_session = None; self._knowledge_tools.clear(); self._knowledge_routes.clear(); self._knowledge_instructions = None; self.history.clear()
         await stack.aclose()

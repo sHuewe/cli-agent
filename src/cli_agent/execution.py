@@ -385,7 +385,7 @@ def apply_named_mcp_overrides(
         if not isinstance(raw_name, str) or not raw_name.strip():
             raise ValueError("--with-mcp benötigt einen nicht-leeren MCP-Servernamen.")
         name = raw_name.strip()
-        if name.casefold() in {OS_MCP_SERVER_NAME, DATA_MCP_SERVER_NAME} or (
+        if name.casefold() in {OS_MCP_SERVER_NAME, DATA_MCP_SERVER_NAME, "knowledge_reentry"} or (
             name.casefold() == "okf" and config.okf is not None
         ):
             raise ValueError(
@@ -561,6 +561,8 @@ async def _run_prompt_sequence(
         approval_callback=options.approval_callback,
         user_message_callback=options.user_message_callback,
         okf=config.okf,
+        knowledge_vector=config.knowledge_vector,
+        model_credential_rules=admin_config.model_credentials,
         file_contexts=file_contexts,
         response_format=response_format,
         workspace_access=effective_workspace_access,

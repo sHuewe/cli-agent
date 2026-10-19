@@ -22,7 +22,8 @@ from .agent_knowledge import (
 )
 from .agent_mcp import McpLifecycleMixin
 from .agent_permissions import WRITE_TOOLS
-from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT
+from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT, HYBRID_OKF_KNOWLEDGE_PROMPT
+from .knowledge_vector import VectorKnowledgeSession, source_root, db_path
 from .agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageCallback
 from .config import LoggingConfig, McpServerConfig
 from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
@@ -78,7 +79,7 @@ DUMP_PREFIX_HASH_HEX_CHARS = 16
 
 
 class CliAgent(McpLifecycleMixin, ConversationMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, response_format: str = "text", workspace_access: str | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None) -> None:
         self.workspace_directory = workspace_directory.resolve()
         self.model_client = model_client
         self.mcp_servers = mcp_servers
@@ -107,6 +108,11 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self._disabled_tools: set[str] = set()
         self._okf_options = self._normalize_okf_config(okf)
         self._okf_enabled = self._okf_options is not None
+        self._vector_config = knowledge_vector
+        self._model_credential_rules = model_credential_rules
+        self._vector_session: VectorKnowledgeSession | None = None
+        self._knowledge_reentry_calls = 0
+        self._knowledge_reentry_seen: set[str] = set()
         self.history: list[dict[str, Any]] = []
         self._dumped_history_json: str | None = None
         self._exit_stack: AsyncExitStack | None = None
@@ -123,6 +129,40 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self._knowledge_tools: list[dict[str, Any]] = []
         self._knowledge_routes: dict[str, ToolRoute] = {}
         self._knowledge_instructions: str | None = None
+
+    async def _request_additional_knowledge(self, question: str):
+        from types import SimpleNamespace
+
+        if not isinstance(question, str) or not question.strip() or len(question) > 2000:
+            return SimpleNamespace(
+                structuredContent={"status": "error", "reason": "Ungültige Knowledge-Frage."},
+                content=[], isError=True,
+            )
+        normalized = " ".join(question.casefold().split())
+        if normalized in self._knowledge_reentry_seen:
+            return SimpleNamespace(
+                structuredContent={"status": "no_new_information", "reason": "Diese Knowledge-Frage wurde bereits gestellt."},
+                content=[], isError=False,
+            )
+        if self._knowledge_reentry_calls >= 2:
+            return SimpleNamespace(
+                structuredContent={"status": "limit_reached", "reason": "Maximal zwei zusätzliche Knowledge-Abfragen pro Anfrage."},
+                content=[], isError=False,
+            )
+        self._knowledge_reentry_calls += 1
+        self._knowledge_reentry_seen.add(normalized)
+        try:
+            result = await self._collect_knowledge(question)
+            return SimpleNamespace(
+                structuredContent={"status": "ok" if result is not None else "no_new_information", "knowledge": json.loads(result) if result is not None else None},
+                content=[], isError=False,
+            )
+        except Exception:
+            logger.exception("additional_knowledge_failed")
+            return SimpleNamespace(
+                structuredContent={"status": "error", "reason": "Zusätzliche Knowledge-Recherche fehlgeschlagen."},
+                content=[], isError=True,
+            )
 
     def _normalize_okf_config(self, config: OkfConfigLike | str | Path | None) -> _OkfOptions | None:
         if config is None:
@@ -483,8 +523,21 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             )
         return "\n\n".join(parts)
 
-    def _build_knowledge_system_prompt(self) -> str:
-        parts = [KNOWLEDGE_SYSTEM_PROMPT, "Aktuell verfügbare OKF-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(tool["function"]["name"] for tool in self._knowledge_tools)]
+    def _build_knowledge_system_prompt(
+        self,
+        *,
+        vector_active: bool | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> str:
+        # A configured optional vector backend may be unavailable for one run.
+        # Prompt capabilities must reflect the tools actually offered.
+        if vector_active is None:
+            vector_active = self._vector_session is not None
+        if tools is None:
+            tools = self._knowledge_tools
+        mode = "hybrid" if vector_active else "okf"
+        prompt = HYBRID_OKF_KNOWLEDGE_PROMPT if mode == "hybrid" else KNOWLEDGE_SYSTEM_PROMPT
+        parts = [prompt, "Aktuell verfügbare Knowledge-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(tool["function"]["name"] for tool in tools)]
         if self._okf_options is not None:
             parts.append(f"Lies höchstens {self._okf_options.max_concept_reads} Concepts. Nach Erreichen dieses Limits rufst du keine Tools mehr auf und triffst die finale Auswahl ausschließlich aus den bereits vergebenen Tokens.")
         if self._knowledge_instructions:
