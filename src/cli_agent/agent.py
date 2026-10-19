@@ -22,7 +22,8 @@ from .agent_knowledge import (
 )
 from .agent_mcp import McpLifecycleMixin
 from .agent_permissions import WRITE_TOOLS
-from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT
+from .agent_prompts import KNOWLEDGE_SYSTEM_PROMPT, VECTOR_KNOWLEDGE_PROMPT, HYBRID_OKF_KNOWLEDGE_PROMPT
+from .knowledge_vector import VectorKnowledgeSession, source_root, db_path
 from .agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageCallback
 from .config import LoggingConfig, McpServerConfig
 from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
@@ -78,7 +79,7 @@ DUMP_PREFIX_HASH_HEX_CHARS = 16
 
 
 class CliAgent(McpLifecycleMixin, ConversationMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, response_format: str = "text", workspace_access: str | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None) -> None:
         self.workspace_directory = workspace_directory.resolve()
         self.model_client = model_client
         self.mcp_servers = mcp_servers
@@ -107,6 +108,9 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self._disabled_tools: set[str] = set()
         self._okf_options = self._normalize_okf_config(okf)
         self._okf_enabled = self._okf_options is not None
+        self._vector_config = knowledge_vector
+        self._model_credential_rules = model_credential_rules
+        self._vector_session: VectorKnowledgeSession | None = None
         self.history: list[dict[str, Any]] = []
         self._dumped_history_json: str | None = None
         self._exit_stack: AsyncExitStack | None = None
@@ -484,7 +488,9 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         return "\n\n".join(parts)
 
     def _build_knowledge_system_prompt(self) -> str:
-        parts = [KNOWLEDGE_SYSTEM_PROMPT, "Aktuell verfügbare OKF-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(tool["function"]["name"] for tool in self._knowledge_tools)]
+        mode = "okf" if self._vector_config is None else ("hybrid" if self._vector_config.mode == "okf" else "vector")
+        prompt = {"okf": KNOWLEDGE_SYSTEM_PROMPT, "vector": VECTOR_KNOWLEDGE_PROMPT, "hybrid": HYBRID_OKF_KNOWLEDGE_PROMPT}[mode]
+        parts = [prompt, "Aktuell verfügbare Knowledge-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(tool["function"]["name"] for tool in self._knowledge_tools)]
         if self._okf_options is not None:
             parts.append(f"Lies höchstens {self._okf_options.max_concept_reads} Concepts. Nach Erreichen dieses Limits rufst du keine Tools mehr auf und triffst die finale Auswahl ausschließlich aus den bereits vergebenen Tokens.")
         if self._knowledge_instructions:
