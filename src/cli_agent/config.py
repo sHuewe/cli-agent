@@ -113,6 +113,20 @@ class OkfConfig:
 
 
 @dataclass(frozen=True)
+class VectorKnowledgeConfig:
+    mode: str = "raw"  # raw or okf
+    source: str | None = None
+    database: str = "knowledge.sqlite"
+    provider: str = "ollama"
+    model: str = "embeddinggemma"
+    base_url: str = "http://localhost:11434"
+    api_key_env: str | None = None
+    search_limit: int = 5
+    max_files: int = 10000
+    required: bool = True
+
+
+@dataclass(frozen=True)
 class McpServerConfig:
     name: str
     transport: str = "stdio"
@@ -139,6 +153,7 @@ class AppConfig:
     logging: LoggingConfig = LoggingConfig()
     mcp_servers: tuple[McpServerConfig, ...] = ()
     okf: OkfConfig | None = None
+    knowledge_vector: VectorKnowledgeConfig | None = None
     max_pdf_pages: int = 100
 
 
@@ -237,6 +252,41 @@ def _okf_config(values: dict[str, Any]) -> OkfConfig:
         max_read_bytes=int(values.get("max_read_bytes", 2_560_000)),
         compress_min_chars=int(values.get("compress_min_chars", 20_000)),
         required=_bool_value(values, "required", True, section="[okf]"),
+    )
+
+
+def _vector_config(values: dict[str, Any], *, has_okf: bool) -> VectorKnowledgeConfig:
+    allowed = {"mode", "source", "database", "provider", "model", "base_url", "api_key_env", "search_limit", "max_files", "required"}
+    if set(values) - allowed:
+        raise ValueError("[knowledge.vector] enthält unbekannte Optionen.")
+    mode = values.get("mode", "okf" if has_okf else "raw")
+    provider = values.get("provider", "ollama")
+    if mode not in {"raw", "okf"} or provider not in {"ollama", "openai"}:
+        raise ValueError("Ungültiger Knowledge-Modus oder Embedding-Provider.")
+    if mode == "okf" and not has_okf:
+        raise ValueError("Vektor-Modus okf erfordert [okf].")
+    source = values.get("source")
+    if mode == "raw" and (not isinstance(source, str) or not source.strip()):
+        raise ValueError("Im Raw-Modus muss knowledge.vector.source gesetzt werden.")
+    if mode == "okf" and source is not None:
+        raise ValueError("Im OKF-Modus bestimmt [okf].repository die Quelle.")
+    for key in ("database", "model", "base_url"):
+        if not isinstance(values.get(key, "x"), str) or not values.get(key, "x").strip():
+            raise ValueError(f"knowledge.vector.{key} darf nicht leer sein.")
+    for key, upper in (("search_limit", 20), ("max_files", 100000)):
+        value = values.get(key, 5 if key == "search_limit" else 10000)
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= upper:
+            raise ValueError(f"knowledge.vector.{key} muss zwischen 1 und {upper} liegen.")
+    env = values.get("api_key_env")
+    if env is not None and (not isinstance(env, str) or not env.strip()):
+        raise ValueError("api_key_env muss ein nicht-leerer Variablenname sein.")
+    return VectorKnowledgeConfig(
+        mode=mode, source=source, database=values.get("database", "knowledge.sqlite"),
+        provider=provider, model=values.get("model", "embeddinggemma"),
+        base_url=values.get("base_url", "http://localhost:11434"),
+        api_key_env=env, search_limit=values.get("search_limit", 5),
+        max_files=values.get("max_files", 10000),
+        required=_bool_value(values, "required", True, section="[knowledge.vector]"),
     )
 
 
@@ -347,7 +397,15 @@ def load_config(path: Path | None = None) -> AppConfig:
         raise ValueError(
             "Der MCP-Servername 'okf' ist reserviert, wenn [okf] konfiguriert ist."
         )
+    knowledge_values = values.get("knowledge", {})
+    if not isinstance(knowledge_values, dict) or set(knowledge_values) - {"vector"}:
+        raise ValueError("[knowledge] enthält unbekannte Optionen.")
+    vector_values = knowledge_values.get("vector")
+    if vector_values is not None and not isinstance(vector_values, dict):
+        raise ValueError("[knowledge.vector] muss eine Tabelle sein.")
+    knowledge_vector = _vector_config(vector_values, has_okf=okf is not None) if vector_values is not None else None
     return AppConfig(
+        knowledge_vector=knowledge_vector,
         dump_llm_context=_bool_value(values, "dump_llm_context", False, section="Root-Konfiguration"),
         model=_model_config(model_values),
         logging=_logging_config(logging_values),
