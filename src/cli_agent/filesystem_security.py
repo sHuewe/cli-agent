@@ -35,9 +35,11 @@ def regular_file_has_multiple_links(path: Path) -> bool:
 def _windows_open_pinned_file(root: Path, relative_parts: tuple[str, ...], stack: ExitStack) -> int:
     """Pin each ancestor against replacement and refuse Windows reparse points.
 
-    Unlike stat-then-open, parent directory handles deny FILE_SHARE_DELETE.
-    CreateFileW opens each next component with OPEN_REPARSE_POINT, so a
-    concurrently substituted junction or symlink is inspected, never followed.
+    Unlike stat-then-open, parent directory handles deny FILE_SHARE_WRITE
+    and FILE_SHARE_DELETE for the entire verified traversal. A competing
+    reparse-point writer therefore cannot modify pinned ancestors, while
+    CreateFileW opens each component with OPEN_REPARSE_POINT. This protects
+    against both renames and in-place junction/reparse mutations.
     The returned CRT fd owns the final Win32 HANDLE.
     """
     import ctypes
@@ -69,7 +71,6 @@ def _windows_open_pinned_file(root: Path, relative_parts: tuple[str, ...], stack
     file_read_attributes = 0x0080
     generic_read = 0x80000000
     file_share_read = 0x00000001
-    file_share_write = 0x00000002
     open_existing = 3
     file_flag_backup_semantics = 0x02000000
     file_flag_open_reparse_point = 0x00200000
@@ -90,7 +91,10 @@ def _windows_open_pinned_file(root: Path, relative_parts: tuple[str, ...], stack
         handle = create_file(
             path,
             file_read_attributes if directory else generic_read,
-            file_share_read | file_share_write if directory else file_share_read,
+            # Do not allow concurrently opened write-capable handles on a
+            # pinned parent directory: FSCTL_SET_REPARSE_POINT can otherwise
+            # retarget it without renaming it.
+            file_share_read,
             None,
             open_existing,
             file_flag_open_reparse_point
