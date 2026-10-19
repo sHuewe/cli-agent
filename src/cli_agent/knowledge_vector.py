@@ -261,7 +261,9 @@ class SQLiteKnowledgeStore:
     def __init__(self, path: Path, *, readonly: bool = True) -> None:
         self.path = path
         if readonly:
-            self.db = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+            # pathlib percent-encodes URI metacharacters (notably ?, #, %).
+            # A raw "file:" + path string can silently open a different file.
+            self.db = sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True)
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             self.db = sqlite3.connect(str(path))
@@ -479,7 +481,9 @@ async def update_index(
             else _raw_paths(root, max_files=config.max_files)
         )
 
-        changed_records: list[tuple[str, str, list[str]]] = []
+        # Only retain identifiers and checksums for changed files. Holding
+        # pre-split contents for the whole corpus can exhaust memory.
+        changed_records: list[tuple[str, str]] = []
         unchanged_records: list[tuple[str, str]] = []
         for relative in paths:
             content = _read_source(root, relative, mode=config.mode)
@@ -487,9 +491,9 @@ async def update_index(
             if existing.get(relative) == fingerprint:
                 unchanged_records.append((relative, fingerprint))
             else:
-                changed_records.append((relative, fingerprint, _chunks(content)))
+                changed_records.append((relative, fingerprint))
 
-        added = sum(1 for relative, _, _ in changed_records if relative not in existing)
+        added = sum(1 for relative, _ in changed_records if relative not in existing)
         changed = len(changed_records) - added
         removed = len(set(existing).difference(paths))
         stats = IndexUpdateResult(
@@ -521,11 +525,20 @@ async def update_index(
                     new_store.copy_unchanged_source(
                         old, path=relative, sha256=fingerprint, dimension=dimension
                     )
-                for relative, fingerprint, chunks in changed_records:
+                for relative, fingerprint in changed_records:
+                    # Re-read one source at a time; nothing but its fingerprint
+                    # was retained from the initial change-detection pass.
+                    content = _read_source(root, relative, mode=config.mode)
+                    if hashlib.sha256(content.encode("utf-8")).hexdigest() != fingerprint:
+                        raise ValueError(
+                            "Knowledge-Quelle wurde während der Indexierung "
+                            "geändert; bitte den Update-Lauf wiederholen."
+                        )
                     new_store.db.execute(
                         "INSERT INTO sources(path,sha256) VALUES (?,?)",
                         (relative, fingerprint),
                     )
+                    chunks = _chunks(content)
                     for pos in range(0, len(chunks), MAX_BATCH):
                         batch = await provider.embed(chunks[pos:pos + MAX_BATCH])
                         for vector in batch:
