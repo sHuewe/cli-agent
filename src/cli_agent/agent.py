@@ -523,10 +523,21 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             )
         return "\n\n".join(parts)
 
-    def _build_knowledge_system_prompt(self) -> str:
-        mode = "okf" if self._vector_session is None else ("hybrid" if self._vector_config.mode == "okf" else "vector")
+    def _build_knowledge_system_prompt(
+        self,
+        *,
+        vector_active: bool | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> str:
+        # A configured optional vector backend may be unavailable for one run.
+        # Prompt capabilities must reflect the tools actually offered.
+        if vector_active is None:
+            vector_active = self._vector_session is not None
+        if tools is None:
+            tools = self._knowledge_tools
+        mode = "okf" if not vector_active else ("hybrid" if self._vector_config.mode == "okf" else "vector")
         prompt = {"okf": KNOWLEDGE_SYSTEM_PROMPT, "vector": VECTOR_KNOWLEDGE_PROMPT, "hybrid": HYBRID_OKF_KNOWLEDGE_PROMPT}[mode]
-        parts = [prompt, "Aktuell verfügbare Knowledge-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(tool["function"]["name"] for tool in self._knowledge_tools)]
+        parts = [prompt, "Aktuell verfügbare Knowledge-Tools (nur diese Namen dürfen aufgerufen werden):\n- " + "\n- ".join(tool["function"]["name"] for tool in tools)]
         if self._okf_options is not None:
             parts.append(f"Lies höchstens {self._okf_options.max_concept_reads} Concepts. Nach Erreichen dieses Limits rufst du keine Tools mehr auf und triffst die finale Auswahl ausschließlich aus den bereits vergebenen Tokens.")
         if self._knowledge_instructions:
