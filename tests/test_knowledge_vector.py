@@ -467,6 +467,7 @@ async def test_update_streams_changed_sources_and_aborts_on_midrun_change(tmp_pa
     assert reads["b.md"] == 2
 
 
+@pytest.mark.skipif(__import__("os").name == "nt", reason="Windows filenames cannot contain ?")
 def test_readonly_sqlite_uri_handles_query_and_fragment_in_filename(tmp_path):
     path = tmp_path / "vectors?source#one%.sqlite"
     writer = SQLiteKnowledgeStore(path, readonly=False)
