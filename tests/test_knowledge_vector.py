@@ -242,3 +242,76 @@ def test_old_schema_version_rejected(tmp_path):
             store.check(root=tmp_path, mode="okf", provider="ollama", model="embed")
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_incremental_update_reuses_vectors_and_handles_all_changes(tmp_path, monkeypatch):
+    from cli_agent.knowledge_vector import EmbeddingProvider, update_index
+    root = tmp_path / "docs"
+    root.mkdir()
+    for name in ("keep.md", "change.md", "remove.md"):
+        (root / name).write_text(name + " original", encoding="utf-8")
+    path = tmp_path / "index.sqlite"
+    config = VectorKnowledgeConfig(mode="raw", source=str(root), database=str(path))
+    batches = []
+
+    async def embed(self, texts):
+        batches.extend(texts)
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(EmbeddingProvider, "embed", embed)
+    await build_index(config, root=root, path=path, network=NetworkConfig())
+    batches.clear()
+    with sqlite3.connect(path) as connection:
+        original = connection.execute(
+            "SELECT vector FROM chunks WHERE source='keep.md'"
+        ).fetchall()
+    (root / "change.md").write_text("change.md UPDATED", encoding="utf-8")
+    (root / "remove.md").unlink()
+    (root / "add.md").write_text("add.md new", encoding="utf-8")
+    result = await update_index(config, root=root, path=path, network=NetworkConfig())
+    assert (result.added, result.changed, result.unchanged, result.removed) == (1, 1, 1, 1)
+    assert len(batches) == 2
+    assert not any("keep.md" in text for text in batches)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT vector FROM chunks WHERE source='keep.md'").fetchall() == original
+        assert {row[0] for row in connection.execute("SELECT path FROM sources")} == {"keep.md", "change.md", "add.md"}
+    batches.clear()
+    result = await update_index(config, root=root, path=path, network=NetworkConfig())
+    assert (result.added, result.changed, result.unchanged, result.removed) == (0, 0, 3, 0)
+    assert batches == []
+
+
+@pytest.mark.asyncio
+async def test_incremental_update_is_atomic_on_embedding_failure(tmp_path, monkeypatch):
+    from cli_agent.knowledge_vector import EmbeddingProvider, update_index
+    root = tmp_path / "docs"
+    root.mkdir()
+    document = root / "concept.md"
+    document.write_text("First version", encoding="utf-8")
+    db = tmp_path / "knowledge.sqlite"
+    config = VectorKnowledgeConfig(mode="raw", source=str(root), database=str(db))
+
+    async def success(self, texts):
+        return [[1.0, 0.0] for _ in texts]
+    monkeypatch.setattr(EmbeddingProvider, "embed", success)
+    await build_index(config, root=root, path=db, network=NetworkConfig())
+    original_bytes = db.read_bytes()
+    document.write_text("Second version", encoding="utf-8")
+
+    async def fail(self, texts):
+        raise RuntimeError("Embedding provider unreachable")
+    monkeypatch.setattr(EmbeddingProvider, "embed", fail)
+    with pytest.raises(RuntimeError, match="unreachable"):
+        await update_index(config, root=root, path=db, network=NetworkConfig())
+    assert db.read_bytes() == original_bytes
+
+
+@pytest.mark.asyncio
+async def test_incremental_update_requires_existing_compatible_index(tmp_path):
+    from cli_agent.knowledge_vector import update_index
+    root = tmp_path / "docs"
+    root.mkdir()
+    config = VectorKnowledgeConfig(mode="raw", source=str(root), database=str(tmp_path / "missing.sqlite"))
+    with pytest.raises(ValueError, match="init-vector-db"):
+        await update_index(config, root=root, path=tmp_path / "missing.sqlite", network=NetworkConfig())
