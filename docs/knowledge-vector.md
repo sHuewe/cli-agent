@@ -163,7 +163,7 @@ cli-agent-rag update-vector-db \
   --sqlite-file "C:/knowledge/indexes/my-okf.sqlite"
 ```
 
-The command requires an existing, compatible schema-v2 index. It computes
+The command requires an existing, compatible schema-v3 index. It computes
 SHA-256 fingerprints for all currently reachable OKF Concepts and:
 - retains the existing stored vectors for unchanged Concepts;
 - embeds only changed or newly reachable Concepts;
@@ -172,5 +172,20 @@ SHA-256 fingerprints for all currently reachable OKF Concepts and:
 The replacement database is assembled next to the old index and atomically
 published only after all necessary embeddings succeed. A no-change run does not
 rewrite the database or call the embedding endpoint. Changes to the embedding
-model/provider or vector dimension require `init-vector-db` to rebuild.
+model/provider, normalized endpoint URL or vector dimension require `init-vector-db` to rebuild.
 The summary reports added, changed, unchanged, and removed Concept counts.
+
+
+## Index identity and stale-result bounds
+
+The database records the normalized embedding base URL in addition to model,
+provider and dimension. Runtime retrieval and incremental updates reject a
+different endpoint, even if the model name and vector dimension match. This
+prevents mixing unrelated embedding spaces. Existing schema-v2 indexes must
+be rebuilt with `init-vector-db`.
+
+Runtime retrieval validates a bounded over-fetch set (up to 100 candidate
+Concepts, and normally at most five times `search_limit` with a minimum of
+10). This avoids unbounded original-file reads when an index is stale.
+Some valid lower-ranked results may be omitted if too many higher-ranked
+Concepts are stale; run `update-vector-db` in that case.
