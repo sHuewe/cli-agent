@@ -858,6 +858,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             forbidden = {"config", "model", "context_file", "add_file_context", "add_web_context", "workspace_access", "with_data", "with_mcp", "retry", "approve_tools", "vars", "conversation_items", "conversation_final_prompt_file", "exclude_paths", "json_inputs", "input"}
             if forbidden & set(raw):
                 raise ValueError("filesystem_operation darf keine Modell- oder Tool-Optionen setzen.")
+        if raw_filesystem_operation is not None:
+            _validate_input_references(
+                [raw_filesystem_operation["directory"]],
+                declared_inputs=inputs,
+                field=f"steps[{index}].filesystem_operation.directory",
+            )
         raw_json_operation = raw.get("json_operation")
         if raw_json_operation is not None:
             if (
@@ -4376,8 +4382,12 @@ async def _run_flow_internal(
                     max_entries=op.get("max_entries", MAX_INVENTORY_ENTRIES),
                 )
                 answer = _json_dumps_preserving_numbers(transformed)
-                output.parent.mkdir(parents=True, exist_ok=True)
-                output.write_text(answer, encoding="utf-8")
+                if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+                    raise ValueError("Inventur überschreitet Output-Größenlimit.")
+                target = prepare_output_target(
+                    workspace, output, overwrite=step.overwrite_output,
+                )
+                target.write_text(answer)
                 context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
                 record_iteration_answer(answer, True, iteration_id)
                 continue
