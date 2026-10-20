@@ -105,10 +105,10 @@ def test_inventory_directory_rejects_platform_absolute_root_var(tmp_path):
     absolute = str((tmp_path / "outside").resolve())
     flow = tmp_path / "flow-absolute.toml"
     flow.write_text(
-        'version = 1\\n[vars]\\nokf_root = "' + absolute.replace('\\\\', '\\\\\\\\') + '"\\n'
-        '[[steps]]\\nid = "inventory"\\noutput = "state/inventory.json"\\n'
-        '[steps.filesystem_operation]\\nkind = "inventory"\\n'
-        'directory = "${var.okf_root}"\\n',
+        'version = 1\n[vars]\nokf_root = "' + absolute.replace('\\', '\\\\') + '"\n'
+        '[[steps]]\nid = "inventory"\noutput = "state/inventory.json"\n'
+        '[steps.filesystem_operation]\nkind = "inventory"\n'
+        'directory = "${var.okf_root}"\n',
         encoding="utf-8",
     )
     with pytest.raises(ValueError):
