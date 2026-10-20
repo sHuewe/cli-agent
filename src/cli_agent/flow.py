@@ -632,6 +632,7 @@ _WHEN_REF = re.compile(
 )
 _WHEN_UNKNOWN = object()
 _WHEN_MISSING = object()
+_WHEN_NO_ITEM = object()
 
 
 class _WhenMissingReferenceError(ValueError):
@@ -728,8 +729,8 @@ def _when_ref_value(
             return _WHEN_UNKNOWN
         return iteration_id
     else:
-        if item is None and allow_unknown:
-            return _WHEN_UNKNOWN
+        if item is _WHEN_NO_ITEM:
+            return _WHEN_UNKNOWN if allow_unknown else _WHEN_MISSING
         value = item
         segments = ref.split(".")[1:] if ref != "item" else []
     for segment in segments:
@@ -742,7 +743,7 @@ def _when_ref_value(
 def _evaluate_when(
     condition: dict[str, Any] | None, *,
     outputs: dict[str, str], statuses: dict[str, str],
-    flow_input: dict[str, Any], item: Any = None,
+    flow_input: dict[str, Any], item: Any = _WHEN_NO_ITEM,
     iteration_id: str | None = None, allow_unknown: bool = False,
 ) -> bool | None:
     if condition is None:
@@ -2668,6 +2669,21 @@ def _capture_run_start_invocation(
             items=items,
             flow_input=flow_input,
         )
+        if _when_uses_item(step.when):
+            eligible = [
+                (element, iid) for element, iid in zip(items, iteration_ids)
+                if _evaluate_when(
+                    step.when, outputs=available_outputs, statuses=statuses,
+                    flow_input=flow_input, item=element, iteration_id=iid,
+                    allow_unknown=True,
+                ) is not False
+            ]
+            items = [element for element, _ in eligible]
+            iteration_ids = [iid for _, iid in eligible]
+            if not items:
+                statuses[step.step_id] = "skipped"
+                continue
+
         outputs: list[Path | None] = []
         for item, iteration_id in zip(items, iteration_ids):
             _set_flow_diagnostic(
@@ -4104,6 +4120,9 @@ def _preflight_concrete_invocation_outputs(
                 ]
                 items = [element for element, _ in eligible]
                 iteration_ids = [iid for _, iid in eligible]
+                if not items:
+                    known_statuses[step.step_id] = "skipped"
+                    continue
             outputs_to_claim = []
             for item, iteration_id in zip(items, iteration_ids):
                 _set_flow_diagnostic(
