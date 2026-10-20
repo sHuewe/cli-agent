@@ -384,3 +384,71 @@ value = "after"
 
     calls = _run(tmp_path, definition, monkeypatch, {})
     assert calls == ["after"]
+
+
+def test_when_null_foreach_item_is_concrete_in_preflight():
+    condition = {"ref": "item", "eq": "expected"}
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={}, flow_input={},
+        allow_unknown=True,
+    ) is None
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={}, flow_input={},
+        item=None, iteration_id="1", allow_unknown=True,
+    ) is False
+
+
+def test_when_null_foreach_item_skips_subflow_preflight(tmp_path, monkeypatch):
+    (tmp_path / "child.toml").write_text(
+        'version = 1\\ninputs = ["value"]\\nresult = "steps.work.output"\\n'
+        '[[steps]]\\nid = "work"\\nprompt_file = "do.md"\\n'
+        'output = "shared.json"\\nresponse_format = "json"\\n'
+        '[steps.vars]\\nvalue = "${input.value}"\\n'.replace("\\\\n", "\\n"),
+        encoding="utf-8",
+    )
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+output = "source.json"
+response_format = "json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "children"
+flow = "child.toml"
+foreach = "steps.source.output.items"
+when = { ref = "item", eq = "selected" }
+[steps.input]
+value = "${iteration.id}"
+""")
+    (tmp_path / "source.json").write_text(
+        '{"items":[null,"selected"]}', encoding="utf-8",
+    )
+    assert _run(tmp_path, definition, monkeypatch, {}) == ["2"]
+
+
+def test_when_model_foreach_filters_before_run_start_path_checks(tmp_path, monkeypatch):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+output = "source.json"
+response_format = "json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "filtered"
+prompt_file = "do.md"
+foreach = "steps.source.output.items"
+output = "shared.json"
+response_format = "json"
+when = { ref = "item.keep", eq = true }
+[steps.vars]
+value = "${item.name}"
+""")
+    (tmp_path / "source.json").write_text(
+        '{"items":[{"name":"a","keep":false},{"name":"b","keep":true}]}',
+        encoding="utf-8",
+    )
+    assert _run(tmp_path, definition, monkeypatch, {}) == ["b"]
