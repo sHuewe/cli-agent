@@ -979,3 +979,31 @@ path = "state/routes/${each.document_id}-${each.id}-${input.folder.id}.json"
 Das Ergebnis enthält `{"batches":[{"id":"b0001","items":[...]},...],"total_items":N}` und lässt sich mit `foreach = "steps.batch_routes.output.batches"` abarbeiten. Die Batch-Grenze wird sowohl durch die Anzahl von Einträgen als auch durch `max_batch_bytes` (1.024 bis 10.000.000) begrenzt. Ist bereits ein einzelner Eintrag zu groß, bricht die Operation explizit ab, statt stillschweigend Daten wegzulassen.
 
 Die zweite Operation `kind = "flatten"` akzeptiert eine JSON-Liste von Listen und gibt `{"items":[...]}` in unveränderter Reihenfolge zurück. Beide Operationen sind vollständig deterministisch und benötigen `output` mit JSON-Format. Sie erlauben keine Modell-, Tool-, Prompt- oder Workspace-Optionen.
+
+
+### Inventory directory via global variables
+
+A filesystem inventory step may use a static global `[vars]` value in
+`directory`:
+
+```toml
+version = 1
+
+[vars]
+okf_root = "okf-generated"
+
+[[steps]]
+id = "inventory"
+output = "state/inventory.json"
+
+[steps.filesystem_operation]
+kind = "inventory"
+directory = "${var.okf_root}"
+recursive = true
+```
+
+The runner expands the declared variable when loading the flow, before
+validating the workspace-relative directory. Undefined variables, absolute
+paths and parent-directory traversal are rejected. `${input.name}`
+continues to work for subflows. Inventory `directory` does not support
+per-item or previous-output expressions.
