@@ -878,13 +878,55 @@ Insbesondere gilt:
 Die erste Version erlaubt maximal 100 Flow-Schritte und maximal 1000 Elemente
 pro `foreach`.
 
+## Bedingte Steps (`when`)
+
+Ein optionales `when` auf einem beliebigen Modell-, JSON-Operations- oder
+Subflow-Step prüft vor der Ausführung eine deklarative Bedingung:
+
+```toml
+[[steps]]
+id = "snapshot"
+prompt_file = "prompts/snapshot.md"
+when = { ref = "steps.assess.output.action", eq = "split" }
+```
+
+Erlaubte Referenzen sind `steps.<id>.output[.<feld>]` und
+`steps.<id>.status` (nur bereits deklarierte Steps), `input.<feld>` sowie
+`item[.<feld>]` und `iteration.id` für Steps mit `foreach`.
+Die Statuswerte sind `completed` und `skipped`.
+Es gibt die Operatoren `eq`, `neq`, `in` (nichtleere Liste von skalaren
+Werten) und `exists` (Boolean). Bedingungen können mit `all` oder `any`
+zu verschachtelten Gruppen kombiniert werden:
+
+```toml
+when = { all = [
+  { ref = "steps.assess.output.action", eq = "split" },
+  { ref = "input.enabled", eq = true }
+] }
+```
+
+Für `foreach` mit `item`-Bedingungen wird pro Element entschieden; nur
+zutreffende Iterationen gehen in die Ergebnisliste ein. Ist die Bedingung
+für den gesamten Step falsch, wird er ohne Modell- oder Tool-Aufruf übersprungen
+und erzeugt weder Output noch Checkpoint. **Folgeschritte werden dadurch nicht
+automatisch übersprungen.** Fehlende Output-Referenzen in Folgeschritten
+führen zu einer Fehlermeldung; sie brauchen gegebenenfalls eine eigene
+`when`-Bedingung. Über `exists = false` lässt sich die Abwesenheit
+eines Outputs ausdrücklich prüfen.
+
+Die Bedingungen werden beim Resume erneut aus vorhandenen Outputs ausgewertet.
+Für unterschiedliche Daten/Checkpoint-Stände können sich andere Verzweigungen
+ergeben; daher gehören konsistente Checkpoints weiterhin zur Verantwortung
+des aufrufenden Flows. `when` ist kein Ersatz für eine Ergebnis-Auswahl
+zwischen mehreren alternativen Steps (das bleibt außerhalb dieser Stufe).
+
 ## Aktuelle Einschränkungen
 
 Die erste Version ist bewusst klein:
 
 - nur sequenzielle Ausführung
 - keine Parallelisierung
-- keine Conditions
+- Bedingungen nur auf Step-Ebene, keine `result_first`-Auswahl zwischen Branches
 - keine JSON-Schema-Validierung; `foreach` verlangt derzeit nur syntaktisch
   gültiges JSON und den erwarteten Listenpfad
 - keine Flow-weiten Tool-Approvals
