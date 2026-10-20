@@ -871,6 +871,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 raise ValueError(
                     "filesystem_operation.directory unterstützt nur ${input...}-Referenzen."
                 )
+            literal_directory = _INPUT_EXPR.sub("placeholder", directory_template)
+            if (
+                not literal_directory.strip()
+                or Path(literal_directory).is_absolute()
+                or any(part == ".." for part in Path(literal_directory).parts)
+                or "\\0" in literal_directory
+            ):
+                raise ValueError("filesystem_operation.directory enthält einen ungültigen Pfad.")
             _validate_input_references(
                 [raw_filesystem_operation["directory"]],
                 declared_inputs=inputs,
@@ -4332,6 +4340,15 @@ async def _run_flow_internal(
             else:
                 checkpoint = None
                 if output is not None and preflight_outputs is None:
+                    if step.filesystem_operation is not None:
+                        directory = _render_input_text(
+                            step.filesystem_operation["directory"], flow_input,
+                        )
+                        inventory_root = _workspace_directory(workspace, directory)
+                        if output == inventory_root or inventory_root in output.parents:
+                            raise ValueError(
+                                "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
+                            )
                     _ensure_output_parent_directory(workspace, output)
                     prepare_output_target(
                         workspace,
