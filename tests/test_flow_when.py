@@ -186,3 +186,47 @@ value = "two"
     calls = _run(tmp_path, flow, monkeypatch,
                  {"one": '{"ready":true,"mode":"test"}'})
     assert calls == ["one", "two"]
+
+
+def test_when_decimal_compares_json_number_with_toml_float(tmp_path, monkeypatch):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "score"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "score"
+[[steps]]
+id = "matched"
+prompt_file = "do.md"
+when = { ref = "steps.score.output.score", eq = 0.5 }
+[steps.vars]
+value = "matched"
+""")
+    calls = _run(tmp_path, definition, monkeypatch, {"score": '{"score":0.5}'})
+    assert calls == ["score", "matched"]
+
+
+def test_when_status_guard_skips_missing_foreach_source(tmp_path, monkeypatch):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+when = { ref = "input.enabled", eq = true }
+[steps.vars]
+value = "source"
+[[steps]]
+id = "dependent"
+prompt_file = "do.md"
+response_format = "json"
+foreach = "steps.source.output.items"
+when = { all = [
+    { ref = "steps.source.status", eq = "completed" },
+    { ref = "item.enabled", eq = true }
+] }
+[steps.vars]
+value = "dependent"
+""", header='inputs = ["enabled"]')
+    calls = _run(tmp_path, definition, monkeypatch, {})
+    assert calls == []
