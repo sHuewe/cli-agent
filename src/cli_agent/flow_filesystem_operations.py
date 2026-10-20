@@ -129,14 +129,16 @@ def inventory_directory(
                         entries.append(entry.name)
                 entries.sort(key=lambda name: (name.casefold(), name))
                 for name in entries:
-                    if name.casefold() in excluded:
-                        continue
                     relative_path = relative_dir / name
                     rel = relative_path.as_posix()
                     metadata = os.stat(name, dir_fd=fd, follow_symlinks=False)
                     mode = metadata.st_mode
                     if stat.S_ISLNK(mode):
                         raise ValueError(f"Symlink/Reparse Point bei Inventur: {rel}")
+                    if not stat.S_ISDIR(mode) and not stat.S_ISREG(mode):
+                        raise ValueError(f"Nicht unterstützter Dateityp bei Inventur: {rel}")
+                    if name.casefold() in excluded:
+                        continue
                     if stat.S_ISDIR(mode):
                         directories.append({"name": name, "path": rel})
                         if recursive:
