@@ -634,6 +634,10 @@ _WHEN_UNKNOWN = object()
 _WHEN_MISSING = object()
 
 
+class _WhenMissingReferenceError(ValueError):
+    """A condition reference is unavailable while evaluating a when clause."""
+
+
 def _validate_when(
     condition: Any,
     *,
@@ -747,11 +751,18 @@ def _evaluate_when(
         op = "all" if "all" in condition else "any"
         unknown = False
         for part in condition[op]:
-            result = _evaluate_when(
-                part, outputs=outputs, statuses=statuses,
-                flow_input=flow_input, item=item, iteration_id=iteration_id,
-                allow_unknown=allow_unknown,
-            )
+            try:
+                result = _evaluate_when(
+                    part, outputs=outputs, statuses=statuses,
+                    flow_input=flow_input, item=item, iteration_id=iteration_id,
+                    allow_unknown=allow_unknown,
+                )
+            except _WhenMissingReferenceError:
+                # An earlier item-dependent condition may still short-circuit
+                # this group. Defer the missing reference to each iteration.
+                if allow_unknown and unknown:
+                    return None
+                raise
             if op == "all" and result is False:
                 return False
             if op == "any" and result is True:
@@ -771,7 +782,7 @@ def _evaluate_when(
     if "exists" in condition:
         return (value is not _WHEN_MISSING) == condition["exists"]
     if value is _WHEN_MISSING:
-        raise ValueError(
+        raise _WhenMissingReferenceError(
             f"when-Referenz {ref!r} ist nicht verfügbar; "
             "verwenden Sie exists oder sichern Sie abhängige Steps mit when ab."
         )
@@ -2513,6 +2524,9 @@ def _capture_run_start_invocation(
                 ]
                 items = [element for element, _ in eligible]
                 iteration_ids = [iid for _, iid in eligible]
+                if not items:
+                    statuses[step.step_id] = "skipped"
+                    continue
 
             if not _subflow_inputs_resolvable_at_run_start(
                 step,
@@ -3996,6 +4010,9 @@ def _preflight_concrete_invocation_outputs(
                 ]
                 items = [element for element, _ in eligible]
                 iteration_ids = [iid for _, iid in eligible]
+                if not items:
+                    known_statuses[step.step_id] = "skipped"
+                    continue
 
             if not _subflow_inputs_resolvable_at_run_start(
                 step,
