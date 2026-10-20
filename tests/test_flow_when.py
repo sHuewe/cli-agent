@@ -213,14 +213,13 @@ def test_when_status_guard_skips_missing_foreach_source(tmp_path, monkeypatch):
 id = "gate"
 prompt_file = "do.md"
 response_format = "json"
-when = { ref = "input.enabled", exists = true }
 [steps.vars]
 value = "gate"
 [[steps]]
 id = "source"
 prompt_file = "do.md"
 response_format = "json"
-when = { ref = "steps.gate.status", eq = "completed" }
+when = { ref = "steps.gate.output.enabled", eq = true }
 [steps.vars]
 value = "source"
 [[steps]]
@@ -235,5 +234,5 @@ when = { all = [
 [steps.vars]
 value = "dependent"
 """)
-    calls = _run(tmp_path, definition, monkeypatch, {})
-    assert calls == []
+    calls = _run(tmp_path, definition, monkeypatch, {"gate": '{ "enabled": false }'})
+    assert calls == ["gate"]
