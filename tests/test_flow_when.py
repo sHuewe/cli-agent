@@ -267,3 +267,31 @@ def test_when_unknown_group_preserves_three_valued_logic():
         condition, outputs={}, statuses={"source": "skipped"},
         flow_input={}, allow_unknown=True,
     ) is False
+
+
+def test_when_iteration_id_deferred_in_preflight():
+    condition = {"ref": "iteration.id", "eq": "2"}
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={}, flow_input={},
+        allow_unknown=True,
+    ) is None
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={}, flow_input={},
+        iteration_id="2",
+    ) is True
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={}, flow_input={},
+        iteration_id="1",
+    ) is False
+
+
+def test_when_iteration_id_in_deferred_in_preflight():
+    condition = {"ref": "iteration.id", "in": ["2", "3"]}
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={}, flow_input={},
+        allow_unknown=True,
+    ) is None
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={}, flow_input={},
+        iteration_id="3",
+    ) is True
