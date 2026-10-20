@@ -743,14 +743,21 @@ def _evaluate_when(
         return True
     if "all" in condition or "any" in condition:
         op = "all" if "all" in condition else "any"
-        results = [_evaluate_when(
-            part, outputs=outputs, statuses=statuses,
-            flow_input=flow_input, item=item, iteration_id=iteration_id,
-            allow_unknown=allow_unknown,
-        ) for part in condition[op]]
-        if op == "all":
-            return False if False in results else (None if None in results else True)
-        return True if True in results else (None if None in results else False)
+        unknown = False
+        for part in condition[op]:
+            result = _evaluate_when(
+                part, outputs=outputs, statuses=statuses,
+                flow_input=flow_input, item=item, iteration_id=iteration_id,
+                allow_unknown=allow_unknown,
+            )
+            if op == "all" and result is False:
+                return False
+            if op == "any" and result is True:
+                return True
+            unknown = unknown or result is None
+        if unknown:
+            return None
+        return op == "all"
     ref = condition["ref"]
     value = _when_ref_value(
         ref, outputs=outputs, statuses=statuses,
