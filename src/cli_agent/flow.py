@@ -3443,7 +3443,7 @@ def validate_flow(
             produced.add(step.step_id)
             continue
 
-        if step.json_operation is not None:
+        if step.json_operation is not None or step.filesystem_operation is not None:
             assert step.output is not None
             if step.workspace_access != "none" or step.response_format != "json":
                 raise ValueError("JSON-Operation benötigt workspace_access=none und JSON.")
