@@ -2415,6 +2415,17 @@ def _capture_run_start_invocation(
                     items=items,
                     flow_input=flow_input,
                 )
+            if _when_uses_item(step.when):
+                eligible = [
+                    (element, iid) for element, iid in zip(items, iteration_ids)
+                    if _evaluate_when(
+                        step.when, outputs=available_outputs, statuses=statuses,
+                        flow_input=flow_input, item=element, iteration_id=iid,
+                        allow_unknown=True,
+                    ) is not False
+                ]
+                items = [element for element, _ in eligible]
+                iteration_ids = [iid for _, iid in eligible]
 
             if not _subflow_inputs_resolvable_at_run_start(
                 step,
@@ -3870,6 +3881,17 @@ def _preflight_concrete_invocation_outputs(
                     items=items,
                     flow_input=flow_input,
                 )
+            if _when_uses_item(step.when):
+                eligible = [
+                    (element, iid) for element, iid in zip(items, iteration_ids)
+                    if _evaluate_when(
+                        step.when, outputs=available_outputs, statuses=known_statuses,
+                        flow_input=flow_input, item=element, iteration_id=iid,
+                        allow_unknown=True,
+                    ) is not False
+                ]
+                items = [element for element, _ in eligible]
+                iteration_ids = [iid for _, iid in eligible]
 
             if not _subflow_inputs_resolvable_at_run_start(
                 step,
