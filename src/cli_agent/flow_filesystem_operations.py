@@ -111,10 +111,8 @@ def inventory_directory(
                 )
                 os.close(start_fd)
                 start_fd = next_fd
-            pending = [(start_fd, start.relative_to(root))]
-            start_fd = -1
-            while pending:
-                fd, relative_dir = pending.pop()
+            def scan(fd: int, relative_dir: Path) -> None:
+                nonlocal examined
                 try:
                     with os.scandir(fd) as iterator:
                         entries = []
@@ -131,7 +129,8 @@ def inventory_directory(
                             continue
                         relative_path = relative_dir / name
                         rel = relative_path.as_posix()
-                        mode = os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode
+                        metadata = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                        mode = metadata.st_mode
                         if stat.S_ISLNK(mode):
                             raise ValueError(f"Symlink/Reparse Point bei Inventur: {rel}")
                         if stat.S_ISDIR(mode):
@@ -141,18 +140,18 @@ def inventory_directory(
                                     name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                                     dir_fd=fd,
                                 )
-                                pending.append((child_fd, relative_path))
+                                scan(child_fd, relative_path)
                         elif stat.S_ISREG(mode):
                             if suffixes and not rel.casefold().endswith(suffixes):
                                 continue
-                            # Size is metadata only. A concurrent file replacement
-                            # cannot cause the operation to read its contents.
-                            size = os.stat(name, dir_fd=fd, follow_symlinks=False).st_size
-                            files.append({"name": name, "path": rel, "size_bytes": size})
+                            files.append({"name": name, "path": rel, "size_bytes": metadata.st_size})
                         else:
                             raise ValueError(f"Nicht unterstützter Dateityp bei Inventur: {rel}")
                 finally:
                     os.close(fd)
+
+            scan(start_fd, start.relative_to(root))
+            start_fd = -1
         finally:
             if start_fd >= 0:
                 os.close(start_fd)
