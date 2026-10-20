@@ -38,6 +38,7 @@ from .file_context import (
     read_existing_output_text,
 )
 from .flow_json_operations import transform_json
+from .flow_filesystem_operations import inventory_directory, MAX_INVENTORY_ENTRIES
 from .flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .logging_setup import configure_logging
@@ -182,6 +183,7 @@ class FlowStep:
     foreach: str | None
     json_inputs: dict[str, JsonInputSpec] | None = None
     json_operation: dict[str, Any] | None = None
+    filesystem_operation: dict[str, Any] | None = None
     conversation_items: tuple[Any, ...] | str | None = None
     conversation_final_prompt_file: Path | None = None
     iteration_id: str | None = None
@@ -511,7 +513,7 @@ def _reserved_flow_input_paths(
                 ),
             )
 
-        if step.json_operation is not None:
+        if step.json_operation is not None or step.filesystem_operation is not None:
             continue
         assert step.prompt_file is not None
         prompt_path = _workspace_path(
@@ -794,6 +796,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "iteration_id",
         "json_inputs",
         "json_operation",
+        "filesystem_operation",
         "flow",
         "input",
     }
@@ -835,6 +838,26 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "keine dynamischen Flow-Platzhalter enthalten."
             )
         prompt_value = raw.get("prompt_file")
+        raw_filesystem_operation = raw.get("filesystem_operation")
+        if raw_filesystem_operation is not None:
+            op = raw_filesystem_operation
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries"} or op.get("kind") != "inventory" or not isinstance(op.get("directory"), str):
+                raise ValueError("filesystem_operation benötigt kind=inventory und directory.")
+            if type(op.get("recursive", False)) is not bool:
+                raise ValueError("filesystem_operation.recursive muss boolesch sein.")
+            for key in ("extensions", "exclude_names"):
+                if not isinstance(op.get(key, []), list) or any(not isinstance(x, str) for x in op.get(key, [])):
+                    raise ValueError(f"filesystem_operation.{key} muss eine String-Liste sein.")
+            limit = op.get("max_entries", MAX_INVENTORY_ENTRIES)
+            if type(limit) is not int or not 1 <= limit <= MAX_INVENTORY_ENTRIES:
+                raise ValueError("filesystem_operation.max_entries ist ungültig.")
+            if child_flow is not None or prompt_value is not None or raw.get("json_operation") is not None:
+                raise ValueError("filesystem_operation darf nicht mit flow, prompt_file oder json_operation kombiniert werden.")
+            if raw.get("foreach") is not None or "output" not in raw:
+                raise ValueError("filesystem_operation benötigt output ohne foreach.")
+            forbidden = {"config", "model", "context_file", "add_file_context", "add_web_context", "workspace_access", "with_data", "with_mcp", "retry", "approve_tools", "vars", "conversation_items", "conversation_final_prompt_file", "exclude_paths", "json_inputs", "input"}
+            if forbidden & set(raw):
+                raise ValueError("filesystem_operation darf keine Modell- oder Tool-Optionen setzen.")
         raw_json_operation = raw.get("json_operation")
         if raw_json_operation is not None:
             if (
@@ -877,7 +900,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             raise ValueError(
                 f"steps[{index}] darf nicht gleichzeitig flow und prompt_file setzen."
             )
-        if child_flow is None and prompt_value is None and raw_json_operation is None:
+        if child_flow is None and prompt_value is None and raw_json_operation is None and raw_filesystem_operation is None:
             raise ValueError(
                 f"steps[{index}] benötigt prompt_file, flow oder json_operation."
             )
@@ -4340,6 +4363,24 @@ async def _run_flow_internal(
                     ) from exc
                 raise
 
+            if step.filesystem_operation is not None:
+                assert output is not None
+                op = step.filesystem_operation
+                directory = _render_input_text(op["directory"], flow_input)
+                transformed = inventory_directory(
+                    workspace, directory,
+                    recursive=op.get("recursive", False),
+                    extensions=tuple(op.get("extensions", [])),
+                    exclude_names=tuple(op.get("exclude_names", [])),
+                    max_entries=op.get("max_entries", MAX_INVENTORY_ENTRIES),
+                )
+                answer = _json_dumps_preserving_numbers(transformed)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(answer, encoding="utf-8")
+                context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+                record_iteration_answer(answer, True, iteration_id)
+                continue
+
             if step.json_operation is not None:
                 assert output is not None
                 assert context.completed_json_outputs is not None
@@ -4734,7 +4775,7 @@ def _initial_flow_logging_config(
                     ),
                     depth + 1,
                 ))
-            elif step.json_operation is not None:
+            elif step.json_operation is not None or step.filesystem_operation is not None:
                 continue
             elif step.config is None:
                 return None
