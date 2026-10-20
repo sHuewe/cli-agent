@@ -210,10 +210,17 @@ value = "matched"
 def test_when_status_guard_skips_missing_foreach_source(tmp_path, monkeypatch):
     definition = _setup(tmp_path, """
 [[steps]]
+id = "gate"
+prompt_file = "do.md"
+response_format = "json"
+when = { ref = "input.enabled", exists = true }
+[steps.vars]
+value = "gate"
+[[steps]]
 id = "source"
 prompt_file = "do.md"
 response_format = "json"
-when = { ref = "input.enabled", eq = true }
+when = { ref = "steps.gate.status", eq = "completed" }
 [steps.vars]
 value = "source"
 [[steps]]
@@ -227,6 +234,6 @@ when = { all = [
 ] }
 [steps.vars]
 value = "dependent"
-""", header='inputs = ["enabled"]')
+""")
     calls = _run(tmp_path, definition, monkeypatch, {})
     assert calls == []
