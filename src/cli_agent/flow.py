@@ -3470,6 +3470,21 @@ def validate_flow(
             continue
 
         if step.json_operation is not None or step.filesystem_operation is not None:
+            if step.filesystem_operation is not None:
+                directory_template = step.filesystem_operation["directory"]
+                if _INPUT_EXPR.search(directory_template) is None:
+                    inventory_root = _workspace_directory(workspace, directory_template)
+                    if step.output is not None and _INPUT_EXPR.search(step.output) is None:
+                        static_inventory_output = _output_for_iteration(
+                            step, workspace=workspace, item=None,
+                        )
+                        if (
+                            static_inventory_output == inventory_root
+                            or inventory_root in static_inventory_output.parents
+                        ):
+                            raise ValueError(
+                                "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
+                            )
             assert step.output is not None
             if step.workspace_access != "none" or step.response_format != "json":
                 raise ValueError("JSON-Operation benötigt workspace_access=none und JSON.")
