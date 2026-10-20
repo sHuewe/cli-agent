@@ -3836,7 +3836,18 @@ def _preflight_concrete_invocation_outputs(
     )
     output_json = snapshot.output_json if snapshot is not None else {}
 
+    known_statuses = {
+        step.step_id: "completed" for step in flow.steps
+        if step.step_id in available_outputs
+    }
     for step in flow.steps:
+        condition = _evaluate_when(
+            step.when, outputs=available_outputs, statuses=known_statuses,
+            flow_input=flow_input, allow_unknown=True,
+        ) if not _when_uses_item(step.when) else None
+        if condition is False:
+            known_statuses[step.step_id] = "skipped"
+            continue
         _set_flow_diagnostic(
             phase="preflight-subflow-batch", flow=flow.source,
             namespace=namespace, step=step.step_id,
@@ -4760,6 +4771,7 @@ async def _run_flow_internal(
                 foreach_parts
             )
             output_json[step.step_id] = True
+        statuses[step.step_id] = "completed"
 
     return _flow_result_value(
         flow,
