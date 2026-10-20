@@ -295,3 +295,77 @@ def test_when_iteration_id_in_deferred_in_preflight():
         condition, outputs={}, statuses={}, flow_input={},
         iteration_id="3",
     ) is True
+
+
+def test_when_missing_ref_after_unknown_item_is_deferred():
+    condition = {"all": [
+        {"ref": "item.enabled", "eq": True},
+        {"ref": "steps.meta.output.optional", "eq": "x"},
+    ]}
+    assert flow_module._evaluate_when(
+        condition, outputs={"meta": '{"other":"value"}'},
+        statuses={"meta": "completed"}, flow_input={}, allow_unknown=True,
+    ) is None
+    assert flow_module._evaluate_when(
+        condition, outputs={"meta": '{"other":"value"}'},
+        statuses={"meta": "completed"}, flow_input={},
+        item={"enabled": False},
+    ) is False
+    with pytest.raises(ValueError, match="optional"):
+        flow_module._evaluate_when(
+            condition, outputs={"meta": '{"other":"value"}'},
+            statuses={"meta": "completed"}, flow_input={},
+            item={"enabled": True},
+        )
+
+
+def test_when_missing_ref_without_prior_unknown_still_raises():
+    condition = {"all": [
+        {"ref": "steps.meta.output.optional", "eq": "x"},
+        {"ref": "item.enabled", "eq": False},
+    ]}
+    with pytest.raises(ValueError, match="optional"):
+        flow_module._evaluate_when(
+            condition, outputs={"meta": '{"other":"value"}'},
+            statuses={"meta": "completed"}, flow_input={},
+            allow_unknown=True,
+        )
+
+
+def test_when_empty_filtered_subflow_is_skipped_in_snapshot(tmp_path, monkeypatch):
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["value"]\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "do.md"\n'
+        '[steps.vars]\nvalue = "${input.value}"\n',
+        encoding="utf-8",
+    )
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+output = "source.json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "child_batch"
+flow = "child.toml"
+foreach = "steps.source.output.items"
+when = { ref = "item.enabled", eq = true }
+[steps.input]
+value = "${item.name}"
+[[steps]]
+id = "after"
+prompt_file = "do.md"
+response_format = "json"
+when = { ref = "steps.child_batch.status", eq = "skipped" }
+output = "after.json"
+[steps.vars]
+value = "after"
+""")
+    (tmp_path / "source.json").write_text(
+        '{"items":[{"name":"a","enabled":false}]}', encoding="utf-8",
+    )
+    calls = _run(tmp_path, definition, monkeypatch, {})
+    assert calls == ["after"]
+    assert (tmp_path / "after.json").exists()
