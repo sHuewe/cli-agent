@@ -96,6 +96,8 @@ def inventory_directory(
     # Open each path component through an already pinned directory descriptor.
     # On platforms without directory-fd/no-follow support, fail closed.
     if os.name != "posix" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        # Windows lacks portable openat-style directory descriptors in Python.
+        # Fail closed for now rather than silently weakening the security contract.
         raise ValueError("Sichere Verzeichnisinventur benötigt POSIX dir_fd/O_NOFOLLOW.")
 
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
