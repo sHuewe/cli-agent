@@ -859,6 +859,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if forbidden & set(raw):
                 raise ValueError("filesystem_operation darf keine Modell- oder Tool-Optionen setzen.")
         if raw_filesystem_operation is not None:
+            directory_template = raw_filesystem_operation["directory"]
+            # This operation deliberately supports only declared flow inputs;
+            # step/item expressions cannot be resolved by _render_input_text.
+            remainder = _INPUT_EXPR.sub("", directory_template)
+            if "${" in remainder:
+                raise ValueError(
+                    "filesystem_operation.directory unterstützt nur ${input...}-Referenzen."
+                )
             _validate_input_references(
                 [raw_filesystem_operation["directory"]],
                 declared_inputs=inputs,
