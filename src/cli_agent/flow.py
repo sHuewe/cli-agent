@@ -2380,7 +2380,19 @@ def _capture_run_start_invocation(
         checkpoint_paths[path_key] = output
         protected_paths[path_key] = output
 
+    statuses: dict[str, str] = {}
     for step in flow.steps:
+        # A known-false condition cannot own an active checkpoint in this run.
+        for prior in flow.steps:
+            if prior.step_id in available_outputs and prior.step_id not in statuses:
+                statuses[prior.step_id] = "completed"
+        run_condition = _evaluate_when(
+            step.when, outputs=available_outputs, statuses=statuses,
+            flow_input=flow_input, allow_unknown=True,
+        ) if not _when_uses_item(step.when) else None
+        if run_condition is False:
+            statuses[step.step_id] = "skipped"
+            continue
         _set_flow_diagnostic(
             phase="run-start-step", flow=flow.source,
             namespace=namespace, step=step.step_id,
@@ -4071,7 +4083,16 @@ async def _run_flow_internal(
         if flow.retry_policy is not None
         else inherited_retry_policy
     )
+    statuses: dict[str, str] = {}
     for step in flow.steps:
+        step_condition = _evaluate_when(
+            step.when, outputs=outputs, statuses=statuses,
+            flow_input=flow_input,
+        ) if not _when_uses_item(step.when) else True
+        if step_condition is False:
+            statuses[step.step_id] = "skipped"
+            print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
+            continue
         _set_flow_diagnostic(
             phase="prepare-step", flow=flow.source,
             namespace=namespace, step=step.step_id,
@@ -4103,6 +4124,22 @@ async def _run_flow_internal(
             items=items,
             flow_input=flow_input,
         )
+        if _when_uses_item(step.when):
+            eligible = [
+                (item, iteration_id)
+                for item, iteration_id in zip(items, iteration_ids)
+                if _evaluate_when(
+                    step.when, outputs=outputs, statuses=statuses,
+                    flow_input=flow_input, item=item,
+                    iteration_id=iteration_id,
+                )
+            ]
+            if not eligible:
+                statuses[step.step_id] = "skipped"
+                print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
+                continue
+            items = [item for item, _ in eligible]
+            iteration_ids = [iteration_id for _, iteration_id in eligible]
 
         preflight_outputs: list[Path | None] | None = None
         preflight_checkpoint_fingerprints: list[bytes | None] | None = None
