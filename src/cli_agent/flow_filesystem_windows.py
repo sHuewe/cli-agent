@@ -4,6 +4,7 @@ from __future__ import annotations
 import ctypes
 import os
 from ctypes import wintypes
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,37 @@ def _handle_info(path: Path) -> tuple[int, int, bool]:
         close(handle)
 
 
+
+@contextmanager
+def _pin_directory(path: Path):
+    """Prevent directory rename/deletion during path-based enumeration.
+
+    FILE_SHARE_DELETE is deliberately omitted. This closes the directory
+    replacement window between handle validation and os.scandir.
+    """
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    handle = create(str(path), 0x80, 0x3, None, 3, _BACKUP_SEMANTICS | _OPEN_REPARSE_POINT, None)
+    if handle is None or handle == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), f"Cannot pin inventory directory: {path}")
+    try:
+        # Do not allow the handle itself to refer to a reparse point.
+        checked_id, _, is_dir = _handle_info(path)
+        if not is_dir:
+            raise ValueError(f"Kein Verzeichnis: {path}")
+        yield checked_id
+    finally:
+        close(handle)
+
+
 def inventory_windows(
     root: Path, start: Path, *, recursive: bool,
     suffixes: tuple[str, ...], excluded: set[str], max_entries: int,
@@ -98,32 +130,35 @@ def inventory_windows(
     while pending:
         relative_dir = pending.pop()
         current = root / relative_dir
-        identity = checked(current, True)[0]
-        with os.scandir(current) as iterator:
-            names = []
-            for entry in iterator:
-                examined += 1
-                if examined > max_entries:
-                    raise ValueError(
-                        f"filesystem_operation.inventory überschreitet max_entries={max_entries}."
-                    )
-                names.append(entry.name)
-        if checked(current, True)[0] != identity:
-            raise ValueError(f"Verzeichnis während Inventur geändert: {current}")
-        for name in sorted(names, key=lambda n: (n.casefold(), n)):
-            relative_path = relative_dir / name
-            _, size, is_dir = checked(root / relative_path)
-            if name.casefold() in excluded:
-                continue
-            rel = relative_path.as_posix()
-            if is_dir:
-                directories.append({"name": name, "path": rel})
-                if recursive:
-                    pending.append(relative_path)
-            elif not suffixes or rel.casefold().endswith(suffixes):
-                files.append({"name": name, "path": rel, "size_bytes": size})
-        if checked(current, True)[0] != identity:
-            raise ValueError(f"Verzeichnis während Inventur geändert: {current}")
+        with _pin_directory(current) as pinned_id:
+            identity = checked(current, True)[0]
+            if identity != pinned_id:
+                raise ValueError(f"Verzeichnis während Inventur geändert: {current}")
+            with os.scandir(current) as iterator:
+                names = []
+                for entry in iterator:
+                    examined += 1
+                    if examined > max_entries:
+                        raise ValueError(
+                            f"filesystem_operation.inventory überschreitet max_entries={max_entries}."
+                        )
+                    names.append(entry.name)
+            if checked(current, True)[0] != identity:
+                raise ValueError(f"Verzeichnis während Inventur geändert: {current}")
+            for name in sorted(names, key=lambda n: (n.casefold(), n)):
+                relative_path = relative_dir / name
+                _, size, is_dir = checked(root / relative_path)
+                if name.casefold() in excluded:
+                    continue
+                rel = relative_path.as_posix()
+                if is_dir:
+                    directories.append({"name": name, "path": rel})
+                    if recursive:
+                        pending.append(relative_path)
+                elif not suffixes or rel.casefold().endswith(suffixes):
+                    files.append({"name": name, "path": rel, "size_bytes": size})
+            if checked(current, True)[0] != identity:
+                raise ValueError(f"Verzeichnis während Inventur geändert: {current}")
     files.sort(key=lambda v: (v["path"].casefold(), v["path"]))
     directories.sort(key=lambda v: (v["path"].casefold(), v["path"]))
     return {
