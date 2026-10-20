@@ -403,7 +403,7 @@ def test_when_null_foreach_item_skips_subflow_preflight(tmp_path, monkeypatch):
         'version = 1\\ninputs = ["value"]\\nresult = "steps.work.output"\\n'
         '[[steps]]\\nid = "work"\\nprompt_file = "do.md"\\n'
         'output = "shared.json"\\nresponse_format = "json"\\n'
-        '[steps.vars]\\nvalue = "${input.value}"\\n'.replace("\\\\n", "\\n"),
+        '[steps.vars]\\nvalue = "${input.value}"\\n',
         encoding="utf-8",
     )
     definition = _setup(tmp_path, """
