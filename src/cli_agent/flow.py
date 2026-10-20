@@ -3471,8 +3471,8 @@ def validate_flow(
 
         if step.json_operation is not None or step.filesystem_operation is not None:
             if step.filesystem_operation is not None:
-                if os.name != "posix" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
-                    raise ValueError("Sichere Verzeichnisinventur benötigt POSIX dir_fd/O_NOFOLLOW.")
+                if os.name not in {"posix", "nt"} or (os.name == "posix" and (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"))):
+                    raise ValueError("Sichere Verzeichnisinventur benötigt POSIX oder Windows.")
                 directory_template = step.filesystem_operation["directory"]
                 if _INPUT_EXPR.search(directory_template) is None:
                     inventory_root = _workspace_directory(workspace, directory_template)
