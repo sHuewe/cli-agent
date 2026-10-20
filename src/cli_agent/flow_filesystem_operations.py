@@ -5,6 +5,7 @@ This module is independent of OKF and never reads file contents.
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -88,47 +89,73 @@ def inventory_directory(
     excluded = {name.casefold() for name in exclude_names}
     root = workspace.resolve(strict=True)
     start = _workspace_directory(root, directory)
-    pending = [start]
     files: list[dict[str, Any]] = []
     directories: list[dict[str, str]] = []
     examined = 0
 
-    while pending:
-        current = pending.pop()
-        # Evaluate each scanned directory again before entering it, to reject
-        # an entry swapped for a symlink after its original enumeration.
-        if path_entry_is_symlink_or_reparse(current):
-            raise ValueError(f"Symlink/Reparse Point bei Inventur: {current}")
-        with os.scandir(current) as iterator:
-            entries = sorted(iterator, key=lambda entry: (entry.name.casefold(), entry.name))
-        for entry in entries:
-            examined += 1
-            if examined > max_entries:
-                raise ValueError(
-                    f"filesystem_operation.inventory überschreitet max_entries={max_entries}."
+    # Open each path component through an already pinned directory descriptor.
+    # On platforms without directory-fd/no-follow support, fail closed.
+    if os.name != "posix" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise ValueError("Sichere Verzeichnisinventur benötigt POSIX dir_fd/O_NOFOLLOW.")
+
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        start_fd = os.dup(root_fd)
+        try:
+            for part in start.relative_to(root).parts:
+                next_fd = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=start_fd,
                 )
-            path = Path(entry.path)
-            if path_entry_is_symlink_or_reparse(path):
-                raise ValueError(f"Symlink/Reparse Point bei Inventur: {path}")
-            # Defend against path-indirection and races without following links.
-            relative = path.relative_to(root).as_posix()
-            if entry.name.casefold() in excluded:
-                continue
-            if entry.is_dir(follow_symlinks=False):
-                directories.append({"name": entry.name, "path": relative})
-                if recursive:
-                    pending.append(path)
-            elif entry.is_file(follow_symlinks=False):
-                if suffixes and not relative.casefold().endswith(suffixes):
-                    continue
-                size = entry.stat(follow_symlinks=False).st_size
-                files.append({
-                    "name": entry.name,
-                    "path": relative,
-                    "size_bytes": size,
-                })
-            else:
-                raise ValueError(f"Nicht unterstützter Dateityp bei Inventur: {relative}")
+                os.close(start_fd)
+                start_fd = next_fd
+            pending = [(start_fd, start.relative_to(root))]
+            start_fd = -1
+            while pending:
+                fd, relative_dir = pending.pop()
+                try:
+                    with os.scandir(fd) as iterator:
+                        entries = []
+                        for entry in iterator:
+                            examined += 1
+                            if examined > max_entries:
+                                raise ValueError(
+                                    f"filesystem_operation.inventory überschreitet max_entries={max_entries}."
+                                )
+                            entries.append(entry.name)
+                    entries.sort(key=lambda name: (name.casefold(), name))
+                    for name in entries:
+                        if name.casefold() in excluded:
+                            continue
+                        relative_path = relative_dir / name
+                        rel = relative_path.as_posix()
+                        mode = os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode
+                        if stat.S_ISLNK(mode):
+                            raise ValueError(f"Symlink/Reparse Point bei Inventur: {rel}")
+                        if stat.S_ISDIR(mode):
+                            directories.append({"name": name, "path": rel})
+                            if recursive:
+                                child_fd = os.open(
+                                    name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                    dir_fd=fd,
+                                )
+                                pending.append((child_fd, relative_path))
+                        elif stat.S_ISREG(mode):
+                            if suffixes and not rel.casefold().endswith(suffixes):
+                                continue
+                            # Size is metadata only. A concurrent file replacement
+                            # cannot cause the operation to read its contents.
+                            size = os.stat(name, dir_fd=fd, follow_symlinks=False).st_size
+                            files.append({"name": name, "path": rel, "size_bytes": size})
+                        else:
+                            raise ValueError(f"Nicht unterstützter Dateityp bei Inventur: {rel}")
+                finally:
+                    os.close(fd)
+        finally:
+            if start_fd >= 0:
+                os.close(start_fd)
+    finally:
+        os.close(root_fd)
 
     files.sort(key=lambda value: (value["path"].casefold(), value["path"]))
     directories.sort(key=lambda value: (value["path"].casefold(), value["path"]))
