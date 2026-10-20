@@ -1035,13 +1035,28 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if forbidden & set(raw):
                 raise ValueError("filesystem_operation darf keine Modell- oder Tool-Optionen setzen.")
         if raw_filesystem_operation is not None:
+            # Expand declared static root [vars] before directory validation.
+            raw_filesystem_operation = dict(raw_filesystem_operation)
             directory_template = raw_filesystem_operation["directory"]
-            # This operation deliberately supports only declared flow inputs;
+            def replace_inventory_var(match: re.Match[str]) -> str:
+                name = match.group(1)
+                if name not in global_variables:
+                    raise ValueError(
+                        f"Unbekannte Inventory-Variable {name!r} in "
+                        f"steps[{index}].filesystem_operation.directory."
+                    )
+                return global_variables[name]
+            directory_template = re.sub(
+                r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
+                replace_inventory_var, directory_template,
+            )
+            raw_filesystem_operation["directory"] = directory_template
+            # Only static vars and declared flow inputs are supported;
             # step/item expressions cannot be resolved by _render_input_text.
             remainder = _INPUT_EXPR.sub("", directory_template)
             if "${" in remainder:
                 raise ValueError(
-                    "filesystem_operation.directory unterstützt nur ${input...}-Referenzen."
+                    "filesystem_operation.directory unterstützt nur ${input...} und ${var...}-Referenzen."
                 )
             literal_directory = _INPUT_EXPR.sub("placeholder", directory_template)
             if (
