@@ -189,6 +189,7 @@ class FlowStep:
     response_format: str = "text"
     # Explicit [steps.retry] keys, before load-time defaults are applied.
     retry_overrides: dict[str, int | float] | None = None
+    when: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -617,6 +618,158 @@ def _path_list(value: Any, *, field: str) -> tuple[Path, ...]:
     return tuple(Path(item) for item in values)
 
 
+
+# Conditions are structured data; no expression evaluation or implicit truthiness.
+_WHEN_REF = re.compile(
+    r"(?:steps\.(?P<step>[A-Za-z_][A-Za-z0-9_-]*)\."
+    r"(?P<kind>status|output)(?P<field>(?:\.[A-Za-z_][A-Za-z0-9_-]*)*)"
+    r"|(?P<input>input\.[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*)"
+    r"|(?P<item>item(?:\.[A-Za-z_][A-Za-z0-9_-]*)*)"
+    r"|(?P<iteration>iteration\.id))\Z"
+)
+_WHEN_UNKNOWN = object()
+_WHEN_MISSING = object()
+
+
+def _validate_when(
+    condition: Any,
+    *,
+    prior_ids: set[str],
+    inputs: set[str],
+    foreach: bool,
+    label: str,
+    depth: int = 0,
+) -> dict[str, Any] | None:
+    if condition is None:
+        return None
+    if depth > 6 or not isinstance(condition, dict):
+        raise ValueError(f"{label} benötigt eine when-Tabelle (max. Tiefe 6).")
+    if len(condition) == 1 and ("all" in condition or "any" in condition):
+        op = "all" if "all" in condition else "any"
+        parts = condition[op]
+        if not isinstance(parts, list) or not 1 <= len(parts) <= 16:
+            raise ValueError(f"{label}.{op} benötigt 1 bis 16 Bedingungen.")
+        return {op: [
+            _validate_when(
+                part, prior_ids=prior_ids, inputs=inputs,
+                foreach=foreach, label=f"{label}.{op}", depth=depth + 1,
+            )
+            for part in parts
+        ]}
+    if set(condition) - {"ref", "eq", "neq", "in", "exists"}:
+        raise ValueError(f"{label} enthält unbekannte Schlüssel.")
+    ops = [op for op in ("eq", "neq", "in", "exists") if op in condition]
+    if len(ops) != 1 or "ref" not in condition:
+        raise ValueError(f"{label} benötigt ref und genau einen Operator.")
+    ref = condition["ref"]
+    match = _WHEN_REF.fullmatch(ref) if isinstance(ref, str) else None
+    if match is None or (match.group("kind") == "status" and match.group("field")):
+        raise ValueError(f"{label}.ref ist ungültig: {ref!r}.")
+    if match.group("step") and match.group("step") not in prior_ids:
+        raise ValueError(f"{label} darf nur vorherige Steps referenzieren.")
+    if match.group("input") and match.group("input").split(".")[1] not in inputs:
+        raise ValueError(f"{label} verweist auf einen unbekannten Flow-Input.")
+    if (match.group("item") or match.group("iteration")) and not foreach:
+        raise ValueError(f"{label} benötigt foreach für item/iteration.id.")
+    op = ops[0]
+    value = condition[op]
+    if op == "exists":
+        if type(value) is not bool:
+            raise ValueError(f"{label}.exists muss boolesch sein.")
+    elif op == "in":
+        if (not isinstance(value, list) or not 1 <= len(value) <= 100
+                or any(type(v) not in (str, int, float, bool) for v in value)):
+            raise ValueError(f"{label}.in benötigt 1 bis 100 skalare Werte.")
+    elif type(value) not in (str, int, float, bool):
+        raise ValueError(f"{label}.{op} benötigt einen skalaren Wert.")
+    return {"ref": ref, op: value}
+
+
+def _when_uses_item(condition: dict[str, Any] | None) -> bool:
+    if condition is None:
+        return False
+    if "all" in condition or "any" in condition:
+        return any(_when_uses_item(part) for part in
+                   condition.get("all", condition.get("any", [])))
+    return condition["ref"].startswith(("item", "iteration."))
+
+
+def _when_ref_value(
+    ref: str, *, outputs: dict[str, str], statuses: dict[str, str],
+    flow_input: dict[str, Any], item: Any, iteration_id: str | None,
+    allow_unknown: bool,
+) -> Any:
+    match = _WHEN_REF.fullmatch(ref)
+    assert match is not None
+    if match.group("step"):
+        source = match.group("step")
+        if match.group("kind") == "status":
+            return statuses.get(source, _WHEN_UNKNOWN if allow_unknown else _WHEN_MISSING)
+        if source not in outputs:
+            if allow_unknown and statuses.get(source) != "skipped":
+                return _WHEN_UNKNOWN
+            return _WHEN_MISSING
+        value: Any = outputs[source]
+        segments = match.group("field").lstrip(".").split(".") if match.group("field") else []
+        if segments:
+            value = _parse_structured_output(value, step_id=source)
+    elif match.group("input"):
+        value = flow_input
+        segments = ref.split(".")[1:]
+    elif match.group("iteration"):
+        return iteration_id
+    else:
+        value = item
+        segments = ref.split(".")[1:] if ref != "item" else []
+    for segment in segments:
+        if not isinstance(value, dict) or segment not in value:
+            return _WHEN_MISSING
+        value = value[segment]
+    return value
+
+
+def _evaluate_when(
+    condition: dict[str, Any] | None, *,
+    outputs: dict[str, str], statuses: dict[str, str],
+    flow_input: dict[str, Any], item: Any = None,
+    iteration_id: str | None = None, allow_unknown: bool = False,
+) -> bool | None:
+    if condition is None:
+        return True
+    if "all" in condition or "any" in condition:
+        op = "all" if "all" in condition else "any"
+        results = [_evaluate_when(
+            part, outputs=outputs, statuses=statuses,
+            flow_input=flow_input, item=item, iteration_id=iteration_id,
+            allow_unknown=allow_unknown,
+        ) for part in condition[op]]
+        if op == "all":
+            return False if False in results else (None if None in results else True)
+        return True if True in results else (None if None in results else False)
+    ref = condition["ref"]
+    value = _when_ref_value(
+        ref, outputs=outputs, statuses=statuses,
+        flow_input=flow_input, item=item, iteration_id=iteration_id,
+        allow_unknown=allow_unknown,
+    )
+    if value is _WHEN_UNKNOWN:
+        return None
+    if "exists" in condition:
+        return (value is not _WHEN_MISSING) == condition["exists"]
+    if value is _WHEN_MISSING:
+        raise ValueError(
+            f"when-Referenz {ref!r} ist nicht verfügbar; "
+            "verwenden Sie exists oder sichern Sie abhängige Steps mit when ab."
+        )
+    def equal(left: Any, right: Any) -> bool:
+        return type(left) is type(right) and left == right
+    if "eq" in condition:
+        return equal(value, condition["eq"])
+    if "neq" in condition:
+        return not equal(value, condition["neq"])
+    return any(equal(value, part) for part in condition["in"])
+
+
 def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
     workspace = workspace.expanduser().resolve()
     if not workspace.is_dir():
@@ -796,6 +949,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "json_operation",
         "flow",
         "input",
+        "when",
     }
 
     for index, raw in enumerate(raw_steps, start=1):
@@ -822,6 +976,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if step_id in known_ids:
             raise ValueError(f"Doppelte Step-ID: {step_id!r}.")
         known_ids.add(step_id)
+        when = _validate_when(
+            raw.get("when"), prior_ids=known_ids - {step_id},
+            inputs=set(inputs), foreach=raw.get("foreach") is not None,
+            label=f"steps[{index}].when",
+        )
 
         flow_value = raw.get("flow")
         child_flow = (
@@ -1492,6 +1651,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 conversation_final_prompt_file=conversation_final_prompt_file,
                 iteration_id=iteration_id,
                 excluded_paths=step_excluded_paths,
+                when=when,
             )
         )
 
