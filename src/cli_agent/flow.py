@@ -1127,7 +1127,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
 
         response_format_value = raw.get(
-            "response_format", "json" if raw_json_operation is not None else "text"
+            "response_format", "json" if raw_json_operation is not None or raw_filesystem_operation is not None else "text"
         )
         if response_format_value not in {"text", "json"}:
             raise ValueError(
@@ -1511,6 +1511,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 foreach=foreach,
                 json_inputs=json_inputs,
                 json_operation=dict(raw_json_operation) if raw_json_operation else None,
+                filesystem_operation=dict(raw_filesystem_operation) if raw_filesystem_operation else None,
                 conversation_items=conversation_items,
                 conversation_final_prompt_file=conversation_final_prompt_file,
                 iteration_id=iteration_id,
