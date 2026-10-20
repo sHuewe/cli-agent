@@ -236,3 +236,34 @@ value = "dependent"
 """)
     calls = _run(tmp_path, definition, monkeypatch, {"gate": '{ "enabled": false }'})
     assert calls == ["gate"]
+
+
+def test_when_all_short_circuits_missing_guarded_output():
+    condition = {"all": [
+        {"ref": "steps.source.output", "exists": True},
+        {"ref": "steps.source.output.kind", "eq": "x"},
+    ]}
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={"source": "skipped"}, flow_input={},
+    ) is False
+
+
+def test_when_any_short_circuits_missing_guarded_output():
+    condition = {"any": [
+        {"ref": "steps.source.status", "eq": "skipped"},
+        {"ref": "steps.source.output.kind", "eq": "x"},
+    ]}
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={"source": "skipped"}, flow_input={},
+    ) is True
+
+
+def test_when_unknown_group_preserves_three_valued_logic():
+    condition = {"all": [
+        {"ref": "item.enabled", "eq": True},
+        {"ref": "steps.source.status", "eq": "completed"},
+    ]}
+    assert flow_module._evaluate_when(
+        condition, outputs={}, statuses={"source": "skipped"},
+        flow_input={}, allow_unknown=True,
+    ) is False
