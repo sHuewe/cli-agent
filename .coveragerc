@@ -1,0 +1,5 @@
+[run]
+# Win32 ctypes backend cannot execute on Linux runners. Windows-specific
+# regression tests run in the Windows CI matrix instead.
+omit =
+    src/cli_agent/flow_filesystem_windows.py

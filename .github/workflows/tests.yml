@@ -44,6 +44,13 @@ jobs:
       - name: Sync locked project and test dependencies
         run: uv sync --frozen --extra dev
 
+      - name: Configure platform-specific coverage
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            rm -f .coveragerc
+          fi
+
       - name: Run tests with coverage from locked environment
         run: >-
           uv run --frozen python -m pytest
@@ -84,6 +91,13 @@ jobs:
 
       - name: Sync locked project and test dependencies
         run: uv sync --frozen --extra dev
+
+      - name: Configure platform-specific coverage
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            rm -f .coveragerc
+          fi
 
       - name: Run tests with coverage from locked environment
         run: >-

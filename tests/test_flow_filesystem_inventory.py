@@ -4,7 +4,7 @@ import os
 from cli_agent.flow_filesystem_operations import inventory_directory
 from cli_agent.flow import load_flow
 
-@pytest.mark.skipif(os.name != "posix", reason="secure inventory requires POSIX dir_fd")
+@pytest.mark.skipif(os.name not in {"posix", "nt"}, reason="secure inventory requires POSIX or Windows")
 def test_inventory_filtered_and_sorted(tmp_path):
     (tmp_path / "docs").mkdir()
     for name in ("b.md", "A.MD", "index.md", "other.txt"):
@@ -54,9 +54,8 @@ def test_flow_rejects_prompt_and_inventory(tmp_path):
         load_flow(flow, workspace=tmp_path)
 
 
-def test_unsupported_platform_fails_closed(tmp_path):
-    if os.name == "posix":
-        pytest.skip("POSIX secure directory traversal supported")
+def test_inventory_supported_platforms(tmp_path):
+    if os.name not in {"posix", "nt"}:
+        pytest.skip("unsupported platform")
     (tmp_path / "docs").mkdir()
-    with pytest.raises(ValueError, match="POSIX"):
-        inventory_directory(tmp_path, "docs")
+    assert inventory_directory(tmp_path, "docs")["file_count"] == 0

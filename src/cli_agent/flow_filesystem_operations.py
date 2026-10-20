@@ -93,6 +93,13 @@ def inventory_directory(
     directories: list[dict[str, str]] = []
     examined = 0
 
+    if os.name == "nt":
+        from .flow_filesystem_windows import inventory_windows
+        return inventory_windows(
+            root, start, suffixes=suffixes, excluded=excluded,
+            recursive=recursive, max_entries=max_entries,
+        )
+
     # Open each path component through an already pinned directory descriptor.
     # On platforms without directory-fd/no-follow support, fail closed.
     if os.name != "posix" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
@@ -163,3 +170,4 @@ def inventory_directory(
         "file_count": len(files),
         "directory_count": len(directories),
     }
+
