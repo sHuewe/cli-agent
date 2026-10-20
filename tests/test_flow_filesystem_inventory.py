@@ -59,3 +59,43 @@ def test_inventory_supported_platforms(tmp_path):
         pytest.skip("unsupported platform")
     (tmp_path / "docs").mkdir()
     assert inventory_directory(tmp_path, "docs")["file_count"] == 0
+
+
+def test_inventory_directory_expands_root_var(tmp_path):
+    flow = tmp_path / "flow.toml"
+    flow.write_text(
+        'version = 1\n[vars]\nokf_root = "docs"\n'
+        '[[steps]]\nid = "inventory"\noutput = "state/inventory.json"\n'
+        '[steps.filesystem_operation]\nkind = "inventory"\n'
+        'directory = "${var.okf_root}"\n',
+        encoding="utf-8",
+    )
+    parsed = load_flow(flow, workspace=tmp_path)
+    assert parsed.steps[0].filesystem_operation["directory"] == "docs"
+
+
+@pytest.mark.parametrize("value", ["../outside", "/tmp", "docs/../other"])
+def test_inventory_directory_rejects_unsafe_root_var(tmp_path, value):
+    flow = tmp_path / "flow.toml"
+    flow.write_text(
+        'version = 1\n[vars]\nokf_root = "' + value + '"\n'
+        '[[steps]]\nid = "inventory"\noutput = "state/inventory.json"\n'
+        '[steps.filesystem_operation]\nkind = "inventory"\n'
+        'directory = "${var.okf_root}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_flow(flow, workspace=tmp_path)
+
+
+def test_inventory_directory_rejects_unknown_var(tmp_path):
+    flow = tmp_path / "flow.toml"
+    flow.write_text(
+        'version = 1\n[[steps]]\nid = "inventory"\n'
+        'output = "state/inventory.json"\n'
+        '[steps.filesystem_operation]\nkind = "inventory"\n'
+        'directory = "${var.missing}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Inventory-Variable"):
+        load_flow(flow, workspace=tmp_path)
