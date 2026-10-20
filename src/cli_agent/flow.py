@@ -720,6 +720,8 @@ def _when_ref_value(
         value = flow_input
         segments = ref.split(".")[1:]
     elif match.group("iteration"):
+        if iteration_id is None and allow_unknown:
+            return _WHEN_UNKNOWN
         return iteration_id
     else:
         if item is None and allow_unknown:
