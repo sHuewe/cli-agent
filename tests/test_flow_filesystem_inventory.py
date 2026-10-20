@@ -1,8 +1,10 @@
 from pathlib import Path
 import pytest
+import os
 from cli_agent.flow_filesystem_operations import inventory_directory
 from cli_agent.flow import load_flow
 
+@pytest.mark.skipif(os.name != "posix", reason="secure inventory requires POSIX dir_fd")
 def test_inventory_filtered_and_sorted(tmp_path):
     (tmp_path / "docs").mkdir()
     for name in ("b.md", "A.MD", "index.md", "other.txt"):
@@ -13,6 +15,7 @@ def test_inventory_filtered_and_sorted(tmp_path):
     assert [f["path"] for f in result["files"]] == ["docs/A.MD", "docs/b.md"]
     assert result["directories"] == [{"name": "nested", "path": "docs/nested"}]
 
+@pytest.mark.skipif(os.name != "posix", reason="secure inventory requires POSIX dir_fd")
 def test_inventory_recursive_and_budget(tmp_path):
     (tmp_path / "a").mkdir()
     (tmp_path / "a" / "b").mkdir()
@@ -21,6 +24,7 @@ def test_inventory_recursive_and_budget(tmp_path):
     with pytest.raises(ValueError, match="max_entries"):
         inventory_directory(tmp_path, "a", recursive=True, max_entries=1)
 
+@pytest.mark.skipif(os.name != "posix", reason="secure inventory requires POSIX dir_fd")
 def test_inventory_symlinks_and_traversal(tmp_path):
     (tmp_path / "a").mkdir()
     with pytest.raises(ValueError):
@@ -48,3 +52,11 @@ def test_flow_rejects_prompt_and_inventory(tmp_path):
     flow.write_text('version = 1\n[[steps]]\nid = "inventory"\nprompt_file = "prompt.md"\noutput = "state/inventory.json"\n[steps.filesystem_operation]\nkind = "inventory"\ndirectory = "."\n')
     with pytest.raises(ValueError, match="filesystem_operation"):
         load_flow(flow, workspace=tmp_path)
+
+
+def test_unsupported_platform_fails_closed(tmp_path):
+    if os.name == "posix":
+        pytest.skip("POSIX secure directory traversal supported")
+    (tmp_path / "docs").mkdir()
+    with pytest.raises(ValueError, match="POSIX"):
+        inventory_directory(tmp_path, "docs")
