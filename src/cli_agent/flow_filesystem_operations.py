@@ -102,60 +102,53 @@ def inventory_directory(
 
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        start_fd = os.dup(root_fd)
-        try:
-            for part in start.relative_to(root).parts:
-                next_fd = os.open(
-                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=start_fd,
-                )
-                os.close(start_fd)
-                start_fd = next_fd
-            def scan(fd: int, relative_dir: Path) -> None:
-                nonlocal examined
-                try:
-                    with os.scandir(fd) as iterator:
-                        entries = []
-                        for entry in iterator:
-                            examined += 1
-                            if examined > max_entries:
-                                raise ValueError(
-                                    f"filesystem_operation.inventory überschreitet max_entries={max_entries}."
-                                )
-                            entries.append(entry.name)
-                    entries.sort(key=lambda name: (name.casefold(), name))
-                    for name in entries:
-                        if name.casefold() in excluded:
-                            continue
-                        relative_path = relative_dir / name
-                        rel = relative_path.as_posix()
-                        metadata = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                        mode = metadata.st_mode
-                        if stat.S_ISLNK(mode):
-                            raise ValueError(f"Symlink/Reparse Point bei Inventur: {rel}")
-                        if stat.S_ISDIR(mode):
-                            directories.append({"name": name, "path": rel})
-                            if recursive:
-                                child_fd = os.open(
-                                    name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                    dir_fd=fd,
-                                )
-                                scan(child_fd, relative_path)
-                        elif stat.S_ISREG(mode):
-                            if suffixes and not rel.casefold().endswith(suffixes):
-                                continue
-                            files.append({"name": name, "path": rel, "size_bytes": metadata.st_size})
-                        else:
-                            raise ValueError(f"Nicht unterstützter Dateityp bei Inventur: {rel}")
-                finally:
+        # Keep only relative paths on the work stack, never open descriptors.
+        # Each directory is reopened through the pinned root using no-follow
+        # handles; this bounds descriptor usage independently of tree width
+        # and avoids Python recursion limits for deep trees.
+        pending = [start.relative_to(root)]
+        while pending:
+            relative_dir = pending.pop()
+            fd = os.dup(root_fd)
+            try:
+                for part in relative_dir.parts:
+                    child_fd = os.open(
+                        part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=fd,
+                    )
                     os.close(fd)
-
-            scanning_fd = start_fd
-            start_fd = -1
-            scan(scanning_fd, start.relative_to(root))
-        finally:
-            if start_fd >= 0:
-                os.close(start_fd)
+                    fd = child_fd
+                with os.scandir(fd) as iterator:
+                    entries = []
+                    for entry in iterator:
+                        examined += 1
+                        if examined > max_entries:
+                            raise ValueError(
+                                f"filesystem_operation.inventory überschreitet max_entries={max_entries}."
+                            )
+                        entries.append(entry.name)
+                entries.sort(key=lambda name: (name.casefold(), name))
+                for name in entries:
+                    if name.casefold() in excluded:
+                        continue
+                    relative_path = relative_dir / name
+                    rel = relative_path.as_posix()
+                    metadata = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    mode = metadata.st_mode
+                    if stat.S_ISLNK(mode):
+                        raise ValueError(f"Symlink/Reparse Point bei Inventur: {rel}")
+                    if stat.S_ISDIR(mode):
+                        directories.append({"name": name, "path": rel})
+                        if recursive:
+                            pending.append(relative_path)
+                    elif stat.S_ISREG(mode):
+                        if suffixes and not rel.casefold().endswith(suffixes):
+                            continue
+                        files.append({"name": name, "path": rel, "size_bytes": metadata.st_size})
+                    else:
+                        raise ValueError(f"Nicht unterstützter Dateityp bei Inventur: {rel}")
+            finally:
+                os.close(fd)
     finally:
         os.close(root_fd)
 
