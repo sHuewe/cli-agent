@@ -150,8 +150,9 @@ def inventory_directory(
                 finally:
                     os.close(fd)
 
-            scan(start_fd, start.relative_to(root))
+            scanning_fd = start_fd
             start_fd = -1
+            scan(scanning_fd, start.relative_to(root))
         finally:
             if start_fd >= 0:
                 os.close(start_fd)
