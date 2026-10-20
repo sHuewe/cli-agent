@@ -920,6 +920,35 @@ ergeben; daher gehören konsistente Checkpoints weiterhin zur Verantwortung
 des aufrufenden Flows. `when` ist kein Ersatz für eine Ergebnis-Auswahl
 zwischen mehreren alternativen Steps (das bleibt außerhalb dieser Stufe).
 
+## Generische Verzeichnisinventur
+
+Eine `filesystem_operation` benötigt weder Modell noch MCP-Tools:
+
+```toml
+[[steps]]
+id = "inventory"
+output = "state/inventory.json"
+overwrite_output = true
+
+[steps.filesystem_operation]
+kind = "inventory"
+directory = "${input.directory}"
+recursive = false
+extensions = [".md"]
+exclude_names = ["index.md", "log.md"]
+max_entries = 10000
+```
+
+Der Output ist JSON mit `directory`, `files` (`name`, `path`,
+`size_bytes`), `directories` (`name`, `path`), `file_count` und
+`directory_count`. Alle Pfade sind workspace-relativ und sortiert.
+Es werden keine Dateiinhalte gelesen. Verzeichniswechsel über `..`,
+Symlinks und Reparse Points werden abgelehnt; `max_entries` begrenzt
+alle untersuchten Einträge, auch ausgefilterte. Der Scan nutzt plattformspezifisch abgesicherte Dateisystemoperationen unter POSIX und Windows. Die Operation ist unabhängig
+von OKF und kann mit `foreach = "steps.inventory.output.files"` genutzt werden.
+Für aktuelle Inventuren `overwrite_output = true` setzen; bei `false`
+kann ein vorhandener Run-Start-Checkpoint wiederverwendet werden.
+
 ## Aktuelle Einschränkungen
 
 Die erste Version ist bewusst klein:
