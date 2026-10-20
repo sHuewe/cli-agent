@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal, InvalidOperation
 import asyncio
 import contextvars
 import logging
@@ -38,6 +39,7 @@ from .file_context import (
     read_existing_output_text,
 )
 from .flow_json_operations import transform_json
+from .flow_filesystem_operations import inventory_directory, MAX_INVENTORY_ENTRIES, _workspace_directory
 from .flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .logging_setup import configure_logging
@@ -182,6 +184,7 @@ class FlowStep:
     foreach: str | None
     json_inputs: dict[str, JsonInputSpec] | None = None
     json_operation: dict[str, Any] | None = None
+    filesystem_operation: dict[str, Any] | None = None
     conversation_items: tuple[Any, ...] | str | None = None
     conversation_final_prompt_file: Path | None = None
     iteration_id: str | None = None
@@ -512,7 +515,7 @@ def _reserved_flow_input_paths(
                 ),
             )
 
-        if step.json_operation is not None:
+        if step.json_operation is not None or step.filesystem_operation is not None:
             continue
         assert step.prompt_file is not None
         prompt_path = _workspace_path(
@@ -719,6 +722,8 @@ def _when_ref_value(
     elif match.group("iteration"):
         return iteration_id
     else:
+        if item is None and allow_unknown:
+            return _WHEN_UNKNOWN
         value = item
         segments = ref.split(".")[1:] if ref != "item" else []
     for segment in segments:
@@ -762,6 +767,16 @@ def _evaluate_when(
             "verwenden Sie exists oder sichern Sie abhängige Steps mit when ab."
         )
     def equal(left: Any, right: Any) -> bool:
+        if isinstance(left, (_JsonNumber, float)) or isinstance(right, (_JsonNumber, float)):
+            if type(left) is bool or type(right) is bool:
+                return False
+            if not (isinstance(left, (_JsonNumber, int, float)) and
+                    isinstance(right, (_JsonNumber, int, float))):
+                return False
+            try:
+                return Decimal(str(left)) == Decimal(str(right))
+            except InvalidOperation:
+                return False
         return type(left) is type(right) and left == right
     if "eq" in condition:
         return equal(value, condition["eq"])
@@ -947,6 +962,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "iteration_id",
         "json_inputs",
         "json_operation",
+        "filesystem_operation",
         "flow",
         "input",
         "when",
@@ -994,6 +1010,52 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "keine dynamischen Flow-Platzhalter enthalten."
             )
         prompt_value = raw.get("prompt_file")
+        raw_filesystem_operation = raw.get("filesystem_operation")
+        if raw_filesystem_operation is not None:
+            op = raw_filesystem_operation
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries"} or op.get("kind") != "inventory" or not isinstance(op.get("directory"), str):
+                raise ValueError("filesystem_operation benötigt kind=inventory und directory.")
+            if type(op.get("recursive", False)) is not bool:
+                raise ValueError("filesystem_operation.recursive muss boolesch sein.")
+            for key in ("extensions", "exclude_names"):
+                if not isinstance(op.get(key, []), list) or any(not isinstance(x, str) for x in op.get(key, [])):
+                    raise ValueError(f"filesystem_operation.{key} muss eine String-Liste sein.")
+            if any(not x.startswith(".") or len(x) < 2 or "/" in x or chr(92) in x for x in op.get("extensions", [])):
+                raise ValueError("filesystem_operation.extensions enthält ungültige Endungen.")
+            if any(not x or x in {".", ".."} or "/" in x or chr(92) in x for x in op.get("exclude_names", [])):
+                raise ValueError("filesystem_operation.exclude_names enthält ungültige Namen.")
+            limit = op.get("max_entries", MAX_INVENTORY_ENTRIES)
+            if type(limit) is not int or not 1 <= limit <= MAX_INVENTORY_ENTRIES:
+                raise ValueError("filesystem_operation.max_entries ist ungültig.")
+            if child_flow is not None or prompt_value is not None or raw.get("json_operation") is not None:
+                raise ValueError("filesystem_operation darf nicht mit flow, prompt_file oder json_operation kombiniert werden.")
+            if raw.get("foreach") is not None or "output" not in raw:
+                raise ValueError("filesystem_operation benötigt output ohne foreach.")
+            forbidden = {"config", "model", "context_file", "add_file_context", "add_web_context", "workspace_access", "with_data", "with_mcp", "retry", "approve_tools", "vars", "conversation_items", "conversation_final_prompt_file", "exclude_paths", "json_inputs", "input"}
+            if forbidden & set(raw):
+                raise ValueError("filesystem_operation darf keine Modell- oder Tool-Optionen setzen.")
+        if raw_filesystem_operation is not None:
+            directory_template = raw_filesystem_operation["directory"]
+            # This operation deliberately supports only declared flow inputs;
+            # step/item expressions cannot be resolved by _render_input_text.
+            remainder = _INPUT_EXPR.sub("", directory_template)
+            if "${" in remainder:
+                raise ValueError(
+                    "filesystem_operation.directory unterstützt nur ${input...}-Referenzen."
+                )
+            literal_directory = _INPUT_EXPR.sub("placeholder", directory_template)
+            if (
+                not literal_directory.strip()
+                or Path(literal_directory).is_absolute()
+                or any(part == ".." for part in Path(literal_directory).parts)
+                or "\\0" in literal_directory
+            ):
+                raise ValueError("filesystem_operation.directory enthält einen ungültigen Pfad.")
+            _validate_input_references(
+                [raw_filesystem_operation["directory"]],
+                declared_inputs=inputs,
+                field=f"steps[{index}].filesystem_operation.directory",
+            )
         raw_json_operation = raw.get("json_operation")
         if raw_json_operation is not None:
             if (
@@ -1036,7 +1098,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             raise ValueError(
                 f"steps[{index}] darf nicht gleichzeitig flow und prompt_file setzen."
             )
-        if child_flow is None and prompt_value is None and raw_json_operation is None:
+        if child_flow is None and prompt_value is None and raw_json_operation is None and raw_filesystem_operation is None:
             raise ValueError(
                 f"steps[{index}] benötigt prompt_file, flow oder json_operation."
             )
@@ -1263,7 +1325,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
 
         response_format_value = raw.get(
-            "response_format", "json" if raw_json_operation is not None else "text"
+            "response_format", "json" if raw_json_operation is not None or raw_filesystem_operation is not None else "text"
         )
         if response_format_value not in {"text", "json"}:
             raise ValueError(
@@ -1647,6 +1709,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 foreach=foreach,
                 json_inputs=json_inputs,
                 json_operation=dict(raw_json_operation) if raw_json_operation else None,
+                filesystem_operation=dict(raw_filesystem_operation) if raw_filesystem_operation else None,
                 conversation_items=conversation_items,
                 conversation_final_prompt_file=conversation_final_prompt_file,
                 iteration_id=iteration_id,
@@ -2389,7 +2452,7 @@ def _capture_run_start_invocation(
         run_condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=statuses,
             flow_input=flow_input, allow_unknown=True,
-        ) if not _when_uses_item(step.when) else None
+        )
         if run_condition is False:
             statuses[step.step_id] = "skipped"
             continue
@@ -3602,7 +3665,24 @@ def validate_flow(
             produced.add(step.step_id)
             continue
 
-        if step.json_operation is not None:
+        if step.json_operation is not None or step.filesystem_operation is not None:
+            if step.filesystem_operation is not None:
+                if os.name not in {"posix", "nt"} or (os.name == "posix" and (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"))):
+                    raise ValueError("Sichere Verzeichnisinventur benötigt POSIX oder Windows.")
+                directory_template = step.filesystem_operation["directory"]
+                if _INPUT_EXPR.search(directory_template) is None:
+                    inventory_root = _workspace_directory(workspace, directory_template)
+                    if step.output is not None and _INPUT_EXPR.search(step.output) is None:
+                        static_inventory_output = _output_for_iteration(
+                            step, workspace=workspace, item=None,
+                        )
+                        if (
+                            static_inventory_output == inventory_root
+                            or inventory_root in static_inventory_output.parents
+                        ):
+                            raise ValueError(
+                                "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
+                            )
             assert step.output is not None
             if step.workspace_access != "none" or step.response_format != "json":
                 raise ValueError("JSON-Operation benötigt workspace_access=none und JSON.")
@@ -3855,7 +3935,7 @@ def _preflight_concrete_invocation_outputs(
         condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=known_statuses,
             flow_input=flow_input, allow_unknown=True,
-        ) if not _when_uses_item(step.when) else None
+        )
         if condition is False:
             known_statuses[step.step_id] = "skipped"
             continue
@@ -3972,6 +4052,17 @@ def _preflight_concrete_invocation_outputs(
                 items=items,
                 flow_input=flow_input,
             )
+            if _when_uses_item(step.when):
+                eligible = [
+                    (element, iid) for element, iid in zip(items, iteration_ids)
+                    if _evaluate_when(
+                        step.when, outputs=available_outputs, statuses=known_statuses,
+                        flow_input=flow_input, item=element, iteration_id=iid,
+                        allow_unknown=True,
+                    ) is not False
+                ]
+                items = [element for element, _ in eligible]
+                iteration_ids = [iid for _, iid in eligible]
             outputs_to_claim = []
             for item, iteration_id in zip(items, iteration_ids):
                 _set_flow_diagnostic(
@@ -4121,7 +4212,10 @@ async def _run_flow_internal(
         step_condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
             flow_input=flow_input,
-        ) if not _when_uses_item(step.when) else True
+        ) if not _when_uses_item(step.when) else _evaluate_when(
+            step.when, outputs=outputs, statuses=statuses,
+            flow_input=flow_input, allow_unknown=True,
+        )
         if step_condition is False:
             statuses[step.step_id] = "skipped"
             print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
@@ -4520,6 +4614,15 @@ async def _run_flow_internal(
             else:
                 checkpoint = None
                 if output is not None and preflight_outputs is None:
+                    if step.filesystem_operation is not None:
+                        directory = _render_input_text(
+                            step.filesystem_operation["directory"], flow_input,
+                        )
+                        inventory_root = _workspace_directory(workspace, directory)
+                        if output == inventory_root or inventory_root in output.parents:
+                            raise ValueError(
+                                "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
+                            )
                     _ensure_output_parent_directory(workspace, output)
                     prepare_output_target(
                         workspace,
@@ -4569,6 +4672,31 @@ async def _run_flow_internal(
                         "Run-Start-Checkpoints ableitbar sein."
                     ) from exc
                 raise
+
+            if step.filesystem_operation is not None:
+                assert output is not None
+                op = step.filesystem_operation
+                directory = _render_input_text(op["directory"], flow_input)
+                inventory_root = _workspace_directory(workspace, directory)
+                if output == inventory_root or inventory_root in output.parents:
+                    raise ValueError("Inventur-Output darf nicht im inventarisierten Verzeichnis liegen.")
+                transformed = inventory_directory(
+                    workspace, directory,
+                    recursive=op.get("recursive", False),
+                    extensions=tuple(op.get("extensions", [])),
+                    exclude_names=tuple(op.get("exclude_names", [])),
+                    max_entries=op.get("max_entries", MAX_INVENTORY_ENTRIES),
+                )
+                answer = _json_dumps_preserving_numbers(transformed)
+                if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+                    raise ValueError("Inventur überschreitet Output-Größenlimit.")
+                target = prepare_output_target(
+                    workspace, output, overwrite=step.overwrite_output,
+                )
+                target.write_text(answer)
+                context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+                record_iteration_answer(answer, True, iteration_id)
+                continue
 
             if step.json_operation is not None:
                 assert output is not None
@@ -4965,7 +5093,7 @@ def _initial_flow_logging_config(
                     ),
                     depth + 1,
                 ))
-            elif step.json_operation is not None:
+            elif step.json_operation is not None or step.filesystem_operation is not None:
                 continue
             elif step.config is None:
                 return None
