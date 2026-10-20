@@ -38,7 +38,7 @@ from .file_context import (
     read_existing_output_text,
 )
 from .flow_json_operations import transform_json
-from .flow_filesystem_operations import inventory_directory, MAX_INVENTORY_ENTRIES
+from .flow_filesystem_operations import inventory_directory, MAX_INVENTORY_ENTRIES, _workspace_directory
 from .flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from .filesystem_security import path_entry_is_symlink_or_reparse
 from .logging_setup import configure_logging
@@ -848,6 +848,10 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             for key in ("extensions", "exclude_names"):
                 if not isinstance(op.get(key, []), list) or any(not isinstance(x, str) for x in op.get(key, [])):
                     raise ValueError(f"filesystem_operation.{key} muss eine String-Liste sein.")
+            if any(not x.startswith(".") or len(x) < 2 or "/" in x or chr(92) in x for x in op.get("extensions", [])):
+                raise ValueError("filesystem_operation.extensions enthält ungültige Endungen.")
+            if any(not x or x in {".", ".."} or "/" in x or chr(92) in x for x in op.get("exclude_names", [])):
+                raise ValueError("filesystem_operation.exclude_names enthält ungültige Namen.")
             limit = op.get("max_entries", MAX_INVENTORY_ENTRIES)
             if type(limit) is not int or not 1 <= limit <= MAX_INVENTORY_ENTRIES:
                 raise ValueError("filesystem_operation.max_entries ist ungültig.")
@@ -4382,6 +4386,9 @@ async def _run_flow_internal(
                 assert output is not None
                 op = step.filesystem_operation
                 directory = _render_input_text(op["directory"], flow_input)
+                inventory_root = _workspace_directory(workspace, directory)
+                if output == inventory_root or inventory_root in output.parents:
+                    raise ValueError("Inventur-Output darf nicht im inventarisierten Verzeichnis liegen.")
                 transformed = inventory_directory(
                     workspace, directory,
                     recursive=op.get("recursive", False),
