@@ -366,6 +366,21 @@ value = "after"
     (tmp_path / "source.json").write_text(
         '{"items":[{"name":"a","enabled":false}]}', encoding="utf-8",
     )
+    # Verify the run-start snapshot, not a file the mocked run_once never writes.
+    parsed = load_flow(definition, workspace=tmp_path)
+    snapshots = {}
+    flow_module._capture_run_start_invocation(
+        parsed,
+        workspace=tmp_path,
+        cache={flow_module._filesystem_path_key(parsed.source): parsed},
+        flow_input={},
+        namespace="",
+        snapshots=snapshots,
+        protected_paths={},
+        budget=flow_module._SubflowTraversalBudget(),
+    )
+    assert "source" in snapshots[""].available_outputs
+    assert "child_batch" not in snapshots[""].available_outputs
+
     calls = _run(tmp_path, definition, monkeypatch, {})
     assert calls == ["after"]
-    assert (tmp_path / "after.json").exists()
