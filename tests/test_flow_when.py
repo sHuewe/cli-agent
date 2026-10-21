@@ -933,3 +933,75 @@ value = "never"
 """)
     (tmp_path / "source.json").write_text('{"items":[1,2]}', encoding="utf-8")
     assert _run(tmp_path, definition, monkeypatch, {}) == ["gate"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "json_mode"),
+    [
+        ("true", True, True),
+        ("1", 1, True),
+        ('"ready"', "ready", True),
+        ("ready", "ready", False),
+    ],
+)
+def test_when_root_output_typed_json_scalars(raw, expected, json_mode):
+    assert flow_module._evaluate_when(
+        {"ref": "steps.source.output", "eq": expected},
+        outputs={"source": raw}, output_json={"source": json_mode},
+        statuses={"source": "completed"}, flow_input={},
+    ) is True
+    if json_mode and raw == '"ready"':
+        assert flow_module._evaluate_when(
+            {"ref": "steps.source.output", "eq": raw},
+            outputs={"source": raw}, output_json={"source": True},
+            statuses={"source": "completed"}, flow_input={},
+        ) is False
+
+
+def test_conditional_static_outputs_can_share_a_path(tmp_path, monkeypatch):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "yes"
+prompt_file = "do.md"
+output = "shared.txt"
+when = { ref = "steps.source.output.enabled", eq = true }
+[steps.vars]
+value = "yes"
+[[steps]]
+id = "no"
+prompt_file = "do.md"
+output = "shared.txt"
+when = { ref = "steps.source.output.enabled", eq = false }
+[steps.vars]
+value = "no"
+""")
+    assert _run(
+        tmp_path, definition, monkeypatch,
+        {"source": '{"enabled":true}'},
+    ) == ["source", "yes"]
+
+
+def test_when_typed_root_json_scalar_selects_branch(tmp_path, monkeypatch):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "selected"
+prompt_file = "do.md"
+when = { ref = "steps.source.output", eq = true }
+[steps.vars]
+value = "selected"
+""")
+    assert _run(tmp_path, definition, monkeypatch, {"source": "true"}) == [
+        "source", "selected",
+    ]
