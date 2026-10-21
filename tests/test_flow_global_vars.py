@@ -314,6 +314,15 @@ def test_global_vars_expand_alongside_dynamic_subflow_references(tmp_path: Path)
     "prefix-${var.missing}/child",
     "${var}",
     "${var.root.child}",
+    "${var .root}",
+    "${var[root]}",
+    "${ var.root }",
+    "${ var .root }",
+    "${Var.root}",
+    "${var/root}",
+    "${var(root)}",
+    "${var.root",
+    "prefix-${var .root}/child",
 ])
 def test_subflow_input_rejects_missing_or_malformed_global_var(
     tmp_path: Path, reference: str,
@@ -331,4 +340,43 @@ def test_subflow_input_rejects_missing_or_malformed_global_var(
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="globale Variable|globale Variablenreferenz"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+@pytest.mark.parametrize("reference", ["${var [root]}", "${Var.root}", "${var .root}"])
+def test_nested_subflow_input_rejects_malformed_global_var(
+    tmp_path: Path, reference: str,
+) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["settings"]\n'
+        '[[steps]]\nid = "run"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[vars]\nroot = "docs"\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        f'[steps.input]\nsettings = {{ nested = ["valid", "{reference}"] }}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="globale Variablenreferenz"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_global_variable_value_cannot_introduce_nested_reference(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["root"]\n'
+        '[[steps]]\nid = "run"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[vars]\nroot = "${var.second}"\nsecond = "docs"\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        '[steps.input]\nroot = "${var.root}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="globale Variablenreferenz"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
