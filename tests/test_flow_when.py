@@ -738,3 +738,47 @@ value = "${item}"
 """)
     (tmp_path / "source.json").write_text('{"items":[1,2]}', encoding="utf-8")
     assert _run(tmp_path, definition, monkeypatch, {}) == ["work"]
+
+
+def test_future_checkpoint_reservation_uses_fresh_budget_per_scan(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["concept"]\nresult = "steps.resume.output"\n'
+        '[[steps]]\nid = "resume"\noutput = "resume.json"\n'
+        'overwrite_output = true\n[steps.filesystem_operation]\n'
+        'kind = "checkpoint_status"\npaths = ["verify.json"]\n'
+        'expected_status = "ok"\n'
+        'expected_source_path = "${input.concept}"\n',
+        encoding="utf-8",
+    )
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "child"
+flow = "child.toml"
+[steps.input]
+concept = "concept.md"
+""")
+    root = load_flow(definition, workspace=tmp_path)
+    # Root and concrete child each consume one expansion per scan. A shared
+    # budget would exceed this limit after the first scan.
+    monkeypatch.setattr(flow_module, "MAX_SUBFLOW_GRAPH_EXPANSIONS", 2)
+    reserved = {}
+    cache = {flow_module._filesystem_path_key(root.source): root}
+    for _ in range(12):
+        flow_module._reserve_future_child_checkpoint_inputs(
+            root, workspace=tmp_path, cache=cache,
+            flow_input={}, outputs={}, output_json={}, statuses={},
+            reserved_inputs=reserved, claimed_outputs={},
+        )
+    assert flow_module._filesystem_path_key(tmp_path / "verify.json") in reserved
+    assert flow_module._filesystem_path_key(tmp_path / "concept.md") in reserved
+
+    # Each individual scan remains bounded, including nested descendants.
+    monkeypatch.setattr(flow_module, "MAX_SUBFLOW_GRAPH_EXPANSIONS", 1)
+    with pytest.raises(ValueError, match="Expansionslimit"):
+        flow_module._reserve_future_child_checkpoint_inputs(
+            root, workspace=tmp_path, cache=cache,
+            flow_input={}, outputs={}, output_json={}, statuses={},
+            reserved_inputs={}, claimed_outputs={},
+        )
