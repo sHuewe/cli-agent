@@ -2840,6 +2840,9 @@ def _capture_run_start_invocation(
         if run_condition is False:
             statuses[step.step_id] = "skipped"
             continue
+        # A checkpoint behind an unresolved gate can be fingerprinted for
+        # possible later execution, but must not be published as an output.
+        unknown_gate = run_condition is None
         if step.foreach is None:
             if run_condition is True:
                 statuses[step.step_id] = "completed"
@@ -2858,6 +2861,11 @@ def _capture_run_start_invocation(
             namespace=namespace, step=step.step_id,
         )
         if step.flow is not None:
+            # A non-item conditional child cannot contribute a proven result
+            # until its gate resolves. The live frontier protects possible
+            # read inputs and reevaluates them as conditions become known.
+            if unknown_gate and not _when_uses_item(step.when):
+                continue
             if step.foreach is None:
                 items = [None]
                 iteration_ids: list[str | None] = [None]
@@ -3007,8 +3015,9 @@ def _capture_run_start_invocation(
             )
             if checkpoint is not None:
                 remember_checkpoint(step, output, checkpoint)
-                available_outputs[step.step_id] = checkpoint
-                output_json[step.step_id] = True
+                if not unknown_gate:
+                    available_outputs[step.step_id] = checkpoint
+                    output_json[step.step_id] = True
             continue
 
         source_id = _foreach_output_source(step.foreach)
@@ -3092,8 +3101,9 @@ def _capture_run_start_invocation(
                 remember_previous_output(step, output)
 
         if not items:
-            available_outputs[step.step_id] = _finish_foreach_output([])
-            output_json[step.step_id] = True
+            if not unknown_gate:
+                available_outputs[step.step_id] = _finish_foreach_output([])
+                output_json[step.step_id] = True
             continue
 
         if (
@@ -3132,7 +3142,7 @@ def _capture_run_start_invocation(
                     answer=checkpoint,
                 )
 
-        if complete:
+        if complete and not unknown_gate:
             available_outputs[step.step_id] = _finish_foreach_output(parts)
             output_json[step.step_id] = True
 
@@ -5529,8 +5539,9 @@ async def run_flow(
             workspace=workspace,
             root_flow=flow,
             cache=cache,
-            # Read-only run-start checkpoint snapshots must not permanently
-            # reserve conditional branch inputs.
+            # Capture guaranteed-active concrete descendant checkpoint inputs
+            # before earlier writers can overwrite them.
+            reserved_inputs=reserved_inputs,
         )
     )
     known_fingerprints: dict[str, bytes] = {}
