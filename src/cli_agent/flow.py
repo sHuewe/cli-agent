@@ -2514,6 +2514,7 @@ def _capture_run_start_invocation(
     protected_paths: dict[str, Path],
     budget: _SubflowTraversalBudget,
     call_stack: tuple[str, ...] = (),
+    reserved_inputs: dict[str, Path] | None = None,
 ) -> _FlowResultValue | None:
     _set_flow_diagnostic(
         phase="run-start-snapshot", flow=flow.source,
@@ -2531,10 +2532,11 @@ def _capture_run_start_invocation(
     next_stack = (*call_stack, flow_key)
     # Concrete nested inputs available from run-start checkpoints must be
     # protected before any step executes, including parent/sibling writers.
-    _reserve_checkpoint_status_inputs(
-        flow, workspace=workspace, flow_input=flow_input,
-        reserved_inputs=protected_paths,
-    )
+    if reserved_inputs is not None:
+        _reserve_checkpoint_status_inputs(
+            flow, workspace=workspace, flow_input=flow_input,
+            reserved_inputs=reserved_inputs,
+        )
     fingerprints: dict[tuple[str, str], bytes] = {}
     checkpoint_paths: dict[str, Path] = {}
     previous_output_fingerprints: dict[
@@ -2676,6 +2678,7 @@ def _capture_run_start_invocation(
                     snapshots=snapshots,
                     protected_paths=protected_paths,
                     budget=budget,
+                    reserved_inputs=reserved_inputs,
                     call_stack=next_stack,
                 )
                 _set_flow_diagnostic(
@@ -3103,6 +3106,7 @@ def _capture_run_start_snapshots(
     workspace: Path,
     root_flow: FlowDefinition,
     cache: dict[str, FlowDefinition],
+    reserved_inputs: dict[str, Path] | None = None,
 ) -> tuple[
     dict[str, _RunStartSnapshot],
     tuple[Path, ...],
@@ -3118,6 +3122,7 @@ def _capture_run_start_snapshots(
         snapshots=snapshots,
         protected_paths=protected_paths,
         budget=_SubflowTraversalBudget(),
+        reserved_inputs=reserved_inputs,
     )
     return snapshots, tuple(protected_paths.values())
 
@@ -5190,12 +5195,9 @@ async def run_flow(
             workspace=workspace,
             root_flow=flow,
             cache=cache,
+            reserved_inputs=reserved_inputs,
         )
     )
-    # This set includes concrete checkpoint/source inputs for child
-    # invocations reconstructible at run start, not only JSON checkpoints.
-    for path in run_start_checkpoint_paths:
-        reserved_inputs[_filesystem_path_key(path)] = path
     known_fingerprints: dict[str, bytes] = {}
     for snapshot in run_start_snapshots.values():
         for (_, path_key), fingerprint in snapshot.checkpoint_fingerprints.items():
