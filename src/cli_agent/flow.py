@@ -3058,17 +3058,24 @@ def _capture_run_start_invocation(
             flow_input=flow_input,
         )
         if _when_uses_item(step.when):
-            eligible = [
-                (element, iid) for element, iid in zip(items, iteration_ids)
-                if _evaluate_when(
+            eligible: list[tuple[Any, str | None]] = []
+            unresolved_item_gate = False
+            for element, iid in zip(items, iteration_ids):
+                item_condition = _evaluate_when(
                     step.when, outputs=available_outputs, statuses=statuses,
                     flow_input=flow_input, item=element, iteration_id=iid,
-                    allow_unknown=True,
-                    output_json=output_json,
-                ) is not False
-            ]
+                    allow_unknown=True, output_json=output_json,
+                )
+                if item_condition is None:
+                    unresolved_item_gate = True
+                if item_condition is not False:
+                    eligible.append((element, iid))
             items = [element for element, _ in eligible]
             iteration_ids = [iid for _, iid in eligible]
+            # Without an item the condition is always unknown for item-gated
+            # foreach. Once every *concrete* item was evaluated, only genuinely
+            # unresolved gates should prevent snapshot output publication.
+            unknown_gate = unresolved_item_gate
             if not items:
                 statuses[step.step_id] = "skipped"
                 continue
