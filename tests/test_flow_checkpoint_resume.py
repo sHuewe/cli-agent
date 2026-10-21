@@ -105,3 +105,34 @@ def test_fallback_result_requires_primary(tmp_path):
     )
     with pytest.raises(ValueError, match="result_fallback"):
         load_flow(path, workspace=tmp_path)
+
+
+def test_released_source_alias_stays_protected_when_also_checkpoint_candidate(
+    tmp_path,
+):
+    path = tmp_path / "alias.toml"
+    path.write_text(
+        'version = 1\n[[steps]]\nid = "resume"\n'
+        'output = "status.json"\noverwrite_output = true\n'
+        '[steps.filesystem_operation]\nkind = "checkpoint_status"\n'
+        'paths = ["same.json"]\nexpected_status = "ok"\n'
+        'expected_source_path = "same.json"\nrelease_source_on_miss = true\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(path, workspace=tmp_path)
+    reserved = {}
+    flow_module._reserve_checkpoint_status_inputs(
+        flow, workspace=tmp_path, flow_input={},
+        reserved_inputs=reserved,
+    )
+    key = flow_module._filesystem_path_key(tmp_path / "same.json")
+    assert key in reserved
+
+    front = {}
+    flow_module._reserve_conditional_checkpoint_status_inputs(
+        flow, workspace=tmp_path, flow_input={},
+        outputs={"resume": '{"completed":false}'},
+        output_json={"resume": True}, statuses={"resume": "completed"},
+        reserved_inputs=front, claimed_outputs={},
+    )
+    assert key in front
