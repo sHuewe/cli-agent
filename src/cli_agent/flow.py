@@ -2934,6 +2934,17 @@ def _capture_run_start_invocation(
                     iteration_id=iteration_id,
                     case_colliding_step_ids=case_colliding_step_ids,
                 )
+                # A foreach item gate can remain unknown despite its item
+                # being concrete (for example when it also references an
+                # earlier model result). Capture possible checkpoint bytes
+                # for resume, but do not permanently reserve this child's
+                # inputs or treat its result as an executed branch.
+                item_condition = _evaluate_when(
+                    step.when, outputs=available_outputs, statuses=statuses,
+                    flow_input=flow_input, item=item,
+                    iteration_id=iteration_id, allow_unknown=True,
+                    output_json=output_json,
+                )
                 child_result = _capture_run_start_invocation(
                     child,
                     workspace=workspace,
@@ -2943,9 +2954,14 @@ def _capture_run_start_invocation(
                     snapshots=snapshots,
                     protected_paths=protected_paths,
                     budget=budget,
-                    reserved_inputs=reserved_inputs,
+                    reserved_inputs=(
+                        reserved_inputs if item_condition is True else None
+                    ),
                     call_stack=next_stack,
                 )
+                if item_condition is not True:
+                    complete = False
+                    continue
                 _set_flow_diagnostic(
                     phase="run-start-subflow-result", flow=flow.source,
                     namespace=namespace, step=step.step_id,
