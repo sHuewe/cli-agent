@@ -569,16 +569,20 @@ def _reserve_future_child_checkpoint_inputs(
     statuses: dict[str, str],
     reserved_inputs: dict[str, Path],
     claimed_outputs: dict[str, str],
-    budget: _SubflowTraversalBudget,
+    budget: _SubflowTraversalBudget | None = None,
     stack: tuple[str, ...] = (),
 ) -> None:
     """Reserve resolvable future checkpoint inputs before any intervening write.
 
     A child input depending on a freshly produced model result cannot be
     reserved at run start. Re-run this bounded projection before each step
-    using the outputs already produced by its parent invocation.
+    using the outputs already produced by its parent invocation. Each scan
+    has a fresh expansion budget; recursively visited children share that
+    scan's budget, but identical scans must not exhaust the main preflight
+    budget just because a flow contains more steps.
     """
-    budget.consume(purpose="Checkpoint-Eingabereservierung")
+    scan_budget = budget if budget is not None else _SubflowTraversalBudget()
+    scan_budget.consume(purpose="Checkpoint-Eingabereservierung")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError("Zyklischer oder zu tief verschachtelter Subflow.")
@@ -639,7 +643,7 @@ def _reserve_future_child_checkpoint_inputs(
                 child, workspace=workspace, cache=cache,
                 flow_input=child_input, outputs={}, output_json={},
                 statuses={}, reserved_inputs=reserved_inputs,
-                claimed_outputs=claimed_outputs, budget=budget,
+                claimed_outputs=claimed_outputs, budget=scan_budget,
                 stack=next_stack,
             )
 
@@ -4500,12 +4504,11 @@ async def _run_flow_internal(
         # A previous step may have produced the input used by a later
         # checkpoint_status child. Reserve it before this step can write.
         assert context.flow_cache is not None
-        assert context.preflight_budget is not None
         _reserve_future_child_checkpoint_inputs(
             flow, workspace=workspace, cache=context.flow_cache,
             flow_input=flow_input, outputs=outputs, output_json=output_json,
             statuses=statuses, reserved_inputs=reserved_inputs,
-            claimed_outputs=claimed_outputs, budget=context.preflight_budget,
+            claimed_outputs=claimed_outputs,
         )
         step_condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
