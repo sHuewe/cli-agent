@@ -202,6 +202,7 @@ class FlowDefinition:
     excluded_paths: tuple[Path, ...] = ()
     inputs: tuple[str, ...] = ()
     result: str | None = None
+    result_fallback: str | None = None
     # Root-level [retry], separate from effective per-step defaults.
     retry_policy: ModelRetryPolicy | None = None
 
@@ -525,9 +526,17 @@ def _reserve_checkpoint_status_inputs(
     for step in flow.steps:
         if step.when is not None:
             continue
-        for path in _checkpoint_status_input_paths(
+        operation = step.filesystem_operation
+        paths = _checkpoint_status_input_paths(
             step, workspace=workspace, flow_input=flow_input,
-        ):
+        )
+        for index, path in enumerate(paths):
+            # Only the final source-path entry is releasable, never a
+            # candidate checkpoint (even when both normalize to one path).
+            if (operation is not None
+                    and operation.get("release_source_on_miss")
+                    and index == len(paths) - 1):
+                continue
             key = _filesystem_path_key(path)
             if claimed_outputs is not None and key in claimed_outputs:
                 raise ValueError(
@@ -556,10 +565,10 @@ def _reserve_conditional_checkpoint_status_inputs(
     dictionary so these speculative reservations never become permanent.
     """
     for step in flow.steps:
-        if step.when is None:
-            continue
         operation = step.filesystem_operation
         if operation is None or operation["kind"] != "checkpoint_status":
+            continue
+        if step.when is None and not operation.get("release_source_on_miss"):
             continue
         condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
@@ -568,9 +577,21 @@ def _reserve_conditional_checkpoint_status_inputs(
         )
         if condition is False:
             continue
-        for path in _checkpoint_status_input_paths(
+        paths = _checkpoint_status_input_paths(
             step, workspace=workspace, flow_input=flow_input,
-        ):
+        )
+        for index, path in enumerate(paths):
+            if (operation.get("release_source_on_miss")
+                    and index == len(paths) - 1):
+                # Release only once this exact first-step check has produced
+                # a confirmed miss; unresolved checks fail closed.
+                if step.step_id in outputs:
+                    checked = _parse_structured_output(
+                        outputs[step.step_id], step_id=step.step_id,
+                    )
+                    if (isinstance(checked, dict)
+                            and checked.get("completed") is False):
+                        continue
             key = _filesystem_path_key(path)
             if key in claimed_outputs:
                 raise ValueError(
@@ -621,6 +642,7 @@ def _reserve_future_child_checkpoint_inputs(
     budget: _SubflowTraversalBudget | None = None,
     stack: tuple[str, ...] = (),
     exclude_invocation: tuple[str, str | None] | None = None,
+    completed_invocations: set[tuple[str, str | None]] | None = None,
 ) -> None:
     """Reserve resolvable future checkpoint inputs before any intervening write.
 
@@ -638,7 +660,7 @@ def _reserve_future_child_checkpoint_inputs(
         raise ValueError("Zyklischer oder zu tief verschachtelter Subflow.")
     next_stack = (*stack, flow_key)
     for step in flow.steps:
-        if step.flow is None:
+        if step.flow is None or statuses.get(step.step_id) in {"completed", "skipped"}:
             continue
         condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
@@ -674,7 +696,10 @@ def _reserve_future_child_checkpoint_inputs(
         for item, iteration_id in zip(items, iteration_ids):
             # A child's own speculative inputs must be recalculated from
             # its live statuses. Parent and sibling reservations still apply.
-            if exclude_invocation == (step.step_id, iteration_id):
+            invocation = (step.step_id, iteration_id)
+            if (exclude_invocation == invocation
+                    or (completed_invocations is not None
+                        and invocation in completed_invocations)):
                 continue
             if _evaluate_when(
                 step.when, outputs=outputs, statuses=statuses,
@@ -1099,6 +1124,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "retry",
         "inputs",
         "result",
+        "result_fallback",
     }
     unknown_root = set(values) - allowed_root
     if unknown_root:
@@ -1132,6 +1158,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if result_value is not None
         else None
     )
+
+    fallback_value = values.get("result_fallback")
+    fallback_selector = (
+        _string(fallback_value, field="result_fallback")
+        if fallback_value is not None else None
+    )
+    if fallback_selector is not None and result_selector is None:
+        raise ValueError("result_fallback benötigt result.")
 
     global_config_value = values.get("config")
     global_config = (
@@ -1291,7 +1325,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
-            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "paths", "expected_status", "expected_source_path"} or op.get("kind") not in {"inventory", "checkpoint_status"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "paths", "expected_status", "expected_source_path", "release_source_on_miss"} or op.get("kind") not in {"inventory", "checkpoint_status"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
                 raise ValueError("filesystem_operation benötigt kind=inventory und directory.")
             if op["kind"] == "checkpoint_status":
                 if (not isinstance(op.get("paths"), list) or not 1 <= len(op["paths"]) <= 16
@@ -1303,6 +1337,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     raise ValueError("checkpoint_status.expected_source_path fehlt.")
                 if set(op) & {"directory", "recursive", "extensions", "exclude_names", "max_entries"}:
                     raise ValueError("checkpoint_status unterstützt keine Inventur-Optionen.")
+                if "release_source_on_miss" in op:
+                    if (op["release_source_on_miss"] is not True
+                            or index != 1 or when is not None):
+                        raise ValueError(
+                            "release_source_on_miss=true ist nur im ersten "
+                            "unbedingten Flow-Schritt erlaubt."
+                        )
             if type(op.get("recursive", False)) is not bool:
                 raise ValueError("filesystem_operation.recursive muss boolesch sein.")
             for key in ("extensions", "exclude_names"):
@@ -2048,16 +2089,16 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         )
 
-    if result_selector is not None:
-        match = _FOREACH.fullmatch(result_selector)
-        if match is None:
+    for label, selector in (
+        ("result", result_selector),
+        ("result_fallback", fallback_selector),
+    ):
+        if selector is None:
+            continue
+        match = _FOREACH.fullmatch(selector)
+        if match is None or match.group(1) not in known_ids:
             raise ValueError(
-                "result muss auf steps.<id>.output[.<pfad>] verweisen."
-            )
-        source_id = match.group(1)
-        if source_id not in known_ids:
-            raise ValueError(
-                f"result verweist auf unbekannten Schritt {source_id!r}."
+                f"{label} muss auf den Output eines bekannten Schritts verweisen."
             )
 
     return FlowDefinition(
@@ -2066,6 +2107,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         excluded_paths=excluded_paths,
         inputs=inputs,
         result=result_selector,
+        result_fallback=fallback_selector,
         retry_policy=global_retry_policy,
     )
 
@@ -3184,16 +3226,17 @@ def _capture_run_start_invocation(
 
     if flow.result is None:
         return None
-    match = _FOREACH.fullmatch(flow.result)
-    assert match is not None
-    source_id = match.group(1)
-    if source_id not in available_outputs:
+    # A fallback cannot be made visible before the primary is resolved.
+    # Otherwise a parent may eagerly plan foreach output paths using a
+    # provisional fallback which the primary will later supersede.
+    primary_match = _FOREACH.fullmatch(flow.result)
+    assert primary_match is not None
+    if primary_match.group(1) not in available_outputs:
         return None
-    return _flow_result_value(
-        flow,
-        available_outputs,
-        output_json,
-    )
+    try:
+        return _flow_result_value(flow, available_outputs, output_json)
+    except ValueError:
+        return None
 
 
 
@@ -3987,26 +4030,38 @@ def _flow_result_value(
 ) -> _FlowResultValue | None:
     if flow.result is None:
         return None
-    match = _FOREACH.fullmatch(flow.result)
-    assert match is not None
-    source_id, path = match.groups()
-    if source_id not in outputs:
-        raise ValueError(
-            f"Result-Quelle {source_id!r} von Flow {flow.source} "
-            "besitzt keinen verfügbaren Output."
-        )
-    text = outputs[source_id]
-    if path is None:
-        return _FlowResultValue(
-            text=text,
-            is_json=output_json.get(source_id, False),
-        )
-    parsed = _parse_structured_output(text, step_id=source_id)
-    value = _lookup(
-        parsed,
-        path,
-        label=f"Result von Flow {flow.source}",
-    )
+    value: Any = None
+    is_found = False
+    source_id = ""
+    for selector in (flow.result, flow.result_fallback):
+        if selector is None:
+            continue
+        match = _FOREACH.fullmatch(selector)
+        assert match is not None
+        source_id, path = match.groups()
+        if source_id not in outputs:
+            continue
+        text = outputs[source_id]
+        if path is None:
+            is_json_output = output_json.get(source_id, False)
+            # A JSON-null whole-step output is an absent primary result,
+            # unlike the literal "null" of a plain-text step.
+            if (is_json_output
+                    and _parse_structured_output(text, step_id=source_id) is None):
+                continue
+            return _FlowResultValue(text=text, is_json=is_json_output)
+        parsed = _parse_structured_output(text, step_id=source_id)
+        try:
+            value = _lookup(
+                parsed, path, label=f"Result von Flow {flow.source}",
+            )
+        except ValueError:
+            continue
+        if value is not None:
+            is_found = True
+            break
+    if not is_found:
+        raise ValueError(f"Kein verfügbarer Flow-Result-Selector für {flow.source}.")
     is_json = isinstance(value, _JsonNumber) or not isinstance(value, str)
     return _FlowResultValue(
         text=_json_dumps_preserving_numbers(value)
@@ -4709,6 +4764,7 @@ async def _run_flow_internal(
         else inherited_retry_policy
     )
     statuses: dict[str, str] = {}
+    completed_child_invocations: set[tuple[str, str | None]] = set()
     for step in flow.steps:
         # Speculative checkpoint inputs belong to this execution frontier,
         # never to the permanent reservation table. Reevaluate them after
@@ -4730,6 +4786,7 @@ async def _run_flow_internal(
             flow_input=flow_input, outputs=outputs, output_json=output_json,
             statuses=statuses, reserved_inputs=reserved_inputs,
             claimed_outputs=claimed_outputs,
+            completed_invocations=completed_child_invocations,
         )
         step_condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
@@ -5059,6 +5116,7 @@ async def _run_flow_internal(
                     reserved_inputs=child_inherited_inputs,
                     claimed_outputs=claimed_outputs,
                     exclude_invocation=(step.step_id, iteration_id),
+                    completed_invocations=completed_child_invocations,
                 )
                 child_result = await _run_flow_internal(
                     child,
@@ -5085,6 +5143,7 @@ async def _run_flow_internal(
                     child_result.is_json,
                     iteration_id,
                 )
+                completed_child_invocations.add((step.step_id, iteration_id))
                 continue
 
             output = (
@@ -5217,6 +5276,8 @@ async def _run_flow_internal(
                 if op["kind"] == "checkpoint_status":
                     expected_source = _render_input_text(op["expected_source_path"], flow_input)
                     result = {"completed": False, "checkpoint": None, "source_path": expected_source}
+                    if op.get("release_source_on_miss"):
+                        result["verification"] = None
                     # Reject input/output aliasing before reading or writing any
                     # candidate. Compare normalized workspace paths on both OSes.
                     candidates = [
@@ -5255,11 +5316,23 @@ async def _run_flow_internal(
                                 and payload.get("status") == op["expected_status"]
                                 and payload.get("source_path") == expected_source):
                             result.update(completed=True, checkpoint=str(candidate.relative_to(workspace)))
+                            if op.get("release_source_on_miss"):
+                                result["verification"] = payload
                             break
                     answer = _json_dumps_preserving_numbers(result)
+                    if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+                        raise ValueError(
+                            "checkpoint_status überschreitet Output-Größenlimit."
+                        )
                     target = prepare_output_target(workspace, output, overwrite=True)
                     target.write_text(answer)
                     context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+                    if op.get("release_source_on_miss") and result["completed"]:
+                        # A completed read is no longer a future invocation,
+                        # but its verified source remains protected globally.
+                        # A miss never adds this guard, so the parent may write.
+                        assert context.reserved_inputs is not None
+                        context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
                     record_iteration_answer(answer, True, iteration_id)
                     continue
                 directory = _render_input_text(op["directory"], flow_input)
