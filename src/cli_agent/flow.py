@@ -4039,10 +4039,13 @@ def _flow_result_value(
             continue
         text = outputs[source_id]
         if path is None:
-            return _FlowResultValue(
-                text=text,
-                is_json=output_json.get(source_id, False),
-            )
+            is_json_output = output_json.get(source_id, False)
+            # A JSON-null whole-step output is an absent primary result,
+            # unlike the literal "null" of a plain-text step.
+            if (is_json_output
+                    and _parse_structured_output(text, step_id=source_id) is None):
+                continue
+            return _FlowResultValue(text=text, is_json=is_json_output)
         parsed = _parse_structured_output(text, step_id=source_id)
         try:
             value = _lookup(
