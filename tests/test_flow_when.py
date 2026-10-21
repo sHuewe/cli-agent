@@ -1387,3 +1387,63 @@ name = "${item}"
     assert calls == ["selector-a", "final-a", "selector-b", "final-b"]
     assert not (tmp_path / "shared.txt").exists()
     assert (tmp_path / "gated.json").read_text(encoding="utf-8") == '{"old":true}'
+
+
+def test_unknown_foreach_child_gate_does_not_permanently_reserve_checkpoint(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "child.toml").write_text("""
+version = 1
+inputs = ["source"]
+result = "steps.verify.output"
+[[steps]]
+id = "verify"
+output = "status.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "${input.source}"
+""", encoding="utf-8")
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+output = "source.json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "selector"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "selector"
+[[steps]]
+id = "writer"
+prompt_file = "do.md"
+output = "concept.md"
+overwrite_output = true
+when = { ref = "steps.selector.output.allow", eq = false }
+[steps.vars]
+value = "writer"
+[[steps]]
+id = "child"
+flow = "child.toml"
+foreach = "steps.source.output.items"
+when = { all = [
+    { ref = "steps.selector.output.allow", eq = true },
+    { ref = "item.keep", eq = true }
+] }
+[steps.input]
+source = "concept.md"
+""")
+    (tmp_path / "source.json").write_text(
+        '{"items":[{"keep":true}]}', encoding="utf-8",
+    )
+    (tmp_path / "concept.md").write_text("# Original", encoding="utf-8")
+    assert _run(
+        tmp_path, definition, monkeypatch,
+        {"selector": '{"allow":false}'},
+    ) == ["selector", "writer"]
