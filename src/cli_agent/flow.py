@@ -4671,8 +4671,15 @@ async def _run_flow_internal(
     )
     statuses: dict[str, str] = {}
     for step in flow.steps:
-        # A previous step may have produced the input used by a later
-        # checkpoint_status child. Reserve it before this step can write.
+        # Speculative checkpoint inputs belong to this execution frontier,
+        # never to the permanent reservation table. Reevaluate them after
+        # every completed step so mutually exclusive branches can write.
+        reserved_inputs = dict(context.reserved_inputs)
+        _reserve_conditional_checkpoint_status_inputs(
+            flow, workspace=workspace, flow_input=flow_input,
+            outputs=outputs, output_json=output_json, statuses=statuses,
+            reserved_inputs=reserved_inputs, claimed_outputs=claimed_outputs,
+        )
         assert context.flow_cache is not None
         _reserve_future_child_checkpoint_inputs(
             flow, workspace=workspace, cache=context.flow_cache,
