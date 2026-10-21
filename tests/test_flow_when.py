@@ -621,3 +621,38 @@ concept = "concept.md"
     with pytest.raises(ValueError, match="reserviert|kollidiert"):
         _run(tmp_path, flow, monkeypatch, {})
     assert (tmp_path / "concept.md").read_text(encoding="utf-8") == "# Original"
+
+
+def test_checkpoint_status_inputs_are_protected_from_model_tool_writes(
+    tmp_path, monkeypatch,
+):
+    flow = _setup(tmp_path, """
+[[steps]]
+id = "writer"
+prompt_file = "do.md"
+workspace_access = "write"
+[steps.vars]
+value = "writer"
+[[steps]]
+id = "resume"
+output = "resume.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+""")
+    protected = []
+
+    async def inspect_protection(options, *, dependencies=None):
+        protected.append({
+            path.resolve() for path in options.mutation_protected_paths
+        })
+        return SimpleNamespace(answer='{"ok":true}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", inspect_protection)
+    asyncio.run(run_flow(load_flow(flow, workspace=tmp_path), workspace=tmp_path))
+    assert len(protected) == 1
+    assert (tmp_path / "verify.json") in protected[0]
+    assert (tmp_path / "concept.md") in protected[0]
