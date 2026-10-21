@@ -782,3 +782,96 @@ concept = "concept.md"
             flow_input={}, outputs={}, output_json={}, statuses={},
             reserved_inputs={}, claimed_outputs={},
         )
+
+
+@pytest.mark.parametrize(
+    ("items", "condition", "expected"),
+    [
+        ('["a","b"]', None, "completed"),
+        ('[]', None, "completed"),
+        ('[{"keep":false}]', {"ref": "item.keep", "eq": True}, "skipped"),
+        ('[{"keep":true},{"keep":false}]', {"ref": "item.keep", "eq": True}, "completed"),
+    ],
+)
+def test_known_foreach_status_from_checkpoint(items, condition, expected, tmp_path):
+    import json
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+output = "source.json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "work"
+prompt_file = "do.md"
+foreach = "steps.source.output.items"
+[steps.vars]
+value = "${item}"
+""")
+    flow = load_flow(definition, workspace=tmp_path)
+    step = flow.steps[1]
+    if condition is not None:
+        from dataclasses import replace
+        step = replace(step, when=condition)
+    statuses = {"source": "completed"}
+    result = flow_module._known_foreach_execution_status(
+        step, outputs={"source": json.dumps({"items": json.loads(items)})},
+        statuses=statuses, flow_input={}, condition=True if condition is None else None,
+    )
+    assert result == expected
+
+
+def test_checkpoint_backed_foreach_completed_skips_later_colliding_batch(
+    tmp_path, monkeypatch,
+):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+output = "source.json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "gate"
+prompt_file = "do.md"
+foreach = "steps.source.output.items"
+[steps.vars]
+value = "gate"
+[[steps]]
+id = "never"
+prompt_file = "do.md"
+response_format = "json"
+foreach = "steps.source.output.items"
+output = "duplicate.json"
+when = { ref = "steps.gate.status", eq = "skipped" }
+[steps.vars]
+value = "never"
+""")
+    (tmp_path / "source.json").write_text('{"items":["a","b"]}', encoding="utf-8")
+    assert _run(tmp_path, definition, monkeypatch, {}) == ["gate", "gate"]
+
+
+def test_checkpoint_backed_foreach_unknown_source_stays_unresolved(
+    tmp_path,
+):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "gate"
+prompt_file = "do.md"
+foreach = "steps.source.output.items"
+[steps.vars]
+value = "gate"
+""")
+    gate = load_flow(definition, workspace=tmp_path).steps[1]
+    assert flow_module._known_foreach_execution_status(
+        gate, outputs={}, statuses={}, flow_input={}, condition=True,
+    ) is None
