@@ -1209,3 +1209,60 @@ expected_source_path = "concept.md"
     assert result["checkpoint"] == (
         "verification.json" if source_kind == "file" else None
     )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_child_recomputes_own_conditional_checkpoint_reservations(
+    tmp_path, monkeypatch, enabled,
+):
+    """A child's false conditional reader must not remain inherited from its parent."""
+    (tmp_path / "child.toml").write_text("""
+version = 1
+result = "steps.final.output"
+[[steps]]
+id = "selector"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "selector"
+[[steps]]
+id = "verify"
+output = "status.json"
+overwrite_output = true
+when = { ref = "steps.selector.output.enabled", eq = true }
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+[[steps]]
+id = "rewrite"
+prompt_file = "do.md"
+output = "verify.json"
+overwrite_output = true
+when = { ref = "steps.selector.output.enabled", eq = false }
+[steps.vars]
+value = "rewrite"
+[[steps]]
+id = "final"
+prompt_file = "do.md"
+[steps.vars]
+value = "final"
+""", encoding="utf-8")
+    flow = _setup(tmp_path, """
+[[steps]]
+id = "child"
+flow = "child.toml"
+""")
+    original = '{"status":"ok","source_path":"concept.md"}'
+    (tmp_path / "verify.json").write_text(original, encoding="utf-8")
+    (tmp_path / "concept.md").write_text("# Concept", encoding="utf-8")
+    calls = _run(tmp_path, flow, monkeypatch, {
+        "selector": '{"enabled":' + str(enabled).lower() + '}',
+    })
+    assert calls == (["selector", "final"] if enabled
+                     else ["selector", "rewrite", "final"])
+    if enabled:
+        assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original
+    else:
+        assert not (tmp_path / "status.json").exists()
