@@ -238,3 +238,197 @@ def test_oversize_embedded_verification_rejected_before_status_write(
         asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
     assert not (tmp_path / "resume.json").exists()
     assert (tmp_path / "old-v2.json").read_text(encoding="utf-8") == raw
+
+
+@pytest.mark.parametrize("checkpoint_success", [False, True])
+@pytest.mark.parametrize("depth", [1, 2])
+def test_parent_retains_only_live_checkpoint_source_guards(
+    tmp_path, monkeypatch, checkpoint_success, depth,
+):
+    """A completed miss releases the source across nested boundaries;
+    a successful read stays protected even after the child has returned.
+    """
+    root = _make_flow(tmp_path)
+    if checkpoint_success:
+        (tmp_path / "old-v2.json").write_text(
+            '{"status":"ok","source_path":"concept.md","findings":[]}',
+            encoding="utf-8",
+        )
+    if depth == 2:
+        (tmp_path / "middle.toml").write_text(
+            'version = 1\nresult = "steps.child.output"\n'
+            '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+            '[steps.input]\nsource = "concept.md"\n',
+            encoding="utf-8",
+        )
+        middle = 'flow = "middle.toml"'
+        inputs = ''
+    else:
+        middle = 'flow = "child.toml"'
+        inputs = '[steps.input]\nsource = "concept.md"\n'
+    root.write_text(
+        'version = 1\n[[steps]]\nid = "nested"\n'
+        + middle + '\n' + inputs
+        + '[[steps]]\nid = "rewrite"\nprompt_file = "prompt.md"\n'
+        'output = "concept.md"\noverwrite_output = true\n'
+        'workspace_access = "write"\n[steps.vars]\nvalue = "rewrite"\n',
+        encoding="utf-8",
+    )
+    called = []
+
+    async def fake_run(options, *, dependencies=None):
+        called.append(options.prompt)
+        if options.prompt == "rewrite":
+            assert (tmp_path / "concept.md") not in options.mutation_protected_paths
+        return SimpleNamespace(
+            answer='{"status":"ok","source_path":"concept.md","findings":[]}',
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run)
+    flow = load_flow(root, workspace=tmp_path)
+    if checkpoint_success:
+        with pytest.raises(ValueError, match="reserviert|kollidiert"):
+            asyncio.run(run_flow(flow, workspace=tmp_path))
+        assert called == []
+    else:
+        asyncio.run(run_flow(flow, workspace=tmp_path))
+        assert called == ["write", "verify", "rewrite"]
+
+
+def test_parent_protects_unknown_future_checkpoint_before_writer(
+    tmp_path, monkeypatch,
+):
+    """Before the child checks its source even a future miss must fail closed."""
+    root = _make_flow(tmp_path)
+    root.write_text(
+        'version = 1\n[[steps]]\nid = "rewrite"\n'
+        'prompt_file = "prompt.md"\noutput = "concept.md"\n'
+        'overwrite_output = true\n[steps.vars]\nvalue = "rewrite"\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        '[steps.input]\nsource = "concept.md"\n',
+        encoding="utf-8",
+    )
+    called = []
+
+    async def fake_run(options, *, dependencies=None):
+        called.append(options.prompt)
+        raise AssertionError("Earlier writer must not run")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run)
+    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
+    assert called == []
+
+
+def test_skipped_child_does_not_protect_source_from_later_writer(
+    tmp_path, monkeypatch,
+):
+    root = _make_flow(tmp_path)
+    root.write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "switch"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\n[steps.vars]\nvalue = "switch"\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        'when = { ref = "steps.switch.output.enabled", eq = true }\n'
+        '[steps.input]\nsource = "concept.md"\n'
+        '[[steps]]\nid = "rewrite"\nprompt_file = "prompt.md"\n'
+        'output = "concept.md"\noverwrite_output = true\n'
+        '[steps.vars]\nvalue = "rewrite"\n',
+        encoding="utf-8",
+    )
+    called = []
+
+    async def fake_run(options, *, dependencies=None):
+        called.append(options.prompt)
+        return SimpleNamespace(
+            answer='{"enabled":false}' if options.prompt == "switch" else "edited",
+            web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run)
+    asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
+    assert called == ["switch", "rewrite"]
+
+
+def test_completed_child_still_protects_verifier_checkpoint_file(
+    tmp_path, monkeypatch,
+):
+    root = _make_flow(tmp_path)
+    root.write_text(
+        'version = 1\n[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        '[steps.input]\nsource = "concept.md"\n'
+        '[[steps]]\nid = "clobber"\nprompt_file = "prompt.md"\n'
+        'output = "old-v2.json"\noverwrite_output = true\n'
+        '[steps.vars]\nvalue = "clobber"\n',
+        encoding="utf-8",
+    )
+    async def fake_run(options, *, dependencies=None):
+        return SimpleNamespace(
+            answer='{"status":"ok","source_path":"concept.md"}',
+            web_context_statuses=(),
+        )
+    monkeypatch.setattr(flow_module, "run_once", fake_run)
+    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
+
+
+def test_completed_foreach_child_does_not_reapply_released_source_guard(
+    tmp_path, monkeypatch,
+):
+    """The second sibling may write a source whose earlier reader finished."""
+    (tmp_path / "prompt.md").write_text("{{var:value}}", encoding="utf-8")
+    (tmp_path / "a.md").write_text("A", encoding="utf-8")
+    (tmp_path / "b.md").write_text("B", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["source", "key", "target"]\n'
+        'result = "steps.resume.output.verification"\n'
+        'result_fallback = "steps.verify.output"\n'
+        '[[steps]]\nid = "resume"\n'
+        'output = "state/${input.key}/status.json"\n'
+        'overwrite_output = true\n[steps.filesystem_operation]\n'
+        'kind = "checkpoint_status"\npaths = ["state/${input.key}/old.json"]\n'
+        'expected_status = "ok"\nexpected_source_path = "${input.source}"\n'
+        'release_source_on_miss = true\n'
+        '[[steps]]\nid = "write"\nprompt_file = "prompt.md"\n'
+        'workspace_access = "write"\n'
+        'output = "${input.target}"\noverwrite_output = true\n'
+        'when = { ref = "steps.resume.output.completed", eq = false }\n'
+        '[steps.vars]\nvalue = "write"\n'
+        '[[steps]]\nid = "verify"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\n'
+        'when = { ref = "steps.resume.output.completed", eq = false }\n'
+        '[steps.vars]\nvalue = "verify"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "discover"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\n[steps.vars]\nvalue = "discover"\n'
+        '[[steps]]\nid = "children"\nflow = "child.toml"\n'
+        'foreach = "steps.discover.output.items"\n'
+        '[steps.input]\nsource = "${item.source}"\n'
+        'key = "${item.key}"\ntarget = "${item.target}"\n',
+        encoding="utf-8",
+    )
+    called = []
+
+    async def fake_run(options, *, dependencies=None):
+        called.append(options.prompt)
+        if options.prompt == "discover":
+            answer = json.dumps({"items":[
+                {"source":"a.md", "key":"first", "target":"a.md"},
+                {"source":"b.md", "key":"second", "target":"a.md"},
+            ]})
+        else:
+            if options.prompt == "write":
+                assert (tmp_path / "a.md") not in options.mutation_protected_paths
+            answer = '{"status":"ok","source_path":"concept.md"}'
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run)
+    asyncio.run(run_flow(
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path),
+        workspace=tmp_path,
+    ))
+    assert called == ["discover", "write", "verify", "write", "verify"]
