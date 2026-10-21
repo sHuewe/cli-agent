@@ -400,10 +400,10 @@ def test_when_null_foreach_item_is_concrete_in_preflight():
 
 def test_when_null_foreach_item_skips_subflow_preflight(tmp_path, monkeypatch):
     (tmp_path / "child.toml").write_text(
-        'version = 1\\ninputs = ["value"]\\nresult = "steps.work.output"\\n'
-        '[[steps]]\\nid = "work"\\nprompt_file = "do.md"\\n'
-        'output = "shared.json"\\nresponse_format = "json"\\n'
-        '[steps.vars]\\nvalue = "${input.value}"\\n',
+        'version = 1\ninputs = ["value"]\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "do.md"\n'
+        'output = "shared.json"\nresponse_format = "json"\n'
+        '[steps.vars]\nvalue = "${input.value}"\n',
         encoding="utf-8",
     )
     definition = _setup(tmp_path, """
