@@ -475,6 +475,7 @@ value = "link"
     (tmp_path / "verify-v2.json").write_text(
         '{"status":"ok","source_path":"concept.md"}', encoding="utf-8",
     )
+    (tmp_path / "concept.md").write_text("# Verified concept", encoding="utf-8")
     assert _run(tmp_path, flow, monkeypatch, {}) == []
     import json
     assert json.loads((tmp_path / "resume.json").read_text())["completed"] is True
@@ -1176,3 +1177,35 @@ expected_source_path = "concept.md"
     with pytest.raises(ValueError, match="reserviert|kollidiert"):
         _run(tmp_path, definition, monkeypatch, {})
     assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("source_kind", ["missing", "directory", "file"])
+def test_checkpoint_status_requires_real_regular_source(
+    tmp_path, monkeypatch, source_kind,
+):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "verify"
+output = "resume.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verification.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+""")
+    (tmp_path / "verification.json").write_text(
+        '{"status":"ok","source_path":"concept.md"}', encoding="utf-8",
+    )
+    if source_kind == "directory":
+        (tmp_path / "concept.md").mkdir()
+    elif source_kind == "file":
+        (tmp_path / "concept.md").write_text("# Concept", encoding="utf-8")
+
+    _run(tmp_path, definition, monkeypatch, {})
+    import json
+    result = json.loads((tmp_path / "resume.json").read_text(encoding="utf-8"))
+    assert result["completed"] is (source_kind == "file")
+    assert result["checkpoint"] == (
+        "verification.json" if source_kind == "file" else None
+    )
