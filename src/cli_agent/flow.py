@@ -1062,6 +1062,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 raise ValueError("filesystem_operation darf nicht mit flow, prompt_file oder json_operation kombiniert werden.")
             if raw.get("foreach") is not None or "output" not in raw:
                 raise ValueError("filesystem_operation benötigt output ohne foreach.")
+            if op["kind"] == "checkpoint_status" and raw.get("overwrite_output") is not True:
+                raise ValueError("checkpoint_status benötigt overwrite_output=true für aktuelle Prüfungen.")
             forbidden = {"config", "model", "context_file", "add_file_context", "add_web_context", "workspace_access", "with_data", "with_mcp", "retry", "approve_tools", "vars", "conversation_items", "conversation_final_prompt_file", "exclude_paths", "json_inputs", "input"}
             if forbidden & set(raw):
                 raise ValueError("filesystem_operation darf keine Modell- oder Tool-Optionen setzen.")
@@ -1090,11 +1092,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 raw_filesystem_operation["directory"] = directory_template
             else:
                 raw_filesystem_operation["paths"] = [
-                    re.sub(r"\\$\\{var\\.([A-Za-z_][A-Za-z0-9_-]*)\\}", replace_inventory_var, p)
+                    re.sub(r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}", replace_inventory_var, p)
                     for p in raw_filesystem_operation["paths"]
                 ]
                 raw_filesystem_operation["expected_source_path"] = re.sub(
-                    r"\\$\\{var\\.([A-Za-z_][A-Za-z0-9_-]*)\\}",
+                    r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
                     replace_inventory_var, raw_filesystem_operation["expected_source_path"],
                 )
             # Only static vars and declared flow inputs are supported;
@@ -4709,7 +4711,7 @@ async def _run_flow_internal(
             else:
                 checkpoint = None
                 if output is not None and preflight_outputs is None:
-                    if step.filesystem_operation is not None:
+                    if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
                         directory = _render_input_text(
                             step.filesystem_operation["directory"], flow_input,
                         )
