@@ -184,3 +184,57 @@ def test_null_primary_without_available_fallback_is_an_error(tmp_path):
         flow_module._flow_result_value(
             flow, outputs={"primary": "null"}, output_json={"primary": True},
         )
+
+
+def test_run_start_does_not_publish_fallback_before_primary_is_known(tmp_path):
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    path = tmp_path / "choice.toml"
+    path.write_text(
+        'version = 1\nresult = "steps.primary.output"\n'
+        'result_fallback = "steps.fallback.output"\n'
+        '[[steps]]\nid = "primary"\nprompt_file = "prompt.md"\n'
+        'output = "primary.json"\nresponse_format = "json"\n'
+        '[[steps]]\nid = "fallback"\nprompt_file = "prompt.md"\n'
+        'output = "fallback.json"\nresponse_format = "json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "fallback.json").write_text('{"choice":"old"}', encoding="utf-8")
+    flow = load_flow(path, workspace=tmp_path)
+    snapshots = {}
+    result = flow_module._capture_run_start_invocation(
+        flow, workspace=tmp_path,
+        cache={flow_module._filesystem_path_key(flow.source): flow},
+        flow_input={}, namespace="", snapshots=snapshots,
+        protected_paths={}, budget=flow_module._SubflowTraversalBudget(),
+    )
+    assert result is None
+    assert "primary" not in snapshots[""].available_outputs
+    assert "fallback" in snapshots[""].available_outputs
+
+
+def test_oversize_embedded_verification_rejected_before_status_write(
+    tmp_path, monkeypatch,
+):
+    root = _make_flow(tmp_path)
+    payload = {
+        "status": "ok",
+        "source_path": "concept.md",
+        "checked_links": 0,
+        "findings": [],
+        "notes": "x" * 110,
+    }
+    raw = json.dumps(payload)
+    wrapper = json.dumps({
+        "completed": True, "checkpoint": "old-v2.json",
+        "source_path": "concept.md", "verification": payload,
+    })
+    assert len(raw.encode("utf-8")) < len(wrapper.encode("utf-8"))
+    monkeypatch.setattr(
+        flow_module, "MAX_STRUCTURED_OUTPUT_BYTES",
+        (len(raw.encode("utf-8")) + len(wrapper.encode("utf-8"))) // 2,
+    )
+    (tmp_path / "old-v2.json").write_text(raw, encoding="utf-8")
+    with pytest.raises(ValueError, match="checkpoint_status überschreitet"):
+        asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
+    assert not (tmp_path / "resume.json").exists()
+    assert (tmp_path / "old-v2.json").read_text(encoding="utf-8") == raw
