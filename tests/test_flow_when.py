@@ -1266,3 +1266,124 @@ flow = "child.toml"
         assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original
     else:
         assert not (tmp_path / "status.json").exists()
+
+
+def test_run_start_reserves_deep_checkpoint_source_from_child_checkpoint(
+    tmp_path, monkeypatch,
+):
+    """A parent writer must not destroy a deep child's checkpoint source."""
+    (tmp_path / "deep.toml").write_text("""
+version = 1
+inputs = ["concept"]
+result = "steps.verify.output"
+[[steps]]
+id = "verify"
+output = "status.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "${input.concept}"
+""", encoding="utf-8")
+    (tmp_path / "child.toml").write_text("""
+version = 1
+result = "steps.deep.output"
+[[steps]]
+id = "selector"
+prompt_file = "do.md"
+response_format = "json"
+output = "selector.json"
+[steps.vars]
+value = "selector"
+[[steps]]
+id = "deep"
+flow = "deep.toml"
+[steps.input]
+concept = "${steps.selector.output.path}"
+""", encoding="utf-8")
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "writer"
+prompt_file = "do.md"
+output = "concept.md"
+overwrite_output = true
+[steps.vars]
+value = "writer"
+[[steps]]
+id = "child"
+flow = "child.toml"
+""")
+    (tmp_path / "selector.json").write_text(
+        '{"path":"concept.md"}', encoding="utf-8",
+    )
+    (tmp_path / "concept.md").write_text("# Original", encoding="utf-8")
+    (tmp_path / "verify.json").write_text(
+        '{"status":"ok","source_path":"concept.md"}', encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        _run(tmp_path, definition, monkeypatch, {})
+    assert (tmp_path / "concept.md").read_text(encoding="utf-8") == "# Original"
+
+
+def test_unknown_gated_checkpoint_not_published_to_sibling_preflight(
+    tmp_path, monkeypatch,
+):
+    """Speculative checkpoints must not make guarded sibling writers active."""
+    (tmp_path / "child.toml").write_text("""
+version = 1
+inputs = ["name"]
+result = "steps.final.output"
+[[steps]]
+id = "selector"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "selector-${input.name}"
+[[steps]]
+id = "gated"
+prompt_file = "do.md"
+response_format = "json"
+output = "gated.json"
+when = { ref = "steps.selector.output.enabled", eq = true }
+[steps.vars]
+value = "gated"
+[[steps]]
+id = "after"
+prompt_file = "do.md"
+output = "shared.txt"
+when = { ref = "steps.gated.status", eq = "completed" }
+[steps.vars]
+value = "after"
+[[steps]]
+id = "final"
+prompt_file = "do.md"
+[steps.vars]
+value = "final-${input.name}"
+""", encoding="utf-8")
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+output = "source.json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "children"
+flow = "child.toml"
+foreach = "steps.source.output.items"
+[steps.input]
+name = "${item}"
+""")
+    (tmp_path / "source.json").write_text(
+        '{"items":["a","b"]}', encoding="utf-8",
+    )
+    (tmp_path / "gated.json").write_text('{"old":true}', encoding="utf-8")
+    calls = _run(tmp_path, definition, monkeypatch, {
+        "selector-a": '{"enabled":false}',
+        "selector-b": '{"enabled":false}',
+    })
+    assert calls == ["selector-a", "final-a", "selector-b", "final-b"]
+    assert not (tmp_path / "shared.txt").exists()
+    assert (tmp_path / "gated.json").read_text(encoding="utf-8") == '{"old":true}'
