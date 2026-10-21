@@ -878,6 +878,74 @@ Insbesondere gilt:
 Die erste Version erlaubt maximal 100 Flow-Schritte und maximal 1000 Elemente
 pro `foreach`.
 
+## Bedingte Steps (`when`)
+
+Ein optionales `when` auf einem beliebigen Modell-, JSON-Operations- oder
+Subflow-Step prüft vor der Ausführung eine deklarative Bedingung:
+
+```toml
+[[steps]]
+id = "snapshot"
+prompt_file = "prompts/snapshot.md"
+when = { ref = "steps.assess.output.action", eq = "split" }
+```
+
+Erlaubte Referenzen sind `steps.<id>.output[.<feld>]` und
+`steps.<id>.status` (nur bereits deklarierte Steps), `input.<feld>` sowie
+`item[.<feld>]` und `iteration.id` für Steps mit `foreach`.
+Die Statuswerte sind `completed` und `skipped`.
+Es gibt die Operatoren `eq`, `neq`, `in` (nichtleere Liste von skalaren
+Werten) und `exists` (Boolean). Bedingungen können mit `all` oder `any`
+zu verschachtelten Gruppen kombiniert werden:
+
+```toml
+when = { all = [
+  { ref = "steps.assess.output.action", eq = "split" },
+  { ref = "input.enabled", eq = true }
+] }
+```
+
+Für `foreach` mit `item`-Bedingungen wird pro Element entschieden; nur
+zutreffende Iterationen gehen in die Ergebnisliste ein. Ist die Bedingung
+für den gesamten Step falsch, wird er ohne Modell- oder Tool-Aufruf übersprungen
+und erzeugt weder Output noch Checkpoint. **Folgeschritte werden dadurch nicht
+automatisch übersprungen.** Fehlende Output-Referenzen in Folgeschritten
+führen zu einer Fehlermeldung; sie brauchen gegebenenfalls eine eigene
+`when`-Bedingung. Über `exists = false` lässt sich die Abwesenheit
+eines Outputs ausdrücklich prüfen.
+
+Die Bedingungen werden beim Resume erneut aus vorhandenen Outputs ausgewertet.
+Für unterschiedliche Daten/Checkpoint-Stände können sich andere Verzweigungen
+ergeben; daher gehören konsistente Checkpoints weiterhin zur Verantwortung
+des aufrufenden Flows. `when` ist kein Ersatz für eine Ergebnis-Auswahl
+zwischen mehreren alternativen Steps (das bleibt außerhalb dieser Stufe).
+
+## Checkpoint-Status prüfen
+
+Mit `filesystem_operation.kind = "checkpoint_status"` lassen sich ältere
+Verifikations-Checkpoints ohne LLM-Aufruf prüfen. Das Ergebnis wird bei jedem
+Lauf neu erzeugt (`overwrite_output = true` ist Pflicht).
+
+```toml
+[[steps]]
+id = "resume"
+output = "state/resume.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["${input.state_dir}/verify-v2-${input.checkpoint_key}.json", "${input.state_dir}/verify-v3-${input.checkpoint_key}.json"]
+expected_status = "ok"
+expected_source_path = "${input.concept_path}"
+```
+
+Das Ergebnis enthält `completed`, `checkpoint` und `source_path`.
+Fehlende, ungültige oder nicht passende JSON-Checkpoints werden ignoriert.
+Eine erfolgreiche Prüfung setzt außerdem voraus, dass die referenzierte
+Quelldatei noch als reguläre Datei existiert. Der Checkpoint beweist
+jedoch nicht, dass ihr Inhalt seither unverändert geblieben ist; hierfür
+benötigt der aufrufende Flow gegebenenfalls eine zusätzliche
+Fingerprint- oder Inhaltsprüfung.
+
 ## Generische Verzeichnisinventur
 
 Eine `filesystem_operation` benötigt weder Modell noch MCP-Tools:
@@ -902,7 +970,7 @@ Der Output ist JSON mit `directory`, `files` (`name`, `path`,
 `directory_count`. Alle Pfade sind workspace-relativ und sortiert.
 Es werden keine Dateiinhalte gelesen. Verzeichniswechsel über `..`,
 Symlinks und Reparse Points werden abgelehnt; `max_entries` begrenzt
-alle untersuchten Einträge, auch ausgefilterte. Der sichere Scan verwendet derzeit POSIX-\`dir_fd\`/\`O_NOFOLLOW\`; unter Windows wird die Operation bis zur Implementierung eines gleichwertig abgesicherten Backends abgelehnt. Die Operation ist unabhängig
+alle untersuchten Einträge, auch ausgefilterte. Der Scan nutzt plattformspezifisch abgesicherte Dateisystemoperationen unter POSIX und Windows. Die Operation ist unabhängig
 von OKF und kann mit `foreach = "steps.inventory.output.files"` genutzt werden.
 Für aktuelle Inventuren `overwrite_output = true` setzen; bei `false`
 kann ein vorhandener Run-Start-Checkpoint wiederverwendet werden.
@@ -913,7 +981,7 @@ Die erste Version ist bewusst klein:
 
 - nur sequenzielle Ausführung
 - keine Parallelisierung
-- keine Conditions
+- Bedingungen nur auf Step-Ebene, keine `result_first`-Auswahl zwischen Branches
 - keine JSON-Schema-Validierung; `foreach` verlangt derzeit nur syntaktisch
   gültiges JSON und den erwarteten Listenpfad
 - keine Flow-weiten Tool-Approvals
@@ -966,3 +1034,31 @@ path = "state/routes/${each.document_id}-${each.id}-${input.folder.id}.json"
 Das Ergebnis enthält `{"batches":[{"id":"b0001","items":[...]},...],"total_items":N}` und lässt sich mit `foreach = "steps.batch_routes.output.batches"` abarbeiten. Die Batch-Grenze wird sowohl durch die Anzahl von Einträgen als auch durch `max_batch_bytes` (1.024 bis 10.000.000) begrenzt. Ist bereits ein einzelner Eintrag zu groß, bricht die Operation explizit ab, statt stillschweigend Daten wegzulassen.
 
 Die zweite Operation `kind = "flatten"` akzeptiert eine JSON-Liste von Listen und gibt `{"items":[...]}` in unveränderter Reihenfolge zurück. Beide Operationen sind vollständig deterministisch und benötigen `output` mit JSON-Format. Sie erlauben keine Modell-, Tool-, Prompt- oder Workspace-Optionen.
+
+
+### Inventory directory via global variables
+
+A filesystem inventory step may use a static global `[vars]` value in
+`directory`:
+
+```toml
+version = 1
+
+[vars]
+okf_root = "okf-generated"
+
+[[steps]]
+id = "inventory"
+output = "state/inventory.json"
+
+[steps.filesystem_operation]
+kind = "inventory"
+directory = "${var.okf_root}"
+recursive = true
+```
+
+The runner expands the declared variable when loading the flow, before
+validating the workspace-relative directory. Undefined variables, absolute
+paths and parent-directory traversal are rejected. `${input.name}`
+continues to work for subflows. Inventory `directory` does not support
+per-item or previous-output expressions.
