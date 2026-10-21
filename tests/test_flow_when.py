@@ -1447,3 +1447,83 @@ source = "concept.md"
         tmp_path, definition, monkeypatch,
         {"selector": '{"allow":false}'},
     ) == ["selector", "writer"]
+
+
+def test_snapshot_publishes_resolved_item_filtered_checkpoints(tmp_path):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+output = "source.json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "filtered"
+prompt_file = "do.md"
+response_format = "json"
+foreach = "steps.source.output.items"
+output = "filtered-${item.id}.json"
+when = { ref = "item.keep", eq = true }
+[steps.vars]
+value = "filtered"
+""")
+    (tmp_path / "source.json").write_text(
+        '{"items":[{"id":"a","keep":false},{"id":"b","keep":true}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "filtered-b.json").write_text('{"ok":true}', encoding="utf-8")
+    parsed = load_flow(definition, workspace=tmp_path)
+    snapshots = {}
+    flow_module._capture_run_start_invocation(
+        parsed, workspace=tmp_path,
+        cache={flow_module._filesystem_path_key(parsed.source): parsed},
+        flow_input={}, namespace="", snapshots=snapshots,
+        protected_paths={}, budget=flow_module._SubflowTraversalBudget(),
+    )
+    import json
+    value = json.loads(snapshots[""].available_outputs["filtered"])
+    assert value["iterations"] == [{"id":"b","output":{"ok":True}}]
+
+
+def test_snapshot_does_not_publish_partially_unknown_item_gate(tmp_path):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+output = "source.json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "gate"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "gate"
+[[steps]]
+id = "filtered"
+prompt_file = "do.md"
+response_format = "json"
+foreach = "steps.source.output.items"
+output = "filtered-${item.id}.json"
+when = { all = [
+    { ref = "item.keep", eq = true },
+    { ref = "steps.gate.output.allow", eq = true }
+] }
+[steps.vars]
+value = "filtered"
+""")
+    (tmp_path / "source.json").write_text(
+        '{"items":[{"id":"a","keep":true}]}', encoding="utf-8",
+    )
+    (tmp_path / "filtered-a.json").write_text('{"ok":true}', encoding="utf-8")
+    parsed = load_flow(definition, workspace=tmp_path)
+    snapshots = {}
+    flow_module._capture_run_start_invocation(
+        parsed, workspace=tmp_path,
+        cache={flow_module._filesystem_path_key(parsed.source): parsed},
+        flow_input={}, namespace="", snapshots=snapshots,
+        protected_paths={}, budget=flow_module._SubflowTraversalBudget(),
+    )
+    assert "filtered" not in snapshots[""].available_outputs
