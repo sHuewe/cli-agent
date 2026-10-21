@@ -805,6 +805,9 @@ _WHEN_REF = re.compile(
 )
 _WHEN_UNKNOWN = object()
 _WHEN_MISSING = object()
+# A completed step always has a logical root output, even when its value
+# cannot be reconstructed from a run-start checkpoint.
+_WHEN_PRESENT_UNKNOWN = object()
 _WHEN_NO_ITEM = object()
 
 
@@ -887,7 +890,13 @@ def _when_ref_value(
         if match.group("kind") == "status":
             return statuses.get(source, _WHEN_UNKNOWN if allow_unknown else _WHEN_MISSING)
         if source not in outputs:
-            if allow_unknown and statuses.get(source) != "skipped":
+            status = statuses.get(source)
+            if allow_unknown and status == "completed":
+                # Only root presence is proven. Nested fields and comparisons
+                # depend on the unknown value and must remain unresolved.
+                return (_WHEN_PRESENT_UNKNOWN if not match.group("field")
+                        else _WHEN_UNKNOWN)
+            if allow_unknown and status != "skipped":
                 return _WHEN_UNKNOWN
             return _WHEN_MISSING
         value: Any = outputs[source]
@@ -955,6 +964,12 @@ def _evaluate_when(
         return None
     if "exists" in condition:
         return (value is not _WHEN_MISSING) == condition["exists"]
+    if value is _WHEN_PRESENT_UNKNOWN:
+        if allow_unknown:
+            return None
+        raise _WhenMissingReferenceError(
+            f"when-Referenz {ref!r} besitzt noch keinen verfügbaren Wert."
+        )
     if value is _WHEN_MISSING:
         raise _WhenMissingReferenceError(
             f"when-Referenz {ref!r} ist nicht verfügbar; "
