@@ -55,3 +55,33 @@ Globale Variablen sind bewusst statisch. Schlüssel und Werte müssen Strings se
 - `${steps.<id>.output...}`
 
 Dadurch bleibt der Gültigkeitsbereich globaler Variablen unabhängig von Step-, `foreach`- und Conversation-Zuständen.
+
+## Globale Variablen in Subflow-Inputs
+
+`[steps.input]` unterstützt außerdem `${var.name}` für statische Werte aus
+der `[vars]`-Tabelle **des aufrufenden Flows**:
+
+```toml
+[vars]
+okf_root = "okf-generated"
+
+[[steps]]
+id = "build"
+flow = "flows/build.toml"
+[steps.input]
+okf_root = "${var.okf_root}"
+output_dir = "${var.okf_root}/doctrines"
+```
+
+Die Ersetzung findet bereits beim Laden des Flows statt; sie gilt auch für
+verschachtelte Listen und Tabellen in `[steps.input]`. Zusammengesetzte Strings
+dürfen die statischen Werte mit dynamischen `${input...}`- und
+`${item...}`-Referenzen kombinieren; letztere werden erst bei der Ausführung
+aufgelöst. Fehlende oder fehlerhafte `${var...}`-Verweise führen zu einem
+Validierungsfehler. Die globale Variable verleiht keine zusätzlichen
+Dateisystemrechte: Die resultierenden Child-Inputs und Pfade durchlaufen
+unverändert die normalen Workspace-/Flow-Prüfungen.
+
+Die Variablen eines aufgerufenen Child-Flows werden **nicht** implizit als
+Variablen des Parent-Flows verwendet und haben keinen rückwirkenden Einfluss
+auf dessen `[steps.input]`.
