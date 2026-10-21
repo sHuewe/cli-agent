@@ -527,16 +527,15 @@ def _reserve_checkpoint_status_inputs(
         if step.when is not None:
             continue
         operation = step.filesystem_operation
-        for path in _checkpoint_status_input_paths(
+        paths = _checkpoint_status_input_paths(
             step, workspace=workspace, flow_input=flow_input,
-        ):
-            # An opted-in first-step precheck may release ONLY its source
-            # after a proven miss. Candidate checkpoints stay protected.
+        )
+        for index, path in enumerate(paths):
+            # Only the final source-path entry is releasable, never a
+            # candidate checkpoint (even when both normalize to one path).
             if (operation is not None
                     and operation.get("release_source_on_miss")
-                    and path == _checkpoint_status_input_paths(
-                        step, workspace=workspace, flow_input=flow_input,
-                    )[-1]):
+                    and index == len(paths) - 1):
                 continue
             key = _filesystem_path_key(path)
             if claimed_outputs is not None and key in claimed_outputs:
@@ -581,8 +580,9 @@ def _reserve_conditional_checkpoint_status_inputs(
         paths = _checkpoint_status_input_paths(
             step, workspace=workspace, flow_input=flow_input,
         )
-        for path in paths:
-            if operation.get("release_source_on_miss") and path == paths[-1]:
+        for index, path in enumerate(paths):
+            if (operation.get("release_source_on_miss")
+                    and index == len(paths) - 1):
                 # Release only once this exact first-step check has produced
                 # a confirmed miss; unresolved checks fail closed.
                 if step.step_id in outputs:
