@@ -517,3 +517,26 @@ expected_source_path = "concept.md"
 """)
     with pytest.raises(ValueError, match="overwrite_output"):
         load_flow(flow, workspace=tmp_path)
+
+
+@pytest.mark.parametrize("output", ["verify.json", "concept.md"])
+def test_checkpoint_status_never_overwrites_inputs(tmp_path, monkeypatch, output):
+    flow = _setup(tmp_path, f"""
+[[steps]]
+id = "resume"
+output = "{output}"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+""")
+    original_checkpoint = '{"status":"ok","source_path":"concept.md"}'
+    original_source = "# Important concept"
+    (tmp_path / "verify.json").write_text(original_checkpoint, encoding="utf-8")
+    (tmp_path / "concept.md").write_text(original_source, encoding="utf-8")
+    with pytest.raises(ValueError, match="überschreiben"):
+        _run(tmp_path, flow, monkeypatch, {})
+    assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original_checkpoint
+    assert (tmp_path / "concept.md").read_text(encoding="utf-8") == original_source
