@@ -1137,3 +1137,42 @@ expected_source_path = "concept.md"
     )
     with pytest.raises(ValueError, match="reserviert|kollidiert"):
         _run(tmp_path, definition, monkeypatch, {"selector": '{"enabled":true}'})
+
+
+def test_unknown_parent_checkpoint_branch_protects_against_child_write(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.write.output"\n'
+        '[[steps]]\nid = "write"\nprompt_file = "do.md"\n'
+        'output = "verify.json"\noverwrite_output = true\n'
+        '[steps.vars]\nvalue = "write"\n',
+        encoding="utf-8",
+    )
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "child"
+flow = "child.toml"
+[[steps]]
+id = "selector"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "selector"
+[[steps]]
+id = "verify"
+output = "status.json"
+overwrite_output = true
+when = { ref = "steps.selector.output.enabled", eq = true }
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+""")
+    original = '{"status":"ok","source_path":"concept.md"}'
+    (tmp_path / "verify.json").write_text(original, encoding="utf-8")
+    (tmp_path / "concept.md").write_text("# Concept", encoding="utf-8")
+    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        _run(tmp_path, definition, monkeypatch, {})
+    assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original
