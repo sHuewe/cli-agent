@@ -620,6 +620,7 @@ def _reserve_future_child_checkpoint_inputs(
     claimed_outputs: dict[str, str],
     budget: _SubflowTraversalBudget | None = None,
     stack: tuple[str, ...] = (),
+    exclude_invocation: tuple[str, str | None] | None = None,
 ) -> None:
     """Reserve resolvable future checkpoint inputs before any intervening write.
 
@@ -671,6 +672,10 @@ def _reserve_future_child_checkpoint_inputs(
             continue
         _validate_subflow_interface(step, child)
         for item, iteration_id in zip(items, iteration_ids):
+            # A child's own speculative inputs must be recalculated from
+            # its live statuses. Parent and sibling reservations still apply.
+            if exclude_invocation == (step.step_id, iteration_id):
+                continue
             if _evaluate_when(
                 step.when, outputs=outputs, statuses=statuses,
                 flow_input=flow_input, item=item,
@@ -4682,6 +4687,10 @@ async def _run_flow_internal(
             outputs=outputs, output_json=output_json, statuses=statuses,
             reserved_inputs=reserved_inputs, claimed_outputs=claimed_outputs,
         )
+        # Keep this pre-projection scope separate from descendants'
+        # speculative reservations; a child cannot inherit its own stale
+        # predictions as immutable protection.
+        parent_protected_inputs = dict(reserved_inputs)
         assert context.flow_cache is not None
         _reserve_future_child_checkpoint_inputs(
             flow, workspace=workspace, cache=context.flow_cache,
@@ -5006,6 +5015,18 @@ async def _run_flow_internal(
                     iteration_id=iteration_id,
                     case_colliding_step_ids=case_colliding_step_ids,
                 )
+                # Preserve parent and other sibling input protections, but
+                # exclude this concrete child's speculative projections.
+                # It recomputes its own conditional readers at each frontier.
+                child_inherited_inputs = dict(parent_protected_inputs)
+                _reserve_future_child_checkpoint_inputs(
+                    flow, workspace=workspace, cache=context.flow_cache,
+                    flow_input=flow_input, outputs=outputs,
+                    output_json=output_json, statuses=statuses,
+                    reserved_inputs=child_inherited_inputs,
+                    claimed_outputs=claimed_outputs,
+                    exclude_invocation=(step.step_id, iteration_id),
+                )
                 child_result = await _run_flow_internal(
                     child,
                     workspace=workspace,
@@ -5015,7 +5036,7 @@ async def _run_flow_internal(
                     namespace=child_namespace,
                     inherited_excluded_paths=effective_flow_excluded_paths,
                     inherited_retry_policy=effective_retry_policy,
-                    inherited_protected_inputs=reserved_inputs,
+                    inherited_protected_inputs=child_inherited_inputs,
                 )
                 if child_result is None:
                     raise ValueError(
