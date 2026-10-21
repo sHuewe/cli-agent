@@ -2524,8 +2524,6 @@ def _capture_run_start_invocation(
                 statuses[prior.step_id] = "completed"
         # A prior unconditional outputless model step has a known completed
         # status even though it cannot contribute an output checkpoint.
-        if step.when is None and step.output is None and step.flow is None and step.foreach is None:
-            statuses[step.step_id] = "completed"
         run_condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=statuses,
             flow_input=flow_input, allow_unknown=True,
@@ -2533,6 +2531,8 @@ def _capture_run_start_invocation(
         if run_condition is False:
             statuses[step.step_id] = "skipped"
             continue
+        if run_condition is True and step.output is None and step.flow is None and step.foreach is None:
+            statuses[step.step_id] = "completed"
         _set_flow_diagnostic(
             phase="run-start-step", flow=flow.source,
             namespace=namespace, step=step.step_id,
@@ -4031,8 +4031,6 @@ def _preflight_concrete_invocation_outputs(
         # structurally completed. Its status must not remain unknown during
         # child preflight, otherwise skipped-status guards can claim outputs
         # belonging to later executable steps.
-        if step.when is None and step.output is None and step.flow is None and step.foreach is None:
-            known_statuses[step.step_id] = "completed"
         condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=known_statuses,
             flow_input=flow_input, allow_unknown=True,
@@ -4040,6 +4038,8 @@ def _preflight_concrete_invocation_outputs(
         if condition is False:
             known_statuses[step.step_id] = "skipped"
             continue
+        if condition is True and step.output is None and step.flow is None and step.foreach is None:
+            known_statuses[step.step_id] = "completed"
         _set_flow_diagnostic(
             phase="preflight-subflow-batch", flow=flow.source,
             namespace=namespace, step=step.step_id,
