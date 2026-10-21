@@ -593,6 +593,7 @@ def _reserve_future_child_checkpoint_inputs(
         condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
             flow_input=flow_input, allow_unknown=True,
+            output_json=output_json,
         )
         if condition is False:
             continue
@@ -625,6 +626,7 @@ def _reserve_future_child_checkpoint_inputs(
                 step.when, outputs=outputs, statuses=statuses,
                 flow_input=flow_input, item=item,
                 iteration_id=iteration_id, allow_unknown=True,
+                output_json=output_json,
             ) is False:
                 continue
             child_input = _render_subflow_inputs(
@@ -881,7 +883,7 @@ def _when_uses_item(condition: dict[str, Any] | None) -> bool:
 def _when_ref_value(
     ref: str, *, outputs: dict[str, str], statuses: dict[str, str],
     flow_input: dict[str, Any], item: Any, iteration_id: str | None,
-    allow_unknown: bool,
+    allow_unknown: bool, output_json: dict[str, bool] | None = None,
 ) -> Any:
     match = _WHEN_REF.fullmatch(ref)
     assert match is not None
@@ -901,7 +903,9 @@ def _when_ref_value(
             return _WHEN_MISSING
         value: Any = outputs[source]
         segments = match.group("field").lstrip(".").split(".") if match.group("field") else []
-        if segments:
+        # A JSON root scalar must be compared using its parsed type.
+        # Plain text outputs retain their original string representation.
+        if segments or (output_json is not None and output_json.get(source, False)):
             value = _parse_structured_output(value, step_id=source)
     elif match.group("input"):
         value = flow_input
@@ -927,6 +931,7 @@ def _evaluate_when(
     outputs: dict[str, str], statuses: dict[str, str],
     flow_input: dict[str, Any], item: Any = _WHEN_NO_ITEM,
     iteration_id: str | None = None, allow_unknown: bool = False,
+    output_json: dict[str, bool] | None = None,
 ) -> bool | None:
     if condition is None:
         return True
@@ -939,6 +944,7 @@ def _evaluate_when(
                     part, outputs=outputs, statuses=statuses,
                     flow_input=flow_input, item=item, iteration_id=iteration_id,
                     allow_unknown=allow_unknown,
+                    output_json=output_json,
                 )
             except _WhenMissingReferenceError:
                 # An earlier item-dependent condition may still short-circuit
@@ -958,7 +964,7 @@ def _evaluate_when(
     value = _when_ref_value(
         ref, outputs=outputs, statuses=statuses,
         flow_input=flow_input, item=item, iteration_id=iteration_id,
-        allow_unknown=allow_unknown,
+        allow_unknown=allow_unknown, output_json=output_json,
     )
     if value is _WHEN_UNKNOWN:
         return None
@@ -2642,6 +2648,7 @@ def _known_foreach_execution_status(
     statuses: dict[str, str],
     flow_input: dict[str, Any],
     condition: bool | None,
+    output_json: dict[str, bool] | None = None,
 ) -> str | None:
     """Return a provable foreach status without executing a step.
 
@@ -2668,6 +2675,7 @@ def _known_foreach_execution_status(
             step.when, outputs=outputs, statuses=statuses,
             flow_input=flow_input, item=item, iteration_id=iteration_id,
             allow_unknown=True,
+            output_json=output_json,
         )
         if result is True:
             return "completed"
@@ -2764,6 +2772,7 @@ def _capture_run_start_invocation(
         run_condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=statuses,
             flow_input=flow_input, allow_unknown=True,
+            output_json=output_json,
         )
         if run_condition is False:
             statuses[step.step_id] = "skipped"
@@ -2775,6 +2784,7 @@ def _capture_run_start_invocation(
             foreach_status = _known_foreach_execution_status(
                 step, outputs=available_outputs, statuses=statuses,
                 flow_input=flow_input, condition=run_condition,
+                output_json=output_json,
             )
             if foreach_status is not None:
                 statuses[step.step_id] = foreach_status
@@ -2809,6 +2819,7 @@ def _capture_run_start_invocation(
                         step.when, outputs=available_outputs, statuses=statuses,
                         flow_input=flow_input, item=element, iteration_id=iid,
                         allow_unknown=True,
+                        output_json=output_json,
                     ) is not False
                 ]
                 items = [element for element, _ in eligible]
@@ -2965,6 +2976,7 @@ def _capture_run_start_invocation(
                     step.when, outputs=available_outputs, statuses=statuses,
                     flow_input=flow_input, item=element, iteration_id=iid,
                     allow_unknown=True,
+                    output_json=output_json,
                 ) is not False
             ]
             items = [element for element, _ in eligible]
@@ -4290,6 +4302,7 @@ def _preflight_concrete_invocation_outputs(
         condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=known_statuses,
             flow_input=flow_input, allow_unknown=True,
+            output_json=output_json,
         )
         if condition is False:
             known_statuses[step.step_id] = "skipped"
@@ -4301,6 +4314,7 @@ def _preflight_concrete_invocation_outputs(
             foreach_status = _known_foreach_execution_status(
                 step, outputs=available_outputs, statuses=known_statuses,
                 flow_input=flow_input, condition=condition,
+                output_json=output_json,
             )
             if foreach_status is not None:
                 known_statuses[step.step_id] = foreach_status
@@ -4335,6 +4349,7 @@ def _preflight_concrete_invocation_outputs(
                         step.when, outputs=available_outputs, statuses=known_statuses,
                         flow_input=flow_input, item=element, iteration_id=iid,
                         allow_unknown=True,
+                        output_json=output_json,
                     ) is not False
                 ]
                 items = [element for element, _ in eligible]
@@ -4429,6 +4444,7 @@ def _preflight_concrete_invocation_outputs(
                         step.when, outputs=available_outputs, statuses=known_statuses,
                         flow_input=flow_input, item=element, iteration_id=iid,
                         allow_unknown=True,
+                        output_json=output_json,
                     ) is not False
                 ]
                 items = [element for element, _ in eligible]
@@ -4589,9 +4605,11 @@ async def _run_flow_internal(
         step_condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
             flow_input=flow_input,
+            output_json=output_json,
         ) if not _when_uses_item(step.when) else _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
             flow_input=flow_input, allow_unknown=True,
+            output_json=output_json,
         )
         if step_condition is False:
             statuses[step.step_id] = "skipped"
@@ -4636,6 +4654,7 @@ async def _run_flow_internal(
                     step.when, outputs=outputs, statuses=statuses,
                     flow_input=flow_input, item=item,
                     iteration_id=iteration_id,
+                    output_json=output_json,
                 )
             ]
             if not eligible:
