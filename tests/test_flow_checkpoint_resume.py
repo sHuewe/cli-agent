@@ -136,3 +136,51 @@ def test_released_source_alias_stays_protected_when_also_checkpoint_candidate(
         reserved_inputs=front, claimed_outputs={},
     )
     assert key in front
+
+
+@pytest.mark.parametrize(
+    ("primary_text", "primary_json", "expected_text", "expected_json"),
+    [
+        ("null", True, '{"status":"ok"}', True),
+        ("null", False, "null", False),
+        ('"null"', True, '"null"', True),
+        ("false", True, "false", True),
+        ("0", True, "0", True),
+    ],
+)
+def test_whole_step_result_fallback_only_on_json_null(
+    tmp_path, primary_text, primary_json, expected_text, expected_json,
+):
+    source = tmp_path / "fallback.toml"
+    source.write_text(
+        'version = 1\nresult = "steps.primary.output"\n'
+        'result_fallback = "steps.secondary.output"\n'
+        '[[steps]]\nid = "primary"\nprompt_file = "prompt.md"\n'
+        '[[steps]]\nid = "secondary"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(source, workspace=tmp_path)
+    result = flow_module._flow_result_value(
+        flow,
+        outputs={"primary": primary_text, "secondary": '{"status":"ok"}'},
+        output_json={"primary": primary_json, "secondary": True},
+    )
+    assert result is not None
+    assert result.text == expected_text
+    assert result.is_json is expected_json
+
+
+def test_null_primary_without_available_fallback_is_an_error(tmp_path):
+    source = tmp_path / "fallback.toml"
+    source.write_text(
+        'version = 1\nresult = "steps.primary.output"\n'
+        'result_fallback = "steps.secondary.output"\n'
+        '[[steps]]\nid = "primary"\nprompt_file = "prompt.md"\n'
+        '[[steps]]\nid = "secondary"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(source, workspace=tmp_path)
+    with pytest.raises(ValueError, match="Kein verfügbarer Flow-Result-Selector"):
+        flow_module._flow_result_value(
+            flow, outputs={"primary": "null"}, output_json={"primary": True},
+        )
