@@ -1483,7 +1483,7 @@ value = "filtered"
     )
     import json
     value = json.loads(snapshots[""].available_outputs["filtered"])
-    assert value["iterations"] == [{"id":"b","output":{"ok":True}}]
+    assert value["iterations"] == [{"id":"2","output":{"ok":True}}]
 
 
 def test_snapshot_does_not_publish_partially_unknown_item_gate(tmp_path):
