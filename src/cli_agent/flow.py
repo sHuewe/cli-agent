@@ -202,6 +202,7 @@ class FlowDefinition:
     excluded_paths: tuple[Path, ...] = ()
     inputs: tuple[str, ...] = ()
     result: str | None = None
+    result_fallback: str | None = None
     # Root-level [retry], separate from effective per-step defaults.
     retry_policy: ModelRetryPolicy | None = None
 
@@ -1099,6 +1100,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "retry",
         "inputs",
         "result",
+        "result_fallback",
     }
     unknown_root = set(values) - allowed_root
     if unknown_root:
@@ -1132,6 +1134,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if result_value is not None
         else None
     )
+
+    fallback_value = values.get("result_fallback")
+    fallback_selector = (
+        _string(fallback_value, field="result_fallback")
+        if fallback_value is not None else None
+    )
+    if fallback_selector is not None and result_selector is None:
+        raise ValueError("result_fallback benötigt result.")
 
     global_config_value = values.get("config")
     global_config = (
@@ -2048,16 +2058,16 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         )
 
-    if result_selector is not None:
-        match = _FOREACH.fullmatch(result_selector)
-        if match is None:
+    for label, selector in (
+        ("result", result_selector),
+        ("result_fallback", fallback_selector),
+    ):
+        if selector is None:
+            continue
+        match = _FOREACH.fullmatch(selector)
+        if match is None or match.group(1) not in known_ids:
             raise ValueError(
-                "result muss auf steps.<id>.output[.<pfad>] verweisen."
-            )
-        source_id = match.group(1)
-        if source_id not in known_ids:
-            raise ValueError(
-                f"result verweist auf unbekannten Schritt {source_id!r}."
+                f"{label} muss auf den Output eines bekannten Schritts verweisen."
             )
 
     return FlowDefinition(
@@ -2066,6 +2076,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         excluded_paths=excluded_paths,
         inputs=inputs,
         result=result_selector,
+        result_fallback=fallback_selector,
         retry_policy=global_retry_policy,
     )
 
@@ -3184,16 +3195,17 @@ def _capture_run_start_invocation(
 
     if flow.result is None:
         return None
-    match = _FOREACH.fullmatch(flow.result)
-    assert match is not None
-    source_id = match.group(1)
-    if source_id not in available_outputs:
+    # At run start neither selector may have produced a checkpoint yet.
+    if not any(
+        selector is not None and
+        _FOREACH.fullmatch(selector).group(1) in available_outputs
+        for selector in (flow.result, flow.result_fallback)
+    ):
         return None
-    return _flow_result_value(
-        flow,
-        available_outputs,
-        output_json,
-    )
+    try:
+        return _flow_result_value(flow, available_outputs, output_json)
+    except ValueError:
+        return None
 
 
 
@@ -3987,26 +3999,35 @@ def _flow_result_value(
 ) -> _FlowResultValue | None:
     if flow.result is None:
         return None
-    match = _FOREACH.fullmatch(flow.result)
-    assert match is not None
-    source_id, path = match.groups()
-    if source_id not in outputs:
-        raise ValueError(
-            f"Result-Quelle {source_id!r} von Flow {flow.source} "
-            "besitzt keinen verfügbaren Output."
-        )
-    text = outputs[source_id]
-    if path is None:
-        return _FlowResultValue(
-            text=text,
-            is_json=output_json.get(source_id, False),
-        )
-    parsed = _parse_structured_output(text, step_id=source_id)
-    value = _lookup(
-        parsed,
-        path,
-        label=f"Result von Flow {flow.source}",
-    )
+    value: Any = None
+    is_found = False
+    source_id = ""
+    for selector in (flow.result, flow.result_fallback):
+        if selector is None:
+            continue
+        match = _FOREACH.fullmatch(selector)
+        assert match is not None
+        source_id, path = match.groups()
+        if source_id not in outputs:
+            continue
+        text = outputs[source_id]
+        if path is None:
+            return _FlowResultValue(
+                text=text,
+                is_json=output_json.get(source_id, False),
+            )
+        parsed = _parse_structured_output(text, step_id=source_id)
+        try:
+            value = _lookup(
+                parsed, path, label=f"Result von Flow {flow.source}",
+            )
+        except ValueError:
+            continue
+        if value is not None:
+            is_found = True
+            break
+    if not is_found:
+        raise ValueError(f"Kein verfügbarer Flow-Result-Selector für {flow.source}.")
     is_json = isinstance(value, _JsonNumber) or not isinstance(value, str)
     return _FlowResultValue(
         text=_json_dumps_preserving_numbers(value)
