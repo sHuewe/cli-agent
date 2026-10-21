@@ -3757,7 +3757,7 @@ def validate_flow(
             continue
 
         if step.json_operation is not None or step.filesystem_operation is not None:
-            if step.filesystem_operation is not None:
+            if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
                 if os.name not in {"posix", "nt"} or (os.name == "posix" and (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"))):
                     raise ValueError("Sichere Verzeichnisinventur benötigt POSIX oder Windows.")
                 directory_template = step.filesystem_operation["directory"]
