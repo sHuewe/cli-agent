@@ -1005,3 +1005,55 @@ value = "selected"
     assert _run(tmp_path, definition, monkeypatch, {"source": "true"}) == [
         "source", "selected",
     ]
+
+
+@pytest.mark.parametrize("both_active", [False, True])
+def test_nested_unknown_conditional_writers_wait_for_runtime_choice(
+    tmp_path, monkeypatch, both_active,
+):
+    """Unknown child conditions must not reserve mutually exclusive outputs.
+
+    Conversely, if both branches execute, the runtime must still reject the
+    second writer instead of allowing two non-overwriting output claims.
+    """
+    (tmp_path / "child.toml").write_text("""
+version = 1
+result = "steps.final.output"
+[[steps]]
+id = "choice"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "choice"
+[[steps]]
+id = "first"
+prompt_file = "do.md"
+output = "shared.txt"
+when = { ref = "steps.choice.output.enabled", eq = true }
+[steps.vars]
+value = "first"
+[[steps]]
+id = "second"
+prompt_file = "do.md"
+output = "shared.txt"
+when = { ref = "steps.choice.output.enabled", eq = """ + ("true" if both_active else "false") + """ }
+[steps.vars]
+value = "second"
+[[steps]]
+id = "final"
+prompt_file = "do.md"
+[steps.vars]
+value = "final"
+""", encoding="utf-8")
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "child"
+flow = "child.toml"
+""")
+    if both_active:
+        with pytest.raises(ValueError, match="bereits|kollidiert|existiert"):
+            _run(tmp_path, definition, monkeypatch, {"choice": '{"enabled":true}'})
+    else:
+        assert _run(
+            tmp_path, definition, monkeypatch, {"choice": '{"enabled":true}'},
+        ) == ["choice", "first", "final"]
