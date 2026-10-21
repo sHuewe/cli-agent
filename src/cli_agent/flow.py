@@ -3222,12 +3222,12 @@ def _capture_run_start_invocation(
 
     if flow.result is None:
         return None
-    # At run start neither selector may have produced a checkpoint yet.
-    if not any(
-        selector is not None and
-        _FOREACH.fullmatch(selector).group(1) in available_outputs
-        for selector in (flow.result, flow.result_fallback)
-    ):
+    # A fallback cannot be made visible before the primary is resolved.
+    # Otherwise a parent may eagerly plan foreach output paths using a
+    # provisional fallback which the primary will later supersede.
+    primary_match = _FOREACH.fullmatch(flow.result)
+    assert primary_match is not None
+    if primary_match.group(1) not in available_outputs:
         return None
     try:
         return _flow_result_value(flow, available_outputs, output_json)
@@ -5312,6 +5312,10 @@ async def _run_flow_internal(
                                 result["verification"] = payload
                             break
                     answer = _json_dumps_preserving_numbers(result)
+                    if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+                        raise ValueError(
+                            "checkpoint_status überschreitet Output-Größenlimit."
+                        )
                     target = prepare_output_target(workspace, output, overwrite=True)
                     target.write_text(answer)
                     context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
