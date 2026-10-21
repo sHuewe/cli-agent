@@ -642,6 +642,7 @@ def _reserve_future_child_checkpoint_inputs(
     budget: _SubflowTraversalBudget | None = None,
     stack: tuple[str, ...] = (),
     exclude_invocation: tuple[str, str | None] | None = None,
+    completed_invocations: set[tuple[str, str | None]] | None = None,
 ) -> None:
     """Reserve resolvable future checkpoint inputs before any intervening write.
 
@@ -659,7 +660,7 @@ def _reserve_future_child_checkpoint_inputs(
         raise ValueError("Zyklischer oder zu tief verschachtelter Subflow.")
     next_stack = (*stack, flow_key)
     for step in flow.steps:
-        if step.flow is None:
+        if step.flow is None or statuses.get(step.step_id) in {"completed", "skipped"}:
             continue
         condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
@@ -695,7 +696,10 @@ def _reserve_future_child_checkpoint_inputs(
         for item, iteration_id in zip(items, iteration_ids):
             # A child's own speculative inputs must be recalculated from
             # its live statuses. Parent and sibling reservations still apply.
-            if exclude_invocation == (step.step_id, iteration_id):
+            invocation = (step.step_id, iteration_id)
+            if (exclude_invocation == invocation
+                    or (completed_invocations is not None
+                        and invocation in completed_invocations)):
                 continue
             if _evaluate_when(
                 step.when, outputs=outputs, statuses=statuses,
@@ -4760,6 +4764,7 @@ async def _run_flow_internal(
         else inherited_retry_policy
     )
     statuses: dict[str, str] = {}
+    completed_child_invocations: set[tuple[str, str | None]] = set()
     for step in flow.steps:
         # Speculative checkpoint inputs belong to this execution frontier,
         # never to the permanent reservation table. Reevaluate them after
@@ -4781,6 +4786,7 @@ async def _run_flow_internal(
             flow_input=flow_input, outputs=outputs, output_json=output_json,
             statuses=statuses, reserved_inputs=reserved_inputs,
             claimed_outputs=claimed_outputs,
+            completed_invocations=completed_child_invocations,
         )
         step_condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
@@ -5110,6 +5116,7 @@ async def _run_flow_internal(
                     reserved_inputs=child_inherited_inputs,
                     claimed_outputs=claimed_outputs,
                     exclude_invocation=(step.step_id, iteration_id),
+                    completed_invocations=completed_child_invocations,
                 )
                 child_result = await _run_flow_internal(
                     child,
@@ -5136,6 +5143,7 @@ async def _run_flow_internal(
                     child_result.is_json,
                     iteration_id,
                 )
+                completed_child_invocations.add((step.step_id, iteration_id))
                 continue
 
             output = (
