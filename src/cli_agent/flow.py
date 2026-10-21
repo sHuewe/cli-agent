@@ -4023,6 +4023,12 @@ def _preflight_concrete_invocation_outputs(
         if step.step_id in available_outputs
     }
     for step in flow.steps:
+        # An outputless, unconditional predecessor that reaches this point is
+        # structurally completed. Its status must not remain unknown during
+        # child preflight, otherwise skipped-status guards can claim outputs
+        # belonging to later executable steps.
+        if step.when is None and step.output is None and step.flow is None and step.foreach is None:
+            known_statuses[step.step_id] = "completed"
         condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=known_statuses,
             flow_input=flow_input, allow_unknown=True,
