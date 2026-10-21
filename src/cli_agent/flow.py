@@ -2620,6 +2620,47 @@ def _child_invocation_namespace(
         step_segment = f"{step_segment}.case-{digest}"
     return f"{parent_namespace}{step_segment}.{suffix}."
 
+def _known_foreach_execution_status(
+    step: FlowStep,
+    *,
+    outputs: dict[str, str],
+    statuses: dict[str, str],
+    flow_input: dict[str, Any],
+    condition: bool | None,
+) -> str | None:
+    """Return a provable foreach status without executing a step.
+
+    Foreach without item filtering completes even for an empty collection.
+    Item-filtered foreach is skipped only when every item is definitely
+    rejected; one definitely accepted item suffices to prove completion.
+    Unknown source data or conditions must stay unknown.
+    """
+    if step.foreach is None or condition is False:
+        return None
+    source_id = _foreach_output_source(step.foreach)
+    if source_id is not None and source_id not in outputs:
+        return None
+    if not _when_uses_item(step.when):
+        return "completed" if condition is True else None
+
+    items = _foreach_items(step, outputs=outputs, flow_input=flow_input)
+    iteration_ids = _iteration_ids(
+        step, items=items, flow_input=flow_input,
+    )
+    saw_unknown = False
+    for item, iteration_id in zip(items, iteration_ids):
+        result = _evaluate_when(
+            step.when, outputs=outputs, statuses=statuses,
+            flow_input=flow_input, item=item, iteration_id=iteration_id,
+            allow_unknown=True,
+        )
+        if result is True:
+            return "completed"
+        if result is None:
+            saw_unknown = True
+    return None if saw_unknown else "skipped"
+
+
 def _capture_run_start_invocation(
     flow: FlowDefinition,
     *,
@@ -2712,8 +2753,18 @@ def _capture_run_start_invocation(
         if run_condition is False:
             statuses[step.step_id] = "skipped"
             continue
-        if run_condition is True and step.foreach is None:
-            statuses[step.step_id] = "completed"
+        if step.foreach is None:
+            if run_condition is True:
+                statuses[step.step_id] = "completed"
+        else:
+            foreach_status = _known_foreach_execution_status(
+                step, outputs=available_outputs, statuses=statuses,
+                flow_input=flow_input, condition=run_condition,
+            )
+            if foreach_status is not None:
+                statuses[step.step_id] = foreach_status
+                if foreach_status == "skipped":
+                    continue
         _set_flow_diagnostic(
             phase="run-start-step", flow=flow.source,
             namespace=namespace, step=step.step_id,
@@ -4228,8 +4279,18 @@ def _preflight_concrete_invocation_outputs(
         if condition is False:
             known_statuses[step.step_id] = "skipped"
             continue
-        if condition is True and step.foreach is None:
-            known_statuses[step.step_id] = "completed"
+        if step.foreach is None:
+            if condition is True:
+                known_statuses[step.step_id] = "completed"
+        else:
+            foreach_status = _known_foreach_execution_status(
+                step, outputs=available_outputs, statuses=known_statuses,
+                flow_input=flow_input, condition=condition,
+            )
+            if foreach_status is not None:
+                known_statuses[step.step_id] = foreach_status
+                if foreach_status == "skipped":
+                    continue
         _set_flow_diagnostic(
             phase="preflight-subflow-batch", flow=flow.source,
             namespace=namespace, step=step.step_id,
