@@ -452,3 +452,68 @@ value = "${item.name}"
         encoding="utf-8",
     )
     assert _run(tmp_path, definition, monkeypatch, {}) == ["b"]
+
+
+def test_checkpoint_status_skips_completed_link_and_rechecks(tmp_path, monkeypatch):
+    flow = _setup(tmp_path, """
+[[steps]]
+id = "resume"
+output = "resume.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify-v2.json", "verify-v3.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+[[steps]]
+id = "link"
+prompt_file = "do.md"
+when = { ref = "steps.resume.output.completed", eq = false }
+[steps.vars]
+value = "link"
+""")
+    (tmp_path / "verify-v2.json").write_text(
+        '{"status":"ok","source_path":"concept.md"}', encoding="utf-8",
+    )
+    assert _run(tmp_path, flow, monkeypatch, {}) == []
+    import json
+    assert json.loads((tmp_path / "resume.json").read_text())["completed"] is True
+    (tmp_path / "verify-v2.json").unlink()
+    assert _run(tmp_path, flow, monkeypatch, {}) == ["link"]
+    assert json.loads((tmp_path / "resume.json").read_text())["completed"] is False
+
+
+def test_checkpoint_status_rejects_invalid_or_unrelated_results(tmp_path, monkeypatch):
+    flow = _setup(tmp_path, """
+[[steps]]
+id = "resume"
+output = "resume.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["broken.json", "wrong.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+""")
+    (tmp_path / "broken.json").write_text("not json", encoding="utf-8")
+    (tmp_path / "wrong.json").write_text(
+        '{"status":"ok","source_path":"other.md"}', encoding="utf-8",
+    )
+    assert _run(tmp_path, flow, monkeypatch, {}) == []
+    import json
+    assert json.loads((tmp_path / "resume.json").read_text())["completed"] is False
+
+
+def test_checkpoint_status_requires_fresh_output(tmp_path):
+    flow = _setup(tmp_path, """
+[[steps]]
+id = "resume"
+output = "resume.json"
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+""")
+    with pytest.raises(ValueError, match="overwrite_output"):
+        load_flow(flow, workspace=tmp_path)
