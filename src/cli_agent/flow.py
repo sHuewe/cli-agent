@@ -4598,6 +4598,7 @@ async def _run_flow_internal(
     namespace: str,
     inherited_excluded_paths: tuple[Path, ...],
     inherited_retry_policy: ModelRetryPolicy | None,
+    inherited_protected_inputs: dict[str, Path] | None = None,
 ) -> _FlowResultValue | None:
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
@@ -4675,6 +4676,7 @@ async def _run_flow_internal(
         # never to the permanent reservation table. Reevaluate them after
         # every completed step so mutually exclusive branches can write.
         reserved_inputs = dict(context.reserved_inputs)
+        reserved_inputs.update(inherited_protected_inputs or {})
         _reserve_conditional_checkpoint_status_inputs(
             flow, workspace=workspace, flow_input=flow_input,
             outputs=outputs, output_json=output_json, statuses=statuses,
@@ -5013,6 +5015,7 @@ async def _run_flow_internal(
                     namespace=child_namespace,
                     inherited_excluded_paths=effective_flow_excluded_paths,
                     inherited_retry_policy=effective_retry_policy,
+                    inherited_protected_inputs=reserved_inputs,
                 )
                 if child_result is None:
                     raise ValueError(
