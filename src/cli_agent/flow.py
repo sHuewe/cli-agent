@@ -5183,8 +5183,12 @@ async def _run_flow_internal(
                             "checkpoint_status.output darf weder einen Eingabe-Checkpoint "
                             "noch die Quelldatei überschreiben."
                         )
+                    # A matching verification record is insufficient if
+                    # its source file has since been removed or replaced by
+                    # a directory. Never skip work for an orphaned checkpoint.
+                    source_exists = source_path.is_file()
                     for candidate in candidates:
-                        if not candidate.is_file():
+                        if not source_exists or not candidate.is_file():
                             continue
                         try:
                             raw_checkpoint = read_existing_output_text(
