@@ -531,6 +531,88 @@ def _reserve_checkpoint_status_inputs(
             reserved_inputs[key] = path
 
 
+def _reserve_future_child_checkpoint_inputs(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    cache: dict[str, FlowDefinition],
+    flow_input: dict[str, Any],
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+    statuses: dict[str, str],
+    reserved_inputs: dict[str, Path],
+    claimed_outputs: dict[str, str],
+    budget: _SubflowTraversalBudget,
+    stack: tuple[str, ...] = (),
+) -> None:
+    """Reserve resolvable future checkpoint inputs before any intervening write.
+
+    A child input depending on a freshly produced model result cannot be
+    reserved at run start. Re-run this bounded projection before each step
+    using the outputs already produced by its parent invocation.
+    """
+    budget.consume(purpose="Checkpoint-Eingabereservierung")
+    flow_key = _filesystem_path_key(flow.source)
+    if flow_key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError("Zyklischer oder zu tief verschachtelter Subflow.")
+    next_stack = (*stack, flow_key)
+    for step in flow.steps:
+        if step.flow is None:
+            continue
+        condition = _evaluate_when(
+            step.when, outputs=outputs, statuses=statuses,
+            flow_input=flow_input, allow_unknown=True,
+        )
+        if condition is False:
+            continue
+        if not _subflow_inputs_resolvable_at_run_start(
+            step, available_outputs=outputs,
+        ):
+            continue
+        source_id = (
+            _foreach_output_source(step.foreach)
+            if step.foreach is not None else None
+        )
+        if source_id is not None and source_id not in outputs:
+            continue
+        items = _foreach_items(
+            step, outputs=outputs, flow_input=flow_input,
+        )
+        iteration_ids = _iteration_ids(
+            step, items=items, flow_input=flow_input,
+        )
+        child = _load_subflow_definition(
+            step, workspace=workspace, cache=cache,
+        )
+        _validate_subflow_interface(step, child)
+        for item, iteration_id in zip(items, iteration_ids):
+            if _evaluate_when(
+                step.when, outputs=outputs, statuses=statuses,
+                flow_input=flow_input, item=item,
+                iteration_id=iteration_id, allow_unknown=True,
+            ) is False:
+                continue
+            child_input = _render_subflow_inputs(
+                step, item=item, iteration_id=iteration_id,
+                outputs=outputs, output_json=output_json,
+                flow_input=flow_input,
+            )
+            _reserve_checkpoint_status_inputs(
+                child, workspace=workspace, flow_input=child_input,
+                reserved_inputs=reserved_inputs,
+                claimed_outputs=claimed_outputs,
+            )
+            # Descendants depending only on declared child inputs can be
+            # reserved before the child starts as well.
+            _reserve_future_child_checkpoint_inputs(
+                child, workspace=workspace, cache=cache,
+                flow_input=child_input, outputs={}, output_json={},
+                statuses={}, reserved_inputs=reserved_inputs,
+                claimed_outputs=claimed_outputs, budget=budget,
+                stack=next_stack,
+            )
+
+
 def _reserved_flow_input_paths(
     flow: FlowDefinition,
     *,
@@ -2595,7 +2677,7 @@ def _capture_run_start_invocation(
         if run_condition is False:
             statuses[step.step_id] = "skipped"
             continue
-        if run_condition is True and step.flow is None and step.foreach is None:
+        if run_condition is True and step.foreach is None:
             statuses[step.step_id] = "completed"
         _set_flow_diagnostic(
             phase="run-start-step", flow=flow.source,
@@ -4111,7 +4193,7 @@ def _preflight_concrete_invocation_outputs(
         if condition is False:
             known_statuses[step.step_id] = "skipped"
             continue
-        if condition is True and step.flow is None and step.foreach is None:
+        if condition is True and step.foreach is None:
             known_statuses[step.step_id] = "completed"
         _set_flow_diagnostic(
             phase="preflight-subflow-batch", flow=flow.source,
@@ -4384,6 +4466,16 @@ async def _run_flow_internal(
     )
     statuses: dict[str, str] = {}
     for step in flow.steps:
+        # A previous step may have produced the input used by a later
+        # checkpoint_status child. Reserve it before this step can write.
+        assert context.flow_cache is not None
+        assert context.preflight_budget is not None
+        _reserve_future_child_checkpoint_inputs(
+            flow, workspace=workspace, cache=context.flow_cache,
+            flow_input=flow_input, outputs=outputs, output_json=output_json,
+            statuses=statuses, reserved_inputs=reserved_inputs,
+            claimed_outputs=claimed_outputs, budget=context.preflight_budget,
+        )
         step_condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
             flow_input=flow_input,
