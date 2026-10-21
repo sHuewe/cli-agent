@@ -920,6 +920,30 @@ ergeben; daher gehören konsistente Checkpoints weiterhin zur Verantwortung
 des aufrufenden Flows. `when` ist kein Ersatz für eine Ergebnis-Auswahl
 zwischen mehreren alternativen Steps (das bleibt außerhalb dieser Stufe).
 
+## Checkpoint-Status prüfen
+
+Mit `filesystem_operation.kind = "checkpoint_status"` lassen sich ältere
+Verifikations-Checkpoints ohne LLM-Aufruf prüfen. Das Ergebnis wird bei jedem
+Lauf neu erzeugt (`overwrite_output = true` ist Pflicht).
+
+```toml
+[[steps]]
+id = "resume"
+output = "state/resume.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["${input.state_dir}/verify-v2-${input.checkpoint_key}.json", "${input.state_dir}/verify-v3-${input.checkpoint_key}.json"]
+expected_status = "ok"
+expected_source_path = "${input.concept_path}"
+```
+
+Das Ergebnis enthält `completed`, `checkpoint` und `source_path`.
+Fehlende, ungültige oder nicht passende JSON-Checkpoints werden ignoriert.
+Ein erfolgreicher Checkpoint beweist nicht, dass die Quelldatei seither
+unverändert geblieben ist; das muss der aufrufende Flow gegebenenfalls
+zusätzlich verifizieren.
+
 ## Generische Verzeichnisinventur
 
 Eine `filesystem_operation` benötigt weder Modell noch MCP-Tools:
