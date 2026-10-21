@@ -526,9 +526,18 @@ def _reserve_checkpoint_status_inputs(
     for step in flow.steps:
         if step.when is not None:
             continue
+        operation = step.filesystem_operation
         for path in _checkpoint_status_input_paths(
             step, workspace=workspace, flow_input=flow_input,
         ):
+            # An opted-in first-step precheck may release ONLY its source
+            # after a proven miss. Candidate checkpoints stay protected.
+            if (operation is not None
+                    and operation.get("release_source_on_miss")
+                    and path == _checkpoint_status_input_paths(
+                        step, workspace=workspace, flow_input=flow_input,
+                    )[-1]):
+                continue
             key = _filesystem_path_key(path)
             if claimed_outputs is not None and key in claimed_outputs:
                 raise ValueError(
@@ -557,10 +566,10 @@ def _reserve_conditional_checkpoint_status_inputs(
     dictionary so these speculative reservations never become permanent.
     """
     for step in flow.steps:
-        if step.when is None:
-            continue
         operation = step.filesystem_operation
         if operation is None or operation["kind"] != "checkpoint_status":
+            continue
+        if step.when is None and not operation.get("release_source_on_miss"):
             continue
         condition = _evaluate_when(
             step.when, outputs=outputs, statuses=statuses,
@@ -569,9 +578,20 @@ def _reserve_conditional_checkpoint_status_inputs(
         )
         if condition is False:
             continue
-        for path in _checkpoint_status_input_paths(
+        paths = _checkpoint_status_input_paths(
             step, workspace=workspace, flow_input=flow_input,
-        ):
+        )
+        for path in paths:
+            if operation.get("release_source_on_miss") and path == paths[-1]:
+                # Release only once this exact first-step check has produced
+                # a confirmed miss; unresolved checks fail closed.
+                if step.step_id in outputs:
+                    checked = _parse_structured_output(
+                        outputs[step.step_id], step_id=step.step_id,
+                    )
+                    if (isinstance(checked, dict)
+                            and checked.get("completed") is False):
+                        continue
             key = _filesystem_path_key(path)
             if key in claimed_outputs:
                 raise ValueError(
@@ -1301,7 +1321,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
-            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "paths", "expected_status", "expected_source_path"} or op.get("kind") not in {"inventory", "checkpoint_status"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "paths", "expected_status", "expected_source_path", "release_source_on_miss"} or op.get("kind") not in {"inventory", "checkpoint_status"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
                 raise ValueError("filesystem_operation benötigt kind=inventory und directory.")
             if op["kind"] == "checkpoint_status":
                 if (not isinstance(op.get("paths"), list) or not 1 <= len(op["paths"]) <= 16
@@ -1313,6 +1333,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     raise ValueError("checkpoint_status.expected_source_path fehlt.")
                 if set(op) & {"directory", "recursive", "extensions", "exclude_names", "max_entries"}:
                     raise ValueError("checkpoint_status unterstützt keine Inventur-Optionen.")
+                if "release_source_on_miss" in op:
+                    if (op["release_source_on_miss"] is not True
+                            or index != 1 or when is not None):
+                        raise ValueError(
+                            "release_source_on_miss=true ist nur im ersten "
+                            "unbedingten Flow-Schritt erlaubt."
+                        )
             if type(op.get("recursive", False)) is not bool:
                 raise ValueError("filesystem_operation.recursive muss boolesch sein.")
             for key in ("extensions", "exclude_names"):
@@ -5238,6 +5265,8 @@ async def _run_flow_internal(
                 if op["kind"] == "checkpoint_status":
                     expected_source = _render_input_text(op["expected_source_path"], flow_input)
                     result = {"completed": False, "checkpoint": None, "source_path": expected_source}
+                    if op.get("release_source_on_miss"):
+                        result["verification"] = None
                     # Reject input/output aliasing before reading or writing any
                     # candidate. Compare normalized workspace paths on both OSes.
                     candidates = [
@@ -5276,6 +5305,8 @@ async def _run_flow_internal(
                                 and payload.get("status") == op["expected_status"]
                                 and payload.get("source_path") == expected_source):
                             result.update(completed=True, checkpoint=str(candidate.relative_to(workspace)))
+                            if op.get("release_source_on_miss"):
+                                result["verification"] = payload
                             break
                     answer = _json_dumps_preserving_numbers(result)
                     target = prepare_output_target(workspace, output, overwrite=True)
