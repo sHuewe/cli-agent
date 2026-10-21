@@ -246,3 +246,137 @@ prompt_file = "prompt.md"
 
     with pytest.raises(ValueError, match="Ungültiger globaler Variablenname"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_global_vars_expand_nested_subflow_inputs(tmp_path: Path) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["root", "settings"]\nresult = "steps.run.output"\n'
+        '[[steps]]\nid = "run"\nprompt_file = "prompt.md"\n'
+        '[steps.vars]\nroot = "${input.root}"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("root={{var:root}}", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[vars]\nokf_root = "okf-generated"\n'
+        'suffix = "modules"\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        '[steps.input]\nroot = "${var.okf_root}"\n'
+        'settings = { path = "${var.okf_root}/${var.suffix}", '
+        'nested = ["${var.suffix}", { name = "${var.okf_root}" }], enabled = true }\n',
+        encoding="utf-8",
+    )
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    step = definition.steps[0]
+    assert step.flow_input == {
+        "root": "okf-generated",
+        "settings": {
+            "path": "okf-generated/modules",
+            "nested": ["modules", {"name": "okf-generated"}],
+            "enabled": True,
+        },
+    }
+    rendered = flow_module._render_subflow_inputs(
+        step, item=None, iteration_id=None, outputs={}, output_json={},
+        flow_input={},
+    )
+    assert rendered == step.flow_input
+
+
+def test_global_vars_expand_alongside_dynamic_subflow_references(tmp_path: Path) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["name", "root"]\n'
+        '[[steps]]\nid = "run"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[vars]\nroot = "knowledge"\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        'foreach = "input.items"\n'
+        '[steps.input]\nname = "${var.root}/${item.name}"\n'
+        'root = "${var.root}"\n',
+        encoding="utf-8",
+    )
+    # A foreach source must be explicitly declared.
+    source = tmp_path / "flow.toml"
+    source.write_text(source.read_text().replace(
+        'version = 1\n', 'version = 1\ninputs = ["items"]\n', 1
+    ), encoding="utf-8")
+    step = load_flow(source, workspace=tmp_path).steps[0]
+    assert flow_module._render_subflow_inputs(
+        step, item={"name": "A"}, iteration_id="1", outputs={},
+        output_json={}, flow_input={"items": []},
+    ) == {"name": "knowledge/A", "root": "knowledge"}
+
+
+@pytest.mark.parametrize("reference", [
+    "${var.missing}",
+    "prefix-${var.missing}/child",
+    "${var}",
+    "${var.root.child}",
+    "${var .root}",
+    "${var[root]}",
+    "${ var.root }",
+    "${ var .root }",
+    "${Var.root}",
+    "${var/root}",
+    "${var(root)}",
+    "${var.root",
+    "prefix-${var .root}/child",
+])
+def test_subflow_input_rejects_missing_or_malformed_global_var(
+    tmp_path: Path, reference: str,
+) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["name"]\n'
+        '[[steps]]\nid = "run"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[vars]\nroot = "docs"\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        f'[steps.input]\nname = "{reference}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="globale Variable|globale Variablenreferenz"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+@pytest.mark.parametrize("reference", ["${var [root]}", "${Var.root}", "${var .root}"])
+def test_nested_subflow_input_rejects_malformed_global_var(
+    tmp_path: Path, reference: str,
+) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["settings"]\n'
+        '[[steps]]\nid = "run"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[vars]\nroot = "docs"\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        f'[steps.input]\nsettings = {{ nested = ["valid", "{reference}"] }}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="globale Variablenreferenz"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_global_variable_value_cannot_introduce_nested_reference(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["root"]\n'
+        '[[steps]]\nid = "run"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[vars]\nroot = "${var.second}"\nsecond = "docs"\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        '[steps.input]\nroot = "${var.root}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="globale Variablenreferenz"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)

@@ -110,6 +110,8 @@ _INPUT_EXPR = re.compile(
     r"\$\{input(?:\.([A-Za-z_][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
+_GLOBAL_INPUT_EXPR = re.compile(r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}")
+_GLOBAL_INPUT_START_EXPR = re.compile(r"\$\{\s*var\b", re.IGNORECASE)
 _DYNAMIC_VALUE_EXPR = re.compile(
     r"\$\{(?:(?P<iteration>iteration\.id)"
     r"|item(?:\.(?P<item_path>[A-Za-z_][A-Za-z0-9_-]*"
@@ -822,6 +824,53 @@ def _string(value: Any, *, field: str) -> str:
     return value
 
 
+def _expand_global_input_vars(
+    value: Any,
+    *,
+    variables: dict[str, str],
+    field: str,
+) -> Any:
+    """Expand static flow-level variables inside subflow inputs at load time.
+
+    Nested values are traversed without changing their TOML types. Dynamic
+    item/input/step expressions remain untouched for normal runtime rendering.
+    Only the declaring flow's [vars] table is used, not a child's globals.
+    """
+    if isinstance(value, str):
+        def replace(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name not in variables:
+                raise ValueError(
+                    f"{field} referenziert unbekannte globale Variable {name!r}."
+                )
+            return variables[name]
+
+        rendered = _GLOBAL_INPUT_EXPR.sub(replace, value)
+        # Reject remaining var-like placeholders, including malformed forms
+        # such as ${var .name}, ${var[name]}, or ${ var.name }. Also reject
+        # nested references introduced by a global variable's own value.
+        # Other dynamic expression families remain available to the runner.
+        if _GLOBAL_INPUT_START_EXPR.search(rendered):
+            raise ValueError(
+                f"{field} enthält eine ungültige oder verschachtelte "
+                "globale Variablenreferenz."
+            )
+        return rendered
+    if isinstance(value, list):
+        return [
+            _expand_global_input_vars(item, variables=variables, field=field)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _expand_global_input_vars(
+                item, variables=variables, field=f"{field}.{key}",
+            )
+            for key, item in value.items()
+        }
+    return value
+
+
 def _iter_string_values(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
@@ -1488,7 +1537,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 raise ValueError(
                     f"Ungültiger Input-Name {name!r} in steps[{index}].input."
                 )
-            flow_input[name] = value
+            flow_input[name] = _expand_global_input_vars(
+                value,
+                variables=global_variables,
+                field=f"steps[{index}].input.{name}",
+            )
 
         if raw_json_operation is not None:
             forbidden = {
