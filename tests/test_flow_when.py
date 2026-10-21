@@ -875,3 +875,61 @@ value = "gate"
     assert flow_module._known_foreach_execution_status(
         gate, outputs={}, statuses={}, flow_input={}, condition=True,
     ) is None
+
+
+def test_completed_without_checkpoint_proves_root_output_presence_only():
+    outputs = {}
+    statuses = {"gate": "completed"}
+    kwargs = dict(outputs=outputs, statuses=statuses, flow_input={}, allow_unknown=True)
+    assert flow_module._evaluate_when(
+        {"ref": "steps.gate.output", "exists": True}, **kwargs,
+    ) is True
+    assert flow_module._evaluate_when(
+        {"ref": "steps.gate.output", "exists": False}, **kwargs,
+    ) is False
+    assert flow_module._evaluate_when(
+        {"ref": "steps.gate.output", "eq": "anything"}, **kwargs,
+    ) is None
+    assert flow_module._evaluate_when(
+        {"ref": "steps.gate.output.value", "exists": False}, **kwargs,
+    ) is None
+    assert flow_module._evaluate_when(
+        {"ref": "steps.gate.output.value", "eq": "anything"}, **kwargs,
+    ) is None
+    assert flow_module._evaluate_when(
+        {"ref": "steps.gate.output", "exists": False},
+        outputs={}, statuses={}, flow_input={}, allow_unknown=True,
+    ) is None
+    assert flow_module._evaluate_when(
+        {"ref": "steps.gate.output", "exists": False},
+        outputs={}, statuses={"gate": "skipped"},
+        flow_input={}, allow_unknown=True,
+    ) is True
+
+
+def test_known_completed_root_output_avoids_false_foreach_collision(tmp_path, monkeypatch):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+output = "source.json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "gate"
+prompt_file = "do.md"
+[steps.vars]
+value = "gate"
+[[steps]]
+id = "never"
+prompt_file = "do.md"
+response_format = "json"
+foreach = "steps.source.output.items"
+output = "duplicate.json"
+when = { ref = "steps.gate.output", exists = false }
+[steps.vars]
+value = "never"
+""")
+    (tmp_path / "source.json").write_text('{"items":[1,2]}', encoding="utf-8")
+    assert _run(tmp_path, definition, monkeypatch, {}) == ["gate"]
