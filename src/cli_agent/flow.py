@@ -480,6 +480,57 @@ def _workspace_local_config_path(
     return resolved
 
 
+def _checkpoint_status_input_paths(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow_input: dict[str, Any] | None,
+) -> tuple[Path, ...]:
+    """Resolve checkpoint and source inputs; omit unresolved templates only
+    during static validation (flow_input=None). Concrete invocations always
+    resolve all inputs using the same workspace/symlink checks as execution.
+    """
+    operation = step.filesystem_operation
+    if operation is None or operation["kind"] != "checkpoint_status":
+        return ()
+    paths: list[Path] = []
+    for template in (*operation["paths"], operation["expected_source_path"]):
+        if flow_input is None and _INPUT_EXPR.search(template):
+            continue
+        rendered = (
+            _render_input_text(template, flow_input)
+            if flow_input is not None else template
+        )
+        paths.append(_workspace_path(
+            workspace, Path(rendered),
+            purpose=f"checkpoint_status-Eingabe von Schritt {step.step_id!r}",
+            must_exist=False,
+        ))
+    return tuple(paths)
+
+
+def _reserve_checkpoint_status_inputs(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    flow_input: dict[str, Any] | None,
+    reserved_inputs: dict[str, Path],
+    claimed_outputs: dict[str, str] | None = None,
+) -> None:
+    """Reserve inputs flow-wide, including concrete nested invocations."""
+    for step in flow.steps:
+        for path in _checkpoint_status_input_paths(
+            step, workspace=workspace, flow_input=flow_input,
+        ):
+            key = _filesystem_path_key(path)
+            if claimed_outputs is not None and key in claimed_outputs:
+                raise ValueError(
+                    f"checkpoint_status-Eingabe {path} kollidiert mit bereits "
+                    f"beanspruchtem Output von {claimed_outputs[key]}."
+                )
+            reserved_inputs[key] = path
+
+
 def _reserved_flow_input_paths(
     flow: FlowDefinition,
     *,
@@ -489,6 +540,11 @@ def _reserved_flow_input_paths(
     reserved: dict[str, Path] = {
         _filesystem_path_key(flow.source): flow.source,
     }
+    # Include literal checkpoint inputs before validating any writer, even
+    # when the checkpoint_status step occurs later in the flow.
+    _reserve_checkpoint_status_inputs(
+        flow, workspace=workspace, flow_input=None, reserved_inputs=reserved,
+    )
     for step in flow.steps:
         _set_flow_diagnostic(
             phase="validate-reserved-input", flow=flow.source,
@@ -2473,6 +2529,12 @@ def _capture_run_start_invocation(
         )
 
     next_stack = (*call_stack, flow_key)
+    # Concrete nested inputs available from run-start checkpoints must be
+    # protected before any step executes, including parent/sibling writers.
+    _reserve_checkpoint_status_inputs(
+        flow, workspace=workspace, flow_input=flow_input,
+        reserved_inputs=protected_paths,
+    )
     fingerprints: dict[tuple[str, str], bytes] = {}
     checkpoint_paths: dict[str, Path] = {}
     previous_output_fingerprints: dict[
@@ -4010,6 +4072,12 @@ def _preflight_concrete_invocation_outputs(
             f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
         )
     next_stack = (*call_stack, flow_key)
+    # Resolve all checkpoint inputs for this concrete invocation before
+    # claiming outputs from any of its steps.
+    _reserve_checkpoint_status_inputs(
+        flow, workspace=workspace, flow_input=flow_input,
+        reserved_inputs=reserved_inputs, claimed_outputs=claimed_outputs,
+    )
     case_colliding_step_ids = _case_colliding_step_ids(
         flow,
         workspace=workspace,
@@ -4038,7 +4106,7 @@ def _preflight_concrete_invocation_outputs(
         if condition is False:
             known_statuses[step.step_id] = "skipped"
             continue
-        if condition is True and step.output is None and step.flow is None and step.foreach is None:
+        if condition is True and step.flow is None and step.foreach is None:
             known_statuses[step.step_id] = "completed"
         _set_flow_diagnostic(
             phase="preflight-subflow-batch", flow=flow.source,
@@ -4273,6 +4341,10 @@ async def _run_flow_internal(
     reserved_inputs = context.reserved_inputs
     assert claimed_outputs is not None
     assert reserved_inputs is not None
+    _reserve_checkpoint_status_inputs(
+        flow, workspace=workspace, flow_input=flow_input,
+        reserved_inputs=reserved_inputs, claimed_outputs=claimed_outputs,
+    )
 
     assert context.run_start_snapshots is not None
     run_start_snapshot = context.run_start_snapshots.get(namespace)
@@ -4291,15 +4363,6 @@ async def _run_flow_internal(
     initial_checkpoint_paths = run_start_snapshot.checkpoint_paths
     initial_previous_output_fingerprints = (
         run_start_snapshot.previous_output_fingerprints
-    )
-    mutation_protected_paths = tuple(
-        dict.fromkeys(
-            (
-                *reserved_inputs.values(),
-                *context.run_start_checkpoint_paths,
-                *initial_checkpoint_paths,
-            )
-        )
     )
     case_colliding_step_ids = _case_colliding_step_ids(
         flow,
@@ -4951,6 +5014,13 @@ async def _run_flow_internal(
                 namespace=namespace, step=step.step_id,
                 iteration_id=iteration_id, output=output,
             )
+            # Child invocations may have resolved new protected inputs since
+            # this parent invocation began. Do not cache the protection tuple.
+            mutation_protected_paths = tuple(dict.fromkeys((
+                *reserved_inputs.values(),
+                *context.run_start_checkpoint_paths,
+                *initial_checkpoint_paths,
+            )))
             assert context.completed_json_outputs is not None
             json_input_values = _resolve_json_inputs(
                 step,
@@ -5122,6 +5192,10 @@ async def run_flow(
             cache=cache,
         )
     )
+    # This set includes concrete checkpoint/source inputs for child
+    # invocations reconstructible at run start, not only JSON checkpoints.
+    for path in run_start_checkpoint_paths:
+        reserved_inputs[_filesystem_path_key(path)] = path
     known_fingerprints: dict[str, bytes] = {}
     for snapshot in run_start_snapshots.values():
         for (_, path_key), fingerprint in snapshot.checkpoint_fingerprints.items():
