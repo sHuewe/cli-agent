@@ -531,6 +531,33 @@ def _reserve_checkpoint_status_inputs(
             reserved_inputs[key] = path
 
 
+def _has_checkpoint_status_descendant(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    cache: dict[str, FlowDefinition],
+    stack: tuple[str, ...] = (),
+) -> bool:
+    key = _filesystem_path_key(flow.source)
+    if key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
+        raise ValueError("Zyklischer oder zu tief verschachtelter Subflow.")
+    next_stack = (*stack, key)
+    for step in flow.steps:
+        if (step.filesystem_operation is not None
+                and step.filesystem_operation["kind"] == "checkpoint_status"):
+            return True
+        if step.flow is not None:
+            child = _load_subflow_definition(
+                step, workspace=workspace, cache=cache,
+            )
+            if _has_checkpoint_status_descendant(
+                child, workspace=workspace, cache=cache,
+                stack=next_stack,
+            ):
+                return True
+    return False
+
+
 def _reserve_future_child_checkpoint_inputs(
     flow: FlowDefinition,
     *,
@@ -584,6 +611,10 @@ def _reserve_future_child_checkpoint_inputs(
         child = _load_subflow_definition(
             step, workspace=workspace, cache=cache,
         )
+        if not _has_checkpoint_status_descendant(
+            child, workspace=workspace, cache=cache,
+        ):
+            continue
         _validate_subflow_interface(step, child)
         for item, iteration_id in zip(items, iteration_ids):
             if _evaluate_when(
