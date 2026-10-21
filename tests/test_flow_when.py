@@ -656,3 +656,85 @@ expected_source_path = "concept.md"
     assert len(protected) == 1
     assert (tmp_path / "verify.json") in protected[0]
     assert (tmp_path / "concept.md") in protected[0]
+
+
+def test_checkpoint_status_dynamic_child_reserves_before_intervening_writer(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["concept"]\nresult = "steps.resume.output"\n'
+        '[[steps]]\nid = "resume"\noutput = "status.json"\n'
+        'overwrite_output = true\n[steps.filesystem_operation]\n'
+        'kind = "checkpoint_status"\npaths = ["verify.json"]\n'
+        'expected_status = "ok"\n'
+        'expected_source_path = "${input.concept}"\n',
+        encoding="utf-8",
+    )
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "discover"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "discover"
+[[steps]]
+id = "writer"
+prompt_file = "do.md"
+output = "concept.md"
+overwrite_output = true
+[steps.vars]
+value = "writer"
+[[steps]]
+id = "child"
+flow = "child.toml"
+[steps.input]
+concept = "${steps.discover.output.path}"
+""")
+    (tmp_path / "concept.md").write_text("# Original", encoding="utf-8")
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        return SimpleNamespace(answer='{"path":"concept.md"}',
+                               web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        asyncio.run(run_flow(load_flow(definition, workspace=tmp_path), workspace=tmp_path))
+    assert calls == ["discover"]
+    assert (tmp_path / "concept.md").read_text(encoding="utf-8") == "# Original"
+
+
+def test_known_true_subflow_does_not_trigger_skipped_foreach_preflight(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "do.md"\n'
+        'response_format = "json"\noutput = "work.json"\n'
+        '[steps.vars]\nvalue = "work"\n',
+        encoding="utf-8",
+    )
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "source"
+prompt_file = "do.md"
+response_format = "json"
+output = "source.json"
+[steps.vars]
+value = "source"
+[[steps]]
+id = "child"
+flow = "child.toml"
+[[steps]]
+id = "skipped_batch"
+prompt_file = "do.md"
+response_format = "json"
+foreach = "steps.source.output.items"
+output = "shared.json"
+when = { ref = "steps.child.status", eq = "skipped" }
+[steps.vars]
+value = "${item}"
+""")
+    (tmp_path / "source.json").write_text('{"items":[1,2]}', encoding="utf-8")
+    assert _run(tmp_path, definition, monkeypatch, {}) == ["work"]
