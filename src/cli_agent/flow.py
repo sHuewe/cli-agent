@@ -1034,8 +1034,18 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
-            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries"} or op.get("kind") != "inventory" or not isinstance(op.get("directory"), str):
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "paths", "expected_status", "expected_source_path"} or op.get("kind") not in {"inventory", "checkpoint_status"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
                 raise ValueError("filesystem_operation benötigt kind=inventory und directory.")
+            if op["kind"] == "checkpoint_status":
+                if (not isinstance(op.get("paths"), list) or not 1 <= len(op["paths"]) <= 16
+                        or any(not isinstance(p, str) or not p.strip() for p in op["paths"])):
+                    raise ValueError("checkpoint_status.paths benötigt 1 bis 16 Pfade.")
+                if not isinstance(op.get("expected_status"), str) or not op["expected_status"]:
+                    raise ValueError("checkpoint_status.expected_status fehlt.")
+                if not isinstance(op.get("expected_source_path"), str) or not op["expected_source_path"]:
+                    raise ValueError("checkpoint_status.expected_source_path fehlt.")
+                if set(op) & {"directory", "recursive", "extensions", "exclude_names", "max_entries"}:
+                    raise ValueError("checkpoint_status unterstützt keine Inventur-Optionen.")
             if type(op.get("recursive", False)) is not bool:
                 raise ValueError("filesystem_operation.recursive muss boolesch sein.")
             for key in ("extensions", "exclude_names"):
@@ -1058,7 +1068,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if raw_filesystem_operation is not None:
             # Expand declared static root [vars] before directory validation.
             raw_filesystem_operation = dict(raw_filesystem_operation)
-            directory_template = raw_filesystem_operation["directory"]
+            directory_template = raw_filesystem_operation.get("directory", "")
+            checkpoint_templates = raw_filesystem_operation.get("paths", [])
+            if raw_filesystem_operation["kind"] == "checkpoint_status":
+                checkpoint_templates = [*checkpoint_templates, raw_filesystem_operation["expected_source_path"]]
+            else:
+                checkpoint_templates = [directory_template]
             def replace_inventory_var(match: re.Match[str]) -> str:
                 name = match.group(1)
                 if name not in global_variables:
@@ -1071,16 +1086,36 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
                 replace_inventory_var, directory_template,
             )
-            raw_filesystem_operation["directory"] = directory_template
+            if raw_filesystem_operation["kind"] == "inventory":
+                raw_filesystem_operation["directory"] = directory_template
+            else:
+                raw_filesystem_operation["paths"] = [
+                    re.sub(r"\\$\\{var\\.([A-Za-z_][A-Za-z0-9_-]*)\\}", replace_inventory_var, p)
+                    for p in raw_filesystem_operation["paths"]
+                ]
+                raw_filesystem_operation["expected_source_path"] = re.sub(
+                    r"\\$\\{var\\.([A-Za-z_][A-Za-z0-9_-]*)\\}",
+                    replace_inventory_var, raw_filesystem_operation["expected_source_path"],
+                )
             # Only static vars and declared flow inputs are supported;
             # step/item expressions cannot be resolved by _render_input_text.
+            if raw_filesystem_operation["kind"] == "checkpoint_status":
+                for template in [*raw_filesystem_operation["paths"], raw_filesystem_operation["expected_source_path"]]:
+                    remainder = _INPUT_EXPR.sub("", template)
+                    if "${" in remainder:
+                        raise ValueError("checkpoint_status erlaubt nur Input-Referenzen.")
+                    _validate_input_references([template], declared_inputs=inputs, field="checkpoint_status")
+                for template in raw_filesystem_operation["paths"]:
+                    literal = _INPUT_EXPR.sub("placeholder", template)
+                    if (Path(literal).is_absolute() or PureWindowsPath(literal).is_absolute()
+                            or PureWindowsPath(literal).drive or ".." in Path(literal).parts
+                            or ".." in PureWindowsPath(literal).parts):
+                        raise ValueError("checkpoint_status.paths muss workspace-relativ sein.")
             remainder = _INPUT_EXPR.sub("", directory_template)
-            if "${" in remainder:
-                raise ValueError(
-                    "filesystem_operation.directory unterstützt nur ${input...} und ${var...}-Referenzen."
-                )
+            if raw_filesystem_operation["kind"] == "inventory" and "${" in remainder:
+                raise ValueError("filesystem_operation.directory unterstützt nur Input- und Var-Referenzen.")
             literal_directory = _INPUT_EXPR.sub("placeholder", directory_template)
-            if (
+            if raw_filesystem_operation["kind"] == "inventory" and (
                 not literal_directory.strip()
                 or Path(literal_directory).is_absolute()
                 or any(part == ".." for part in Path(literal_directory).parts)
@@ -1088,7 +1123,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             ):
                 raise ValueError("filesystem_operation.directory enthält einen ungültigen Pfad.")
             _validate_input_references(
-                [raw_filesystem_operation["directory"]],
+                [directory_template] if raw_filesystem_operation["kind"] == "inventory" else [],
                 declared_inputs=inputs,
                 field=f"steps[{index}].filesystem_operation.directory",
             )
@@ -4736,6 +4771,34 @@ async def _run_flow_internal(
             if step.filesystem_operation is not None:
                 assert output is not None
                 op = step.filesystem_operation
+                if op["kind"] == "checkpoint_status":
+                    expected_source = _render_input_text(op["expected_source_path"], flow_input)
+                    result = {"completed": False, "checkpoint": None, "source_path": expected_source}
+                    for template in op["paths"]:
+                        candidate = _workspace_path(
+                            workspace, Path(_render_input_text(template, flow_input)),
+                            purpose="Checkpoint-Status", must_exist=False,
+                        )
+                        if not candidate.is_file():
+                            continue
+                        try:
+                            raw_checkpoint = read_existing_output_text(
+                                workspace, candidate, max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+                            )
+                            payload = _parse_structured_output(raw_checkpoint, step_id=step.step_id)
+                        except (ValueError, OSError):
+                            continue
+                        if (isinstance(payload, dict)
+                                and payload.get("status") == op["expected_status"]
+                                and payload.get("source_path") == expected_source):
+                            result.update(completed=True, checkpoint=str(candidate.relative_to(workspace)))
+                            break
+                    answer = _json_dumps_preserving_numbers(result)
+                    target = prepare_output_target(workspace, output, overwrite=True)
+                    target.write_text(answer)
+                    context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+                    record_iteration_answer(answer, True, iteration_id)
+                    continue
                 directory = _render_input_text(op["directory"], flow_input)
                 inventory_root = _workspace_directory(workspace, directory)
                 if output == inventory_root or inventory_root in output.parents:
