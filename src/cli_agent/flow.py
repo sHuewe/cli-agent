@@ -2531,7 +2531,7 @@ def _capture_run_start_invocation(
         if run_condition is False:
             statuses[step.step_id] = "skipped"
             continue
-        if run_condition is True and step.output is None and step.flow is None and step.foreach is None:
+        if run_condition is True and step.flow is None and step.foreach is None:
             statuses[step.step_id] = "completed"
         _set_flow_diagnostic(
             phase="run-start-step", flow=flow.source,
