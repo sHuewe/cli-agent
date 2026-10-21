@@ -540,3 +540,83 @@ expected_source_path = "concept.md"
         _run(tmp_path, flow, monkeypatch, {})
     assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original_checkpoint
     assert (tmp_path / "concept.md").read_text(encoding="utf-8") == original_source
+
+
+@pytest.mark.parametrize("checkpoint_first", [True, False])
+@pytest.mark.parametrize("protected_name", ["verify.json", "concept.md"])
+def test_checkpoint_status_reserves_inputs_against_other_steps(
+    tmp_path, monkeypatch, checkpoint_first, protected_name,
+):
+    check = """
+[[steps]]
+id = "resume"
+output = "resume.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+"""
+    writer = f"""
+[[steps]]
+id = "writer"
+prompt_file = "do.md"
+output = "{protected_name}"
+overwrite_output = true
+[steps.vars]
+value = "writer"
+"""
+    flow = _setup(tmp_path, check + writer if checkpoint_first else writer + check)
+    original_checkpoint = '{"status":"ok","source_path":"concept.md"}'
+    original_source = "# Original concept"
+    (tmp_path / "verify.json").write_text(original_checkpoint, encoding="utf-8")
+    (tmp_path / "concept.md").write_text(original_source, encoding="utf-8")
+    called = []
+
+    async def should_not_run(*args, **kwargs):
+        called.append(True)
+        raise AssertionError("No model step may execute before collision detection")
+
+    monkeypatch.setattr(flow_module, "run_once", should_not_run)
+    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        asyncio.run(run_flow(load_flow(flow, workspace=tmp_path), workspace=tmp_path))
+    assert called == []
+    assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original_checkpoint
+    assert (tmp_path / "concept.md").read_text(encoding="utf-8") == original_source
+
+
+def test_checkpoint_status_reserves_child_input_before_parent_writer(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "child.toml").write_text("""
+version = 1
+inputs = ["concept"]
+[[steps]]
+id = "resume"
+output = "resume.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "${input.concept}"
+expected_source_path = "${input.concept}"
+""", encoding="utf-8")
+    flow = _setup(tmp_path, """
+[[steps]]
+id = "writer"
+prompt_file = "do.md"
+output = "concept.md"
+overwrite_output = true
+[steps.vars]
+value = "writer"
+[[steps]]
+id = "child"
+flow = "child.toml"
+[steps.input]
+concept = "concept.md"
+""")
+    (tmp_path / "concept.md").write_text("# Original", encoding="utf-8")
+    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        _run(tmp_path, flow, monkeypatch, {})
+    assert (tmp_path / "concept.md").read_text(encoding="utf-8") == "# Original"
