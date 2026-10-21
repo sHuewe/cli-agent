@@ -2522,6 +2522,10 @@ def _capture_run_start_invocation(
         for prior in flow.steps:
             if prior.step_id in available_outputs and prior.step_id not in statuses:
                 statuses[prior.step_id] = "completed"
+        # A prior unconditional outputless model step has a known completed
+        # status even though it cannot contribute an output checkpoint.
+        if step.when is None and step.output is None and step.flow is None and step.foreach is None:
+            statuses[step.step_id] = "completed"
         run_condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=statuses,
             flow_input=flow_input, allow_unknown=True,
