@@ -517,8 +517,14 @@ def _reserve_checkpoint_status_inputs(
     reserved_inputs: dict[str, Path],
     claimed_outputs: dict[str, str] | None = None,
 ) -> None:
-    """Reserve inputs flow-wide, including concrete nested invocations."""
+    """Reserve unconditional checkpoint inputs across the entire invocation.
+
+    Conditional candidates must be reconsidered during execution, rather
+    than permanently blocking writes when their branch is skipped.
+    """
     for step in flow.steps:
+        if step.when is not None:
+            continue
         for path in _checkpoint_status_input_paths(
             step, workspace=workspace, flow_input=flow_input,
         ):
@@ -527,6 +533,49 @@ def _reserve_checkpoint_status_inputs(
                 raise ValueError(
                     f"checkpoint_status-Eingabe {path} kollidiert mit bereits "
                     f"beanspruchtem Output von {claimed_outputs[key]}."
+                )
+            reserved_inputs[key] = path
+
+
+def _reserve_conditional_checkpoint_status_inputs(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+    flow_input: dict[str, Any],
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+    statuses: dict[str, str],
+    reserved_inputs: dict[str, Path],
+    claimed_outputs: dict[str, str],
+) -> None:
+    """Protect conditional read inputs for the current execution frontier.
+
+    False branches do not protect anything. True and unresolved branches
+    remain protected, since an earlier writer must not corrupt a checkpoint
+    before its condition can be decided. The caller owns a fresh per-step
+    dictionary so these speculative reservations never become permanent.
+    """
+    for step in flow.steps:
+        if step.when is None:
+            continue
+        operation = step.filesystem_operation
+        if operation is None or operation["kind"] != "checkpoint_status":
+            continue
+        condition = _evaluate_when(
+            step.when, outputs=outputs, statuses=statuses,
+            flow_input=flow_input, allow_unknown=True,
+            output_json=output_json,
+        )
+        if condition is False:
+            continue
+        for path in _checkpoint_status_input_paths(
+            step, workspace=workspace, flow_input=flow_input,
+        ):
+            key = _filesystem_path_key(path)
+            if key in claimed_outputs:
+                raise ValueError(
+                    f"Aktive checkpoint_status-Eingabe {path} kollidiert "
+                    f"mit Output von {claimed_outputs[key]}."
                 )
             reserved_inputs[key] = path
 
@@ -639,6 +688,12 @@ def _reserve_future_child_checkpoint_inputs(
                 reserved_inputs=reserved_inputs,
                 claimed_outputs=claimed_outputs,
             )
+            _reserve_conditional_checkpoint_status_inputs(
+                child, workspace=workspace, flow_input=child_input,
+                outputs={}, output_json={}, statuses={},
+                reserved_inputs=reserved_inputs,
+                claimed_outputs=claimed_outputs,
+            )
             # Descendants depending only on declared child inputs can be
             # reserved before the child starts as well.
             _reserve_future_child_checkpoint_inputs(
@@ -654,16 +709,19 @@ def _reserved_flow_input_paths(
     flow: FlowDefinition,
     *,
     workspace: Path,
+    reserve_checkpoint_inputs: bool = True,
 ) -> dict[str, Path]:
     flow_dir = flow.source.parent
     reserved: dict[str, Path] = {
         _filesystem_path_key(flow.source): flow.source,
     }
-    # Include literal checkpoint inputs before validating any writer, even
-    # when the checkpoint_status step occurs later in the flow.
-    _reserve_checkpoint_status_inputs(
-        flow, workspace=workspace, flow_input=None, reserved_inputs=reserved,
-    )
+    # Only unconditional invocations and steps have static read protection.
+    # Conditional invocations are protected by the runtime frontier scan.
+    if reserve_checkpoint_inputs:
+        _reserve_checkpoint_status_inputs(
+            flow, workspace=workspace, flow_input=None,
+            reserved_inputs=reserved,
+        )
     for step in flow.steps:
         _set_flow_diagnostic(
             phase="validate-reserved-input", flow=flow.source,
@@ -3836,6 +3894,7 @@ def _collect_reserved_flow_input_paths(
     cache: dict[str, FlowDefinition],
     stack: tuple[str, ...] = (),
     budget: _SubflowTraversalBudget | None = None,
+    conditional_ancestor: bool = False,
 ) -> dict[str, Path]:
     traversal_budget = budget or _SubflowTraversalBudget()
     traversal_budget.consume(purpose="Eingabe-Validierung")
@@ -3848,7 +3907,10 @@ def _collect_reserved_flow_input_paths(
             f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
         )
 
-    reserved = _reserved_flow_input_paths(flow, workspace=workspace)
+    reserved = _reserved_flow_input_paths(
+        flow, workspace=workspace,
+        reserve_checkpoint_inputs=not conditional_ancestor,
+    )
     next_stack = (*stack, key)
     for step in flow.steps:
         if step.flow is None:
@@ -3870,6 +3932,11 @@ def _collect_reserved_flow_input_paths(
                 cache=cache,
                 stack=next_stack,
                 budget=traversal_budget,
+                conditional_ancestor=(
+                    conditional_ancestor
+                    or step.when is not None
+                    or step.foreach is not None
+                ),
             )
         )
     return reserved
@@ -5427,7 +5494,8 @@ async def run_flow(
             workspace=workspace,
             root_flow=flow,
             cache=cache,
-            reserved_inputs=reserved_inputs,
+            # Read-only run-start checkpoint snapshots must not permanently
+            # reserve conditional branch inputs.
         )
     )
     known_fingerprints: dict[str, bytes] = {}
