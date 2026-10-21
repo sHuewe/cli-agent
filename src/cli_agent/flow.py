@@ -4311,6 +4311,13 @@ def _preflight_concrete_invocation_outputs(
         if condition is False:
             known_statuses[step.step_id] = "skipped"
             continue
+        if condition is None:
+            # This condition depends on an output produced later during the
+            # invocation. Do not claim its output path (or descend into its
+            # subflow) speculatively: another mutually exclusive branch may
+            # target the same path. Runtime preflight still checks the
+            # selected branch before that step executes.
+            continue
         if step.foreach is None:
             if condition is True:
                 known_statuses[step.step_id] = "completed"
