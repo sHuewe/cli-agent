@@ -4786,11 +4786,21 @@ async def _run_flow_internal(
                 if op["kind"] == "checkpoint_status":
                     expected_source = _render_input_text(op["expected_source_path"], flow_input)
                     result = {"completed": False, "checkpoint": None, "source_path": expected_source}
-                    for template in op["paths"]:
-                        candidate = _workspace_path(
+                    # Reject input/output aliasing before reading or writing any
+                    # candidate. Compare normalized workspace paths on both OSes.
+                    candidates = [
+                        _workspace_path(
                             workspace, Path(_render_input_text(template, flow_input)),
                             purpose="Checkpoint-Status", must_exist=False,
                         )
+                        for template in op["paths"]
+                    ]
+                    if any(_filesystem_path_key(candidate) == _filesystem_path_key(output)
+                           for candidate in candidates):
+                        raise ValueError(
+                            "checkpoint_status.output darf keinen Eingabe-Checkpoint überschreiben."
+                        )
+                    for candidate in candidates:
                         if not candidate.is_file():
                             continue
                         try:
