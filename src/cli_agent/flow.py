@@ -5327,6 +5327,12 @@ async def _run_flow_internal(
                     target = prepare_output_target(workspace, output, overwrite=True)
                     target.write_text(answer)
                     context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+                    if op.get("release_source_on_miss") and result["completed"]:
+                        # A completed read is no longer a future invocation,
+                        # but its verified source remains protected globally.
+                        # A miss never adds this guard, so the parent may write.
+                        assert context.reserved_inputs is not None
+                        context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
                     record_iteration_answer(answer, True, iteration_id)
                     continue
                 directory = _render_input_text(op["directory"], flow_input)
