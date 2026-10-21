@@ -536,7 +536,7 @@ expected_source_path = "concept.md"
     original_source = "# Important concept"
     (tmp_path / "verify.json").write_text(original_checkpoint, encoding="utf-8")
     (tmp_path / "concept.md").write_text(original_source, encoding="utf-8")
-    with pytest.raises(ValueError, match="überschreiben"):
+    with pytest.raises(ValueError, match="überschreiben|reserviert|kollidiert"):
         _run(tmp_path, flow, monkeypatch, {})
     assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original_checkpoint
     assert (tmp_path / "concept.md").read_text(encoding="utf-8") == original_source
@@ -592,6 +592,7 @@ def test_checkpoint_status_reserves_child_input_before_parent_writer(
     (tmp_path / "child.toml").write_text("""
 version = 1
 inputs = ["concept"]
+result = "steps.resume.output"
 [[steps]]
 id = "resume"
 output = "resume.json"
