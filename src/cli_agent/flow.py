@@ -111,6 +111,7 @@ _INPUT_EXPR = re.compile(
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*))?\}"
 )
 _GLOBAL_INPUT_EXPR = re.compile(r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}")
+_GLOBAL_INPUT_START_EXPR = re.compile(r"\$\{\s*var\b", re.IGNORECASE)
 _DYNAMIC_VALUE_EXPR = re.compile(
     r"\$\{(?:(?P<iteration>iteration\.id)"
     r"|item(?:\.(?P<item_path>[A-Za-z_][A-Za-z0-9_-]*"
@@ -845,9 +846,11 @@ def _expand_global_input_vars(
             return variables[name]
 
         rendered = _GLOBAL_INPUT_EXPR.sub(replace, value)
-        # Do not silently forward malformed or recursively nested ${var...}
-        # references to the child as uninterpreted literal text.
-        if "${var." in rendered or "${var}" in rendered:
+        # Reject remaining var-like placeholders, including malformed forms
+        # such as ${var .name}, ${var[name]}, or ${ var.name }. Also reject
+        # nested references introduced by a global variable's own value.
+        # Other dynamic expression families remain available to the runner.
+        if _GLOBAL_INPUT_START_EXPR.search(rendered):
             raise ValueError(
                 f"{field} enthält eine ungültige oder verschachtelte "
                 "globale Variablenreferenz."
