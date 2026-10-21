@@ -1062,3 +1062,26 @@ validating the workspace-relative directory. Undefined variables, absolute
 paths and parent-directory traversal are rejected. `${input.name}`
 continues to work for subflows. Inventory `directory` does not support
 per-item or previous-output expressions.
+
+
+### Safely resume a previously verified concept
+
+For first-step `checkpoint_status` checks, set
+`release_source_on_miss = true` to release **only**
+`expected_source_path` after a deterministic `completed = false`
+result. This is restricted to the very first, unconditional step of the
+subflow. Input candidate checkpoint files remain protected throughout
+the run, and until the result is known the source is protected against
+writes. Other flow-input protections and checkpoint fingerprints remain
+in force.
+
+The check's JSON output also contains `verification`: the original
+matching verifier JSON on success, or `null` on a miss. This is suitable
+for reuse of legacy verified link results, without an LLM call.
+
+A flow may declare an optional `result_fallback` in addition to
+`result`. If the primary step output or nested field is absent/null,
+the runner resolves `result_fallback`. Both must refer to a declared
+step output. This permits a deterministic result from either a legacy
+verification or a conditionally executed fresh verifier. A missing
+result in both branches is an error.
