@@ -4795,10 +4795,16 @@ async def _run_flow_internal(
                         )
                         for template in op["paths"]
                     ]
+                    source_path = _workspace_path(
+                        workspace, Path(expected_source),
+                        purpose="Checkpoint-Quelldatei", must_exist=False,
+                    )
+                    protected_inputs = [*candidates, source_path]
                     if any(_filesystem_path_key(candidate) == _filesystem_path_key(output)
-                           for candidate in candidates):
+                           for candidate in protected_inputs):
                         raise ValueError(
-                            "checkpoint_status.output darf keinen Eingabe-Checkpoint überschreiben."
+                            "checkpoint_status.output darf weder einen Eingabe-Checkpoint "
+                            "noch die Quelldatei überschreiben."
                         )
                     for candidate in candidates:
                         if not candidate.is_file():
