@@ -940,9 +940,11 @@ expected_source_path = "${input.concept_path}"
 
 Das Ergebnis enthält `completed`, `checkpoint` und `source_path`.
 Fehlende, ungültige oder nicht passende JSON-Checkpoints werden ignoriert.
-Ein erfolgreicher Checkpoint beweist nicht, dass die Quelldatei seither
-unverändert geblieben ist; das muss der aufrufende Flow gegebenenfalls
-zusätzlich verifizieren.
+Eine erfolgreiche Prüfung setzt außerdem voraus, dass die referenzierte
+Quelldatei noch als reguläre Datei existiert. Der Checkpoint beweist
+jedoch nicht, dass ihr Inhalt seither unverändert geblieben ist; hierfür
+benötigt der aufrufende Flow gegebenenfalls eine zusätzliche
+Fingerprint- oder Inhaltsprüfung.
 
 ## Generische Verzeichnisinventur
 
