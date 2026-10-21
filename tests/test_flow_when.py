@@ -1057,3 +1057,83 @@ flow = "child.toml"
         assert _run(
             tmp_path, definition, monkeypatch, {"choice": '{"enabled":true}'},
         ) == ["choice", "first", "final"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_conditional_checkpoint_inputs_only_block_active_branch(
+    tmp_path, monkeypatch, enabled,
+):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "selector"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "selector"
+[[steps]]
+id = "verify"
+output = "status.json"
+overwrite_output = true
+when = { ref = "steps.selector.output.enabled", eq = true }
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+[[steps]]
+id = "rewrite"
+prompt_file = "do.md"
+output = "verify.json"
+overwrite_output = true
+when = { ref = "steps.selector.output.enabled", eq = false }
+[steps.vars]
+value = "rewrite"
+""")
+    original = '{"status":"ok","source_path":"concept.md"}'
+    (tmp_path / "verify.json").write_text(original, encoding="utf-8")
+    (tmp_path / "concept.md").write_text("# Source", encoding="utf-8")
+    calls = _run(
+        tmp_path, definition, monkeypatch,
+        {"selector": '{"enabled":' + str(enabled).lower() + '}'},
+    )
+    assert calls == (["selector"] if enabled else ["selector", "rewrite"])
+    if enabled:
+        assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original
+        assert (tmp_path / "status.json").exists()
+    else:
+        assert not (tmp_path / "status.json").exists()
+
+
+def test_unresolved_conditional_checkpoint_protects_earlier_writer(
+    tmp_path, monkeypatch,
+):
+    definition = _setup(tmp_path, """
+[[steps]]
+id = "rewrite"
+prompt_file = "do.md"
+output = "verify.json"
+overwrite_output = true
+[steps.vars]
+value = "rewrite"
+[[steps]]
+id = "selector"
+prompt_file = "do.md"
+response_format = "json"
+[steps.vars]
+value = "selector"
+[[steps]]
+id = "verify"
+output = "status.json"
+overwrite_output = true
+when = { ref = "steps.selector.output.enabled", eq = true }
+[steps.filesystem_operation]
+kind = "checkpoint_status"
+paths = ["verify.json"]
+expected_status = "ok"
+expected_source_path = "concept.md"
+""")
+    (tmp_path / "verify.json").write_text(
+        '{"status":"ok","source_path":"concept.md"}', encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        _run(tmp_path, definition, monkeypatch, {"selector": '{"enabled":true}'})
