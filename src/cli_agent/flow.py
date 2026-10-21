@@ -4053,13 +4053,16 @@ def validate_flow(
                 key = _filesystem_path_key(static_output)
                 if key in all_reserved_inputs:
                     raise ValueError("JSON-Output kollidiert mit reservierter Eingabe.")
-                _prepare_flow_output(
-                    step, workspace=workspace, output=static_output,
-                )
-                previous = planned_static_outputs.get(key)
-                if previous is not None and not step.overwrite_output:
-                    raise ValueError("JSON-Output kollidiert mit geplantem Output.")
-                planned_static_outputs[key] = f"{flow.source.name}:{step.step_id}"
+                # A conditional writer might be skipped; only reserve its
+                # output after the when condition has been evaluated.
+                if step.when is None:
+                    _prepare_flow_output(
+                        step, workspace=workspace, output=static_output,
+                    )
+                    previous = planned_static_outputs.get(key)
+                    if previous is not None and not step.overwrite_output:
+                        raise ValueError("JSON-Output kollidiert mit geplantem Output.")
+                    planned_static_outputs[key] = f"{flow.source.name}:{step.step_id}"
             produced.add(step.step_id)
             continue
 
@@ -4205,21 +4208,22 @@ def validate_flow(
                     "mit einer reservierten Flow-Eingabe: "
                     f"{reserved_input}"
                 )
-            _prepare_flow_output(
-                step,
-                workspace=workspace,
-                output=static_output,
-            )
-            previous_writer = planned_static_outputs.get(static_output_key)
-            if previous_writer is not None and not step.overwrite_output:
-                raise ValueError(
-                    f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                    f"mit dem geplanten Output von Schritt {previous_writer!r}; "
-                    "der spätere Schritt erlaubt kein Überschreiben."
+            if step.when is None:
+                _prepare_flow_output(
+                    step,
+                    workspace=workspace,
+                    output=static_output,
                 )
-            planned_static_outputs[static_output_key] = (
-                f"{flow.source.name}:{step.step_id}"
-            )
+                previous_writer = planned_static_outputs.get(static_output_key)
+                if previous_writer is not None and not step.overwrite_output:
+                    raise ValueError(
+                        f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                        f"mit dem geplanten Output von Schritt {previous_writer!r}; "
+                        "der spätere Schritt erlaubt kein Überschreiben."
+                    )
+                planned_static_outputs[static_output_key] = (
+                    f"{flow.source.name}:{step.step_id}"
+                )
 
         if step.foreach is not None:
             source_id = _foreach_output_source(step.foreach)
