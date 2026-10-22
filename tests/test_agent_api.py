@@ -312,7 +312,7 @@ async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, mo
         okf: object = None
         knowledge_vector: object = None
 
-    fake_config = FakeConfig(model=FakeModel(), logging=SimpleNamespace())
+    fake_config = FakeConfig(model=FakeModel(), logging=SimpleNamespace(), dump_llm_context=True)
     fake_admin = SimpleNamespace(
         network=object(), model_credentials=(), web=SimpleNamespace(providers=()),
         mcp=object(),
@@ -348,6 +348,8 @@ async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, mo
     assert captured[0][0][0] == tmp_path.resolve()
     assert captured[0][0][1] == "model-client"
     assert captured[0][1]["workspace_access"] == "read"
+    assert captured[0][1]["dump_llm_context"] is False
+    assert fake_config.dump_llm_context is True  # API must not mutate CLI configuration
     assert captured[0][1]["approval_callback"] == session.approve
     assert fake_config.model.model == "default"
     await service.shutdown()
