@@ -198,8 +198,8 @@ async def test_approval_is_per_run_and_denied_without_listener():
         rid = (await client.post(run_url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
         assert (await run_until_done(client, sid, rid, service))["answer"] == "approved=False"
         session = service.sessions[sid]
-        session._run.listeners = 1  # Simulate an authenticated subscriber for this run
         rid2 = (await client.post(run_url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
+        session._run.listeners = 1  # Simulate an authenticated subscriber for this run
         for _ in range(100):
             pending = list(session.broker._pending)
             if pending:
