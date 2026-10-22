@@ -294,12 +294,28 @@ def create_app(service: AgentApiService) -> Any:
     async def checked_json(request: Request):
         if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
             raise ValueError("Content-Type application/json erforderlich.")
-        if request.headers.get("content-length"):
-            if int(request.headers["content-length"]) > MAX_JSON_BYTES:
+        declared_length = request.headers.get("content-length")
+        if declared_length is not None:
+            try:
+                length = int(declared_length)
+            except ValueError as exc:
+                raise ValueError("Ungültiger Content-Length-Header.") from exc
+            if length < 0:
+                raise ValueError("Ungültiger Content-Length-Header.")
+            if length > MAX_JSON_BYTES:
                 raise ValueError("JSON-Anfrage zu groß.")
-        raw = await request.body()
-        if len(raw) > MAX_JSON_BYTES:
-            raise ValueError("JSON-Anfrage zu groß.")
+
+        # Content-Length is optional (for example with chunked encoding), and
+        # client-provided length is not a trusted memory limit. Check the size
+        # of each incoming chunk BEFORE appending it to the buffered JSON.
+        chunks: list[bytes] = []
+        total_bytes = 0
+        async for chunk in request.stream():
+            total_bytes += len(chunk)
+            if total_bytes > MAX_JSON_BYTES:
+                raise ValueError("JSON-Anfrage zu groß.")
+            chunks.append(chunk)
+        raw = b"".join(chunks)
         try:
             value = json.loads(raw)
         except (ValueError, UnicodeDecodeError) as exc:
