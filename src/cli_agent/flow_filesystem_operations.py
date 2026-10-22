@@ -5,6 +5,8 @@ This module is independent of OKF and never reads file contents.
 from __future__ import annotations
 
 import os
+import hashlib
+import re
 import stat
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -13,6 +15,22 @@ from .filesystem_security import path_entry_is_symlink_or_reparse
 
 
 MAX_INVENTORY_ENTRIES = 10_000
+
+
+def _add_stable_slugs(result: dict[str, Any]) -> dict[str, Any]:
+    """Derive stable, collision-resistant module IDs without model input."""
+    seen: set[str] = set()
+    for item in result["files"]:
+        path = item["path"]
+        prefix = re.sub(r"[^a-z0-9]+", "-", path.casefold()).strip("-")[:60].strip("-")
+        digest = hashlib.sha256(path.encode("utf-8")).hexdigest()[:16]
+        slug = f"{prefix or 'source'}-{digest}"
+        if slug in seen:
+            raise ValueError("Mehrdeutiger Source-Slug im Inventar.")
+        seen.add(slug)
+        item["slug"] = slug
+    return result
+
 
 
 def _workspace_directory(workspace: Path, directory: str) -> Path:
@@ -54,6 +72,7 @@ def inventory_directory(
     extensions: tuple[str, ...] = (),
     exclude_names: tuple[str, ...] = (),
     max_entries: int = MAX_INVENTORY_ENTRIES,
+    stable_slugs: bool = False,
 ) -> dict[str, Any]:
     """Return a sorted inventory of regular files and directories.
 
@@ -61,6 +80,8 @@ def inventory_directory(
     filtered-out ones. Symlinks/reparse points are rejected, never followed.
     The inventory does not inspect or modify the contents of any file.
     """
+    if type(stable_slugs) is not bool:
+        raise ValueError("filesystem_operation.stable_slugs muss boolesch sein.")
     if type(recursive) is not bool:
         raise ValueError("filesystem_operation.recursive muss boolesch sein.")
     if type(max_entries) is not int or not 1 <= max_entries <= MAX_INVENTORY_ENTRIES:
@@ -95,10 +116,11 @@ def inventory_directory(
 
     if os.name == "nt":
         from .flow_filesystem_windows import inventory_windows
-        return inventory_windows(
+        result = inventory_windows(
             root, start, suffixes=suffixes, excluded=excluded,
             recursive=recursive, max_entries=max_entries,
         )
+        return _add_stable_slugs(result) if stable_slugs else result
 
     # Open each path component through an already pinned directory descriptor.
     # On platforms without directory-fd/no-follow support, fail closed.
@@ -163,11 +185,12 @@ def inventory_directory(
 
     files.sort(key=lambda value: (value["path"].casefold(), value["path"]))
     directories.sort(key=lambda value: (value["path"].casefold(), value["path"]))
-    return {
+    result = {
         "directory": start.relative_to(root).as_posix(),
         "files": files,
         "directories": directories,
         "file_count": len(files),
         "directory_count": len(directories),
     }
+    return _add_stable_slugs(result) if stable_slugs else result
 
