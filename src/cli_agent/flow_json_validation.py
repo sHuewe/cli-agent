@@ -186,7 +186,9 @@ def build_okf_manifest(
     Navigation determines publication status, not membership. Any incomplete
     navigation yields needs_attention without advertising a complete module.
     """
-    validated = validate_okf_plan(\n        plan, plan_kind="doctrine", expected_source_path=expected_source_path\n    )
+    validated = validate_okf_plan(
+        plan, plan_kind="doctrine", expected_source_path=expected_source_path
+    )
     outcome = _obj(navigation, "navigation")
     folder = _obj(validated["folder"], "folder")
     folder_path = folder["path"]
