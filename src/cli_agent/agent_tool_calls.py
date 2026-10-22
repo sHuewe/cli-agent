@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import uuid
 from typing import Any
 
 from .agent_knowledge import (
@@ -284,6 +285,13 @@ async def process_tool_calls(
                 )
                 continue
 
+        event_callback = getattr(agent, "event_callback", None)
+        event_id = str(tool_call.get("id") or uuid.uuid4().hex)
+        if event_callback is not None:
+            await event_callback(
+                "tool_started",
+                {"call_id": event_id, "tool": exposed_name},
+            )
         if agent.logging_config.log_tool_calls:
             logger.info(
                 "tool_call phase=%s name=%s arguments=%s",
@@ -306,6 +314,12 @@ async def process_tool_calls(
             )
             raise
 
+        if event_callback is not None:
+            await event_callback(
+                "tool_finished",
+                {"call_id": event_id, "tool": exposed_name,
+                 "status": "error" if getattr(result, "isError", False) else "success"},
+            )
         user_message = _message_to_user(result)
         is_error = bool(getattr(result, "isError", False))
         if (
