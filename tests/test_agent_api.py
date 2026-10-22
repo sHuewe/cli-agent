@@ -361,3 +361,79 @@ def test_api_start_rejects_invalid_static_start_options(tmp_path):
     ])
     with pytest.raises(ValueError, match="OS-Zugriff"):
         build_service(excluded)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_creation_reserves_capacity_before_startup():
+    from cli_agent.agent_api import AgentSession
+    ready = asyncio.Event()
+    original_start = AgentSession.start
+
+    async def slow_start(self):
+        await ready.wait()
+        return await original_start(self)
+
+    service, agents = make_test_service()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(AgentSession, "start", slow_start)
+        pending = [asyncio.create_task(service.create()) for _ in range(MAX_SESSIONS)]
+        await asyncio.sleep(0)
+        assert len(service.sessions) == MAX_SESSIONS
+        with pytest.raises(OverflowError):
+            await service.create()
+        ready.set()
+        sessions = await asyncio.gather(*pending)
+    assert len(sessions) == MAX_SESSIONS
+    await service.shutdown()
+    assert all(a.closed for a in agents)
+
+
+@pytest.mark.asyncio
+async def test_start_failure_frees_reserved_session_slot():
+    from cli_agent.agent_api import AgentSession
+    original_start = AgentSession.start
+
+    async def failed_start(self):
+        raise RuntimeError("startup fails")
+
+    service, _ = make_test_service()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(AgentSession, "start", failed_start)
+        with pytest.raises(RuntimeError, match="startup fails"):
+            await service.create()
+    assert not service.sessions
+    session = await service.create()
+    assert session.id in service.sessions
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_context_patch_rechecks_busy_after_body_read():
+    from starlette.requests import Request
+    service, agents = make_test_service()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_body = Request.body
+
+    async def paused_body(request):
+        if request.url.path.endswith("/context") and request.method == "PATCH":
+            entered.set()
+            await release.wait()
+        return await original_body(request)
+
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(Request, "body", paused_body)
+            pending = asyncio.create_task(client.patch(
+                f"/sessions/{sid}/context",
+                json={"tools": {"read": False}}, headers=headers(service),
+            ))
+            await asyncio.wait_for(entered.wait(), 3)
+            rid = (await client.post(f"/sessions/{sid}/runs", json={"prompt": "slow"}, headers=headers(service))).json()["run_id"]
+            release.set()
+            response = await asyncio.wait_for(pending, 3)
+            assert response.status_code == 409
+            assert agents[0].enabled["read"] is True
+            assert service.sessions[sid]._run.id == rid
+    await service.shutdown()
