@@ -47,7 +47,13 @@ def group_assigned_items(
     folder = _object(registry.get("folder"), "topics.folder")
     folder_id = _string(folder.get("id"), "topics.folder.id")
     folder_path = _string(folder.get("path"), "topics.folder.path")
-    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", folder_path):
+    # OKF module folders may be nested (e.g. doctrines/<source-slug>).
+    # Validate every segment: this rejects absolute paths, traversal,
+    # backslashes, empty segments, and unsafe or platform-dependent names.
+    folder_segment = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+    if len(folder_path) > 512 or not re.fullmatch(
+        rf"{folder_segment}(?:/{folder_segment})*", folder_path
+    ):
         raise ValueError("Ungültiger semantischer Ordnerpfad.")
     if type(max_concept_bytes) is not int or not 1024 <= max_concept_bytes <= 10_000_000:
         raise ValueError("Ungültiges Konzept-Bytelimit.")
