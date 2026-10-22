@@ -1514,7 +1514,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 {"plan", "navigation"}
                 if raw_json_operation["kind"] == "build_okf_manifest" else set()
             )
-            if required_sources and (raw_json_operation["input"] != sorted(required_sources)[0]
+            if required_sources and (raw_json_operation["input"] != ("plan" if raw_json_operation["kind"] == "build_okf_manifest" else sorted(required_sources)[0])
                                      or not required_sources <= set(raw.get("json_inputs", {}))):
                 raise ValueError("JSON-Gruppierungsoperation benötigt die vorgesehenen json_inputs.")
             if child_flow is not None or prompt_value is not None:
