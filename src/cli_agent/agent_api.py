@@ -21,7 +21,12 @@ API_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_SESSIONS = 8
 MAX_PROMPT_BYTES = 512 * 1024
-MAX_EVENTS_PER_RUN = 512
+# Replay keeps a full supported run, including the optional initial knowledge
+# phase and its two permitted re-entry searches. Five events per tool covers
+# start, end, status, MCP user notice, and approval request.
+MAX_EVENTS_PER_RUN = 8_192
+REPLAY_EVENTS_PER_TOOL = 5
+REPLAY_LIFECYCLE_ALLOWANCE = 32
 MAX_JSON_BYTES = 1024 * 1024
 
 
@@ -37,6 +42,7 @@ class AgentRun:
     answer: str | None = None
     error: str | None = None
     events: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
+    max_events: int = MAX_EVENTS_PER_RUN
     next_sequence: int = 1
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -47,8 +53,8 @@ class AgentRun:
     def emit(self, event: dict[str, Any]) -> None:
         self.events.append((self.next_sequence, event))
         self.next_sequence += 1
-        if len(self.events) > MAX_EVENTS_PER_RUN:
-            del self.events[: len(self.events) - MAX_EVENTS_PER_RUN]
+        if len(self.events) > self.max_events:
+            del self.events[: len(self.events) - self.max_events]
         self.changed.set()
 
     def snapshot(self) -> dict[str, Any]:
@@ -145,13 +151,34 @@ class AgentSession:
             if self._run is not None:
                 self._run.changed.set()
 
+    def _replay_capacity(self) -> int:
+        """Ensure a run's replay buffer covers configured tool-call budgets.
+
+        A regular answer allows up to max_tool_calls in the main loop, and
+        knowledge can run once up-front plus twice via re-entry. The buffer
+        is not preallocated: only emitted events consume memory.
+        """
+        agent = self.agent
+        main_limit = max(0, int(getattr(agent, "max_tool_calls", 200)))
+        okf = getattr(agent, "_okf_options", None)
+        vector = getattr(agent, "_vector_config", None)
+        knowledge_limit = 0
+        if okf is not None or vector is not None:
+            knowledge_limit = max(0, int(getattr(okf, "max_tool_calls", 100)))
+        tool_budget = main_limit + 3 * knowledge_limit
+        calculated = tool_budget * REPLAY_EVENTS_PER_TOOL + REPLAY_LIFECYCLE_ALLOWANCE
+        return max(MAX_EVENTS_PER_RUN, calculated)
+
     def submit(self, prompt: str) -> AgentRun:
         if self._closed:
             raise RuntimeError("Session ist geschlossen.")
         if self._busy:
             raise RuntimeError("Session bearbeitet bereits eine Anfrage.")
         self._busy = True
-        run = AgentRun(id=uuid.uuid4().hex, thread_id=self.id, prompt=prompt)
+        run = AgentRun(
+            id=uuid.uuid4().hex, thread_id=self.id, prompt=prompt,
+            max_events=self._replay_capacity(),
+        )
         self._run = run
         self._queue.put_nowait(run)
         return run
