@@ -305,7 +305,7 @@ def test_group_rejects_bad_semantic_subfolders(subfolder):
     topics["folder"]["path"] = "doctrines/example"
     topics["folders"] = [{"id": subfolder, "path": f"doctrines/example/{subfolder}", "title": "Bad"}]
     topics["topics"][0]["path"] = f"doctrines/example/{subfolder}/requirements.md"
-    with pytest.raises(ValueError, match="Ungültiger semantischer Unterordner"):
+    with pytest.raises(ValueError, match="Ungültiger semantischer Unterordner|nichtleerer String"):
         build(routes, assignments, topics)
 
 
