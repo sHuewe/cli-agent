@@ -157,7 +157,8 @@ def _validate_themes(plan: dict[str, Any]) -> None:
 
 
 def validate_okf_plan(
-    value: Any, *, plan_kind: str, expected_source_path: str | None = None
+    value: Any, *, plan_kind: str, expected_source_path: str | None = None,
+    expected_source_slug: str | None = None, manifests: Any = None
 ) -> dict[str, Any]:
     """Return the original plan after bounded, structural path validation."""
     plan = _obj(value, "OKF-Plan")
@@ -166,12 +167,34 @@ def validate_okf_plan(
     if plan_kind == "doctrine":
         _validate_doctrine(plan)
         source_path = _canonical_source_path(plan.get("source_path"))
+        if expected_source_slug is not None and plan["folder"]["id"] != _slug(expected_source_slug, "expected_source_slug"):
+            raise ValueError("folder.id stimmt nicht mit der Inventur überein.")
         if expected_source_path is not None and source_path != _canonical_source_path(
             expected_source_path
         ):
             raise ValueError("source_path stimmt nicht mit der inventarisierten Quelle überein.")
     elif plan_kind == "themes":
         _validate_themes(plan)
+        if manifests is not None:
+            current_paths: set[str] = set()
+            modules: set[str] = set()
+            for raw in _array(manifests, "manifests"):
+                module = _obj(raw, "manifests[]")
+                if module.get("status") != "ok":
+                    raise ValueError("Unvollständiges Modulmanifest.")
+                module_path = module.get("module_path")
+                if not isinstance(module_path, str) or not module_path.startswith("doctrines/"):
+                    raise ValueError("Ungültiger Modulpfad.")
+                _unique(modules, module_path, "module_path")
+                for raw_concept in _array(module.get("concepts"), "manifest.concepts"):
+                    concept_path = _obj(raw_concept, "manifest.concept").get("path")
+                    if not isinstance(concept_path, str) or not concept_path.startswith(module_path + "/"):
+                        raise ValueError("Ungültiger Concept-Pfad im Manifest.")
+                    _unique(current_paths, concept_path, "manifest.concept.path")
+            for theme in plan["themes"]:
+                missing = {path for path in theme["concept_paths"] if path.casefold() not in current_paths}
+                if missing:
+                    raise ValueError("Thema referenziert veraltete Concepts: " + ", ".join(sorted(missing)))
     else:
         raise ValueError(f"Unbekannte OKF-Planart: {plan_kind!r}.")
     return plan
