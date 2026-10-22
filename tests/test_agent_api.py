@@ -235,3 +235,129 @@ async def test_session_limit_and_shutdown():
     await service.shutdown()
     assert all(agent.closed for agent in agents)
     assert not service.sessions
+
+
+@pytest.mark.asyncio
+async def test_sse_replay_event_id_validation_and_tool_events():
+    service, _agents = make_test_service()
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        session = service.sessions[sid]
+        rid = (await client.post(
+            f"/sessions/{sid}/runs", json={"prompt": "events"}, headers=headers(service)
+        )).json()["run_id"]
+        await run_until_done(client, sid, rid, service)
+        await session.on_agent_event("tool_started", {"call_id": "x", "tool": "os__read_file"})
+        # The finished run must not be mutated by subsequent events.
+        assert len(session._run.events) == 5
+        events_url = f"/sessions/{sid}/runs/{rid}/events"
+        replay = await client.get(events_url, headers={**headers(service), "Last-Event-ID": "3"})
+        assert [json.loads(x[6:])["type"] for x in replay.text.splitlines() if x.startswith("data: ")] == [
+            "TEXT_MESSAGE_END", "RUN_FINISHED"
+        ]
+        for invalid in ["-1", "garbage", "100"]:
+            assert (await client.get(events_url, headers={
+                **headers(service), "Last-Event-ID": invalid
+            })).status_code == 400
+        assert (await client.get(
+            f"/sessions/{sid}/runs/wrong/events", headers=headers(service)
+        )).status_code == 404
+        session._run.status = "running"
+        await session.on_agent_event("tool_started", {"call_id": "t1", "tool": "os__read_file"})
+        await session.on_agent_event("tool_finished", {"call_id": "t1", "status": "success"})
+        assert [e[1]["type"] for e in session._run.events[-3:]] == [
+            "TOOL_CALL_START", "TOOL_CALL_END", "CUSTOM"
+        ]
+        session._run.status = "completed"
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_api_validation_and_disconnect_fails_closed():
+    service, _agents = make_test_service()
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        assert (await client.get(f"/sessions/{sid}/context", headers=headers(service))).status_code == 200
+        assert (await client.patch(f"/sessions/{sid}/context", json={"tools": {"unexpected": True}}, headers=headers(service))).status_code == 400
+        assert (await client.patch(f"/sessions/{sid}/context", json={"unexpected": True}, headers=headers(service))).status_code == 400
+        assert (await client.patch(f"/sessions/{sid}/context", json={"contexts": {"file-a": 1}}, headers=headers(service))).status_code == 400
+        assert (await client.post(f"/sessions/{sid}/runs", json={"prompt": "x" * (512 * 1024 + 1)}, headers=headers(service))).status_code == 400
+        assert (await client.post(f"/sessions/{sid}/runs", content=b" " * (1024 * 1024 + 1), headers={**headers(service), "Content-Type": "application/json"})).status_code == 400
+        assert (await client.get("/sessions/not-a-session/context", headers=headers(service))).status_code == 404
+        assert (await client.patch("/sessions/not-a-session/context", json={"tools": {}}, headers=headers(service))).status_code == 404
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, monkeypatch):
+    from cli_agent import admin_config, config, execution, file_context, logging_setup, model_factory
+    from cli_agent.agent_api import build_service
+    from dataclasses import dataclass
+
+    @dataclass
+    class FakeModel:
+        model: str = "default"
+
+    @dataclass
+    class FakeConfig:
+        model: FakeModel
+        logging: object
+        mcp_servers: tuple = ()
+        dump_llm_context: bool = False
+        okf: object = None
+        knowledge_vector: object = None
+
+    fake_config = FakeConfig(model=FakeModel(), logging=SimpleNamespace())
+    fake_admin = SimpleNamespace(
+        network=object(), model_credentials=(), web=SimpleNamespace(providers=()),
+        mcp=object(),
+    )
+    captured = []
+    monkeypatch.setattr(config, "load_config", lambda _: fake_config)
+    monkeypatch.setattr(admin_config, "load_admin_config", lambda: fake_admin)
+    monkeypatch.setattr(logging_setup, "configure_logging", lambda _: None)
+    monkeypatch.setattr(model_factory, "create_model_client", lambda *a, **kw: "model-client")
+    monkeypatch.setattr(execution, "resolve_excluded_paths", lambda *a: ())
+    monkeypatch.setattr(execution, "apply_workspace_access_override", lambda cfg, **kw: cfg)
+    monkeypatch.setattr(execution, "apply_data_override", lambda cfg, **kw: cfg)
+    monkeypatch.setattr(execution, "apply_named_mcp_overrides", lambda cfg, **kw: cfg)
+
+    class FakeConstructedAgent:
+        def __init__(self, *args, **kwargs):
+            captured.append((args, kwargs))
+            self.session = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+    monkeypatch.setattr(file_context, "ContextFileCliAgent", FakeConstructedAgent)
+
+    args = build_parser().parse_args([
+        "--workspace", str(tmp_path), "--model", "override", "--with-os-read"
+    ])
+    service = build_service(args)
+    session = await service.create()
+    assert captured[0][0][0] == tmp_path.resolve()
+    assert captured[0][0][1] == "model-client"
+    assert captured[0][1]["workspace_access"] == "read"
+    assert captured[0][1]["approval_callback"] == session.approve
+    assert fake_config.model.model == "default"
+    await service.shutdown()
+
+
+def test_api_start_rejects_invalid_static_start_options(tmp_path):
+    from cli_agent.agent_api import build_service
+    invalid_port = build_parser().parse_args(["--port", "0"])
+    with pytest.raises(ValueError, match="Port"):
+        build_service(invalid_port)
+    absent = build_parser().parse_args(["--workspace", str(tmp_path / "missing")])
+    with pytest.raises(ValueError, match="Workspace"):
+        build_service(absent)
+    excluded = build_parser().parse_args([
+        "--workspace", str(tmp_path), "--exclude-path", "secret"
+    ])
+    with pytest.raises(ValueError, match="OS-Zugriff"):
+        build_service(excluded)
