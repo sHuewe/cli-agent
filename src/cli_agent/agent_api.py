@@ -619,7 +619,9 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
             workspace, model_client, config.mcp_servers,
             logging_config=config.logging,
             config_file=config_file,
-            dump_llm_context=config.dump_llm_context,
+            # API sessions never write LLM context dumps, even when enabled
+            # in config.toml for CLI or flow execution.
+            dump_llm_context=False,
             network=admin.network,
             web_providers=admin.web.providers,
             mcp_policy=admin.mcp,
