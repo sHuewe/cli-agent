@@ -143,3 +143,77 @@ def validate_okf_plan(value: Any, *, plan_kind: str) -> dict[str, Any]:
     else:
         raise ValueError(f"Unbekannte OKF-Planart: {plan_kind!r}.")
     return plan
+
+
+def build_okf_manifest(*, plan: Any, navigation: Any) -> dict[str, Any]:
+    """Build a lossless compact concept catalog; never ask an LLM to recopy it.
+
+    The validated plan is the single source of concept identity and metadata.
+    Navigation determines publication status, not membership. Any incomplete
+    navigation yields needs_attention without advertising a complete module.
+    """
+    validated = validate_okf_plan(plan, plan_kind="doctrine")
+    outcome = _obj(navigation, "navigation")
+    folder = _obj(validated["folder"], "folder")
+    folder_path = folder["path"]
+    if outcome.get("status") not in {"ok", "needs_attention"}:
+        raise ValueError("navigation.status muss ok|needs_attention sein.")
+    if outcome.get("module_path") != folder_path:
+        raise ValueError("navigation.module_path stimmt nicht mit Plan überein.")
+
+    warnings = outcome.get("warnings", [])
+    if not isinstance(warnings, list) or not all(
+        isinstance(warning, str) for warning in warnings
+    ):
+        raise ValueError("navigation.warnings muss eine String-Liste sein.")
+    complete = outcome["status"] == "ok"
+    if complete:
+        indexes = _array(outcome.get("index_paths"), "navigation.index_paths")
+        required = {f"{folder_path}/index.md"} | {
+            f"{entry['path']}/index.md" for entry in validated["folders"]
+        }
+        if len(indexes) != len(required) or set(indexes) != required:
+            raise ValueError(
+                "navigation.index_paths deckt nicht genau die geplanten Indizes ab."
+            )
+    source_path = validated.get("source_path")
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise ValueError("source_path fehlt im Doctrine-Plan.")
+
+    concepts: list[dict[str, Any]] = []
+    if complete:
+        for raw in validated["concepts"]:
+            concept = _obj(raw, "concept")
+            title = concept.get("title")
+            description = concept.get("description")
+            tags = concept.get("tags", [])
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError(f"Concept {concept['id']}: title fehlt.")
+            if not isinstance(description, str) or not description.strip():
+                raise ValueError(f"Concept {concept['id']}: description fehlt.")
+            if not isinstance(tags, list) or not all(
+                isinstance(tag, str) and tag.strip() for tag in tags
+            ):
+                raise ValueError(f"Concept {concept['id']}: ungültige Tags.")
+            concepts.append({
+                "path": concept["path"],
+                "title": title,
+                "description": description,
+                "tags": list(tags),
+            })
+    title = folder.get("title")
+    description = folder.get("description")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("folder.title fehlt im Doctrine-Plan.")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError("folder.description fehlt im Doctrine-Plan.")
+
+    return {
+        "status": "ok" if complete else "needs_attention",
+        "source_path": source_path,
+        "module_path": folder_path,
+        "title": title,
+        "description": description,
+        "concepts": concepts,
+        "warnings": warnings,
+    }
