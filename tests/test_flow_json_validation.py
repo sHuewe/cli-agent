@@ -59,14 +59,43 @@ def test_complete_manifest_preserves_each_planned_concept_exactly_once():
         "status": "ok", "module_path": "doctrines/source-123",
         "index_paths": ["doctrines/source-123/index.md"], "warnings": [],
     }
-    result = build_okf_manifest(plan=plan, navigation=navigation)
+    result = build_okf_manifest(plan=plan, navigation=navigation, expected_source_path="doctrines/source.md")
     assert result["status"] == "ok"
     assert [x["path"] for x in result["concepts"]] == [
         "doctrines/source-123/first.md", "doctrines/source-123/second.md"
     ]
     assert result["concepts"][1]["tags"] == ["beta"]
-    assert build_okf_manifest(plan=plan, navigation={
+    assert build_okf_manifest(plan=plan, expected_source_path="doctrines/source.md", navigation={
         **navigation, "status": "needs_attention", "warnings": ["missing"]
     })["concepts"] == []
     with pytest.raises(ValueError, match="index_paths"):
-        build_okf_manifest(plan=plan, navigation={**navigation, "index_paths": []})
+        build_okf_manifest(plan=plan, expected_source_path="doctrines/source.md", navigation={**navigation, "index_paths": []})
+
+
+@pytest.mark.parametrize("source", [
+    "../secrets.md", "../../secrets.md", "/absolute/file.md",
+    "C:/secrets.md", "doctrines/./source.md", "doctrines/../source.md",
+    "doctrines//source.md", "doctrines/source.md ", "doctrines\\\\source.md",
+])
+def test_manifest_rejects_invalid_source_path(source):
+    plan = doctrine([{"id": "first", "path": "doctrines/source-123/first.md",
+                     "title": "First", "description": "One"}])
+    plan["folder"].update(title="Source", description="Overview")
+    plan["source_path"] = source
+    nav = {"status": "ok", "module_path": "doctrines/source-123",
+           "index_paths": ["doctrines/source-123/index.md"]}
+    with pytest.raises(ValueError, match="source_path"):
+        build_okf_manifest(plan=plan, navigation=nav,
+                           expected_source_path="doctrines/source.md")
+
+
+def test_manifest_rejects_valid_but_wrong_source():
+    plan = doctrine([{"id": "first", "path": "doctrines/source-123/first.md",
+                     "title": "First", "description": "One"}])
+    plan["folder"].update(title="Source", description="Overview")
+    plan["source_path"] = "doctrines/other.md"
+    nav = {"status": "ok", "module_path": "doctrines/source-123",
+           "index_paths": ["doctrines/source-123/index.md"]}
+    with pytest.raises(ValueError, match="inventarisierten"):
+        build_okf_manifest(plan=plan, navigation=nav,
+                           expected_source_path="doctrines/source.md")
