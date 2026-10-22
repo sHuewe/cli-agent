@@ -287,3 +287,32 @@ def test_group_rejects_reserved_windows_topic_names(reserved: str) -> None:
     topics["topics"][0]["path"] = f"doctrines/example/{reserved}.md"
     with pytest.raises(ValueError, match="Reservierter Windows-Gerätename"):
         build(routes, assignments, topics)
+
+
+def test_group_declared_semantic_subfolders():
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = "doctrines/example"
+    topics["folders"] = [{"id": "permissions", "path": "doctrines/example/permissions", "title": "Permissions"}]
+    topics["topics"][0]["path"] = "doctrines/example/permissions/requirements.md"
+    result = build(routes, assignments, topics)
+    assert result["folders"] == topics["folders"]
+    assert result["concepts"][0]["path"] == topics["topics"][0]["path"]
+
+
+@pytest.mark.parametrize("subfolder", ["../escape", "con", "has_under", "a/b", ""])
+def test_group_rejects_bad_semantic_subfolders(subfolder):
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = "doctrines/example"
+    topics["folders"] = [{"id": subfolder, "path": f"doctrines/example/{subfolder}", "title": "Bad"}]
+    topics["topics"][0]["path"] = f"doctrines/example/{subfolder}/requirements.md"
+    with pytest.raises(ValueError, match="Ungültiger semantischer Unterordner|nichtleerer String"):
+        build(routes, assignments, topics)
+
+
+def test_group_rejects_undeclared_semantic_topic_folder():
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = "doctrines/example"
+    topics["folders"] = [{"id": "rights", "path": "doctrines/example/rights", "title": "Rights"}]
+    topics["topics"][0]["path"] = "doctrines/example/other/requirements.md"
+    with pytest.raises(ValueError, match="Topic-Pfad außerhalb"):
+        build(routes, assignments, topics)
