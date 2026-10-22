@@ -305,13 +305,18 @@ async def process_tool_calls(
                 timeout_seconds=MCP_TOOL_CALL_TIMEOUT_SECONDS,
                 operation=f"MCP-Tool {exposed_name!r}",
             )
-        except Exception as exc:
-            logger.error(
-                "tool_call_failed phase=%s name=%s error_type=%s",
-                phase,
-                exposed_name,
-                type(exc).__name__,
-            )
+        except BaseException as exc:
+            # Always balance TOOL_CALL_START, including timeout and cancellation.
+            if event_callback is not None:
+                await event_callback(
+                    "tool_finished",
+                    {"call_id": event_id, "tool": exposed_name, "status": "error"},
+                )
+            if isinstance(exc, Exception):
+                logger.error(
+                    "tool_call_failed phase=%s name=%s error_type=%s",
+                    phase, exposed_name, type(exc).__name__,
+                )
             raise
 
         if event_callback is not None:
