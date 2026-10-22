@@ -29,6 +29,9 @@ class FakeAgent:
     async def ask(self, prompt):
         self.history.append(prompt)
         if prompt == "needs approval":
+            gate = getattr(self, "approval_gate", None)
+            if gate is not None:
+                await gate.wait()
             decision = await self.session.approve("remote__write", {"path": "file.txt"})
             return f"approved={decision}"
         if prompt == "fail":
@@ -198,8 +201,10 @@ async def test_approval_is_per_run_and_denied_without_listener():
         rid = (await client.post(run_url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
         assert (await run_until_done(client, sid, rid, service))["answer"] == "approved=False"
         session = service.sessions[sid]
+        session.agent.approval_gate = asyncio.Event()
         rid2 = (await client.post(run_url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
-        session._run.listeners = 1  # Simulate an authenticated subscriber for this run
+        session.subscribe(session._run)
+        session.agent.approval_gate.set()
         for _ in range(100):
             pending = list(session.broker._pending)
             if pending:
@@ -476,9 +481,11 @@ async def test_stale_sse_disconnect_does_not_deny_current_run_approval():
         await run_until_done(client, sid, first_id, service)
         previous = session._run
         session.subscribe(previous)
+        session.agent.approval_gate = asyncio.Event()
         next_id = (await client.post(url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
         current = session._run
         session.subscribe(current)
+        session.agent.approval_gate.set()
         for _ in range(100):
             if session.broker._pending:
                 break
@@ -503,9 +510,11 @@ async def test_current_run_last_listener_disconnect_denies_pending_approval():
         sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
         session = service.sessions[sid]
         url = f"/sessions/{sid}/runs"
+        session.agent.approval_gate = asyncio.Event()
         rid = (await client.post(url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
         current = session._run
         session.subscribe(current)
+        session.agent.approval_gate.set()
         for _ in range(100):
             if session.broker._pending:
                 break
