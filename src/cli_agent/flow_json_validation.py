@@ -48,7 +48,7 @@ def _canonical_source_path(value: Any) -> str:
         not isinstance(value, str)
         or not 1 <= len(value) <= 4096
         or value != value.strip()
-        or "\\\\" in value
+        or chr(92) in value
         or ":" in value
         or any(ord(char) < 32 or ord(char) == 127 for char in value)
     ):
