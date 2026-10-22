@@ -39,6 +39,7 @@ from .file_context import (
     read_existing_output_text,
 )
 from .flow_json_operations import transform_json
+from .flow_json_validation import validate_okf_plan
 from .flow_filesystem_operations import inventory_directory, MAX_INVENTORY_ENTRIES, _workspace_directory
 from .flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from .filesystem_security import path_entry_is_symlink_or_reparse
@@ -1483,9 +1484,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes"
+                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
@@ -1493,6 +1494,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     f"steps[{index}].json_operation benötigt kind=batch|batch_routes|flatten|group_items|verify_coverage "
                     "und den Namen eines json_inputs enthalten."
                 )
+            if raw_json_operation["kind"] == "validate_okf_plan" and raw_json_operation.get("plan_kind") not in {"doctrine", "themes"}:
+                raise ValueError("validate_okf_plan benötigt plan_kind=doctrine|themes.")
             size = raw_json_operation.get("batch_size", 5)
             max_bytes = raw_json_operation.get("max_batch_bytes", 80000)
             if (
@@ -5445,6 +5448,8 @@ async def _run_flow_internal(
                         plan=_parse_structured_output(json_values["plan"], step_id=step.step_id),
                         results=_parse_structured_output(json_values["results"], step_id=step.step_id),
                     )
+                elif operation["kind"] == "validate_okf_plan":
+                    transformed = validate_okf_plan(source, plan_kind=operation["plan_kind"])
                 else:
                     transformed = transform_json(
                         kind=operation["kind"],
