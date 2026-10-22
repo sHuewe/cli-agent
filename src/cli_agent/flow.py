@@ -39,7 +39,7 @@ from .file_context import (
     read_existing_output_text,
 )
 from .flow_json_operations import transform_json
-from .flow_json_validation import validate_okf_plan
+from .flow_json_validation import validate_okf_plan, build_okf_manifest
 from .flow_filesystem_operations import inventory_directory, MAX_INVENTORY_ENTRIES, _workspace_directory
 from .flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from .filesystem_security import path_entry_is_symlink_or_reparse
@@ -1486,7 +1486,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 or set(raw_json_operation) - {
                     "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
@@ -1510,7 +1510,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 {"routes", "assignments", "topics"}
                 if raw_json_operation["kind"] == "group_items" else
                 {"plan", "results"}
-                if raw_json_operation["kind"] == "verify_coverage" else set()
+                if raw_json_operation["kind"] == "verify_coverage" else
+                {"plan", "navigation"}
+                if raw_json_operation["kind"] == "build_okf_manifest" else set()
             )
             if required_sources and (raw_json_operation["input"] != sorted(required_sources)[0]
                                      or not required_sources <= set(raw.get("json_inputs", {}))):
@@ -5447,6 +5449,11 @@ async def _run_flow_internal(
                     transformed = verify_assigned_coverage(
                         plan=_parse_structured_output(json_values["plan"], step_id=step.step_id),
                         results=_parse_structured_output(json_values["results"], step_id=step.step_id),
+                    )
+                elif operation["kind"] == "build_okf_manifest":
+                    transformed = build_okf_manifest(
+                        plan=source,
+                        navigation=_parse_structured_output(json_values["navigation"], step_id=step.step_id),
                     )
                 elif operation["kind"] == "validate_okf_plan":
                     transformed = validate_okf_plan(source, plan_kind=operation["plan_kind"])
