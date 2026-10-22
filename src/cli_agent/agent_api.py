@@ -31,6 +31,9 @@ class AgentRun:
     thread_id: str
     prompt: str
     status: str = "queued"
+    # Subscribers belong to this run, not the parent session. A slow
+    # subscriber draining a previous run must never authorize a new run.
+    listeners: int = 0
     answer: str | None = None
     error: str | None = None
     events: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
@@ -77,7 +80,6 @@ class AgentSession:
         self._busy = False
         self._run: AgentRun | None = None
         self.agent: Any = None
-        self.listeners = 0
         self.broker = WebUiApprovalBroker(workspace=approval_workspace)
         self._approval_sender = self._send_approval
         self.broker.attach(self._approval_sender)
@@ -176,14 +178,28 @@ class AgentSession:
         if self._run is not None and not self._run.done:
             self._run.emit({"type": "CUSTOM", "name": "mcp_user_message", "value": payload})
 
+    def subscribe(self, run: AgentRun) -> None:
+        run.listeners += 1
+
+    def unsubscribe(self, run: AgentRun) -> None:
+        run.listeners -= 1
+        if run.listeners < 0:
+            raise RuntimeError("SSE-Listener-Zähler untergelaufen.")
+        # Only losing the *current* run's final subscriber invalidates
+        # pending approvals. Disconnects of earlier runs are irrelevant.
+        if self._run is run and run.listeners == 0:
+            self.broker.deny_all()
+
     async def _send_approval(self, payload: dict[str, Any]) -> None:
-        if self.listeners < 1 or self._run is None:
+        run = self._run
+        if run is None or run.done or run.listeners < 1:
             raise RuntimeError("Keine aktive UI-Verbindung für Tool-Freigabe.")
         # WebUiApprovalBroker prepares sanitized arguments and write previews.
-        self._run.emit({"type": "CUSTOM", "name": "approval_required", "value": payload})
+        run.emit({"type": "CUSTOM", "name": "approval_required", "value": payload})
 
     async def approve(self, tool: str, arguments: dict[str, Any]) -> bool | str:
-        if self.listeners < 1:
+        run = self._run
+        if run is None or run.done or run.listeners < 1:
             return False
         return await self.broker.approve_tool_call(tool, arguments)
 
@@ -359,7 +375,7 @@ def create_app(service: AgentApiService) -> Any:
 
         async def stream():
             cursor = last
-            session.listeners += 1
+            session.subscribe(run)
             try:
                 while True:
                     if run.events and cursor < run.events[0][0] - 1:
@@ -377,9 +393,7 @@ def create_app(service: AgentApiService) -> Any:
                         continue
                     await run.changed.wait()
             finally:
-                session.listeners -= 1
-                if session.listeners == 0:
-                    session.broker.deny_all()
+                session.unsubscribe(run)
 
         return StreamingResponse(
             stream(),
