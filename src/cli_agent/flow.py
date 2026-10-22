@@ -1484,7 +1484,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path"
+                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug"
                 }
                 or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest"}
                 or not isinstance(raw_json_operation.get("input"), str)
@@ -1496,6 +1496,17 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
             if raw_json_operation["kind"] == "validate_okf_plan" and raw_json_operation.get("plan_kind") not in {"doctrine", "themes"}:
                 raise ValueError("validate_okf_plan benötigt plan_kind=doctrine|themes.")
+            if raw_json_operation["kind"] == "validate_okf_plan":
+                if raw_json_operation["plan_kind"] == "doctrine":
+                    for name in ("expected_source_path", "expected_source_slug"):
+                        value = raw_json_operation.get(name)
+                        if not isinstance(value, str) or not value.strip():
+                            raise ValueError("validate_okf_plan benötigt " + name)
+                        if "${" in _INPUT_EXPR.sub("", value):
+                            raise ValueError(name + " erlaubt nur Flow-Input-Referenzen.")
+                        _validate_input_references([value], declared_inputs=inputs, field=name)
+                elif "manifests" not in raw.get("json_inputs", {}):
+                    raise ValueError("Theme-Planvalidierung benötigt json_inputs.manifests.")
             if raw_json_operation["kind"] == "build_okf_manifest":
                 expected = raw_json_operation.get("expected_source_path")
                 if not isinstance(expected, str) or not expected.strip():
@@ -5467,7 +5478,21 @@ async def _run_flow_internal(
                         expected_source_path=_render_input_text(operation["expected_source_path"], flow_input),
                     )
                 elif operation["kind"] == "validate_okf_plan":
-                    transformed = validate_okf_plan(source, plan_kind=operation["plan_kind"])
+                    transformed = validate_okf_plan(
+                        source, plan_kind=operation["plan_kind"],
+                        expected_source_path=(
+                            _render_input_text(operation["expected_source_path"], flow_input)
+                            if operation["plan_kind"] == "doctrine" else None
+                        ),
+                        expected_source_slug=(
+                            _render_input_text(operation["expected_source_slug"], flow_input)
+                            if operation["plan_kind"] == "doctrine" else None
+                        ),
+                        manifests=(
+                            _parse_structured_output(json_values["manifests"], step_id=step.step_id)
+                            if operation["plan_kind"] == "themes" else None
+                        ),
+                    )
                 else:
                     transformed = transform_json(
                         kind=operation["kind"],
