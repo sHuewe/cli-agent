@@ -113,3 +113,38 @@ def test_inventory_directory_rejects_platform_absolute_root_var(tmp_path):
     )
     with pytest.raises(ValueError):
         load_flow(flow, workspace=tmp_path)
+
+
+def test_inventory_stable_slugs_distinguish_ambiguous_paths(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "b.md").write_text("one", encoding="utf-8")
+    (tmp_path / "a-b.md").write_text("two", encoding="utf-8")
+    result = inventory_directory(tmp_path, ".", recursive=True, extensions=(".md",), stable_slugs=True)
+    by_path = {item["path"]: item["slug"] for item in result["files"]}
+    assert len(by_path) == 2
+    assert len(set(by_path.values())) == 2
+    assert all(len(slug) <= 77 for slug in by_path.values())
+    assert by_path == {item["path"]: item["slug"] for item in inventory_directory(
+        tmp_path, ".", recursive=True, extensions=(".md",), stable_slugs=True
+    )["files"]}
+    assert all("slug" not in item for item in inventory_directory(
+        tmp_path, ".", recursive=True, extensions=(".md",)
+    )["files"])
+
+
+def test_inventory_stable_slugs_rejects_non_boolean(tmp_path):
+    with pytest.raises(ValueError, match="stable_slugs"):
+        inventory_directory(tmp_path, ".", stable_slugs="true")
+
+
+def test_flow_accepts_stable_slug_inventory_option(tmp_path):
+    flow = tmp_path / "flow.toml"
+    flow.write_text(
+        'version = 1\n[[steps]]\nid = "inventory"\n'
+        'output = "state/inventory.json"\n'
+        '[steps.filesystem_operation]\nkind = "inventory"\n'
+        'directory = "."\nstable_slugs = true\n',
+        encoding="utf-8",
+    )
+    parsed = load_flow(flow, workspace=tmp_path)
+    assert parsed.steps[0].filesystem_operation["stable_slugs"] is True
