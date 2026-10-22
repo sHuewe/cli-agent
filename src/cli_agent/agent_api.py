@@ -232,6 +232,8 @@ def create_app(service: AgentApiService) -> Any:
     from starlette.requests import Request
     from starlette.responses import JSONResponse, Response, StreamingResponse
     from starlette.routing import Route
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
 
     def error(status: int, message: str) -> JSONResponse:
         return JSONResponse({"error": message}, status_code=status)
@@ -444,8 +446,8 @@ def create_app(service: AgentApiService) -> Any:
             Route("/sessions/{session_id}/runs/{run_id}/approvals/{approval_id}", approve, methods=["POST"]),
         ],
         lifespan=lifespan,
+        middleware=[Middleware(BaseHTTPMiddleware, dispatch=authenticate)],
     )
-    app.middleware("http")(authenticate)
     return app
 
 
