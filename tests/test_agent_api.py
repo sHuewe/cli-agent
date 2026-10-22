@@ -625,3 +625,51 @@ def test_cli_startup_flushes_token_before_uvicorn(monkeypatch, capsys):
     agent_api.main()
     assert observed[0][1]["host"] == "127.0.0.1"
     assert observed[0][1]["proxy_headers"] is False
+
+
+@pytest.mark.asyncio
+async def test_long_supported_run_replays_all_events_from_beginning():
+    """200 calls produce 600 tool events; late SSE subscribers retain RUN_STARTED."""
+    from cli_agent.agent_api import MAX_EVENTS_PER_RUN
+    service, _ = make_test_service()
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        session = service.sessions[sid]
+        rid = (await client.post(
+            f"/sessions/{sid}/runs", json={"prompt": "first"}, headers=headers(service)
+        )).json()["run_id"]
+        await run_until_done(client, sid, rid, service)
+        run = session._run
+        assert run.max_events >= 3 * 200 + 5
+        # Add the tool events to the completed run to simulate the SSE history
+        # after a legitimate 200-tool agent loop.
+        for index in range(200):
+            run.emit({"type": "TOOL_CALL_START", "toolCallId": str(index)})
+            run.emit({"type": "TOOL_CALL_END", "toolCallId": str(index)})
+            run.emit({"type": "CUSTOM", "name": "tool_status", "value": {"status": "success"}})
+        assert len(run.events) == 605
+        assert run.events[0][1]["type"] == "RUN_STARTED"
+        response = await client.get(
+            f"/sessions/{sid}/runs/{rid}/events", headers=headers(service)
+        )
+        assert response.status_code == 200
+        events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+        assert len(events) == 605
+        assert events[0]["type"] == "RUN_STARTED"
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_replay_capacity_adapts_to_knowledge_and_custom_limits():
+    from cli_agent.agent_api import MAX_EVENTS_PER_RUN, REPLAY_EVENTS_PER_TOOL
+    service, _ = make_test_service()
+    session = await service.create()
+    agent = session.agent
+    assert session._replay_capacity() >= MAX_EVENTS_PER_RUN
+    agent.max_tool_calls = 2500
+    agent._okf_options = SimpleNamespace(max_tool_calls=1000)
+    capacity = session._replay_capacity()
+    assert capacity >= (2500 + 3 * 1000) * REPLAY_EVENTS_PER_TOOL
+    run = session.submit("custom")
+    assert run.max_events == capacity
+    await service.shutdown()
