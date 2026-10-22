@@ -587,3 +587,41 @@ async def test_chunked_json_valid_without_content_length():
         state = await run_until_done(client, sid, resp.json()["run_id"], service)
         assert state["answer"] == "reply hello"
     await service.shutdown()
+
+
+def test_cli_startup_flushes_token_before_uvicorn(monkeypatch, capsys):
+    """A supervisor reading piped stdout must see the credential immediately."""
+    import sys
+    from cli_agent import agent_api
+
+    service, _agents = make_test_service()
+    monkeypatch.setattr(agent_api, "build_service", lambda args: service)
+    monkeypatch.setattr(sys, "argv", ["cli-agent-api", "--port", "9876"])
+    observed = []
+
+    class Stream:
+        def __init__(self):
+            self.pending = ""
+            self.flushed = []
+
+        def write(self, text):
+            self.pending += text
+
+        def flush(self):
+            self.flushed.append(self.pending)
+            self.pending = ""
+
+    stream = Stream()
+    monkeypatch.setattr(sys, "stdout", stream)
+
+    def fake_run(app, **kwargs):
+        observed.append((list(stream.flushed), kwargs))
+        assert stream.pending == ""
+        assert f"Bearer-Token: {service.token}" in "".join(stream.flushed)
+        assert "cli-agent-api: http://127.0.0.1:9876" in "".join(stream.flushed)
+
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    agent_api.main()
+    assert observed[0][1]["host"] == "127.0.0.1"
+    assert observed[0][1]["proxy_headers"] is False
