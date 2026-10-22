@@ -1374,7 +1374,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
-            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "paths", "expected_status", "expected_source_path", "release_source_on_miss"} or op.get("kind") not in {"inventory", "checkpoint_status"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss"} or op.get("kind") not in {"inventory", "checkpoint_status"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
                 raise ValueError("filesystem_operation benötigt kind=inventory und directory.")
             if op["kind"] == "checkpoint_status":
                 if (not isinstance(op.get("paths"), list) or not 1 <= len(op["paths"]) <= 16
@@ -1384,7 +1384,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     raise ValueError("checkpoint_status.expected_status fehlt.")
                 if not isinstance(op.get("expected_source_path"), str) or not op["expected_source_path"]:
                     raise ValueError("checkpoint_status.expected_source_path fehlt.")
-                if set(op) & {"directory", "recursive", "extensions", "exclude_names", "max_entries"}:
+                if set(op) & {"directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs"}:
                     raise ValueError("checkpoint_status unterstützt keine Inventur-Optionen.")
                 if "release_source_on_miss" in op:
                     if (op["release_source_on_miss"] is not True
@@ -1393,6 +1393,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                             "release_source_on_miss=true ist nur im ersten "
                             "unbedingten Flow-Schritt erlaubt."
                         )
+            if type(op.get("stable_slugs", False)) is not bool:
+                raise ValueError("filesystem_operation.stable_slugs muss boolesch sein.")
             if type(op.get("recursive", False)) is not bool:
                 raise ValueError("filesystem_operation.recursive muss boolesch sein.")
             for key in ("extensions", "exclude_names"):
@@ -5398,6 +5400,7 @@ async def _run_flow_internal(
                     extensions=tuple(op.get("extensions", [])),
                     exclude_names=tuple(op.get("exclude_names", [])),
                     max_entries=op.get("max_entries", MAX_INVENTORY_ENTRIES),
+                    stable_slugs=op.get("stable_slugs", False),
                 )
                 answer = _json_dumps_preserving_numbers(transformed)
                 if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
