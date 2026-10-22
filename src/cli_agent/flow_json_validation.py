@@ -156,7 +156,9 @@ def _validate_themes(plan: dict[str, Any]) -> None:
             raise ValueError("Thema verknüpft nicht mindestens zwei Doctrines.")
 
 
-def validate_okf_plan(\n    value: Any, *, plan_kind: str, expected_source_path: str | None = None\n) -> dict[str, Any]:
+def validate_okf_plan(
+    value: Any, *, plan_kind: str, expected_source_path: str | None = None
+) -> dict[str, Any]:
     """Return the original plan after bounded, structural path validation."""
     plan = _obj(value, "OKF-Plan")
     if plan.get("status") != "ok":
@@ -175,7 +177,9 @@ def validate_okf_plan(\n    value: Any, *, plan_kind: str, expected_source_path:
     return plan
 
 
-def build_okf_manifest(\n    *, plan: Any, navigation: Any, expected_source_path: str\n) -> dict[str, Any]:
+def build_okf_manifest(
+    *, plan: Any, navigation: Any, expected_source_path: str
+) -> dict[str, Any]:
     """Build a lossless compact concept catalog; never ask an LLM to recopy it.
 
     The validated plan is the single source of concept identity and metadata.
