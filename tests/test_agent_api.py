@@ -418,18 +418,19 @@ async def test_context_patch_rechecks_busy_after_body_read():
     service, agents = make_test_service()
     entered = asyncio.Event()
     release = asyncio.Event()
-    original_body = Request.body
+    original_stream = Request.stream
 
-    async def paused_body(request):
+    async def paused_stream(request):
         if request.url.path.endswith("/context") and request.method == "PATCH":
             entered.set()
             await release.wait()
-        return await original_body(request)
+        async for chunk in original_stream(request):
+            yield chunk
 
     async with await client_for(service) as client:
         sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
         with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(Request, "body", paused_body)
+            patch.setattr(Request, "stream", paused_stream)
             pending = asyncio.create_task(client.patch(
                 f"/sessions/{sid}/context",
                 json={"tools": {"read": False}}, headers=headers(service),
@@ -522,4 +523,67 @@ async def test_current_run_last_listener_disconnect_denies_pending_approval():
         assert session.broker._pending
         session.unsubscribe(current)
         assert (await run_until_done(client, sid, rid, service))["answer"] == "approved=False"
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_chunked_json_limit_stops_before_buffering_extra_data():
+    from starlette.requests import Request
+    from cli_agent.agent_api import MAX_JSON_BYTES
+
+    service, _agents = make_test_service()
+    consumed = []
+    original_stream = Request.stream
+
+    async def oversized_stream(request):
+        if request.method == "POST" and request.url.path.endswith("/runs"):
+            for piece in (b'{"prompt":"', b"x" * MAX_JSON_BYTES, b"this-must-not-be-read"):
+                consumed.append(piece[:24])
+                yield piece
+            return
+        async for piece in original_stream(request):
+            yield piece
+
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(Request, "stream", oversized_stream)
+            resp = await client.post(
+                f"/sessions/{sid}/runs",
+                content=b'{}',
+                headers={**headers(service), "Content-Type": "application/json"},
+            )
+        assert resp.status_code == 400
+        assert "zu groß" in resp.json()["error"]
+        assert len(consumed) == 2
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_chunked_json_valid_without_content_length():
+    from starlette.requests import Request
+
+    service, _agents = make_test_service()
+    original_stream = Request.stream
+
+    async def chunked_stream(request):
+        if request.method == "POST" and request.url.path.endswith("/runs"):
+            yield b'{"pro'
+            yield b'mpt":"hello"}'
+            return
+        async for piece in original_stream(request):
+            yield piece
+
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(Request, "stream", chunked_stream)
+            resp = await client.post(
+                f"/sessions/{sid}/runs",
+                content=b'{}',
+                headers={**headers(service), "Content-Type": "application/json"},
+            )
+        assert resp.status_code == 202
+        state = await run_until_done(client, sid, resp.json()["run_id"], service)
+        assert state["answer"] == "reply hello"
     await service.shutdown()
