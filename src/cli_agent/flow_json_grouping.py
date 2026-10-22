@@ -8,6 +8,13 @@ from typing import Any, Callable
 MAX_KNOWLEDGE_ITEMS = 100_000
 MAX_CONCEPTS = 1_000
 
+# Windows treats these as device names even with extensions (e.g. con.md).
+# Checking individual path segments keeps generated OKF paths portable.
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"{prefix}{index}" for prefix in ("com", "lpt") for index in range(1, 10)}
+)
+
 
 def _object(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -51,8 +58,10 @@ def group_assigned_items(
     # Validate every segment: this rejects absolute paths, traversal,
     # backslashes, empty segments, and unsafe or platform-dependent names.
     folder_segment = r"[a-z0-9]+(?:-[a-z0-9]+)*"
-    if len(folder_path) > 512 or not re.fullmatch(
-        rf"{folder_segment}(?:/{folder_segment})*", folder_path
+    if (
+        len(folder_path) > 512
+        or not re.fullmatch(rf"{folder_segment}(?:/{folder_segment})*", folder_path)
+        or any(segment in _WINDOWS_RESERVED_NAMES for segment in folder_path.split("/"))
     ):
         raise ValueError("Ungültiger semantischer Ordnerpfad.")
     if type(max_concept_bytes) is not int or not 1024 <= max_concept_bytes <= 10_000_000:
@@ -70,6 +79,8 @@ def group_assigned_items(
             re.escape(folder_path) + r"/[a-z0-9]+(?:-[a-z0-9]+)*\.md", path
         ):
             raise ValueError(f"Topic-Pfad außerhalb des Ordners: {path!r}.")
+        if path.rsplit("/", 1)[-1][:-3] in _WINDOWS_RESERVED_NAMES:
+            raise ValueError(f"Reservierter Windows-Gerätename im Topic-Pfad: {path!r}.")
         if topic_id in topic_map or path.casefold() in paths:
             raise ValueError("Topic-IDs und Dateipfade müssen eindeutig sein.")
         for name in ("title", "description", "type"):
