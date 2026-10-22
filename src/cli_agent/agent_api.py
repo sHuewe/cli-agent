@@ -123,6 +123,8 @@ class AgentSession:
                         self._busy = False
                         run.changed.set()
         except asyncio.CancelledError:
+            if not self._ready.done():
+                self._ready.set_exception(RuntimeError("Session-Start abgebrochen."))
             if self._run is not None and not self._run.done:
                 self._run.status = "cancelled"
                 self._run.emit({"type": "RUN_ERROR", "message": "Agentenlauf abgebrochen."})
@@ -203,27 +205,54 @@ class AgentApiService:
     def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None) -> None:
         self.factory = factory
         self.approval_workspace = approval_workspace
+        # Slots are reserved before MCP startup (which may suspend indefinitely).
         self.sessions: dict[str, AgentSession] = {}
+        self._lifecycle_lock = asyncio.Lock()
+        self._shutting_down = False
         self.token = secrets.token_urlsafe(32)
 
     async def create(self) -> AgentSession:
-        if len(self.sessions) >= MAX_SESSIONS:
-            raise OverflowError("Maximale Anzahl von Sessions erreicht.")
-        session = AgentSession(self.factory, approval_workspace=self.approval_workspace)
-        await session.start()
-        self.sessions[session.id] = session
+        async with self._lifecycle_lock:
+            if self._shutting_down:
+                raise RuntimeError("API-Server wird beendet.")
+            if len(self.sessions) >= MAX_SESSIONS:
+                raise OverflowError("Maximale Anzahl von Sessions erreicht.")
+            session = AgentSession(self.factory, approval_workspace=self.approval_workspace)
+            self.sessions[session.id] = session
+
+        try:
+            await session.start()
+        except BaseException:
+            # Startup failures and request cancellations release capacity.
+            async with self._lifecycle_lock:
+                if self.sessions.get(session.id) is session:
+                    del self.sessions[session.id]
+            await session.close()
+            raise
+
+        async with self._lifecycle_lock:
+            active = not self._shutting_down and self.sessions.get(session.id) is session
+        if not active:
+            await session.close()
+            raise RuntimeError("Session wurde beim Start geschlossen.")
         return session
 
     async def remove(self, session_id: str) -> bool:
-        session = self.sessions.pop(session_id, None)
+        async with self._lifecycle_lock:
+            session = self.sessions.pop(session_id, None)
         if session is None:
             return False
         await session.close()
         return True
 
     async def shutdown(self) -> None:
-        for session_id in list(self.sessions):
-            await self.remove(session_id)
+        async with self._lifecycle_lock:
+            self._shutting_down = True
+            sessions = tuple(self.sessions.values())
+            self.sessions.clear()
+        # Include sessions whose start() is still in progress.
+        for session in sessions:
+            await session.close()
 
 
 def create_app(service: AgentApiService) -> Any:
@@ -342,6 +371,10 @@ def create_app(service: AgentApiService) -> Any:
                     if run.done:
                         return
                     run.changed.clear()
+                    # New events may have arrived while yield suspended us.
+                    # Recheck after clear to avoid an indefinitely lost wakeup.
+                    if run.next_sequence > cursor + 1 or run.done:
+                        continue
                     await run.changed.wait()
             finally:
                 session.listeners -= 1
@@ -364,6 +397,9 @@ def create_app(service: AgentApiService) -> Any:
             async with checked_json(request) as body:
                 if set(body) != {"decision"} or body["decision"] not in ("yes", "no", "session"):
                     return error(400, "Entscheidung muss yes, no oder session sein.")
+                if (session._run is None or session._run.id != request.path_params["run_id"]
+                        or session._run.done or session._closed):
+                    return error(409, "Run ist nicht aktiv.")
                 if not session.broker.resolve(request.path_params["approval_id"], body["decision"]):
                     return error(409, "Freigabe ist ungültig oder abgelaufen.")
                 return JSONResponse({"accepted": True})
@@ -405,6 +441,11 @@ def create_app(service: AgentApiService) -> Any:
                 okf = body.get("okf")
                 if "okf" in body and (not isinstance(okf, bool) or not agent.okf_status_snapshot()["configured"]):
                     return error(400, "OKF ist nicht konfiguriert oder Zustand ungültig.")
+                # checked_json() awaits the request body. A run may have
+                # started since the initial busy check above. No awaits between
+                # this check and the synchronous state mutations.
+                if session._busy or session._closed:
+                    return error(409, "Änderungen während eines Runs sind nicht erlaubt.")
                 for name, enabled in tools.items():
                     agent.set_tool_enabled(name, enabled=enabled)
                 for context_id, enabled in contexts.items():
