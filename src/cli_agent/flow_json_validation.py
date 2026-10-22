@@ -42,6 +42,31 @@ def _unique(seen: set[str], value: str, name: str) -> None:
     seen.add(key)
 
 
+def _canonical_source_path(value: Any) -> str:
+    """Require a canonical workspace-relative Markdown path, on all OSes."""
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= 4096
+        or value != value.strip()
+        or chr(92) in value
+        or ":" in value
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        raise ValueError("source_path ist kein gültiger relativer Quellpfad.")
+    segments = value.split("/")
+    if any(
+        segment in {"", ".", ".."}
+        or segment != segment.strip()
+        or segment.endswith(".")
+        or segment.split(".", 1)[0].casefold() in _WINDOWS_RESERVED
+        for segment in segments
+    ):
+        raise ValueError("source_path muss ein kanonischer Workspace-Pfad sein.")
+    if not segments[-1].casefold().endswith((".md", ".markdown")):
+        raise ValueError("source_path muss auf eine Markdown-Datei verweisen.")
+    return value
+
+
 def _validate_doctrine(plan: dict[str, Any]) -> None:
     folder = _obj(plan.get("folder"), "folder")
     folder_id = _slug(folder.get("id"), "folder.id")
@@ -131,15 +156,98 @@ def _validate_themes(plan: dict[str, Any]) -> None:
             raise ValueError("Thema verknüpft nicht mindestens zwei Doctrines.")
 
 
-def validate_okf_plan(value: Any, *, plan_kind: str) -> dict[str, Any]:
+def validate_okf_plan(
+    value: Any, *, plan_kind: str, expected_source_path: str | None = None
+) -> dict[str, Any]:
     """Return the original plan after bounded, structural path validation."""
     plan = _obj(value, "OKF-Plan")
     if plan.get("status") != "ok":
         raise ValueError("OKF-Plan ist nicht erfolgreich; kein Schreibschritt erlaubt.")
     if plan_kind == "doctrine":
         _validate_doctrine(plan)
+        source_path = _canonical_source_path(plan.get("source_path"))
+        if expected_source_path is not None and source_path != _canonical_source_path(
+            expected_source_path
+        ):
+            raise ValueError("source_path stimmt nicht mit der inventarisierten Quelle überein.")
     elif plan_kind == "themes":
         _validate_themes(plan)
     else:
         raise ValueError(f"Unbekannte OKF-Planart: {plan_kind!r}.")
     return plan
+
+
+def build_okf_manifest(
+    *, plan: Any, navigation: Any, expected_source_path: str
+) -> dict[str, Any]:
+    """Build a lossless compact concept catalog; never ask an LLM to recopy it.
+
+    The validated plan is the single source of concept identity and metadata.
+    Navigation determines publication status, not membership. Any incomplete
+    navigation yields needs_attention without advertising a complete module.
+    """
+    validated = validate_okf_plan(
+        plan, plan_kind="doctrine", expected_source_path=expected_source_path
+    )
+    outcome = _obj(navigation, "navigation")
+    folder = _obj(validated["folder"], "folder")
+    folder_path = folder["path"]
+    if outcome.get("status") not in {"ok", "needs_attention"}:
+        raise ValueError("navigation.status muss ok|needs_attention sein.")
+    if outcome.get("module_path") != folder_path:
+        raise ValueError("navigation.module_path stimmt nicht mit Plan überein.")
+
+    warnings = outcome.get("warnings", [])
+    if not isinstance(warnings, list) or not all(
+        isinstance(warning, str) for warning in warnings
+    ):
+        raise ValueError("navigation.warnings muss eine String-Liste sein.")
+    complete = outcome["status"] == "ok"
+    if complete:
+        indexes = _array(outcome.get("index_paths"), "navigation.index_paths")
+        required = {f"{folder_path}/index.md"} | {
+            f"{entry['path']}/index.md" for entry in validated["folders"]
+        }
+        if len(indexes) != len(required) or set(indexes) != required:
+            raise ValueError(
+                "navigation.index_paths deckt nicht genau die geplanten Indizes ab."
+            )
+    source_path = _canonical_source_path(validated.get("source_path"))
+
+    concepts: list[dict[str, Any]] = []
+    if complete:
+        for raw in validated["concepts"]:
+            concept = _obj(raw, "concept")
+            title = concept.get("title")
+            description = concept.get("description")
+            tags = concept.get("tags", [])
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError(f"Concept {concept['id']}: title fehlt.")
+            if not isinstance(description, str) or not description.strip():
+                raise ValueError(f"Concept {concept['id']}: description fehlt.")
+            if not isinstance(tags, list) or not all(
+                isinstance(tag, str) and tag.strip() for tag in tags
+            ):
+                raise ValueError(f"Concept {concept['id']}: ungültige Tags.")
+            concepts.append({
+                "path": concept["path"],
+                "title": title,
+                "description": description,
+                "tags": list(tags),
+            })
+    title = folder.get("title")
+    description = folder.get("description")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("folder.title fehlt im Doctrine-Plan.")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError("folder.description fehlt im Doctrine-Plan.")
+
+    return {
+        "status": "ok" if complete else "needs_attention",
+        "source_path": source_path,
+        "module_path": folder_path,
+        "title": title,
+        "description": description,
+        "concepts": concepts,
+        "warnings": warnings,
+    }
