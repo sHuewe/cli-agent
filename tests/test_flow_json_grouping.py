@@ -233,3 +233,57 @@ def test_incremental_sizes_match_exact_json_for_duplicates_and_unicode() -> None
     result = build(routes, assignments, topics, max_bytes=1024)
     for concept in result["concepts"]:
         assert len(dump(concept).encode("utf-8")) <= 1024
+
+
+@pytest.mark.parametrize("folder_path", [
+    "doctrines/example-md",
+    "doctrines/app-28-edb-v1-03-2024-md",
+    "a/b/c",
+])
+def test_group_accepts_safe_nested_folder_paths(folder_path: str) -> None:
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = folder_path
+    topics["topics"][0]["path"] = folder_path + "/requirements.md"
+    result = build(routes, assignments, topics)
+    assert result["folder"]["path"] == folder_path
+    assert result["concepts"][0]["path"] == folder_path + "/requirements.md"
+
+
+@pytest.mark.parametrize("folder_path", [
+    "/absolute", "../escape", "a/../escape", "a/./b", "a//b",
+    "a/", "a\\\\b", "a/b_c", "a/b.md", "a/UPPER",
+])
+def test_group_rejects_unsafe_nested_folder_paths(folder_path: str) -> None:
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = folder_path
+    topics["topics"][0]["path"] = folder_path + "/requirements.md"
+    with pytest.raises(ValueError, match="Ungültiger semantischer Ordnerpfad"):
+        build(routes, assignments, topics)
+
+
+def test_group_rejects_topic_path_outside_nested_folder() -> None:
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = "doctrines/example"
+    topics["topics"][0]["path"] = "doctrines/other/requirements.md"
+    with pytest.raises(ValueError, match="Topic-Pfad außerhalb"):
+        build(routes, assignments, topics)
+
+
+@pytest.mark.parametrize("reserved", [
+    "con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9",
+])
+def test_group_rejects_reserved_windows_folder_names(reserved: str) -> None:
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = f"doctrines/{reserved}"
+    topics["topics"][0]["path"] = f"doctrines/{reserved}/requirements.md"
+    with pytest.raises(ValueError, match="Ungültiger semantischer Ordnerpfad"):
+        build(routes, assignments, topics)
+
+
+@pytest.mark.parametrize("reserved", ["con", "nul", "com1", "lpt9"])
+def test_group_rejects_reserved_windows_topic_names(reserved: str) -> None:
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = "doctrines/example"
+    topics["topics"][0]["path"] = f"doctrines/example/{reserved}.md"
+    with pytest.raises(ValueError, match="Reservierter Windows-Gerätename"):
+        build(routes, assignments, topics)
