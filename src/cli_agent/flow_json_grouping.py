@@ -67,6 +67,30 @@ def group_assigned_items(
     if type(max_concept_bytes) is not int or not 1024 <= max_concept_bytes <= 10_000_000:
         raise ValueError("Ungültiges Konzept-Bytelimit.")
 
+    # Optional single semantic level beneath a doctrine/module folder.
+    # Existing single-folder registries without "folders" remain valid.
+    semantic_folders = _list(registry.get("folders", []), "topics.folders")
+    if len(semantic_folders) > 12:
+        raise ValueError("Zu viele semantische Unterordner (maximal 12).")
+    child_paths: set[str] = set()
+    child_ids: set[str] = set()
+    for entry in semantic_folders:
+        child = _object(entry, "semantic folder")
+        child_id = _string(child.get("id"), "semantic folder.id")
+        child_path = _string(child.get("path"), "semantic folder.path")
+        _string(child.get("title"), "semantic folder.title")
+        if (
+            not re.fullmatch(folder_segment, child_id)
+            or child_id in _WINDOWS_RESERVED_NAMES
+            or child_path != f"{folder_path}/{child_id}"
+            or child_path.casefold() in child_paths
+            or child_id in child_ids
+            or len(child_path) > 512
+        ):
+            raise ValueError(f"Ungültiger semantischer Unterordner: {child_path!r}.")
+        child_paths.add(child_path.casefold())
+        child_ids.add(child_id)
+
     topic_map: dict[str, dict[str, Any]] = {}
     paths: set[str] = set()
     for source in _list(registry.get("topics"), "topics.topics"):
@@ -75,11 +99,21 @@ def group_assigned_items(
         path = _string(topic.get("path"), "topic.path")
         if not re.fullmatch(r"[a-z][a-z0-9_-]*", topic_id):
             raise ValueError(f"Ungültige Topic-ID {topic_id!r}.")
-        if not re.fullmatch(
-            re.escape(folder_path) + r"/[a-z0-9]+(?:-[a-z0-9]+)*\.md", path
+        # A doctrine may either keep a flat layout or declare a set of
+        # semantic subfolders. No arbitrary depth and no undeclared folders.
+        if "/" not in path:
+            raise ValueError(f"Topic-Pfad außerhalb des Ordners: {path!r}.")
+        parent, filename = path.rsplit("/", 1)
+        if (
+            not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*\.md", filename)
+            or (
+                parent not in child_paths
+                if semantic_folders
+                else parent != folder_path
+            )
         ):
             raise ValueError(f"Topic-Pfad außerhalb des Ordners: {path!r}.")
-        if path.rsplit("/", 1)[-1][:-3] in _WINDOWS_RESERVED_NAMES:
+        if filename[:-3] in _WINDOWS_RESERVED_NAMES:
             raise ValueError(f"Reservierter Windows-Gerätename im Topic-Pfad: {path!r}.")
         if topic_id in topic_map or path.casefold() in paths:
             raise ValueError("Topic-IDs und Dateipfade müssen eindeutig sein.")
@@ -273,6 +307,7 @@ def group_assigned_items(
 
     return {
         "folder": folder,
+        "folders": semantic_folders,
         "concepts": concepts,
         "concept_summaries": [
             {"id": item["id"], "path": item["path"], "title": item["title"]}
