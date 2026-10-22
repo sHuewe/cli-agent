@@ -33,6 +33,7 @@ dev = [
 
 [project.scripts]
 cli-agent = "cli_agent.cli:main"
+cli-agent-api = "cli_agent.agent_api:main"
 cli-agent-flow = "cli_agent.flow:main"
 cli-agent-knowledge = "cli_agent.knowledge_cli:main"
 cli-agent-rag = "cli_agent.rag_cli:main"
