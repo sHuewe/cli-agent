@@ -614,8 +614,10 @@ def main() -> None:
     import uvicorn
     args = build_parser().parse_args()
     service = build_service(args)
-    print(f"cli-agent-api: http://{API_HOST}:{args.port} (nur localhost)")
-    print(f"Bearer-Token: {service.token}")
+    # Service managers and desktop integrations often pipe stdout. Explicitly
+    # flush before Uvicorn blocks so clients can read the API credential.
+    print(f"cli-agent-api: http://{API_HOST}:{args.port} (nur localhost)", flush=True)
+    print(f"Bearer-Token: {service.token}", flush=True)
     uvicorn.run(
         create_app(service), host=API_HOST, port=args.port,
         proxy_headers=False, access_log=False, server_header=False,
