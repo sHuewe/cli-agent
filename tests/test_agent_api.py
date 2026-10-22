@@ -209,7 +209,7 @@ async def test_approval_is_per_run_and_denied_without_listener():
         assert (await client.post(
             f"/sessions/{sid}/runs/{rid}/approvals/{pending[0]}",
             json={"decision": "yes"}, headers=headers(service)
-        )).status_code == 409
+        )).status_code == 404
         assert (await client.post(
             f"/sessions/{sid}/runs/{rid2}/approvals/{pending[0]}",
             json={"decision": "wrong"}, headers=headers(service)
