@@ -79,7 +79,8 @@ class AgentSession:
         self.agent: Any = None
         self.listeners = 0
         self.broker = WebUiApprovalBroker(workspace=approval_workspace)
-        self.broker.attach(self._send_approval)
+        self._approval_sender = self._send_approval
+        self.broker.attach(self._approval_sender)
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._worker())
@@ -136,7 +137,7 @@ class AgentSession:
                     self._run.emit({"type": "RUN_ERROR", "message": "Agentenworker wurde beendet."})
         finally:
             self._closed = True
-            self.broker.detach(self._send_approval)
+            self.broker.detach(self._approval_sender)
             if self._run is not None:
                 self._run.changed.set()
 
@@ -168,6 +169,10 @@ class AgentSession:
             run.emit({"type": "CUSTOM", "name": "tool_status", "value": {
                 "toolCallId": tool_id, "status": str(payload.get("status") or "finished")
             }})
+
+    async def _send_user_message(self, payload: dict[str, Any]) -> None:
+        if self._run is not None and not self._run.done:
+            self._run.emit({"type": "CUSTOM", "name": "mcp_user_message", "value": payload})
 
     async def _send_approval(self, payload: dict[str, Any]) -> None:
         if self.listeners < 1 or self._run is None:
@@ -526,7 +531,7 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
             workspace_access=args.os_access,
         )
         agent.event_callback = session.on_agent_event
-        session.broker.set_event_sender(session._send_approval)
+        session.broker.set_event_sender(session._send_user_message)
         return agent
 
     return AgentApiService(factory, approval_workspace=approval_workspace)
