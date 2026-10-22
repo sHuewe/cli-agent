@@ -267,3 +267,23 @@ def test_group_rejects_topic_path_outside_nested_folder() -> None:
     topics["topics"][0]["path"] = "doctrines/other/requirements.md"
     with pytest.raises(ValueError, match="Topic-Pfad außerhalb"):
         build(routes, assignments, topics)
+
+
+@pytest.mark.parametrize("reserved", [
+    "con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9",
+])
+def test_group_rejects_reserved_windows_folder_names(reserved: str) -> None:
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = f"doctrines/{reserved}"
+    topics["topics"][0]["path"] = f"doctrines/{reserved}/requirements.md"
+    with pytest.raises(ValueError, match="Ungültiger semantischer Ordnerpfad"):
+        build(routes, assignments, topics)
+
+
+@pytest.mark.parametrize("reserved", ["con", "nul", "com1", "lpt9"])
+def test_group_rejects_reserved_windows_topic_names(reserved: str) -> None:
+    routes, assignments, topics = source_fixture()
+    topics["folder"]["path"] = "doctrines/example"
+    topics["topics"][0]["path"] = f"doctrines/example/{reserved}.md"
+    with pytest.raises(ValueError, match="Reservierter Windows-Gerätename"):
+        build(routes, assignments, topics)
