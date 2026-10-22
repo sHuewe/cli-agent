@@ -99,3 +99,47 @@ def test_manifest_rejects_valid_but_wrong_source():
     with pytest.raises(ValueError, match="inventarisierten"):
         build_okf_manifest(plan=plan, navigation=nav,
                            expected_source_path="doctrines/source.md")
+
+
+def test_doctrine_validation_requires_matching_inventory_identity():
+    plan = doctrine()
+    plan["source_path"] = "doctrines/source.md"
+    assert validate_okf_plan(
+        plan, plan_kind="doctrine",
+        expected_source_path="doctrines/source.md",
+        expected_source_slug="source-123",
+    ) is plan
+    with pytest.raises(ValueError, match="folder.id"):
+        validate_okf_plan(
+            plan, plan_kind="doctrine",
+            expected_source_path="doctrines/source.md",
+            expected_source_slug="other-slug",
+        )
+    with pytest.raises(ValueError, match="source_path"):
+        validate_okf_plan(
+            plan, plan_kind="doctrine",
+            expected_source_path="doctrines/other.md",
+            expected_source_slug="source-123",
+        )
+
+
+def test_theme_validation_rejects_stale_members():
+    plan = {"status": "ok", "themes": [{
+        "id": "shared", "path": "themen/shared.md",
+        "concept_paths": ["doctrines/first/a.md", "doctrines/second/b.md"],
+    }]}
+    manifests = [
+        {"status": "ok", "module_path": "doctrines/first",
+         "concepts": [{"path": "doctrines/first/a.md"}]},
+        {"status": "ok", "module_path": "doctrines/second",
+         "concepts": [{"path": "doctrines/second/b.md"}]},
+    ]
+    assert validate_okf_plan(plan, plan_kind="themes", manifests=manifests) == plan
+    with pytest.raises(ValueError, match="veraltete"):
+        validate_okf_plan(plan, plan_kind="themes", manifests=[
+            manifests[0], {**manifests[1], "concepts": []},
+        ])
+    with pytest.raises(ValueError, match="Unvollständiges"):
+        validate_okf_plan(plan, plan_kind="themes", manifests=[
+            {**manifests[0], "status": "needs_attention"}, manifests[1],
+        ])
