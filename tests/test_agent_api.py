@@ -198,7 +198,7 @@ async def test_approval_is_per_run_and_denied_without_listener():
         rid = (await client.post(run_url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
         assert (await run_until_done(client, sid, rid, service))["answer"] == "approved=False"
         session = service.sessions[sid]
-        session.listeners = 1  # Simulate an authenticated subscriber
+        session._run.listeners = 1  # Simulate an authenticated subscriber for this run
         rid2 = (await client.post(run_url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
         for _ in range(100):
             pending = list(session.broker._pending)
@@ -436,4 +436,81 @@ async def test_context_patch_rechecks_busy_after_body_read():
             assert response.status_code == 409
             assert agents[0].enabled["read"] is True
             assert service.sessions[sid]._run.id == rid
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_old_run_subscribers_do_not_authorize_new_run_approvals():
+    service, _agents = make_test_service()
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        session = service.sessions[sid]
+        url = f"/sessions/{sid}/runs"
+        first_id = (await client.post(url, json={"prompt": "first"}, headers=headers(service))).json()["run_id"]
+        await run_until_done(client, sid, first_id, service)
+        previous = session._run
+        session.subscribe(previous)  # Previous SSE generator is still draining.
+        assert previous.listeners == 1
+        next_id = (await client.post(
+            url, json={"prompt": "needs approval"}, headers=headers(service)
+        )).json()["run_id"]
+        current = session._run
+        assert current is not previous
+        assert current.listeners == 0
+        result = await run_until_done(client, sid, next_id, service)
+        assert result["answer"] == "approved=False"
+        assert not session.broker._pending
+        session.unsubscribe(previous)
+        assert current.listeners == 0
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_stale_sse_disconnect_does_not_deny_current_run_approval():
+    service, _agents = make_test_service()
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        session = service.sessions[sid]
+        url = f"/sessions/{sid}/runs"
+        first_id = (await client.post(url, json={"prompt": "first"}, headers=headers(service))).json()["run_id"]
+        await run_until_done(client, sid, first_id, service)
+        previous = session._run
+        session.subscribe(previous)
+        next_id = (await client.post(url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
+        current = session._run
+        session.subscribe(current)
+        for _ in range(100):
+            if session.broker._pending:
+                break
+            await asyncio.sleep(0.005)
+        assert session.broker._pending
+        session.unsubscribe(previous)
+        assert session.broker._pending  # Old listener must not deny the new request.
+        request_id = next(iter(session.broker._pending))
+        assert (await client.post(
+            f"/sessions/{sid}/runs/{next_id}/approvals/{request_id}",
+            json={"decision": "yes"}, headers=headers(service)
+        )).status_code == 200
+        assert (await run_until_done(client, sid, next_id, service))["answer"] == "approved=True"
+        session.unsubscribe(current)
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_current_run_last_listener_disconnect_denies_pending_approval():
+    service, _agents = make_test_service()
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        session = service.sessions[sid]
+        url = f"/sessions/{sid}/runs"
+        rid = (await client.post(url, json={"prompt": "needs approval"}, headers=headers(service))).json()["run_id"]
+        current = session._run
+        session.subscribe(current)
+        for _ in range(100):
+            if session.broker._pending:
+                break
+            await asyncio.sleep(0.005)
+        assert session.broker._pending
+        session.unsubscribe(current)
+        assert (await run_until_done(client, sid, rid, service))["answer"] == "approved=False"
     await service.shutdown()
