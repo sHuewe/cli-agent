@@ -77,7 +77,10 @@ class AgentSession:
         *,
         approval_workspace: Any = None,
         output_target: Any = None,
+        initial_commands: tuple[str, ...] = (),
     ) -> None:
+        self.initial_commands = initial_commands
+        self.initial_messages: list[str] = []
         self.output_target = output_target
         self.id = uuid.uuid4().hex
         self._factory = factory
@@ -105,6 +108,8 @@ class AgentSession:
             agent = self._factory(self)
             async with agent:
                 self.agent = agent
+                for initial_command in self.initial_commands:
+                    self.initial_messages.append(await agent.ask(initial_command))
                 if not self._ready.done():
                     self._ready.set_result(None)
                 while True:
@@ -255,7 +260,8 @@ class AgentSession:
 
 
 class AgentApiService:
-    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None, output_target: Any = None) -> None:
+    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None, output_target: Any = None, initial_commands: tuple[str, ...] = ()) -> None:
+        self.initial_commands = initial_commands
         self.factory = factory
         self.output_target = output_target
         self.approval_workspace = approval_workspace
@@ -271,7 +277,7 @@ class AgentApiService:
                 raise RuntimeError("API-Server wird beendet.")
             if len(self.sessions) >= MAX_SESSIONS:
                 raise OverflowError("Maximale Anzahl von Sessions erreicht.")
-            session = AgentSession(self.factory, approval_workspace=self.approval_workspace, output_target=self.output_target)
+            session = AgentSession(self.factory, approval_workspace=self.approval_workspace, output_target=self.output_target, initial_commands=self.initial_commands)
             self.sessions[session.id] = session
 
         try:
@@ -567,7 +573,8 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
 
     async def ui_bootstrap(_request: Request) -> Response:
         assert ui is not None
-        return JSONResponse({"session_id": ui["session_id"], **ui["info"]})
+        session = service.sessions[ui["session_id"]]
+        return JSONResponse({"session_id": session.id, **ui["info"], "initial_messages": session.initial_messages})
 
     async def ui_render(request: Request) -> Response:
         from .web_ui import _render_markdown
