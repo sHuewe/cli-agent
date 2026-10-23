@@ -291,7 +291,11 @@ API_APP_JS = """
 
   function tokenFromFragment() {
     const params = new URLSearchParams(window.location.hash.slice(1));
-    return params.get("token");
+    const value = params.get("token");
+    try {
+      if (value) window.sessionStorage.setItem("cli-agent-browser-token", value);
+      return value || window.sessionStorage.getItem("cli-agent-browser-token");
+    } catch (_error) { return value; }
   }
 
   const token = tokenFromFragment();
@@ -439,6 +443,7 @@ API_APP_JS = """
     }
     if (msg.type === "quit") {
       await api("/ui/shutdown", "POST", {});
+      try { window.sessionStorage.removeItem("cli-agent-browser-token"); } catch (_error) {}
       emit({type:"shutdown", content:"Web-UI wird beendet."});
     }
   }
@@ -693,9 +698,11 @@ async def run_web_ui_via_api(
     from .config import McpServerConfig, default_config_file
     from .file_context import ContextFileCliAgent
     from .model_factory import create_model_client
+    from .logging_setup import configure_logging
     from .os_operations import Workspace
     from .terminal_output import sanitize_terminal_text
 
+    configure_logging(config.logging)
     config_file = args.config or default_config_file()
     exclusions = tuple(excluded_paths)
     preview_workspace = (
