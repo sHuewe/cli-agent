@@ -622,7 +622,8 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             ui is not None
             and secrets.compare_digest(token, ui["token"])
             and request.headers.get("x-cli-agent-browser") == "1"
-            and (origin is None if request.method in {"GET", "HEAD"}
+            and ((origin is None or origin == ui["origin"])
+                 if request.method in {"GET", "HEAD"}
                  else origin == ui["origin"])
             and (path.startswith("/ui/") or
                  (path.startswith(f'/sessions/{ui["session_id"]}/')
