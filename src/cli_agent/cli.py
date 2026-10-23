@@ -668,48 +668,32 @@ async def run(args: argparse.Namespace) -> None:
         print(_status_text(f"Output-Datei: {output_target.path}"))
 
     web_ui = bool(getattr(args, "with_web_ui", False))
-    web_approval_broker = None
     if web_ui:
-        from .web_ui import (
-            WebUiApprovalBroker,
-            ensure_web_ui_available,
-            run_web_ui,
-        )
-
-        # Validate the optional dependency set before model/MCP construction.
+        from .web_ui import ensure_web_ui_available
         ensure_web_ui_available()
-        # Mirror the OS MCP server's protected workspace boundaries for previews.
-        # This must not permit inspecting files excluded from the agent's access.
-        protected_for_preview = (
-            args.config or default_config_file(),
-            *resolved_excluded_paths,
-        )
-        web_approval_broker = WebUiApprovalBroker(
-            workspace=Workspace.from_directory(
-                workspace,
-                McpServerConfig(name="os", config={"allow_write_files": True}),
-                protected_paths=tuple(protected_for_preview),
-                mutation_protected_paths=tuple(
-                    file.source_path for file in file_contexts
-                ) + (
-                    (prompt_file.source_path,) if prompt_file is not None else ()
-                ),
-            ) if args.os_access == "write" else None
-        )
-        approval_callback = build_preapproval_callback(
-            getattr(args, "approve_tool", ()),
-            fallback=web_approval_broker.approve_tool_call,
-        )
-    else:
-        approval_callback = build_approval_callback(
-            getattr(args, "approve_tool", ())
-        )
+    approval_callback = build_approval_callback(
+        getattr(args, "approve_tool", ())
+    )
+    web_approval_broker = None
 
     if web_ui and one_shot_prompt is not None:
         raise ValueError(
             "--with-web-ui ist nur für den interaktiven Modus ohne positional "
             "Prompt oder --prompt-file vorgesehen."
         )
+
+    if web_ui:
+        from .web_ui_api import run_web_ui_via_api
+        await run_web_ui_via_api(
+            args=args,
+            config=config,
+            admin_config=admin_config,
+            workspace=workspace,
+            file_contexts=file_contexts,
+            output_target=output_target,
+            excluded_paths=resolved_excluded_paths,
+        )
+        return
 
     if one_shot_prompt is not None:
         result = await run_once(
