@@ -1,0 +1,668 @@
+# API-backed variant of the existing Web-UI JavaScript.
+# The browser talks only to the Starlette API endpoints and never to agent.ask().
+API_APP_JS = """
+(() => {
+  "use strict";
+
+  const chat = document.getElementById("chat");
+  const form = document.getElementById("composer");
+  const prompt = document.getElementById("prompt");
+  const send = document.getElementById("send");
+  const quit = document.getElementById("quit");
+  const resetHistory = document.getElementById("reset-history");
+  const meta = document.getElementById("session-meta");
+  const showWorkingContext = document.getElementById("show-working-context");
+  const workingContextDialog = document.getElementById("working-context-dialog");
+  const workingMessagesJson = document.getElementById("working-messages-json");
+  const workingToolsList = document.getElementById("working-tools-list");
+  const workingContextsList = document.getElementById("working-contexts-list");
+  const okfState = document.getElementById("okf-state");
+  const refreshWorkingContext = document.getElementById("refresh-working-context");
+  const closeWorkingContext = document.getElementById("close-working-context");
+  const contextTabMessages = document.getElementById("context-tab-messages");
+  const contextTabTools = document.getElementById("context-tab-tools");
+  const contextTabContexts = document.getElementById("context-tab-contexts");
+  const contextPanelMessages = document.getElementById("context-panel-messages");
+  const contextPanelTools = document.getElementById("context-panel-tools");
+  const contextPanelContexts = document.getElementById("context-panel-contexts");
+  const commandButtons = Array.from(
+    document.querySelectorAll("button[data-command]")
+  );
+  const cancelCommand = document.getElementById("cancel-command");
+  const approval = document.getElementById("approval");
+  const approvalTool = document.getElementById("approval-tool");
+  const approvalArguments = document.getElementById("approval-arguments");
+  const approvalDiffSection = document.getElementById("approval-diff-section");
+  const approvalDiff = document.getElementById("approval-diff");
+  const approvalWarning = document.getElementById("approval-warning");
+
+  let socket = null;
+  let pendingApprovalId = null;
+  let pendingCommand = null;
+  let busy = false;
+
+  const COMMANDS = {
+    tokens: {
+      argument: false,
+      display: "tokens"
+    },
+    clear_web_context: {
+      argument: false,
+      display: "clear_web_context"
+    },
+    add_web_context: {
+      argument: true,
+      display: "add_web_context",
+      question: "Welche URL soll als Web-Kontext hinzugefügt werden?",
+      placeholder: "https://…"
+    },
+    enable: {
+      argument: true,
+      display: "enable",
+      question: "Welcher MCP-Server soll aktiviert werden?",
+      placeholder: "Name des MCP-Servers"
+    },
+    disable: {
+      argument: true,
+      display: "disable",
+      question: "Welcher MCP-Server soll deaktiviert werden?",
+      placeholder: "Name des MCP-Servers"
+    }
+  };
+
+  function addMessage(kind, content, renderedHtml = null) {
+    const element = document.createElement("div");
+    element.className = "message " + kind;
+    if (kind === "assistant" && typeof renderedHtml === "string") {
+      element.innerHTML = renderedHtml;
+    } else {
+      element.textContent = content;
+    }
+    chat.appendChild(element);
+    element.scrollIntoView({ block: "end", behavior: "smooth" });
+  }
+
+  function setBusy(value) {
+    busy = Boolean(value);
+    const disconnected = !sessionId;
+    prompt.disabled = busy;
+    send.disabled = busy || disconnected;
+    showWorkingContext.disabled = disconnected;
+    resetHistory.disabled = busy || disconnected;
+
+    for (const button of commandButtons) {
+      button.disabled = busy || disconnected;
+    }
+    for (const button of document.querySelectorAll("button[data-runtime-toggle]")) {
+      const permanentlyDisabled =
+        button.dataset.permanentlyDisabled === "true";
+      button.disabled = busy || disconnected || permanentlyDisabled;
+    }
+    cancelCommand.disabled = busy || disconnected;
+    if (!busy) {
+      prompt.focus();
+    }
+  }
+
+  function resetPendingCommand() {
+    pendingCommand = null;
+    prompt.placeholder = "Nachricht an cli-agent";
+    cancelCommand.classList.add("hidden");
+  }
+
+  function sendCommand(name, argument = null) {
+    if (busy || !sessionId) {
+      return;
+    }
+    socket.send(JSON.stringify({
+      type: "command",
+      command: name,
+      argument
+    }));
+    setBusy(true);
+  }
+
+  function beginCommand(name) {
+    const spec = COMMANDS[name];
+    if (!spec) {
+      return;
+    }
+    if (!spec.argument) {
+      resetPendingCommand();
+      addMessage("user", spec.display);
+      sendCommand(name);
+      return;
+    }
+    pendingCommand = name;
+    prompt.placeholder = spec.placeholder;
+    cancelCommand.classList.remove("hidden");
+    addMessage("system", spec.question);
+    prompt.focus();
+  }
+
+  function setContextTab(tab) {
+    const showMessages = tab === "messages";
+    const showTools = tab === "tools";
+    const showContexts = tab === "contexts";
+    contextTabMessages.classList.toggle("active", showMessages);
+    contextTabTools.classList.toggle("active", showTools);
+    contextTabContexts.classList.toggle("active", showContexts);
+    contextTabMessages.setAttribute("aria-selected", String(showMessages));
+    contextTabTools.setAttribute("aria-selected", String(showTools));
+    contextTabContexts.setAttribute("aria-selected", String(showContexts));
+    contextPanelMessages.classList.toggle("hidden", !showMessages);
+    contextPanelTools.classList.toggle("hidden", !showTools);
+    contextPanelContexts.classList.toggle("hidden", !showContexts);
+  }
+
+  function stateToggleButton(label, enabled, onClick, disabled = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = enabled ? "secondary" : "";
+    button.textContent = enabled ? "Disable" : "Enable";
+    button.title = label;
+    button.dataset.runtimeToggle = "true";
+    button.dataset.permanentlyDisabled = String(Boolean(disabled));
+    const disconnected = !sessionId;
+    button.disabled = Boolean(disabled) || busy || disconnected;
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function renderTools(tools) {
+    workingToolsList.replaceChildren();
+    if (!tools.length) {
+      const empty = document.createElement("div");
+      empty.className = "meta";
+      empty.textContent = "Keine MCP-Tools verfügbar.";
+      workingToolsList.appendChild(empty);
+      return;
+    }
+    for (const tool of tools) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = String(tool.name || "");
+      const description = document.createElement("div");
+      description.className = "state-description";
+      description.textContent = String(tool.description || "");
+      const serverEnabled = tool.server_enabled !== false;
+      const enabled = Boolean(tool.enabled);
+      const button = stateToggleButton(
+        name.textContent,
+        enabled,
+        () => socket.send(JSON.stringify({
+          type: "tool_toggle",
+          name: tool.name,
+          enabled: !enabled
+        })),
+        !serverEnabled
+      );
+      if (!serverEnabled) {
+        button.title = "MCP-Server ist deaktiviert.";
+      }
+      row.append(name, description, button);
+      workingToolsList.appendChild(row);
+    }
+  }
+
+  function renderContexts(contexts, okf) {
+    workingContextsList.replaceChildren();
+    okfState.replaceChildren();
+
+    if (okf && okf.configured) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = "OKF Knowledge";
+      const description = document.createElement("div");
+      description.className = "state-description";
+      description.textContent = okf.available
+        ? "Konfigurierter Knowledge-Lauf vor der Hauptanfrage."
+        : "Konfiguriert, aber aktuell nicht verfügbar.";
+      const enabled = Boolean(okf.enabled);
+      const button = stateToggleButton(
+        "OKF Knowledge",
+        enabled,
+        () => socket.send(JSON.stringify({
+          type: "okf_toggle",
+          enabled: !enabled
+        }))
+      );
+      row.append(name, description, button);
+      okfState.appendChild(row);
+    }
+
+    if (!contexts.length) {
+      const empty = document.createElement("div");
+      empty.className = "meta";
+      empty.textContent = "Keine Datei- oder Web-Kontexte vorhanden.";
+      workingContextsList.appendChild(empty);
+      return;
+    }
+
+    for (const context of contexts) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const heading = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = String(context.label || context.source || "");
+      const source = document.createElement("div");
+      source.className = "state-source";
+      source.textContent = (context.kind === "file" ? "Datei: " : "Web: ") +
+        String(context.source || "");
+      heading.append(name, source);
+
+      const body = document.createElement("div");
+      body.className = "state-description";
+      const content = document.createElement("div");
+      content.className = "state-content";
+      content.textContent = String(context.content || "");
+      body.appendChild(content);
+
+      const enabled = Boolean(context.enabled);
+      const button = stateToggleButton(
+        name.textContent,
+        enabled,
+        () => socket.send(JSON.stringify({
+          type: "context_toggle",
+          id: context.id,
+          enabled: !enabled
+        }))
+      );
+      row.append(heading, body, button);
+      workingContextsList.appendChild(row);
+    }
+  }
+
+  function requestWorkingContext() {
+    if (!sessionId) {
+      const message = "Web-UI-Verbindung ist nicht aktiv.";
+      workingMessagesJson.textContent = message;
+      workingToolsList.textContent = message;
+      workingContextsList.textContent = message;
+      return;
+    }
+    socket.send(JSON.stringify({ type: "working_context" }));
+  }
+
+  function tokenFromFragment() {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    return params.get("token");
+  }
+
+  const token = tokenFromFragment();
+  if (!token) {
+    meta.textContent = "Ungültiger Start-Link: Session-Token fehlt.";
+    prompt.disabled = true;
+    send.disabled = true;
+    return;
+  }
+
+
+  // In-process API transport; no WebSocket or direct agent calls.
+  // Token arrives only in the URL fragment and is immediately removed.
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  let sessionId = null;
+  let runId = null;
+  let streamController = null;
+  const socketBridge = {
+    readyState: WebSocket.OPEN,
+    send(data) {
+      let msg;
+      try { msg = JSON.parse(data); }
+      catch (_error) { return; }
+      void dispatchAction(msg).catch(showApiError);
+    }
+  };
+  socket = socketBridge;
+
+  async function api(path, method = "GET", body = undefined, controller = null) {
+    const headers = {
+      Authorization: "Bearer " + token,
+      "X-Cli-Agent-Browser": "1"
+    };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (method !== "GET") headers["Origin"] = window.location.origin;
+    // Origin is a forbidden browser header; browser sets it automatically
+    // for cross-origin requests only, and same-origin POST usually includes it.
+    delete headers["Origin"];
+    const response = await fetch(path, {
+      method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store", credentials: "omit", signal: controller?.signal
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || "HTTP " + response.status);
+    }
+    return response;
+  }
+
+  function emit(payload) {
+    processServerMessage({ data: JSON.stringify(payload) });
+  }
+
+  function showApiError(error) {
+    addMessage("error", String(error?.message || error));
+    setBusy(false);
+  }
+
+  async function updateContext() {
+    const resp = await api("/sessions/" + sessionId + "/working-context");
+    const body = await resp.json();
+    emit({ type: "working_context", ...body });
+  }
+
+  async function watchRun(activeRun) {
+    const res = await api("/sessions/" + sessionId + "/runs/" + activeRun + "/events");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let answer = "";
+    let finished = false;
+    try {
+      while (!finished) {
+        const next = await reader.read();
+        if (next.done) break;
+        buffer += decoder.decode(next.value, {stream: true});
+        let pos;
+        while ((pos = buffer.indexOf("\n\n")) !== -1) {
+          const block = buffer.slice(0, pos);
+          buffer = buffer.slice(pos + 2);
+          const data = block.split("\n").filter(line => line.startsWith("data:"))
+            .map(line => line.slice(5).trimStart()).join("\n");
+          if (!data) continue;
+          const event = JSON.parse(data);
+          if (event.type === "TEXT_MESSAGE_CONTENT") answer += String(event.delta || "");
+          else if (event.type === "CUSTOM") {
+            if (event.name === "approval_required") emit({type: "approval_required", ...event.value});
+            if (event.name === "mcp_user_message") emit({type: "mcp_user_message", ...event.value});
+            if (event.name === "output_error") emit({type: "error", content: event.value?.message});
+          } else if (event.type === "RUN_ERROR") {
+            emit({type: "error", content: String(event.message || "Agentenlauf fehlgeschlagen.")});
+            finished = true;
+          } else if (event.type === "RUN_FINISHED") {
+            finished = true;
+          }
+        }
+      }
+      if (answer) {
+        const rendered = await (await api("/ui/render", "POST", {text: answer})).json();
+        emit({type: "answer", content: answer, html: rendered.html});
+      }
+      if (!finished) throw new Error("Agenten-Eventstream vorzeitig beendet.");
+    } finally {
+      reader.releaseLock();
+      runId = null;
+      emit({type: "busy", value: false});
+    }
+  }
+
+  async function dispatchAction(msg) {
+    if (!sessionId) return;
+    const base = "/sessions/" + sessionId;
+    if (msg.type === "message" || msg.type === "command") {
+      let promptText = msg.content;
+      if (msg.type === "command") {
+        const spec = COMMANDS[msg.command];
+        if (!spec || (spec.argument && typeof msg.argument !== "string")) {
+          throw new Error("Ungültiger lokaler Befehl.");
+        }
+        promptText = msg.command + (spec.argument ? " " + msg.argument : "");
+      }
+      if (typeof promptText !== "string") throw new Error("Ungültiger Prompt.");
+      const response = await (await api(base + "/runs", "POST", {prompt: promptText})).json();
+      runId = response.run_id;
+      await watchRun(runId);
+      return;
+    }
+    if (msg.type === "working_context") return updateContext();
+    if (msg.type === "reset_history") {
+      await api(base + "/reset", "POST", {});
+      emit({type:"history_reset"});
+      return updateContext();
+    }
+    if (msg.type === "tool_toggle" || msg.type === "context_toggle" || msg.type === "okf_toggle") {
+      let patch;
+      if (msg.type === "tool_toggle") patch = {tools: {[msg.name]: msg.enabled}};
+      if (msg.type === "context_toggle") patch = {contexts: {[msg.id]: msg.enabled}};
+      if (msg.type === "okf_toggle") patch = {okf: msg.enabled};
+      await api(base + "/context", "PATCH", patch);
+      return updateContext();
+    }
+    if (msg.type === "approval_response") {
+      if (!runId) return;
+      await api(base + "/runs/" + runId + "/approvals/" + encodeURIComponent(msg.id),
+        "POST", {decision: msg.decision});
+      return;
+    }
+    if (msg.type === "quit") {
+      await api("/ui/shutdown", "POST", {});
+      emit({type:"shutdown", content:"Web-UI wird beendet."});
+    }
+  }
+
+  function processServerMessage(event) {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (_error) {
+      addMessage("error", "Ungültige Antwort vom lokalen Web-UI-Server.");
+      return;
+    }
+
+    if (payload.type === "session") {
+      reconnectAttempts = 0;
+      quit.disabled = false;
+      const servers = Array.isArray(payload.mcp_servers)
+        ? payload.mcp_servers.join(", ")
+        : "";
+      meta.textContent =
+        "Workspace: " + payload.workspace +
+        " · Modell: " + payload.model +
+        " · MCP: " + (servers || "(keine)");
+      for (const message of payload.initial_messages || []) {
+        addMessage("system", String(message));
+      }
+      return;
+    }
+    if (payload.type === "busy") {
+      setBusy(payload.value);
+      return;
+    }
+    if (payload.type === "answer") {
+      addMessage(
+        "assistant",
+        String(payload.content || ""),
+        typeof payload.html === "string" ? payload.html : null
+      );
+      return;
+    }
+    if (payload.type === "error") {
+      addMessage("error", String(payload.content || "Unbekannter Fehler."));
+      return;
+    }
+    if (payload.type === "mcp_user_message") {
+      const source = String(payload.source || "").trim();
+      const content = String(payload.content || "");
+      addMessage(
+        "mcp-user",
+        source ? "MCP (" + source + ")\\n" + content : content
+      );
+      return;
+    }
+    if (payload.type === "working_context") {
+      const messages = Array.isArray(payload.messages) ? payload.messages : [];
+      const tools = Array.isArray(payload.tools) ? payload.tools : [];
+      const contexts = Array.isArray(payload.contexts) ? payload.contexts : [];
+      workingMessagesJson.textContent = JSON.stringify(messages, null, 2);
+      renderTools(tools);
+      renderContexts(contexts, payload.okf || {});
+      return;
+    }
+    if (payload.type === "history_reset") {
+      resetPendingCommand();
+      chat.replaceChildren();
+      addMessage("system", "History wurde zurückgesetzt.");
+      return;
+    }
+    if (payload.type === "approval_required") {
+      pendingApprovalId = String(payload.id);
+      approvalTool.textContent = String(payload.tool || "");
+      approvalArguments.textContent = String(payload.arguments || "{}");
+      approvalDiffSection.classList.toggle("hidden", typeof payload.diff !== "string");
+      approvalDiff.replaceChildren();
+      if (typeof payload.diff === "string") {
+        for (const line of payload.diff.split("\\n")) {
+          const span = document.createElement("span");
+          span.textContent = line + "\\n";
+          if (line.startsWith("+") && !line.startsWith("+++")) span.style.color = "#288a42";
+          if (line.startsWith("-") && !line.startsWith("---")) span.style.color = "#d24747";
+          approvalDiff.append(span);
+        }
+      }
+      approvalWarning.classList.toggle("hidden", !payload.diff_error);
+      approvalWarning.textContent = String(payload.diff_error || "");
+      for (const button of approval.querySelectorAll('button[data-decision="yes"], button[data-decision="session"]')) {
+        button.disabled = !!payload.diff_blocked;
+      }
+      approval.showModal();
+      return;
+    }
+    if (payload.type === "shutdown") {
+      addMessage("system", String(payload.content || "Sitzung beendet."));
+      setBusy(true);
+    }
+  }
+
+  async function bootstrap() {
+    try {
+      const response = await (await api("/ui/bootstrap")).json();
+      sessionId = response.session_id;
+      emit({type: "session", ...response});
+      emit({type: "busy", value: false});
+    } catch (error) {
+      meta.textContent = "Web-UI-Verbindung fehlgeschlagen.";
+      showApiError(error);
+    }
+  }
+  setBusy(true);
+  void bootstrap();
+
+  showWorkingContext.addEventListener("click", () => {
+    workingMessagesJson.textContent = "Wird geladen …";
+    workingToolsList.textContent = "Wird geladen …";
+    workingContextsList.textContent = "Wird geladen …";
+    okfState.replaceChildren();
+    setContextTab("messages");
+    if (!workingContextDialog.open) {
+      workingContextDialog.showModal();
+    }
+    requestWorkingContext();
+  });
+
+  refreshWorkingContext.addEventListener("click", () => {
+    workingMessagesJson.textContent = "Wird geladen …";
+    workingToolsList.textContent = "Wird geladen …";
+    workingContextsList.textContent = "Wird geladen …";
+    okfState.replaceChildren();
+    requestWorkingContext();
+  });
+
+  closeWorkingContext.addEventListener("click", () => {
+    workingContextDialog.close();
+  });
+
+  contextTabMessages.addEventListener("click", () => setContextTab("messages"));
+  contextTabTools.addEventListener("click", () => setContextTab("tools"));
+  contextTabContexts.addEventListener("click", () => setContextTab("contexts"));
+
+  resetHistory.addEventListener("click", () => {
+    if (busy || !sessionId) {
+      return;
+    }
+    if (!window.confirm("Conversation-History wirklich zurücksetzen?")) {
+      return;
+    }
+    socket.send(JSON.stringify({ type: "reset_history" }));
+  });
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (busy || !sessionId) {
+      return;
+    }
+    const content = prompt.value.trim();
+    if (!content) {
+      return;
+    }
+    addMessage("user", content);
+    prompt.value = "";
+    if (pendingCommand) {
+      const command = pendingCommand;
+      resetPendingCommand();
+      sendCommand(command, content);
+      return;
+    }
+    socket.send(JSON.stringify({ type: "message", content }));
+    setBusy(true);
+  });
+
+  prompt.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
+  for (const button of commandButtons) {
+    button.addEventListener("click", () => {
+      beginCommand(button.dataset.command);
+    });
+  }
+
+  cancelCommand.addEventListener("click", () => {
+    if (pendingCommand) {
+      addMessage("system", "Befehl abgebrochen.");
+    }
+    resetPendingCommand();
+    prompt.focus();
+  });
+
+  approval.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-decision]");
+    if (!button || !pendingApprovalId || !sessionId) {
+      return;
+    }
+    socket.send(JSON.stringify({
+      type: "approval_response",
+      id: pendingApprovalId,
+      decision: button.dataset.decision
+    }));
+    pendingApprovalId = null;
+    approval.close();
+  });
+
+  approval.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    if (pendingApprovalId && sessionId) {
+      socket.send(JSON.stringify({
+        type: "approval_response",
+        id: pendingApprovalId,
+        decision: "no"
+      }));
+    }
+    pendingApprovalId = null;
+    approval.close();
+  });
+
+  quit.addEventListener("click", () => {
+    if (sessionId) {
+      socket.send(JSON.stringify({ type: "quit" }));
+    }
+  });
+})();
+"""
