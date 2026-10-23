@@ -78,7 +78,9 @@ class AgentSession:
         approval_workspace: Any = None,
         output_target: Any = None,
         initial_commands: tuple[str, ...] = (),
+        debug_errors: bool = False,
     ) -> None:
+        self.debug_errors = debug_errors
         self.initial_commands = initial_commands
         self.initial_messages: list[str] = []
         self.output_target = output_target
@@ -139,7 +141,11 @@ class AgentSession:
                         run.emit({"type": "RUN_FINISHED", "threadId": self.id, "runId": run.id})
                     except Exception as exc:
                         run.status = "failed"
-                        run.error = f"{type(exc).__name__}: {exc}"
+                        if self.debug_errors:
+                            import traceback
+                            run.error = "".join(traceback.format_exception(exc))
+                        else:
+                            run.error = f"{type(exc).__name__}: {exc}"
                         # Do not disclose internal exception details in stream events.
                         run.emit({"type": "RUN_ERROR", "message": "Agentenlauf fehlgeschlagen."})
                     finally:
@@ -260,7 +266,8 @@ class AgentSession:
 
 
 class AgentApiService:
-    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None, output_target: Any = None, initial_commands: tuple[str, ...] = ()) -> None:
+    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None, output_target: Any = None, initial_commands: tuple[str, ...] = (), debug_errors: bool = False) -> None:
+        self.debug_errors = debug_errors
         self.initial_commands = initial_commands
         self.factory = factory
         self.output_target = output_target
@@ -277,7 +284,7 @@ class AgentApiService:
                 raise RuntimeError("API-Server wird beendet.")
             if len(self.sessions) >= MAX_SESSIONS:
                 raise OverflowError("Maximale Anzahl von Sessions erreicht.")
-            session = AgentSession(self.factory, approval_workspace=self.approval_workspace, output_target=self.output_target, initial_commands=self.initial_commands)
+            session = AgentSession(self.factory, approval_workspace=self.approval_workspace, output_target=self.output_target, initial_commands=self.initial_commands, debug_errors=self.debug_errors)
             self.sessions[session.id] = session
 
         try:
