@@ -674,7 +674,6 @@ async def run(args: argparse.Namespace) -> None:
     approval_callback = build_approval_callback(
         getattr(args, "approve_tool", ())
     )
-    web_approval_broker = None
 
     if web_ui and one_shot_prompt is not None:
         raise ValueError(
@@ -744,11 +743,7 @@ async def run(args: argparse.Namespace) -> None:
         web_providers=admin_config.web.providers,
         mcp_policy=admin_config.mcp,
         approval_callback=approval_callback,
-        user_message_callback=(
-            web_approval_broker.show_mcp_user_message
-            if web_approval_broker is not None
-            else _show_mcp_user_message
-        ),
+        user_message_callback=_show_mcp_user_message,
         okf=config.okf,
         knowledge_vector=config.knowledge_vector,
         model_credential_rules=admin_config.model_credentials,
@@ -758,27 +753,9 @@ async def run(args: argparse.Namespace) -> None:
     )
 
     async with agent:
-        web_context_statuses: list[str] = []
         for url in getattr(args, "add_web_context", ()):
             status = await agent.ask(f"add_web_context {url}")
-            if web_ui:
-                web_context_statuses.append(status)
-            else:
-                print(sanitize_terminal_text(status, multiline=True))
-
-        if web_ui:
-            assert web_approval_broker is not None
-            await run_web_ui(
-                agent=agent,
-                approval_broker=web_approval_broker,
-                workspace=workspace,
-                model=config.model.model,
-                mcp_servers=tuple(server.name for server in config.mcp_servers),
-                output_target=output_target,
-                initial_messages=tuple(web_context_statuses),
-                debug=args.debug,
-            )
-            return
+            print(sanitize_terminal_text(status, multiline=True))
 
         print("Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung.")
         while True:
