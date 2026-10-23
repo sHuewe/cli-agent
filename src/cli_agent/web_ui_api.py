@@ -384,7 +384,8 @@ API_APP_JS = """
             if (event.name === "mcp_user_message") emit({type: "mcp_user_message", ...event.value});
             if (event.name === "output_error") emit({type: "error", content: event.value?.message});
           } else if (event.type === "RUN_ERROR") {
-            emit({type: "error", content: String(event.message || "Agentenlauf fehlgeschlagen.")});
+            const details = await (await api("/sessions/" + sessionId + "/runs/" + activeRun)).json();
+            emit({type: "error", content: String(details.error || event.message || "Agentenlauf fehlgeschlagen.")});
             finished = true;
           } else if (event.type === "RUN_FINISHED") {
             finished = true;
@@ -750,6 +751,7 @@ async def run_web_ui_via_api(
         factory,
         approval_workspace=preview_workspace,
         output_target=output_target,
+        debug_errors=bool(getattr(args, 'debug', False)),
         initial_commands=tuple(
             f"add_web_context {url}"
             for url in getattr(args, "add_web_context", ()) or ()
