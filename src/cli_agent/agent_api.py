@@ -565,18 +565,26 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             return error(404, "Session nicht gefunden.")
         return JSONResponse({"text": session.agent.token_usage_text()})
 
+    def browser_security_headers(response: Response) -> Response:
+        from .web_ui import _security_headers
+        response = _security_headers(response)
+        # The API-backed browser makes same-origin fetch requests only.
+        response.headers["Content-Security-Policy"] = (
+            response.headers["Content-Security-Policy"].replace(" ws://127.0.0.1:*", "")
+        )
+        return response
+
     async def ui_index(_request: Request) -> Response:
-        from .web_ui import INDEX_HTML, _security_headers
-        return _security_headers(HTMLResponse(INDEX_HTML))
+        from .web_ui import INDEX_HTML
+        return browser_security_headers(HTMLResponse(INDEX_HTML))
 
     async def ui_css(_request: Request) -> Response:
-        from .web_ui import APP_CSS, _security_headers
-        return _security_headers(PlainTextResponse(APP_CSS, media_type="text/css"))
+        from .web_ui import APP_CSS
+        return browser_security_headers(PlainTextResponse(APP_CSS, media_type="text/css"))
 
     async def ui_js(_request: Request) -> Response:
         from .web_ui_api import API_APP_JS
-        from .web_ui import _security_headers
-        return _security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
+        return browser_security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
 
     async def ui_bootstrap(_request: Request) -> Response:
         assert ui is not None
