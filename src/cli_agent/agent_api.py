@@ -76,7 +76,9 @@ class AgentSession:
         factory: Callable[["AgentSession"], Any],
         *,
         approval_workspace: Any = None,
+        output_target: Any = None,
     ) -> None:
+        self.output_target = output_target
         self.id = uuid.uuid4().hex
         self._factory = factory
         self._ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -120,6 +122,14 @@ class AgentSession:
                         run.emit({"type": "TEXT_MESSAGE_START", "messageId": message_id, "role": "assistant"})
                         run.emit({"type": "TEXT_MESSAGE_CONTENT", "messageId": message_id, "delta": answer})
                         run.emit({"type": "TEXT_MESSAGE_END", "messageId": message_id})
+                        if self.output_target is not None:
+                            from .file_context import is_local_agent_command
+                            if not is_local_agent_command(run.prompt):
+                                try:
+                                    self.output_target.write_text(answer)
+                                except Exception:
+                                    run.emit({"type": "CUSTOM", "name": "output_error",
+                                              "value": {"message": "Ausgabedatei konnte nicht geschrieben werden."}})
                         run.status = "completed"
                         run.emit({"type": "RUN_FINISHED", "threadId": self.id, "runId": run.id})
                     except Exception as exc:
@@ -245,8 +255,9 @@ class AgentSession:
 
 
 class AgentApiService:
-    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None) -> None:
+    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None, output_target: Any = None) -> None:
         self.factory = factory
+        self.output_target = output_target
         self.approval_workspace = approval_workspace
         # Slots are reserved before MCP startup (which may suspend indefinitely).
         self.sessions: dict[str, AgentSession] = {}
@@ -260,7 +271,7 @@ class AgentApiService:
                 raise RuntimeError("API-Server wird beendet.")
             if len(self.sessions) >= MAX_SESSIONS:
                 raise OverflowError("Maximale Anzahl von Sessions erreicht.")
-            session = AgentSession(self.factory, approval_workspace=self.approval_workspace)
+            session = AgentSession(self.factory, approval_workspace=self.approval_workspace, output_target=self.output_target)
             self.sessions[session.id] = session
 
         try:
@@ -298,11 +309,11 @@ class AgentApiService:
             await session.close()
 
 
-def create_app(service: AgentApiService) -> Any:
-    """Create a loopback-only ASGI application; all API routes need a bearer."""
+def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) -> Any:
+    """Create a loopback-only ASGI app. Browser mode shares the same API service."""
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import JSONResponse, Response, StreamingResponse
+    from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
     from starlette.routing import Route
     from starlette.middleware import Middleware
     from starlette.middleware.base import BaseHTTPMiddleware
@@ -541,26 +552,78 @@ def create_app(service: AgentApiService) -> Any:
             return error(404, "Session nicht gefunden.")
         return JSONResponse({"text": session.agent.token_usage_text()})
 
+    async def ui_index(_request: Request) -> Response:
+        from .web_ui import INDEX_HTML, _security_headers
+        return _security_headers(HTMLResponse(INDEX_HTML))
+
+    async def ui_css(_request: Request) -> Response:
+        from .web_ui import APP_CSS, _security_headers
+        return _security_headers(PlainTextResponse(APP_CSS, media_type="text/css"))
+
+    async def ui_js(_request: Request) -> Response:
+        from .web_ui_api import API_APP_JS
+        from .web_ui import _security_headers
+        return _security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
+
+    async def ui_bootstrap(_request: Request) -> Response:
+        assert ui is not None
+        return JSONResponse({"session_id": ui["session_id"], **ui["info"]})
+
+    async def ui_render(request: Request) -> Response:
+        from .web_ui import _render_markdown
+        try:
+            async with checked_json(request) as body:
+                if set(body) != {"text"} or not isinstance(body["text"], str):
+                    return error(400, "Text erwartet.")
+                if len(body["text"].encode("utf-8")) > MAX_PROMPT_BYTES:
+                    return error(400, "Text zu groß.")
+                return JSONResponse({"html": _render_markdown(body["text"])})
+        except ValueError as exc:
+            return error(400, str(exc))
+
+    async def ui_shutdown(_request: Request) -> Response:
+        assert ui is not None
+        service.sessions[ui["session_id"]].broker.deny_all()
+        ui["shutdown"]()
+        return JSONResponse({"shutdown": True})
+
     async def health(_request: Request) -> Response:
         return JSONResponse({"status": "ok"})
 
     async def authenticate(request: Request, call_next: Any) -> Response:
-        # Host validation also prevents trivial DNS-rebinding attacks.
+        # Reject rebinding / proxies even for public static assets.
         host = request.headers.get("host", "").split(":")[0].lower()
-        if host != API_HOST:
+        if host != API_HOST or request.headers.get("x-forwarded-host") or request.headers.get("forwarded"):
             return error(403, "Unzulässiger Host.")
-        if request.headers.get("origin") is not None:
-            return error(403, "Browser-Origin nicht zugelassen.")
-        if request.headers.get("x-forwarded-host") or request.headers.get("forwarded"):
-            return error(403, "Weitergeleitete Host-Header nicht zugelassen.")
+        path = request.url.path
+        origin = request.headers.get("origin")
+        if ui is not None and path in {"/", "/assets/app.css", "/assets/app.js"}:
+            if request.method != "GET" or origin is not None:
+                return error(403, "Unzulässige Browser-Anfrage.")
+            return await call_next(request)
         header = request.headers.get("authorization", "")
         prefix = "Bearer "
-        if not header.startswith(prefix) or not secrets.compare_digest(header[len(prefix):], service.token):
+        token = header[len(prefix):] if header.startswith(prefix) else ""
+        browser = (
+            ui is not None
+            and secrets.compare_digest(token, ui["token"])
+            and request.headers.get("x-cli-agent-browser") == "1"
+            and (origin is None if request.method in {"GET", "HEAD"}
+                 else origin == ui["origin"])
+            and (path.startswith("/ui/") or
+                 (path.startswith(f'/sessions/{ui["session_id"]}/')
+                  and request.method != "DELETE"))
+        )
+        if browser:
+            return await call_next(request)
+        if origin is not None:
+            return error(403, "Browser-Origin nicht zugelassen.")
+        if not token or not secrets.compare_digest(token, service.token):
             return error(401, "Authentifizierung erforderlich.")
         return await call_next(request)
 
     app = Starlette(
-        routes=[
+        routes=([
             Route("/health", health, methods=["GET"]),
             Route("/sessions", create_session, methods=["POST"]),
             Route("/sessions/{session_id}", delete_session, methods=["DELETE"]),
@@ -573,7 +636,14 @@ def create_app(service: AgentApiService) -> Any:
             Route("/sessions/{session_id}/runs/{run_id}", run_status, methods=["GET"]),
             Route("/sessions/{session_id}/runs/{run_id}/events", run_events, methods=["GET"]),
             Route("/sessions/{session_id}/runs/{run_id}/approvals/{approval_id}", approve, methods=["POST"]),
-        ],
+        ] + ([
+            Route("/", ui_index, methods=["GET"]),
+            Route("/assets/app.css", ui_css, methods=["GET"]),
+            Route("/assets/app.js", ui_js, methods=["GET"]),
+            Route("/ui/bootstrap", ui_bootstrap, methods=["GET"]),
+            Route("/ui/render", ui_render, methods=["POST"]),
+            Route("/ui/shutdown", ui_shutdown, methods=["POST"]),
+        ] if ui is not None else [])),
         lifespan=lifespan,
         middleware=[Middleware(BaseHTTPMiddleware, dispatch=authenticate)],
     )
