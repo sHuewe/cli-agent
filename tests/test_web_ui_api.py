@@ -89,7 +89,7 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
         assert (await client.get("/ui/bootstrap", headers={**headers, "Host": "evil.example"})).status_code == 403
         assert (await client.get("/ui/bootstrap", headers={**headers, "X-Forwarded-Host": "evil.example"})).status_code == 403
         assert (await client.get("/health", headers=headers)).status_code == 401
-        assert (await client.post("/sessions", json={}, headers={**headers, "Origin": ui["origin"]})).status_code == 401
+        assert (await client.post("/sessions", json={}, headers={**headers, "Origin": ui["origin"]})).status_code == 403
         assert (await client.get("/sessions/not-ours/working-context", headers=headers)).status_code == 401
 
         uri = f"/sessions/{session.id}"
