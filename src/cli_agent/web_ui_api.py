@@ -306,6 +306,7 @@ API_APP_JS = """
   // In-process API transport; no WebSocket or direct agent calls.
   // Token arrives only in the URL fragment and is immediately removed.
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  let reconnectAttempts = 0;
   let sessionId = null;
   let runId = null;
   let streamController = null;
@@ -326,10 +327,7 @@ API_APP_JS = """
       "X-Cli-Agent-Browser": "1"
     };
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    if (method !== "GET") headers["Origin"] = window.location.origin;
-    // Origin is a forbidden browser header; browser sets it automatically
-    // for cross-origin requests only, and same-origin POST usually includes it.
-    delete headers["Origin"];
+    // Browsers set Origin themselves for POST/PATCH; it is a forbidden header.
     const response = await fetch(path, {
       method, headers, body: body === undefined ? undefined : JSON.stringify(body),
       cache: "no-store", credentials: "omit", signal: controller?.signal
