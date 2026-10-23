@@ -513,6 +513,34 @@ def create_app(service: AgentApiService) -> Any:
         except ValueError as exc:
             return error(400, str(exc))
 
+    async def working_context(request: Request) -> Response:
+        session = service.sessions.get(request.path_params["session_id"])
+        if session is None:
+            return error(404, "Session nicht gefunden.")
+        agent = session.agent
+        return JSONResponse({
+            "messages": agent.working_messages_snapshot(),
+            "tools": agent.tool_states_snapshot(),
+            "contexts": agent.context_states_snapshot(),
+            "okf": agent.okf_status_snapshot(),
+        })
+
+    async def reset_history(request: Request) -> Response:
+        session = service.sessions.get(request.path_params["session_id"])
+        if session is None:
+            return error(404, "Session nicht gefunden.")
+        if session._busy or session._closed:
+            return error(409, "Session ist beschäftigt oder geschlossen.")
+        session.broker.deny_all()
+        session.agent.reset_history()
+        return JSONResponse({"reset": True})
+
+    async def usage(request: Request) -> Response:
+        session = service.sessions.get(request.path_params["session_id"])
+        if session is None:
+            return error(404, "Session nicht gefunden.")
+        return JSONResponse({"text": session.agent.token_usage_text()})
+
     async def health(_request: Request) -> Response:
         return JSONResponse({"status": "ok"})
 
@@ -537,6 +565,9 @@ def create_app(service: AgentApiService) -> Any:
             Route("/sessions", create_session, methods=["POST"]),
             Route("/sessions/{session_id}", delete_session, methods=["DELETE"]),
             Route("/sessions/{session_id}/context", context, methods=["GET"]),
+            Route("/sessions/{session_id}/working-context", working_context, methods=["GET"]),
+            Route("/sessions/{session_id}/reset", reset_history, methods=["POST"]),
+            Route("/sessions/{session_id}/usage", usage, methods=["GET"]),
             Route("/sessions/{session_id}/context", update_context, methods=["PATCH"]),
             Route("/sessions/{session_id}/runs", start_run, methods=["POST"]),
             Route("/sessions/{session_id}/runs/{run_id}", run_status, methods=["GET"]),
