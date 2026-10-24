@@ -413,7 +413,8 @@ async def test_agui_http_validation_bounded_json_and_proprietary_routes_removed(
 @pytest.mark.asyncio
 async def test_agui_limits_session_mutations_while_running():
     service, agents = make_test_service()
-    session = await service.create()
+    # Standalone thread IDs are explicitly mapped to isolated MCP sessions.
+    session = await service.resolve_agui_thread("held-external-thread")
     gate = asyncio.Event()
     async def held_ask(prompt):
         await gate.wait()
@@ -421,7 +422,7 @@ async def test_agui_limits_session_mutations_while_running():
     agents[0].ask = held_ask
     try:
         async with await client_for(service) as client:
-            params = {"threadId": session.id, "runId": "held",
+            params = {"threadId": "held-external-thread", "runId": "held",
                       "protocolVersion": "1.0",
                       "messages": [{"id": "u", "role": "user", "content": "hello"}]}
             active = asyncio.create_task(client.post("/ag-ui", json=params, headers={
