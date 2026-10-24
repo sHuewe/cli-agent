@@ -461,3 +461,56 @@ async def test_agui_tool_result_from_another_thread_is_rejected():
             assert first_session._pending_frontend[0].id == "call-1"
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_real_conversation_entry_records_unfinished_frontend_checkpoint():
+    """The actual ConversationMixin.ask() must checkpoint before unwinding."""
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Agent(ConversationMixin):
+        def __init__(self):
+            self._exit_stack = object()
+            self.history = []
+            self.logging_config = SimpleNamespace(log_prompts=False)
+            self._tool_routes = {}
+            self._active_servers = set()
+            self.max_tool_calls = 10
+            self._agui_frontend_tools = normalize_frontend_tools(
+                [definition()], server_names=set()
+            )
+
+        async def _collect_knowledge(self, prompt): return None
+        def _build_reference_context_message(self, **kw): return None
+        def _build_system_prompt(self, **kw): return "Trusted policy"
+        def _model_tools(self): return []
+        async def _run_model_loop(self, *, messages, tools, **kw):
+            assert tools[0]["function"]["name"] == "show_view"
+            assert messages[0]["content"] == "Trusted policy"
+            raise FrontendToolHandoff(
+                [FrontendToolCall("tool", "show_view", "{}")],
+                {"role": "assistant", "content": ""},
+            )
+
+    agent = Agent()
+    with pytest.raises(FrontendToolHandoff):
+        await agent.ask("open energy")
+    assert agent._agui_pending_original_prompt == "open energy"
+    assert agent._agui_pending_working_messages[-1] == {
+        "role": "user", "content": "open energy"
+    }
+    assert agent.history == []
+
+
+def test_frontend_history_reduces_result_content_parts_and_error():
+    value = history_for_model([
+        {"role": "tool", "id": "tool", "toolCallId": "call",
+         "content": [
+             {"type": "text", "text": "done"},
+             {"type": "image", "source": {"type": "url", "value": "https://a"}},
+         ], "error": "denied"},
+    ])
+    assert value == [{
+        "role": "tool", "tool_call_id": "call",
+        "content": "FEHLER: denied\ndone",
+    }]
