@@ -120,6 +120,10 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
 
         rid = (await client.post(uri + "/runs", json={"prompt": "hi"},
             headers={**headers, "Origin": ui["origin"]})).json()["run_id"]
+        # Embedded-browser runs wait for their SSE consumer before execution.
+        sse = await client.get(uri + "/runs/" + rid + "/events", headers=headers)
+        assert sse.status_code == 200
+        assert "RUN_FINISHED" in sse.text
         for _ in range(100):
             run = (await client.get(uri + "/runs/" + rid, headers=headers)).json()
             if run["status"] == "completed":
