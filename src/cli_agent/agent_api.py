@@ -599,31 +599,53 @@ class AgentApiService:
         multiple MCP workers for the same logical conversation.
         """
         async with self._agui_thread_lock:
-            current_id = self._agui_threads.get(thread_id, thread_id)
-            current = self.sessions.get(current_id)
+            # Standalone AG-UI IDs must never alias an unrelated internal
+            # session ID (for example one owned by the embedded browser).
+            current_id = self._agui_threads.get(thread_id)
+            current = self.sessions.get(current_id) if current_id is not None else None
             if current is not None:
                 return current
+            self._agui_threads.pop(thread_id, None)
             session = await self.create()
             self._agui_threads[thread_id] = session.id
             return session
 
-    async def remove(self, session_id: str) -> bool:
+    async def _remove_session_locked(self, session_id: str) -> bool:
+        """Delete a session and every external thread alias under thread lock."""
         async with self._lifecycle_lock:
             session = self.sessions.pop(session_id, None)
+            for thread_id, mapped_id in tuple(self._agui_threads.items()):
+                if mapped_id == session_id:
+                    del self._agui_threads[thread_id]
         if session is None:
             return False
+        # A paused approval or frontend handoff may own live MCP resources.
+        # Close the worker before another request can recreate this thread.
         await session.close()
         return True
 
+    async def remove_agui_thread(self, thread_id: str) -> bool:
+        """Close a standalone client's thread using its original AG-UI ID."""
+        async with self._agui_thread_lock:
+            session_id = self._agui_threads.get(thread_id)
+            if session_id is None:
+                return False
+            return await self._remove_session_locked(session_id)
+
+    async def remove(self, session_id: str) -> bool:
+        async with self._agui_thread_lock:
+            return await self._remove_session_locked(session_id)
+
     async def shutdown(self) -> None:
-        async with self._lifecycle_lock:
-            self._shutting_down = True
-            sessions = tuple(self.sessions.values())
-            self.sessions.clear()
-            self._agui_threads.clear()
-        # Include sessions whose start() is still in progress.
-        for session in sessions:
-            await session.close()
+        async with self._agui_thread_lock:
+            async with self._lifecycle_lock:
+                self._shutting_down = True
+                sessions = tuple(self.sessions.values())
+                self.sessions.clear()
+                self._agui_threads.clear()
+            # Include sessions whose start() is still in progress.
+            for session in sessions:
+                await session.close()
 
 
 def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) -> Any:
@@ -698,6 +720,20 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
     async def delete_session(request: Request) -> Response:
         if not await service.remove(request.path_params["session_id"]):
             return error(404, "Session nicht gefunden.")
+        return Response(status_code=204)
+
+    async def delete_agui_thread(request: Request) -> Response:
+        """Standalone AG-UI management extension (not part of AG-UI 1.0).
+
+        External clients only know their threadId, never the private random
+        internal session ID. Browser sessions remain managed exclusively by
+        /ui/sessions and are deliberately not addressable via this endpoint.
+        """
+        thread_id = request.path_params["thread_id"]
+        if not isinstance(thread_id, str) or not 0 < len(thread_id) <= 128:
+            return error(400, "Ungültige AG-UI-threadId.")
+        if not await service.remove_agui_thread(thread_id):
+            return error(404, "AG-UI-Thread nicht gefunden.")
         return Response(status_code=204)
 
     async def ag_ui_capabilities(_request: Request) -> Response:
@@ -1288,6 +1324,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/health", health, methods=["GET"]),
             Route("/ag-ui", ag_ui_run, methods=["POST"]),
             Route("/ag-ui/capabilities", ag_ui_capabilities, methods=["GET"]),
+            Route("/threads/{thread_id:path}", delete_agui_thread, methods=["DELETE"]),
             Route("/sessions", create_session, methods=["POST"]),
             Route("/sessions/{session_id}", delete_session, methods=["DELETE"]),
             Route("/sessions/{session_id}/context", context, methods=["GET"]),
