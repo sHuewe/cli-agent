@@ -201,6 +201,20 @@ class AgentSession:
                             self._pending_frontend = pending
                             self._pending_frontend_thread_id = yielded.thread_id
                             calls = []
+                            handoff_text = str(exc.assistant.get("content") or "")
+                            message_id = uuid.uuid4().hex
+                            if handoff_text:
+                                yielded.emit({
+                                    "type": "TEXT_MESSAGE_START", "messageId": message_id,
+                                    "role": "assistant",
+                                })
+                                yielded.emit({
+                                    "type": "TEXT_MESSAGE_CONTENT", "messageId": message_id,
+                                    "delta": handoff_text,
+                                })
+                                yielded.emit({
+                                    "type": "TEXT_MESSAGE_END", "messageId": message_id,
+                                })
                             for call in pending:
                                 yielded.emit({
                                     "type": "TOOL_CALL_START", "toolCallId": call.id,
@@ -218,9 +232,8 @@ class AgentSession:
                                     },
                                 })
                             self.agui_messages.append({
-                                "id": uuid.uuid4().hex, "role": "assistant",
-                                "content": str(exc.assistant.get("content") or ""),
-                                "toolCalls": calls,
+                                "id": message_id, "role": "assistant",
+                                "content": handoff_text, "toolCalls": calls,
                             })
                             yielded.status = "completed"
                             yielded.emit({
