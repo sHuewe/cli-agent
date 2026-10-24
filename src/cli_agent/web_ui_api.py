@@ -766,8 +766,11 @@ async def run_web_ui_via_api(
         port = int(sock.getsockname()[1])
         origin = f"http://{API_HOST}:{port}"
         session = await service.create()
+        from .web_ui_sessions import BrowserSessionRegistry
+        registry = BrowserSessionRegistry(service, session.id)
         browser_token = secrets.token_urlsafe(32)
         ui = {
+            "registry": registry,
             "token": browser_token,
             "origin": origin,
             "session_id": session.id,
