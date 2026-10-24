@@ -179,21 +179,31 @@ class ConversationMixin:
         self._last_working_messages = working_messages
 
         tools = self._model_tools()
+        if getattr(self, "_agui_frontend_tools", None):
+            tools = [*tools, *self._agui_frontend_tools.values()]
         # Keep the exact tool definitions used for the current/last main-loop
         # request available for local diagnostics such as the Web UI.
         self._last_working_tools = tools
         routes = self._tool_routes
         enabled_server_names = set(self._active_servers)
         main_run_state = ModelLoopRunState()
-        answer = await self._run_model_loop(
-            messages=working_messages,
-            tools=tools,
-            routes=routes,
-            enabled_server_names=enabled_server_names,
-            max_tool_calls=self.max_tool_calls,
-            phase="main",
-            run_state=main_run_state,
-        )
+        try:
+            answer = await self._run_model_loop(
+                messages=working_messages,
+                tools=tools,
+                routes=routes,
+                enabled_server_names=enabled_server_names,
+                max_tool_calls=self.max_tool_calls,
+                phase="main",
+                run_state=main_run_state,
+            )
+        except Exception as exc:
+            from .ag_ui_frontend_tools import FrontendToolHandoff
+            if not isinstance(exc, FrontendToolHandoff):
+                raise
+            self._agui_pending_working_messages = working_messages
+            self._agui_pending_original_prompt = prompt
+            raise
         if getattr(self, "response_format", "text") == "json":
             answer, last_error = _normalize_json_response(answer)
             repairs = 0
@@ -240,6 +250,39 @@ class ConversationMixin:
             ]
         )
         self._dump_context(working_messages, phase="main")
+        return answer
+
+    async def continue_after_frontend_tools(
+        self, results: list[dict[str, Any]]
+    ) -> str:
+        """Continue with the trusted, previously captured model context."""
+        messages = getattr(self, "_agui_pending_working_messages", None)
+        if not isinstance(messages, list):
+            raise RuntimeError("Kein Frontend-Tool-Checkpoint vorhanden.")
+        prompt = getattr(self, "_agui_pending_original_prompt", "")
+        self._agui_pending_working_messages = None
+        self._agui_pending_original_prompt = ""
+        messages.extend(results)
+        tools = self._model_tools()
+        if getattr(self, "_agui_frontend_tools", None):
+            tools = [*tools, *self._agui_frontend_tools.values()]
+        self._last_working_messages = messages
+        self._last_working_tools = tools
+        from .ag_ui_frontend_tools import FrontendToolHandoff
+        try:
+            answer = await self._run_model_loop(
+                messages=messages, tools=tools, routes=self._tool_routes,
+                enabled_server_names=set(self._active_servers),
+                max_tool_calls=self.max_tool_calls, phase="main",
+            )
+        except FrontendToolHandoff:
+            self._agui_pending_working_messages = messages
+            self._agui_pending_original_prompt = prompt
+            raise
+        self.history.extend([
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": answer},
+        ])
         return answer
 
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
