@@ -385,7 +385,10 @@ class AgentSession:
             "message": f"Freigabe für {payload.get('tool', 'Tool')} erforderlich.",
             "responseSchema": {
                 "type": "object",
-                "properties": {"approved": {"type": "boolean"}},
+                "properties": {
+                    "approved": {"type": "boolean"},
+                    "rememberForSession": {"type": "boolean"},
+                },
                 "required": ["approved"],
             },
             "metadata": {"cli-agent": {
@@ -414,7 +417,10 @@ class AgentSession:
             payload = response.get("payload")
             if not isinstance(payload, dict) or type(payload.get("approved")) is not bool:
                 raise ValueError("Ein boolesches approved-Feld wird benötigt.")
-            decision = "yes" if payload["approved"] else "no"
+            decision = (
+                "session" if payload["approved"] and payload.get("rememberForSession") is True
+                else "yes" if payload["approved"] else "no"
+            )
         elif response.get("status") == "cancelled":
             decision = "no"
         else:
