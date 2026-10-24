@@ -517,7 +517,10 @@ API_APP_JS = """
       const input = aguiInput([{
         interruptId: msg.id,
         status: "resolved",
-        payload: {approved: msg.decision === "yes" || msg.decision === "session"}
+        payload: {
+          approved: msg.decision === "yes" || msg.decision === "session",
+          rememberForSession: msg.decision === "session"
+        }
       }]);
       const response = await api("/ag-ui", "POST", input);
       pendingApprovalId = null;
