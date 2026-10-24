@@ -105,6 +105,7 @@ class AgentSession:
         self._pending_frontend: tuple[Any, ...] | None = None
         self._pending_frontend_thread_id: str | None = None
         self._pending_tool_id: str | None = None
+        self._interrupt_tool_ids: set[str] = set()
         self._agui_seen_run_ids: set[str] = set()
         self._opened_tool_calls: set[str] = set()
         self.output_target = output_target
@@ -279,6 +280,7 @@ class AgentSession:
                         self._busy = False
                         self._pending_interrupt = None
                         self._opened_tool_calls.clear()
+                        self._interrupt_tool_ids.clear()
                         run.changed.set()
                         if self._run is not None:
                             self._run.changed.set()
@@ -388,6 +390,10 @@ class AgentSession:
         name = str(payload.get("tool") or "")
         if kind == "tool_started":
             self._pending_tool_id = tool_id
+            if run.agui and tool_id in self._interrupt_tool_ids:
+                # The interrupt's preceding run already emitted the complete
+                # start/arguments/end trio for this call ID.
+                return
             self._opened_tool_calls.add(tool_id)
             run.emit({"type": "TOOL_CALL_START", "toolCallId": tool_id, "toolCallName": name})
             if run.agui:
@@ -397,6 +403,7 @@ class AgentSession:
                 return
         elif kind == "tool_finished":
             if run.agui:
+                self._interrupt_tool_ids.discard(tool_id)
                 if tool_id in self._opened_tool_calls:
                     run.emit({"type": "TOOL_CALL_END", "toolCallId": tool_id})
                     self._opened_tool_calls.discard(tool_id)
@@ -453,7 +460,10 @@ class AgentSession:
         The already-running agent coroutine remains suspended inside the
         policy-controlled approval broker until a *new* AG-UI run resumes it.
         """
-        call_id = self._pending_tool_id or uuid.uuid4().hex
+        call_id = getattr(self.agent, "_agui_approval_call_id", None)
+        if not isinstance(call_id, str) or not call_id:
+            call_id = self._pending_tool_id or uuid.uuid4().hex
+        self._interrupt_tool_ids.add(call_id)
         if call_id not in self._opened_tool_calls:
             run.emit({"type": "TOOL_CALL_START", "toolCallId": call_id,
                       "toolCallName": payload.get("tool", "")})
