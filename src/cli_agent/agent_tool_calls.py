@@ -209,11 +209,27 @@ async def process_tool_calls(
             original_name,
             exposed_name=exposed_name,
         ):
-            approved = await agent._approve_tool_call(
-                exposed_name,
-                arguments,
-            )
+            event_id = str(tool_call.get("id") or uuid.uuid4().hex)
+            approval_context = getattr(agent, "_agui_approval_call_id", None)
+            agent._agui_approval_call_id = event_id
+            try:
+                approved = await agent._approve_tool_call(
+                    exposed_name,
+                    arguments,
+                )
+            finally:
+                agent._agui_approval_call_id = approval_context
             if not approved:
+                # An AG-UI interrupt advertised this model-provided call ID
+                # before the decision. Even when denied, its tool lifecycle
+                # must have a correlated outcome in the resumed run.
+                if getattr(agent, "_agui_frontend_tools", None) is not None:
+                    callback = getattr(agent, "event_callback", None)
+                    if callback is not None:
+                        await callback("tool_finished", {
+                            "call_id": event_id, "tool": exposed_name,
+                            "status": "denied",
+                        })
                 tool_message = agent._append_tool_error(
                     messages,
                     tool_call,

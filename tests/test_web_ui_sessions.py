@@ -122,34 +122,23 @@ async def test_two_independent_sessions_reopen_without_shared_access():
                 f"/sessions/{b_id}/working-context", headers=_headers(lease_a)
             )).status_code == 403
 
-            run_a = await client.post(
-                f"/sessions/{initial.id}/runs",
-                headers=_headers(lease_a, origin=origin), json={"prompt": "Alpha"},
+            # Independent browser tabs communicate via canonical AG-UI.
+            runs = await asyncio.gather(
+                client.post("/ag-ui", json={
+                    "threadId": initial.id, "runId": "run-alpha",
+                    "protocolVersion": "1.0",
+                    "messages": [{"id": "a", "role": "user", "content": "Alpha"}],
+                }, headers={**_headers(lease_a, origin=origin),
+                            "Accept": "text/event-stream"}),
+                client.post("/ag-ui", json={
+                    "threadId": b_id, "runId": "run-beta",
+                    "protocolVersion": "1.0",
+                    "messages": [{"id": "b", "role": "user", "content": "Beta"}],
+                }, headers={**_headers(lease_b, origin=origin),
+                            "Accept": "text/event-stream"}),
             )
-            run_b = await client.post(
-                f"/sessions/{b_id}/runs",
-                headers=_headers(lease_b, origin=origin), json={"prompt": "Beta"},
-            )
-            assert run_a.status_code == 202
-            assert run_b.status_code == 202
-            # Browser sessions require an attached SSE stream; verify both
-            # agents can proceed independently once their own tab listens.
-            streams = await asyncio.gather(
-                client.get(
-                    f"/sessions/{initial.id}/runs/{run_a.json()['run_id']}/events",
-                    headers=_headers(lease_a),
-                ),
-                client.get(
-                    f"/sessions/{b_id}/runs/{run_b.json()['run_id']}/events",
-                    headers=_headers(lease_b),
-                ),
-            )
-            assert all(response.status_code == 200 for response in streams)
-            assert all("RUN_FINISHED" in response.text for response in streams)
-            for _ in range(100):
-                if agents[0].history and agents[1].history:
-                    break
-                await asyncio.sleep(0.005)
+            assert all(x.status_code == 200 for x in runs)
+            assert all("RUN_FINISHED" in x.text for x in runs)
             assert agents[0].history == ["Alpha"]
             assert agents[1].history == ["Beta"]
 
@@ -271,64 +260,14 @@ async def test_initial_contexts_do_not_share_mcp_startup_deadline():
 
 
 @pytest.mark.asyncio
-async def test_replay_omits_resolved_or_denied_tool_approvals():
-    """A reload must not offer a stale approval that now returns HTTP 409."""
-    import json
+async def test_browser_reconnect_is_private_and_requires_tab_lease():
     service = AgentApiService(lambda session: _Agent(session))
     session = await service.create()
-    try:
-        run = session.submit("example")
-        for _ in range(100):
-            if run.done:
-                break
-            await asyncio.sleep(0.005)
-        assert run.done
-        # Reproduce a historical approval request in an otherwise completed
-        # run. It is deliberately not pending in the broker.
-        old = {"type": "CUSTOM", "name": "approval_required",
-               "value": {"id": "already-denied", "tool": "os__write_file"}}
-        run.events = (run.events[:1] + [(2, old)] +
-                      [(seq + 1, event) for seq, event in run.events[1:]])
-        run.next_sequence += 1
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=create_app(service)),
-            base_url="http://127.0.0.1:9191",
-        ) as client:
-            events = await client.get(
-                f"/sessions/{session.id}/runs/{run.id}/events",
-                headers={"Authorization": f"Bearer {service.token}"},
-            )
-            assert events.status_code == 200
-            payloads = [
-                json.loads(line[6:]) for line in events.text.splitlines()
-                if line.startswith("data: ")
-            ]
-            assert not any(item.get("name") == "approval_required"
-                           for item in payloads)
-            assert any(item["type"] == "RUN_FINISHED" for item in payloads)
-    finally:
-        await service.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_browser_run_limit_reserves_connections_for_heartbeat_and_approvals():
-    """With 8 possible sessions, only 4 may hold long-lived browser streams.
-
-    Otherwise six HTTP/1.1 SSE requests can exhaust a browser origin pool
-    and block the POSTs required to approve tools or renew tab leases.
-    """
-    from cli_agent.agent_api import MAX_CONCURRENT_BROWSER_RUNS
-
-    assert MAX_CONCURRENT_BROWSER_RUNS == 4
-    service = AgentApiService(lambda session: _Agent(session))
-    sessions = [await service.create() for _ in range(6)]
-    registry = BrowserSessionRegistry(service, sessions[0].id)
-    for session in sessions[1:]:
-        registry.register(session.id)
     origin = "http://127.0.0.1:9191"
     ui = {
         "token": "browser-secret", "origin": origin,
-        "session_id": sessions[0].id, "registry": registry,
+        "session_id": session.id,
+        "registry": BrowserSessionRegistry(service, session.id),
         "info": {"model": "test", "workspace": ".", "mcp_servers": []},
         "shutdown": lambda: None,
     }
@@ -337,146 +276,101 @@ async def test_browser_run_limit_reserves_connections_for_heartbeat_and_approval
             transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
             base_url=origin,
         ) as client:
-            leases = []
-            for session in sessions:
-                claimed = await client.post(
-                    "/ui/bootstrap", headers=_headers(origin=origin),
-                    json={"session_id": session.id},
-                )
-                assert claimed.status_code == 200
-                leases.append(claimed.json()["lease"])
-
-            running = []
-            for session, lease in zip(sessions[:4], leases[:4]):
-                response = await client.post(
-                    f"/sessions/{session.id}/runs",
-                    json={"prompt": "hello"},
-                    headers=_headers(lease, origin=origin),
-                )
-                assert response.status_code == 202
-                running.append(session._run)
-            # The fifth browser run is rejected *before* occupying its
-            # session; no SSE connection is opened by the rejected request.
-            rejected = await client.post(
-                f"/sessions/{sessions[4].id}/runs",
-                json={"prompt": "hello"},
-                headers=_headers(leases[4], origin=origin),
-            )
-            assert rejected.status_code == 429
-            assert not sessions[4]._busy
-            assert sessions[4]._run is None
-
-            # Control requests must retain capacity while those runs are live.
-            heartbeat = await client.post(
-                "/ui/heartbeat", json={"session_id": sessions[4].id},
-                headers=_headers(leases[4], origin=origin),
-            )
-            assert heartbeat.status_code == 204
-            listing = await client.get("/ui/sessions", headers=_headers())
-            assert listing.status_code == 200
-
-            # Completing a run immediately frees its slot. Other sessions
-            # may run concurrently, and the standalone API has no such cap.
-            sessions[0].subscribe(running[0])
-            for _ in range(100):
-                if running[0].done:
-                    break
-                await asyncio.sleep(0.005)
-            assert running[0].status == "completed"
-            accepted = await client.post(
-                f"/sessions/{sessions[4].id}/runs",
-                json={"prompt": "hello"},
-                headers=_headers(leases[4], origin=origin),
-            )
-            assert accepted.status_code == 202
+            auth = _headers(origin=origin)
+            claim = await client.post("/ui/bootstrap", headers=auth, json={})
+            lease = claim.json()["lease"]
+            run = await client.post("/ag-ui", headers={
+                **_headers(lease, origin=origin), "Accept": "text/event-stream",
+            }, json={
+                "threadId": session.id, "runId": "reconnect-test",
+                "protocolVersion": "1.0",
+                "messages": [{"id": "m", "role": "user", "content": "hello"}],
+            })
+            assert run.status_code == 200
+            url = f"/ui/reconnect/{session.id}/reconnect-test"
+            assert (await client.get(url, headers=_headers())).status_code == 403
+            assert (await client.get(url, headers=_headers("incorrect"))).status_code == 403
+            good = await client.get(url, headers=_headers(lease))
+            assert good.status_code == 200
+            assert "RUN_FINISHED" in good.text
+            assert (await client.get(url, headers={
+                **_headers(lease), "Last-Event-ID": "invalid"
+            })).status_code == 400
+            assert (await client.get(
+                f"/ui/reconnect/{session.id}/nonexistent",
+                headers=_headers(lease),
+            )).status_code == 404
     finally:
         await service.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_browser_run_limit_reserves_connections_for_approvals_and_heartbeats():
-    """Four SSE runs leave two of six browser HTTP/1.1 slots free."""
+async def test_browser_agui_run_limit_keeps_heartbeats_available():
     from cli_agent.agent_api import MAX_CONCURRENT_BROWSER_RUNS
+    gate = asyncio.Event()
 
-    assert MAX_CONCURRENT_BROWSER_RUNS <= 4
-    agents = []
-    def factory(session):
-        agent = _Agent(session)
-        agents.append(agent)
-        return agent
+    class SlowAgent(_Agent):
+        async def ask(self, prompt):
+            await gate.wait()
+            return await super().ask(prompt)
 
-    service = AgentApiService(factory)
-    initial = await service.create()
-    registry = BrowserSessionRegistry(service, initial.id)
+    service = AgentApiService(lambda session: SlowAgent(session))
+    sessions = [await service.create() for _ in range(5)]
+    registry = BrowserSessionRegistry(service, sessions[0].id)
+    for session in sessions[1:]:
+        registry.register(session.id)
     origin = "http://127.0.0.1:9191"
-    app = create_app(service, ui={
-        "token": "browser-secret", "origin": origin,
-        "session_id": initial.id, "registry": registry,
-        "info": {"model": "fake", "workspace": ".", "mcp_servers": []},
-        "shutdown": lambda: None,
-    })
+    ui = {"token": "browser-secret", "origin": origin,
+          "session_id": sessions[0].id, "registry": registry,
+          "info": {"model": "test", "workspace": ".", "mcp_servers": []},
+          "shutdown": lambda: None}
+    async def agui(client, session_id, lease, index):
+        return await client.post("/ag-ui", json={
+            "threadId": session_id, "runId": f"run-{index}",
+            "protocolVersion": "1.0",
+            "messages": [{"id": "u", "role": "user", "content": "hello"}],
+        }, headers={**_headers(lease, origin=origin),
+                    "Accept": "text/event-stream"})
     try:
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url=origin
+            transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+            base_url=origin,
         ) as client:
-            claims = []
-            for index in range(MAX_CONCURRENT_BROWSER_RUNS + 1):
-                if index:
-                    created = await client.post(
-                        "/ui/sessions", headers=_headers(origin=origin), json={}
-                    )
-                    assert created.status_code == 201
-                    body = {"ticket": created.json()["ticket"]}
-                else:
-                    body = {}
-                claimed = await client.post(
-                    "/ui/bootstrap", headers=_headers(origin=origin), json=body
+            leases = []
+            for session in sessions:
+                response = await client.post(
+                    "/ui/bootstrap", json={"session_id": session.id},
+                    headers=_headers(origin=origin),
                 )
-                assert claimed.status_code == 200
-                claims.append((claimed.json()["session_id"], claimed.json()["lease"]))
-
-            runs = []
-            for sid, lease in claims[:MAX_CONCURRENT_BROWSER_RUNS]:
-                resp = await client.post(
-                    f"/sessions/{sid}/runs",
-                    json={"prompt": "long running"},
-                    headers=_headers(lease, origin=origin),
-                )
-                assert resp.status_code == 202
-                runs.append((sid, lease, resp.json()["run_id"]))
-
-            overflow_sid, overflow_lease = claims[MAX_CONCURRENT_BROWSER_RUNS]
-            refused = await client.post(
-                f"/sessions/{overflow_sid}/runs",
-                json={"prompt": "overflow"},
-                headers=_headers(overflow_lease, origin=origin),
-            )
-            assert refused.status_code == 429
-            assert service.sessions[overflow_sid]._run is None
-            assert not service.sessions[overflow_sid]._busy
-
-            # A queued fifth run must not monopolize a connection. Ordinary
-            # control requests remain accepted while four runs are active.
-            heartbeat = await client.post(
-                "/ui/heartbeat", json={"session_id": overflow_sid},
-                headers=_headers(overflow_lease, origin=origin),
-            )
-            assert heartbeat.status_code == 204
-            assert (await client.get("/ui/sessions", headers=_headers())).status_code == 200
-
-            # Freeing one run permits a new one.
-            first_sid, first_lease, first_run_id = runs[0]
-            response = await client.get(
-                f"/sessions/{first_sid}/runs/{first_run_id}/events",
-                headers=_headers(first_lease),
-            )
-            assert response.status_code == 200
-            assert service.sessions[first_sid]._run.done
-            accepted = await client.post(
-                f"/sessions/{overflow_sid}/runs",
-                json={"prompt": "now available"},
-                headers=_headers(overflow_lease, origin=origin),
-            )
-            assert accepted.status_code == 202
+                assert response.status_code == 200
+                leases.append(response.json()["lease"])
+            tasks = [asyncio.create_task(
+                agui(client, session.id, lease, idx)
+            ) for idx, (session, lease) in enumerate(
+                zip(sessions[:MAX_CONCURRENT_BROWSER_RUNS],
+                    leases[:MAX_CONCURRENT_BROWSER_RUNS])
+            )]
+            try:
+                for _ in range(200):
+                    if all(session._busy for session in sessions[:4]):
+                        break
+                    await asyncio.sleep(0.005)
+                assert all(session._busy for session in sessions[:4])
+                fifth = await agui(client, sessions[4].id, leases[4], 4)
+                assert fifth.status_code == 429
+                assert sessions[4]._run is None
+                assert (await client.post(
+                    "/ui/heartbeat", json={"session_id": sessions[4].id},
+                    headers=_headers(leases[4], origin=origin),
+                )).status_code == 204
+                assert (await client.get("/ui/sessions",
+                                         headers=_headers())).status_code == 200
+            finally:
+                gate.set()
+                done = await asyncio.gather(*tasks)
+                assert all(resp.status_code == 200 for resp in done)
+            accepted = await agui(client, sessions[4].id, leases[4], 5)
+            assert accepted.status_code == 200
     finally:
+        gate.set()
         await service.shutdown()
