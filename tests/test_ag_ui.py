@@ -406,3 +406,40 @@ async def test_interrupted_session_can_be_closed_after_tab_release():
             assert initial.id not in service.sessions
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agui_resume_requires_valid_pending_interrupt_and_boolean_decision():
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            headers = {"Authorization": "Bearer " + service.token,
+                       "Accept": "text/event-stream"}
+            first = _input("resume-guard", "needs approval")
+            events = _events(await client.post("/ag-ui", json=first, headers=headers))
+            interrupt_id = events[-1]["outcome"]["interrupts"][0]["id"]
+            wrong = _input("resume-guard", "needs approval", messages=first["messages"],
+                           resume=[{"interruptId": "unrecognized", "status": "resolved",
+                                    "payload": {"approved": True}}])
+            assert (await client.post("/ag-ui", json=wrong, headers=headers)).status_code == 409
+            malformed = _input("resume-guard", "needs approval", messages=first["messages"],
+                               resume=[{"interruptId": interrupt_id, "status": "resolved",
+                                        "payload": {"approved": "yes"}}])
+            assert (await client.post("/ag-ui", json=malformed, headers=headers)).status_code == 409
+            unfinished = _input("resume-guard", "needs approval", messages=first["messages"])
+            assert (await client.post("/ag-ui", json=unfinished, headers=headers)).status_code == 409
+            multi = _input("resume-guard", "needs approval", messages=first["messages"],
+                           resume=[{"interruptId": interrupt_id, "status": "resolved",
+                                    "payload": {"approved": True}},
+                                   {"interruptId": interrupt_id, "status": "cancelled"}])
+            assert (await client.post("/ag-ui", json=multi, headers=headers)).status_code == 400
+            valid = _input("resume-guard", "needs approval", messages=first["messages"],
+                           resume=[{"interruptId": interrupt_id, "status": "cancelled"}])
+            continued = _events(await client.post("/ag-ui", json=valid, headers=headers))
+            assert continued[-1]["type"] == "RUN_FINISHED"
+            assert any(e.get("delta") == "approved=False" for e in continued)
+    finally:
+        await service.shutdown()
