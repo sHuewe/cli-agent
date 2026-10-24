@@ -1008,6 +1008,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                 "session_id": session_id, "lease": lease,
                 **ui["info"], "initial_messages": session.initial_messages,
                 "history": session.ui_messages,
+                "pending_interrupt": session._pending_interrupt,
                 "active_run": (session._run.id if session._run is not None
                                and not session._run.done else None),
             })
@@ -1112,6 +1113,40 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         except ValueError as exc:
             return error(400, str(exc))
 
+    async def ui_command(request: Request) -> Response:
+        """CLI-only commands are intentionally outside the AG-UI contract."""
+        assert ui is not None
+        from .web_ui import _web_ui_command_prompt
+        try:
+            async with checked_json(request) as body:
+                if (set(body) - {"session_id", "command", "argument"}
+                        or not isinstance(body.get("session_id"), str)):
+                    return error(400, "Ungültiger Web-UI-Befehl.")
+                sid = body["session_id"]
+                if not ui["registry"].is_owner(
+                    sid, request.headers.get("x-cli-agent-lease")
+                ):
+                    return error(403, "Session gehört nicht diesem Tab.")
+                prompt = _web_ui_command_prompt(
+                    body.get("command"), body.get("argument")
+                )
+            session = service.sessions[sid]
+            # Local commands still run on the same MCP-owning worker.
+            run = session.submit(prompt, require_listener=False)
+            while not run.done:
+                run.changed.clear()
+                if not run.done:
+                    await run.changed.wait()
+            if run.status != "completed":
+                return error(503, run.error or "Befehl fehlgeschlagen.")
+            return JSONResponse({"answer": run.answer or ""})
+        except KeyError:
+            return error(404, "Session nicht gefunden.")
+        except RuntimeError:
+            return error(409, "Session ist beschäftigt.")
+        except ValueError as exc:
+            return error(400, str(exc))
+
     async def ui_shutdown(_request: Request) -> Response:
         assert ui is not None
         # Closing the local application terminates every UI session.
@@ -1187,6 +1222,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/ui/release", ui_release, methods=["POST"]),
             Route("/ui/heartbeat", ui_heartbeat, methods=["POST"]),
             Route("/ui/render", ui_render, methods=["POST"]),
+            Route("/ui/command", ui_command, methods=["POST"]),
             Route("/ui/shutdown", ui_shutdown, methods=["POST"]),
         ] if ui is not None else [])),
         lifespan=lifespan,
