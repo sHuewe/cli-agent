@@ -763,3 +763,99 @@ async def test_frontend_continuation_rejects_json_after_exhausted_repairs():
     with pytest.raises(ValueError, match="kein gültiges JSON"):
         await agent.continue_after_frontend_tools([])
     assert agent.history == []
+
+
+@pytest.mark.asyncio
+async def test_json_repair_frontend_tool_handoff_saves_checkpoint_and_resumes():
+    """A tool first requested by JSON repair must have a resumable checkpoint."""
+    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.agent_loop import ModelLoopRunState
+
+    class Agent(ConversationMixin):
+        def __init__(self):
+            self._exit_stack = object()
+            self.history = []
+            self.logging_config = SimpleNamespace(log_prompts=False)
+            self.response_format = "json"
+            self.max_tool_calls = 4
+            self._tool_routes = {}
+            self._active_servers = set()
+            self._agui_frontend_tools = normalize_frontend_tools(
+                [definition()], server_names=set()
+            )
+            self.calls = 0
+
+        async def _collect_knowledge(self, prompt): return None
+        def _build_reference_context_message(self, **kwargs): return None
+        def _build_system_prompt(self, **kwargs): return "Trusted policy"
+        def _model_tools(self): return []
+        def _dump_context(self, *_args, **_kwargs): pass
+
+        async def _run_model_loop(self, *, messages, run_state, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return "prose that is not JSON"
+            if self.calls == 2:
+                assert any("JSON-Format" in m.get("content", "") for m in messages)
+                run_state.tool_calls += 1
+                raise FrontendToolHandoff(
+                    [FrontendToolCall("frontend-one", "show_view", "{}")],
+                    {"role": "assistant", "content": ""},
+                )
+            assert self.calls == 3
+            assert run_state.tool_calls == 1
+            assert messages[-1] == {
+                "role": "tool", "tool_call_id": "frontend-one", "content": "done"
+            }
+            return '{"ok":true}'
+
+    agent = Agent()
+    with pytest.raises(FrontendToolHandoff):
+        await agent.ask("Give me JSON")
+    assert agent._agui_pending_original_prompt == "Give me JSON"
+    assert agent._agui_pending_json_repairs == 1
+    assert agent._agui_pending_run_state.tool_calls == 1
+    assert agent._agui_pending_working_messages is not None
+    answer = await agent.continue_after_frontend_tools([
+        {"role": "tool", "tool_call_id": "frontend-one", "content": "done"},
+    ])
+    assert answer == '{"ok":true}'
+    assert agent.calls == 3
+    assert agent._agui_pending_json_repairs == 0
+    assert agent._agui_pending_run_state is None
+    assert agent.history[-1]["content"] == answer
+
+
+@pytest.mark.asyncio
+async def test_json_repair_budget_not_reset_by_frontend_handoff():
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Agent(ConversationMixin):
+        def __init__(self):
+            self.history = []
+            self.response_format = "json"
+            self.max_tool_calls = 5
+            self._tool_routes = {}
+            self._active_servers = set()
+            self._agui_frontend_tools = {}
+            self._agui_pending_original_prompt = "Return JSON"
+            self._agui_pending_working_messages = [
+                {"role": "system", "content": "trusted"}
+            ]
+            self._agui_pending_json_repairs = 1
+            self.calls = 0
+
+        def _model_tools(self): return []
+        async def _run_model_loop(self, **kwargs):
+            self.calls += 1
+            return "still invalid"
+
+    agent = Agent()
+    with pytest.raises(ValueError, match="kein gültiges JSON"):
+        await agent.continue_after_frontend_tools([
+            {"role": "tool", "tool_call_id": "first", "content": "done"}
+        ])
+    # One repair was consumed before this run. Only the second is permitted.
+    assert agent.calls == 2
+    assert agent._agui_pending_json_repairs == 2
+    assert agent.history == []
