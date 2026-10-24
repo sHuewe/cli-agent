@@ -321,6 +321,7 @@ API_APP_JS = """
   let sessionId = null;
   let leaseToken = null; // Page-instance secret, deliberately NOT in sessionStorage.
   let runId = null;
+  let aguiMessages = [];
   let streamController = null;
   const socketBridge = {
     readyState: WebSocket.OPEN,
@@ -339,6 +340,7 @@ API_APP_JS = """
       "X-Cli-Agent-Browser": "1"
     };
     if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (path === "/ag-ui") headers["Accept"] = "text/event-stream";
     if (leaseToken) headers["X-Cli-Agent-Lease"] = leaseToken;
     // Browsers set Origin themselves for POST/PATCH; it is a forbidden header.
     const response = await fetch(path, {
@@ -385,13 +387,19 @@ API_APP_JS = """
     }
   }
 
-  async function watchRun(activeRun) {
-    const res = await api("/sessions/" + sessionId + "/runs/" + activeRun + "/events");
+  async function watchRun(activeRun, response = null) {
+    // Normal runs use only AG-UI's canonical POST/SSE response. The
+    // historical GET stream is used solely for reconnecting a pre-existing
+    // in-flight run after a browser reload (AG-UI has no SSE resumption).
+    const res = response || await api(
+      "/sessions/" + sessionId + "/runs/" + activeRun + "/events"
+    );
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let answer = "";
     let finished = false;
+    let interrupted = false;
     try {
       while (!finished) {
         const next = await reader.read();
@@ -412,58 +420,87 @@ API_APP_JS = """
             if (event.name === "output_error") emit({type: "error", content: event.value?.message});
           } else if (event.type === "RUN_ERROR") {
             dismissApproval();
-            const details = await (await api("/sessions/" + sessionId + "/runs/" + activeRun)).json();
-            emit({type: "error", content: String(details.error || event.message || "Agentenlauf fehlgeschlagen.")});
+            emit({type: "error", content: String(event.message || "Agentenlauf fehlgeschlagen.")});
             finished = true;
           } else if (event.type === "RUN_FINISHED") {
-            dismissApproval();
             finished = true;
+            if (event.outcome?.type === "interrupt") {
+              interrupted = true;
+              const item = event.outcome.interrupts?.[0];
+              if (item) {
+                const extra = item.metadata?.["cli-agent"] || {};
+                emit({
+                  type: "approval_required",
+                  id: item.id,
+                  tool: item.message || "Tool-Freigabe",
+                  ...extra
+                });
+              }
+            } else {
+              dismissApproval();
+            }
           }
         }
       }
       if (answer) {
+        aguiMessages.push({id: crypto.randomUUID(), role: "assistant", content: answer});
         emit({type: "answer", content: answer, html: await renderAnswer(answer)});
       }
       if (!finished) throw new Error("Agenten-Eventstream vorzeitig beendet.");
     } finally {
-      dismissApproval();
+      if (!interrupted) dismissApproval();
       reader.releaseLock();
       runId = null;
-      emit({type: "busy", value: false});
+      emit({type: "busy", value: interrupted});
     }
+  }
+
+  function aguiInput(resume = undefined) {
+    const result = {
+      threadId: sessionId,
+      runId: crypto.randomUUID(),
+      protocolVersion: "1.0",
+      messages: aguiMessages
+    };
+    if (resume) result.resume = resume;
+    return result;
   }
 
   async function dispatchAction(msg) {
     if (!sessionId) return;
     const base = "/sessions/" + sessionId;
-    if (msg.type === "message" || msg.type === "command") {
-      let promptText = msg.content;
-      if (msg.type === "command") {
-        const spec = COMMANDS[msg.command];
-        if (!spec || (spec.argument && typeof msg.argument !== "string") ||
-            (!spec.argument && msg.argument != null && msg.argument !== "")) {
-          throw new Error("Ungültiger lokaler Befehl.");
-        }
-      } else if (typeof promptText !== "string") {
-        throw new Error("Ungültiger Prompt.");
-      }
-      // Preserve the legacy Web-UI's local exit/quit commands. Never send
-      // these to the model or touch the configured output file.
-      if (msg.type === "message" && ["exit", "quit"].includes(promptText.trim().toLowerCase())) {
+    if (msg.type === "message") {
+      if (typeof msg.content !== "string") throw new Error("Ungültiger Prompt.");
+      if (["exit", "quit"].includes(msg.content.trim().toLowerCase())) {
         await dispatchAction({type: "quit"});
         return;
       }
-      const payload = msg.type === "command"
-        ? {command: msg.command, argument: msg.argument == null ? null : msg.argument}
-        : {prompt: promptText};
-      const response = await (await api(base + "/runs", "POST", payload)).json();
-      runId = response.run_id;
-      await watchRun(runId);
+      aguiMessages.push({id: crypto.randomUUID(), role: "user", content: msg.content});
+      const input = aguiInput();
+      const response = await api("/ag-ui", "POST", input);
+      runId = input.runId;
+      await watchRun(runId, response);
+      return;
+    }
+    if (msg.type === "command") {
+      const spec = COMMANDS[msg.command];
+      if (!spec || (spec.argument && typeof msg.argument !== "string") ||
+          (!spec.argument && msg.argument != null && msg.argument !== "")) {
+        throw new Error("Ungültiger lokaler Befehl.");
+      }
+      const result = await (await api("/ui/command", "POST", {
+        session_id: sessionId, command: msg.command,
+        argument: msg.argument == null ? null : msg.argument
+      })).json();
+      const answer = String(result.answer || "");
+      emit({type: "answer", content: answer, html: await renderAnswer(answer)});
+      emit({type: "busy", value: false});
       return;
     }
     if (msg.type === "working_context") return updateContext();
     if (msg.type === "reset_history") {
       await api(base + "/reset", "POST", {});
+      aguiMessages = [];
       emit({type:"history_reset"});
       return updateContext();
     }
@@ -476,15 +513,16 @@ API_APP_JS = """
       return updateContext();
     }
     if (msg.type === "approval_response") {
-      if (!runId) return;
-      try {
-        await api(base + "/runs/" + runId + "/approvals/" + encodeURIComponent(msg.id),
-          "POST", {decision: msg.decision});
-      } catch (error) {
-        // A reload/disconnect may invalidate the pending approval meanwhile.
-        if (!String(error.message).includes("Freigabe ist ungültig") &&
-            !String(error.message).includes("Run ist nicht aktiv")) throw error;
-      }
+      if (msg.id !== pendingApprovalId) return;
+      const input = aguiInput([{
+        interruptId: msg.id,
+        status: "resolved",
+        payload: {approved: msg.decision === "yes" || msg.decision === "session"}
+      }]);
+      const response = await api("/ag-ui", "POST", input);
+      pendingApprovalId = null;
+      runId = input.runId;
+      await watchRun(runId, response);
       return;
     }
     if (msg.type === "quit") {
@@ -737,6 +775,8 @@ API_APP_JS = """
       }
       sessionId = response.session_id;
       leaseToken = response.lease;
+      aguiMessages = Array.isArray(response.agui_messages)
+        ? response.agui_messages : [];
       try { window.sessionStorage.setItem("cli-agent-session-id", sessionId); }
       catch (_error) {}
       chat.replaceChildren();
@@ -750,7 +790,15 @@ API_APP_JS = """
           addMessage("user", String(message.content || ""));
         }
       }
-      if (response.active_run) {
+      if (response.pending_interrupt) {
+        const item = response.pending_interrupt;
+        emit({
+          type: "approval_required", id: item.id,
+          tool: item.message || "Tool-Freigabe",
+          ...(item.metadata?.["cli-agent"] || {})
+        });
+        emit({type: "busy", value: true});
+      } else if (response.active_run) {
         runId = response.active_run;
         emit({type: "busy", value: true});
         void watchRun(runId).catch(showApiError);
