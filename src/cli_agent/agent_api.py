@@ -48,6 +48,8 @@ class AgentRun:
     # Only embedded-browser runs require an SSE subscriber before execution.
     # Headless API runs retain their existing fire-and-poll semantics.
     require_listener: bool = False
+    agui: bool = False
+    resume_approval: tuple[str, str] | None = None
     subscriber_ready: asyncio.Event = field(default_factory=asyncio.Event)
     answer: str | None = None
     error: str | None = None
@@ -58,7 +60,7 @@ class AgentRun:
 
     @property
     def done(self) -> bool:
-        return self.status in {"completed", "failed", "cancelled"}
+        return self.status in {"completed", "failed", "cancelled", "interrupted"}
 
     def emit(self, event: dict[str, Any]) -> None:
         self.events.append((self.next_sequence, event))
@@ -94,6 +96,12 @@ class AgentSession:
         self.initial_commands = initial_commands
         self.initial_messages: list[str] = []
         self.ui_messages: list[dict[str, str]] = []
+        self.agui_messages: list[dict[str, Any]] = []
+        self.agui_state: Any = {}
+        self.agui_context: list[dict[str, Any]] = []
+        self._pending_interrupt: dict[str, Any] | None = None
+        self._pending_tool_id: str | None = None
+        self._opened_tool_calls: set[str] = set()
         self.output_target = output_target
         self.id = uuid.uuid4().hex
         self._factory = factory
@@ -145,34 +153,49 @@ class AgentSession:
                         answer = await agent.ask(run.prompt)
                         if not isinstance(answer, str):
                             raise TypeError("Agentenantwort muss Text sein.")
-                        run.answer = answer
+                        # An AG-UI approval may have ended one or more earlier
+                        # run segments. The coroutine itself is still running
+                        # on this worker; its output belongs to the latest
+                        # resumed segment, not to the interrupted original.
+                        finished = self._run if run.agui else run
+                        if finished is None:
+                            raise RuntimeError("Run wurde beendet.")
+                        finished.answer = answer
                         self._remember("assistant", answer)
                         message_id = uuid.uuid4().hex
-                        run.emit({"type": "TEXT_MESSAGE_START", "messageId": message_id, "role": "assistant"})
-                        run.emit({"type": "TEXT_MESSAGE_CONTENT", "messageId": message_id, "delta": answer})
-                        run.emit({"type": "TEXT_MESSAGE_END", "messageId": message_id})
+                        finished.emit({"type": "TEXT_MESSAGE_START", "messageId": message_id, "role": "assistant"})
+                        finished.emit({"type": "TEXT_MESSAGE_CONTENT", "messageId": message_id, "delta": answer})
+                        finished.emit({"type": "TEXT_MESSAGE_END", "messageId": message_id})
+                        if finished.agui:
+                            self.agui_messages.append({"id": message_id, "role": "assistant", "content": answer})
                         if self.output_target is not None:
                             from .file_context import is_local_agent_command
                             if not is_local_agent_command(run.prompt):
                                 try:
                                     self.output_target.write_text(answer)
                                 except Exception:
-                                    run.emit({"type": "CUSTOM", "name": "output_error",
+                                    finished.emit({"type": "CUSTOM", "name": "output_error",
                                               "value": {"message": "Ausgabedatei konnte nicht geschrieben werden."}})
-                        run.status = "completed"
-                        run.emit({"type": "RUN_FINISHED", "threadId": self.id, "runId": run.id})
+                        finished.status = "completed"
+                        finished.emit({"type": "RUN_FINISHED", "threadId": finished.thread_id, "runId": finished.id,
+                                       **({"outcome": {"type": "success"}} if finished.agui else {})})
                     except Exception as exc:
-                        run.status = "failed"
-                        if self.debug_errors:
-                            import traceback
-                            run.error = "".join(traceback.format_exception(exc))
-                        else:
-                            run.error = f"{type(exc).__name__}: {exc}"
-                        # Do not disclose internal exception details in stream events.
-                        run.emit({"type": "RUN_ERROR", "message": "Agentenlauf fehlgeschlagen."})
+                        failed = self._run if run.agui else run
+                        if failed is not None:
+                            failed.status = "failed"
+                            if self.debug_errors:
+                                import traceback
+                                failed.error = "".join(traceback.format_exception(exc))
+                            else:
+                                failed.error = f"{type(exc).__name__}: {exc}"
+                            failed.emit({"type": "RUN_ERROR", "message": "Agentenlauf fehlgeschlagen."})
                     finally:
                         self._busy = False
+                        self._pending_interrupt = None
+                        self._opened_tool_calls.clear()
                         run.changed.set()
+                        if self._run is not None:
+                            self._run.changed.set()
         except asyncio.CancelledError:
             if not self._startup_ready.done():
                 self._startup_ready.cancel()
@@ -244,16 +267,18 @@ class AgentSession:
         calculated = tool_budget * REPLAY_EVENTS_PER_TOOL + REPLAY_LIFECYCLE_ALLOWANCE
         return max(MAX_EVENTS_PER_RUN, calculated)
 
-    def submit(self, prompt: str, *, require_listener: bool = False) -> AgentRun:
+    def submit(self, prompt: str, *, require_listener: bool = False,
+               agui: bool = False, thread_id: str | None = None,
+               run_id: str | None = None) -> AgentRun:
         if self._closed:
             raise RuntimeError("Session ist geschlossen.")
         if self._busy:
             raise RuntimeError("Session bearbeitet bereits eine Anfrage.")
         self._busy = True
         run = AgentRun(
-            id=uuid.uuid4().hex, thread_id=self.id, prompt=prompt,
+            id=run_id or uuid.uuid4().hex, thread_id=thread_id or self.id, prompt=prompt,
             max_events=self._replay_capacity(),
-            require_listener=require_listener,
+            require_listener=require_listener, agui=agui,
         )
         self._run = run
         self._queue.put_nowait(run)
@@ -293,7 +318,7 @@ class AgentSession:
         # pending approvals. Disconnects of earlier runs are irrelevant.
         if run.listeners == 0:
             run.subscriber_ready.clear()
-            if self._run is run:
+            if self._run is run and run.status != "interrupted":
                 self.broker.deny_all()
 
     async def _send_approval(self, payload: dict[str, Any]) -> None:
@@ -301,13 +326,85 @@ class AgentSession:
         if run is None or run.done or run.listeners < 1:
             raise RuntimeError("Keine aktive UI-Verbindung für Tool-Freigabe.")
         # WebUiApprovalBroker prepares sanitized arguments and write previews.
-        run.emit({"type": "CUSTOM", "name": "approval_required", "value": payload})
+        if run.agui:
+            self._interrupt_for_approval(run, payload)
+        else:
+            run.emit({"type": "CUSTOM", "name": "approval_required", "value": payload})
 
     async def approve(self, tool: str, arguments: dict[str, Any]) -> bool | str:
         run = self._run
         if run is None or run.done or run.listeners < 1:
             return False
         return await self.broker.approve_tool_call(tool, arguments)
+
+    def _interrupt_for_approval(self, run: AgentRun, payload: dict[str, Any]) -> None:
+        """Terminate AG-UI run with a human-in-the-loop interrupt.
+
+        The already-running agent coroutine remains suspended inside the
+        policy-controlled approval broker until a *new* AG-UI run resumes it.
+        """
+        call_id = self._pending_tool_id or uuid.uuid4().hex
+        if call_id not in self._opened_tool_calls:
+            run.emit({"type": "TOOL_CALL_START", "toolCallId": call_id,
+                      "toolCallName": payload.get("tool", "")})
+        run.emit({"type": "TOOL_CALL_ARGS", "toolCallId": call_id,
+                  "delta": json.dumps(payload.get("arguments", {}), ensure_ascii=False)})
+        run.emit({"type": "TOOL_CALL_END", "toolCallId": call_id})
+        self._opened_tool_calls.discard(call_id)
+        self._pending_tool_id = call_id
+        interrupt = {
+            "id": payload["id"],
+            "reason": "tool_call",
+            "toolCallId": call_id,
+            "message": f"Freigabe für {payload.get('tool', 'Tool')} erforderlich.",
+            "responseSchema": {
+                "type": "object",
+                "properties": {"approved": {"type": "boolean"}},
+                "required": ["approved"],
+            },
+            "metadata": {"cli-agent": {
+                key: value for key, value in payload.items()
+                if key not in {"id", "tool"}
+            }},
+        }
+        self._pending_interrupt = interrupt
+        run.status = "interrupted"
+        run.emit({"type": "RUN_FINISHED", "threadId": run.thread_id,
+                  "runId": run.id, "outcome": {
+                      "type": "interrupt", "interrupts": [interrupt],
+                  }})
+
+    def resume_agui(self, *, thread_id: str, run_id: str,
+                    response: dict[str, Any]) -> AgentRun:
+        """Reserve the next segment; approval is not applied until SSE attaches."""
+        pending = self._pending_interrupt
+        if not self._busy or pending is None or self._run is None:
+            raise RuntimeError("Kein fortsetzbarer Interrupt vorhanden.")
+        if self._run.status != "interrupted" or self._run.thread_id != thread_id:
+            raise RuntimeError("Die vorherige Ausführung ist nicht unterbrochen.")
+        if response.get("interruptId") != pending["id"]:
+            raise ValueError("Die Interrupt-ID stimmt nicht überein.")
+        if response.get("status") == "resolved":
+            payload = response.get("payload")
+            if not isinstance(payload, dict) or type(payload.get("approved")) is not bool:
+                raise ValueError("Ein boolesches approved-Feld wird benötigt.")
+            decision = "yes" if payload["approved"] else "no"
+        elif response.get("status") == "cancelled":
+            decision = "no"
+        else:
+            raise ValueError("Ungültiger Resume-Status.")
+        next_run = AgentRun(
+            id=run_id, thread_id=thread_id, prompt="",
+            max_events=self._replay_capacity(), agui=True,
+            require_listener=True,
+            status="running",
+            resume_approval=(pending["id"], decision),
+        )
+        self._run = next_run
+        next_run.emit({"type": "RUN_STARTED", "threadId": thread_id,
+                       "runId": run_id, "protocolVersion": "1.0"})
+        self._pending_interrupt = None
+        return next_run
 
     async def close(self) -> None:
         if self._closed and (self._task is None or self._task.done()):
