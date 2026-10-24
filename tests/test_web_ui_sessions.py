@@ -217,3 +217,79 @@ async def test_registry_lease_expiration_and_single_use_ticket():
         assert registry.release(initial.id, new_token)
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_initial_contexts_do_not_share_mcp_startup_deadline():
+    """After MCP startup, slow initial contexts must not consume its 30s budget."""
+    gate = asyncio.Event()
+    started = asyncio.Event()
+
+    class SlowContextAgent(_Agent):
+        async def ask(self, prompt):
+            if prompt.startswith("add_web_context "):
+                started.set()
+                await gate.wait()
+            return await super().ask(prompt)
+
+    service = AgentApiService(
+        lambda session: SlowContextAgent(session),
+        initial_commands=("add_web_context https://example.com/first",
+                          "add_web_context https://example.com/second"),
+    )
+    creation = asyncio.create_task(service.create())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert len(service.sessions) == 1
+        pending_session = next(iter(service.sessions.values()))
+        assert pending_session._startup_ready.done()
+        assert not pending_session._ready.done()
+        assert not creation.done()
+        gate.set()
+        session = await asyncio.wait_for(creation, timeout=2)
+        assert session.initial_messages == [
+            "reply add_web_context https://example.com/first",
+            "reply add_web_context https://example.com/second",
+        ]
+    finally:
+        gate.set()
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_replay_omits_resolved_or_denied_tool_approvals():
+    """A reload must not offer a stale approval that now returns HTTP 409."""
+    import json
+    service = AgentApiService(lambda session: _Agent(session))
+    session = await service.create()
+    try:
+        run = session.submit("example")
+        for _ in range(100):
+            if run.done:
+                break
+            await asyncio.sleep(0.005)
+        assert run.done
+        # Reproduce a historical approval request in an otherwise completed
+        # run. It is deliberately not pending in the broker.
+        old = {"type": "CUSTOM", "name": "approval_required",
+               "value": {"id": "already-denied", "tool": "os__write_file"}}
+        run.events.insert(1, (run.next_sequence, old))
+        run.next_sequence += 1
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            events = await client.get(
+                f"/sessions/{session.id}/runs/{run.id}/events",
+                headers={"Authorization": f"Bearer {service.token}"},
+            )
+            assert events.status_code == 200
+            payloads = [
+                json.loads(line[6:]) for line in events.text.splitlines()
+                if line.startswith("data: ")
+            ]
+            assert not any(item.get("name") == "approval_required"
+                           for item in payloads)
+            assert any(item["type"] == "RUN_FINISHED" for item in payloads)
+    finally:
+        await service.shutdown()
