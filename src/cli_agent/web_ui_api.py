@@ -46,6 +46,7 @@ API_APP_JS = """
 
   let socket = null;
   let pendingApprovalId = null;
+  let approvalSubmitting = false;
   let pendingCommand = null;
   let busy = false;
 
@@ -589,20 +590,38 @@ API_APP_JS = """
       return updateContext();
     }
     if (msg.type === "approval_response") {
-      if (msg.id !== pendingApprovalId) return;
-      const input = aguiInput([{
-        interruptId: msg.id,
-        status: "resolved",
-        payload: {
-          approved: msg.decision === "yes" || msg.decision === "session",
-          rememberForSession: msg.decision === "session"
+      if (msg.id !== pendingApprovalId || approvalSubmitting) return;
+      approvalSubmitting = true;
+      const buttons = approval.querySelectorAll("button[data-decision]");
+      for (const button of buttons) button.disabled = true;
+      try {
+        const input = aguiInput([{
+          interruptId: msg.id,
+          status: "resolved",
+          payload: {
+            approved: msg.decision === "yes" || msg.decision === "session",
+            rememberForSession: msg.decision === "session"
+          }
+        }]);
+        // An interrupted run still occupies its server-side approval slot.
+        // Resume may be rejected (e.g. HTTP 429) before the server accepts it.
+        // Keep the dialog and interrupt ID intact until the POST succeeds.
+        const response = await api("/ag-ui", "POST", input);
+        aguiMessages = input.messages;
+        dismissApproval();
+        runId = input.runId;
+        await watchRun(runId, response);
+      } catch (error) {
+        if (pendingApprovalId === msg.id) {
+          addMessage("error", String(error?.message || error));
+          setBusy(true);
+          return;
         }
-      }]);
-      const response = await api("/ag-ui", "POST", input);
-      aguiMessages = input.messages;
-      pendingApprovalId = null;
-      runId = input.runId;
-      await watchRun(runId, response);
+        throw error;
+      } finally {
+        approvalSubmitting = false;
+        for (const button of buttons) button.disabled = false;
+      }
       return;
     }
   }
@@ -992,7 +1011,7 @@ API_APP_JS = """
 
   approval.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-decision]");
-    if (!button || !pendingApprovalId || !sessionId) {
+    if (!button || !pendingApprovalId || !sessionId || approvalSubmitting) {
       return;
     }
     socket.send(JSON.stringify({
@@ -1000,21 +1019,17 @@ API_APP_JS = """
       id: pendingApprovalId,
       decision: button.dataset.decision
     }));
-    pendingApprovalId = null;
-    approval.close();
   });
 
   approval.addEventListener("cancel", (event) => {
     event.preventDefault();
-    if (pendingApprovalId && sessionId) {
+    if (pendingApprovalId && sessionId && !approvalSubmitting) {
       socket.send(JSON.stringify({
         type: "approval_response",
         id: pendingApprovalId,
         decision: "no"
       }));
     }
-    pendingApprovalId = null;
-    approval.close();
   });
 
   quit.addEventListener("click", () => {
