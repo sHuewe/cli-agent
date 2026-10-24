@@ -236,9 +236,9 @@ def test_local_exit_and_quit_are_not_sent_to_agent():
     from cli_agent.web_ui_api import API_APP_JS
 
     dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
-    assert '["exit", "quit"].includes(promptText.trim().toLowerCase())' in dispatch
+    assert '["exit", "quit"].includes(msg.content.trim().toLowerCase())' in dispatch
     assert dispatch.index('await dispatchAction({type: "quit"});') < dispatch.index(
-        'api(base + "/runs", "POST", payload)'
+        'api("/ag-ui", "POST", input)'
     )
 
 
@@ -247,7 +247,7 @@ def test_browser_buttons_submit_structured_commands():
 
     dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
     assert 'msg.type === "command"' in dispatch
-    assert '{command: msg.command, argument: msg.argument == null ? null : msg.argument}' in dispatch
-    assert 'api(base + "/runs", "POST", payload)' in dispatch
+    assert 'api("/ui/command", "POST", {' in dispatch
+    assert 'api("/ag-ui", "POST", input)' in dispatch
     # Do not assemble unchecked commands into ordinary prompt strings.
     assert 'promptText = msg.command +' not in dispatch
