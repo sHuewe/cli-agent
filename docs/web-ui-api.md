@@ -50,7 +50,11 @@ the agent's worker task before its session becomes ready.
 ## Multiple browser sessions
 
 The built-in UI can manage up to eight independent agent sessions on the same
-Starlette server. At most four browser agent runs may be active simultaneously:
+Starlette server. To reserve HTTP/1.1 connections for tool approvals, lease
+heartbeats and UI control requests, no more than four embedded-browser runs
+may be active simultaneously. The fifth concurrent run request returns HTTP
+429 and can be retried once another run completes. This limit does not affect
+headless API clients or prevent idle UI sessions from remaining open. At most four browser agent runs may be active simultaneously:
 this reserves HTTP/1.1 browser connections for approval requests, heartbeat
 renewals, and UI controls even when multiple sessions stream events. Additional
 sessions remain available and can start a run when an active run completes;
