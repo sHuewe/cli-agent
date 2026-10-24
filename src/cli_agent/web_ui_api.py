@@ -694,7 +694,25 @@ API_APP_JS = """
       try { window.sessionStorage.setItem("cli-agent-session-id", sessionId); }
       catch (_error) {}
       emit({type: "session", ...response});
-      emit({type: "busy", value: false});
+      chat.replaceChildren();
+      for (const message of response.history || []) {
+        if (message.role === "assistant") {
+          // Render only server-sanitized Markdown; never inject model HTML.
+          const rendered = await (await api("/ui/render", "POST", {
+            text: String(message.content || "")
+          })).json();
+          addMessage("assistant", String(message.content || ""), rendered.html);
+        } else if (message.role === "user") {
+          addMessage("user", String(message.content || ""));
+        }
+      }
+      if (response.active_run) {
+        runId = response.active_run;
+        emit({type: "busy", value: true});
+        void watchRun(runId).catch(showApiError);
+      } else {
+        emit({type: "busy", value: false});
+      }
       startHeartbeat();
     } catch (error) {
       meta.textContent = "Session konnte nicht geöffnet werden.";
