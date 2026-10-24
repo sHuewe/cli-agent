@@ -83,6 +83,7 @@ class AgentSession:
         self.debug_errors = debug_errors
         self.initial_commands = initial_commands
         self.initial_messages: list[str] = []
+        self.ui_messages: list[dict[str, str]] = []
         self.output_target = output_target
         self.id = uuid.uuid4().hex
         self._factory = factory
@@ -119,12 +120,14 @@ class AgentSession:
                     if run is None:
                         return
                     run.status = "running"
+                    self._remember("user", run.prompt)
                     run.emit({"type": "RUN_STARTED", "threadId": self.id, "runId": run.id})
                     try:
                         answer = await agent.ask(run.prompt)
                         if not isinstance(answer, str):
                             raise TypeError("Agentenantwort muss Text sein.")
                         run.answer = answer
+                        self._remember("assistant", answer)
                         message_id = uuid.uuid4().hex
                         run.emit({"type": "TEXT_MESSAGE_START", "messageId": message_id, "role": "assistant"})
                         run.emit({"type": "TEXT_MESSAGE_CONTENT", "messageId": message_id, "delta": answer})
@@ -171,6 +174,13 @@ class AgentSession:
             self.broker.detach(self._approval_sender)
             if self._run is not None:
                 self._run.changed.set()
+
+    def _remember(self, role: str, content: str) -> None:
+        # Bounded, in-memory chat display history. Never retain MCP payloads,
+        # approval arguments or internal LLM context as browser transcript.
+        self.ui_messages.append({"role": role, "content": content[:100_000]})
+        if len(self.ui_messages) > 200:
+            del self.ui_messages[:-200]
 
     def _replay_capacity(self) -> int:
         """Ensure a run's replay buffer covers configured tool-call budgets.
@@ -557,6 +567,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             return error(409, "Session ist beschäftigt oder geschlossen.")
         session.broker.deny_all()
         session.agent.reset_history()
+        session.ui_messages.clear()
         return JSONResponse({"reset": True})
 
     async def usage(request: Request) -> Response:
@@ -608,6 +619,9 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             return JSONResponse({
                 "session_id": session_id, "lease": lease,
                 **ui["info"], "initial_messages": session.initial_messages,
+                "history": session.ui_messages,
+                "active_run": (session._run.id if session._run is not None
+                               and not session._run.done else None),
             })
         except SessionOccupiedError as exc:
             return error(409, str(exc))
