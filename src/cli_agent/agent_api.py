@@ -198,6 +198,15 @@ class AgentSession:
                             pending = tuple(exc.calls)
                             if not pending:
                                 raise RuntimeError("Leerer Frontend-Tool-Handoff.") from exc
+                            existing_ids = {
+                                event.get("toolCallId")
+                                for _, event in yielded.events
+                                if event.get("type") == "TOOL_CALL_START"
+                            }
+                            offered_ids = [call.id for call in pending]
+                            if (len(set(offered_ids)) != len(offered_ids)
+                                    or existing_ids.intersection(offered_ids)):
+                                raise RuntimeError("Doppelte Tool-Call-ID im Frontend-Handoff.") from exc
                             self._pending_frontend = pending
                             self._pending_frontend_thread_id = yielded.thread_id
                             calls = []
