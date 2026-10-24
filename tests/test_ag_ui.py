@@ -771,3 +771,99 @@ async def test_agui_thread_start_cancelled_during_cleanup(action):
                     await service.resolve_agui_thread("abandoned")
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_explicit_api_session_is_used_for_agui_and_control_endpoints():
+    """POST /sessions configuration must affect the very same AG-UI worker."""
+    from cli_agent.agent_api import MAX_SESSIONS
+
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    headers = {"Authorization": f"Bearer {service.token}"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            created = await client.post("/sessions", headers=headers)
+            assert created.status_code == 201
+            sid = created.json()["session_id"]
+            original = service.sessions[sid]
+            assert service._agui_threads[sid] == sid
+            run = await client.post(
+                "/ag-ui", json=_input(sid, "configured request"),
+                headers={**headers, "Accept": "text/event-stream"},
+            )
+            assert _events(run)[-1]["type"] == "RUN_FINISHED"
+            assert run.headers["x-cli-agent-session-id"] == sid
+            assert len(service.sessions) == 1
+            assert service.sessions[sid] is original
+            assert original.agent.calls == ["configured request"]
+            assert (await client.delete(f"/threads/{sid}", headers=headers)).status_code == 204
+            assert not service.sessions
+            assert not service._agui_threads
+            assert (await client.delete(f"/sessions/{sid}", headers=headers)).status_code == 404
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_automatic_agui_thread_exposes_control_session_id():
+    """Automatic threads must be configurable without private map access."""
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    headers = {"Authorization": f"Bearer {service.token}"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            response = await client.post(
+                "/ag-ui", json=_input("external-control-thread", "hello"),
+                headers={**headers, "Accept": "text/event-stream"},
+            )
+            assert _events(response)[-1]["type"] == "RUN_FINISHED"
+            sid = response.headers["x-cli-agent-session-id"]
+            assert sid != "external-control-thread"
+            assert service.sessions[sid].agent.calls == ["hello"]
+            # The session ID is usable by the retained control API.
+            assert (await client.delete(f"/sessions/{sid}", headers=headers)).status_code == 204
+            assert not service.sessions
+            assert not service._agui_threads
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_external_agui_cannot_claim_browser_owned_session_id():
+    """Neither the external bearer token nor a guessed thread ID binds a UI session."""
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    browser_session = await service.create()
+    ui = {
+        "token": "browser-secret", "session_id": browser_session.id,
+        "registry": BrowserSessionRegistry(service, browser_session.id),
+        "origin": "http://127.0.0.1:9191",
+        "info": {"model": "fake", "workspace": ".", "mcp_servers": []},
+        "shutdown": lambda: None,
+    }
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+            base_url=ui["origin"],
+        ) as client:
+            auth = {"Authorization": f"Bearer {service.token}",
+                    "Accept": "text/event-stream"}
+            result = await client.post(
+                "/ag-ui", json=_input(browser_session.id, "external"),
+                headers=auth,
+            )
+            assert _events(result)[-1]["type"] == "RUN_FINISHED"
+            assert result.headers["x-cli-agent-session-id"] != browser_session.id
+            assert browser_session.agent.calls == []
+            assert len(service.sessions) == 2
+            assert (await client.delete(
+                f"/threads/{browser_session.id}",
+                headers={"Authorization": f"Bearer {service.token}"},
+            )).status_code == 204
+            assert browser_session.id in service.sessions
+    finally:
+        await service.shutdown()
