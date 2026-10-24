@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-LEASE_TTL_SECONDS = 25.0
+LEASE_TTL_SECONDS = 120.0
 TICKET_TTL_SECONDS = 60.0
 
 
