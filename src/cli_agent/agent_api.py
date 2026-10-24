@@ -460,6 +460,13 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                     prompt = body["prompt"]
                     if not prompt.strip() or len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
                         return error(400, "Prompt ist leer oder zu groß.")
+                    # The embedded UI treats exit/quit as local shutdown commands.
+                    # Never allow an alternative browser caller to submit them
+                    # as model prompts (or write their responses to --output).
+                    if (ui is not None
+                            and request.headers.get("x-cli-agent-browser") == "1"
+                            and prompt.strip().casefold() in {"exit", "quit"}):
+                        return error(400, "exit/quit sind lokale Web-UI-Befehle.")
                     try:
                         run = session.submit(
                             prompt,
