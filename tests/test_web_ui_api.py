@@ -120,14 +120,25 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
 
         for command in ("exit", "QUIT", " Quit "):
             response = await client.post(
-                uri + "/runs", json={"prompt": command}, headers=auth
+                "/ag-ui", json={
+                    "threadId": session.id, "runId": "exit-" + command,
+                    "protocolVersion": "1.0",
+                    "messages": [{"id": "u", "role": "user", "content": command}],
+                }, headers={**auth, "Accept": "text/event-stream"},
             )
             assert response.status_code == 400
         assert agents[0].requests == []
         assert stopped == []
 
-        # Browser command buttons are server-validated, unlike free-form
-        # prompts. Invalid inputs must not reach the model or --output.
+        # Proprietary run/approval routes were intentionally removed.
+        assert (await client.post(uri + "/runs", json={"prompt": "hi"},
+                                  headers=auth)).status_code == 404
+        assert (await client.get(uri + "/runs/test/events",
+                                 headers=headers)).status_code == 404
+        assert (await client.post(uri + "/runs/test/approvals/a",
+                                  json={"decision": "yes"},
+                                  headers=auth)).status_code == 404
+
         for invalid in (
             {"command": "add_web_context", "argument": "example.com"},
             {"command": "enable", "argument": "server with spaces"},
@@ -135,39 +146,36 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
             {"command": "unknown", "argument": "x"},
             {"command": "add_web_context"},
         ):
-            bad = await client.post(uri + "/runs", json=invalid, headers=auth)
+            bad = await client.post(
+                "/ui/command", json={"session_id": session.id, **invalid},
+                headers=auth,
+            )
             assert bad.status_code == 400
         assert agents[0].requests == []
-        assert session._run is None
 
-        valid = await client.post(
-            uri + "/runs", json={"command": "tokens"}, headers=auth
-        )
-        assert valid.status_code == 202
-        valid_stream = await client.get(
-            uri + f"/runs/{valid.json()['run_id']}/events", headers=headers
-        )
-        assert "RUN_FINISHED" in valid_stream.text
-        assert agents[0].requests == ["tokens"]
+        valid = await client.post("/ui/command", json={
+            "session_id": session.id, "command": "tokens",
+        }, headers=auth)
+        assert valid.status_code == 200
+        assert valid.json()["answer"] == "Antwort: tokens"
 
-        rid = (await client.post(uri + "/runs", json={"prompt": "hi"},
-            headers={**headers, "Origin": ui["origin"]})).json()["run_id"]
-        # Embedded-browser runs wait for their SSE consumer before execution.
-        sse = await client.get(uri + "/runs/" + rid + "/events", headers=headers)
-        assert sse.status_code == 200
-        assert "RUN_FINISHED" in sse.text
-        for _ in range(100):
-            run = (await client.get(uri + "/runs/" + rid, headers=headers)).json()
-            if run["status"] == "completed":
-                break
-            await asyncio.sleep(.005)
-        assert run["answer"] == "Antwort: hi"
+        result = await client.post("/ag-ui", json={
+            "threadId": session.id, "runId": "browser-run",
+            "protocolVersion": "1.0",
+            "messages": [{"id": "u", "role": "user", "content": "hi"}],
+        }, headers={**auth, "Accept": "text/event-stream"})
+        assert result.status_code == 200
+        assert "RUN_FINISHED" in result.text
+        assert "Antwort: hi" in result.text
+        assert agents[0].requests == ["tokens", "hi"]
 
         assert (await client.post("/ui/render", json={"text": "**safe**"},
             headers={**headers, "Origin": ui["origin"]})).status_code == 200
+        # A browser must not be able to shut down the entire Python process.
         assert (await client.post("/ui/shutdown", json={},
-            headers={**headers, "Origin": ui["origin"]})).status_code == 200
-        assert stopped == [True]
+            headers={**headers, "Origin": ui["origin"]})).status_code == 404
+        assert stopped == []
+        assert session.id in service.sessions
     await service.shutdown()
 
 
@@ -236,10 +244,14 @@ def test_local_exit_and_quit_are_not_sent_to_agent():
     from cli_agent.web_ui_api import API_APP_JS
 
     dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
-    assert '["exit", "quit"].includes(promptText.trim().toLowerCase())' in dispatch
-    assert dispatch.index('await dispatchAction({type: "quit"});') < dispatch.index(
-        'api(base + "/runs", "POST", payload)'
+    assert '["exit", "quit"].includes(msg.content.trim().toLowerCase())' in dispatch
+    assert dispatch.index('await deleteUnusedSession(sessionId);') < dispatch.index(
+        'api("/ag-ui", "POST", input)'
     )
+    assert 'api("/ui/shutdown"' not in API_APP_JS
+    assert 'quit.textContent = "Session beenden";' in API_APP_JS
+    assert 'quit.disabled = busy || disconnected;' in API_APP_JS
+    assert 'void deleteUnusedSession(sessionId).catch(showApiError);' in API_APP_JS
 
 
 def test_browser_buttons_submit_structured_commands():
@@ -247,7 +259,109 @@ def test_browser_buttons_submit_structured_commands():
 
     dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
     assert 'msg.type === "command"' in dispatch
-    assert '{command: msg.command, argument: msg.argument == null ? null : msg.argument}' in dispatch
-    assert 'api(base + "/runs", "POST", payload)' in dispatch
+    assert 'api("/ui/command", "POST", {' in dispatch
+    assert 'api("/ag-ui", "POST", input)' in dispatch
     # Do not assemble unchecked commands into ordinary prompt strings.
     assert 'promptText = msg.command +' not in dispatch
+
+
+def test_browser_agui_transcript_compaction_with_real_javascript():
+    """Drive the embedded JS compactor, not a Python reimplementation."""
+    import json
+    import shutil
+    import subprocess
+
+    from cli_agent.web_ui_api import API_APP_JS
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is needed for embedded browser JS assertions.")
+    start = API_APP_JS.index("  const MAX_SYNCED_MESSAGES")
+    stop = API_APP_JS.index("  async function dispatchAction(msg)", start)
+    logic = API_APP_JS[start:stop]
+    script = logic + """
+    const makeInput = messages => ({
+      threadId: "thread", runId: "run", protocolVersion: "1.0", messages
+    });
+    const messages = [];
+    for (let n = 0; n < 300; n++) {
+      messages.push({id: "u" + n, role: "user", content: "question"});
+      messages.push({id: "a" + n, role: "assistant", content: "answer"});
+    }
+    const bounded = compactAguiHistory(makeInput(messages));
+    if (bounded.length > 480 || bounded.length <= 0)
+      throw new Error("Message bound ineffective");
+    if (bounded[0].role !== "user" ||
+        bounded[bounded.length - 1].id !== "a299")
+      throw new Error("Turn boundaries or latest response lost");
+
+    const big = [];
+    for (let n = 0; n < 24; n++) {
+      big.push({id: "u" + n, role: "user", content: "Ü".repeat(25000)});
+      big.push({id: "a" + n, role: "assistant", content: "🎯".repeat(8000)});
+    }
+    const byteBounded = compactAguiHistory(makeInput(big));
+    const bytes = new TextEncoder().encode(JSON.stringify(makeInput(byteBounded))).length;
+    if (bytes > 800000) throw new Error("UTF-8 payload limit ineffective");
+    if (byteBounded.at(-1).id !== "a23")
+      throw new Error("Latest response lost to byte limit");
+    if (byteBounded[0].role !== "user")
+      throw new Error("Oversized trim breaks conversation turns");
+
+    const last = makeInput([{id: "latest", role: "user", content: "x".repeat(810000)}]);
+    let rejected = false;
+    try { compactAguiHistory(last); }
+    catch (err) { rejected = String(err.message).includes("zu groß"); }
+    if (!rejected) throw new Error("Overlarge latest turn must be rejected");
+
+    const resume = makeInput([
+      {id: "old", role: "user", content: "x".repeat(550000)},
+      {id: "old-answer", role: "assistant", content: "ok"},
+      {id: "current", role: "user", content: "approve this"},
+      {id: "pending", role: "assistant", content: "",
+       toolCalls: [{id:"tool1", type:"function",
+                    function:{name:"show", arguments:"{}"}}]},
+      {id: "result", role: "tool", toolCallId: "tool1", content: "done"},
+    ]);
+    const compactedResume = compactAguiHistory(resume);
+    if (compactedResume.at(-1).id !== "result")
+      throw new Error("Latest tool result was removed");
+    console.log("ok");
+    """
+    result = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_browser_agui_messages_are_trimmed_before_post_and_restored_after_rejection():
+    from cli_agent.web_ui_api import API_APP_JS
+
+    assert "result.messages = compactAguiHistory(result);" in API_APP_JS
+    dispatch = API_APP_JS.split('if (msg.type === "message") {', 1)[1]
+    assert "input = aguiInput();" in dispatch
+    assert "aguiMessages = input.messages;" in dispatch
+    assert "aguiMessages.pop();" in dispatch
+    assert 'const MAX_SYNCED_MESSAGES = 480;' in API_APP_JS
+    assert 'const MAX_SYNCED_REQUEST_BYTES = 800000;' in API_APP_JS
+
+
+def test_browser_wire_transcript_is_bounded_without_truncating_latest_prompt():
+    from cli_agent.web_ui_api import API_APP_JS
+
+    bound = API_APP_JS.split("function boundAguiMessages() {", 1)[1].split(
+        "function aguiInput(", 1
+    )[0]
+    assert "MAX_WIRE_MESSAGES = 240" in API_APP_JS
+    assert "MAX_WIRE_BYTES = 400 * 1024" in API_APP_JS
+    assert "new TextEncoder()" in bound
+    assert "aguiMessages.length - MAX_WIRE_MESSAGES" in bound
+    assert "aguiMessages = aguiMessages.slice(start)" in bound
+    assert "if (start >= aguiMessages.length)" in bound
+    assert "aguiMessages[0].role !== \"user\"" in bound
+    assert "messages: boundAguiMessages()" in API_APP_JS
+    assert "chat.replaceChildren();" in API_APP_JS
+    # The browser display is not truncated when the AG-UI wire history is.
+    assert "chat.replaceChildren()" not in bound
