@@ -574,3 +574,41 @@ async def test_model_loop_routes_only_advertised_frontend_tool_calls():
     assert raised.value.calls[0].id == "client"
     assert any("existiert nicht" in item.get("content", "")
                for item in messages if item.get("role") == "tool")
+
+
+@pytest.mark.asyncio
+async def test_frontend_handoff_streams_assistant_text_before_pending_tool_calls():
+    class TextAndToolAgent(FrontendFakeAgent):
+        async def ask(self, prompt):
+            self.started += 1
+            tool = FrontendToolCall("call-1", "show_view", "{}")
+            raise FrontendToolHandoff(
+                [tool], {"role": "assistant", "content": "Opening the view"}
+            )
+
+    service = AgentApiService(lambda session: TextAndToolAgent(session))
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            response = await client.post("/ag-ui", json={
+                "threadId": "t", "runId": "run",
+                "messages": [{"id": "u", "role": "user", "content": "open"}],
+                "tools": [definition()],
+            }, headers={
+                "Authorization": "Bearer " + service.token,
+                "Accept": "text/event-stream",
+            })
+            assert response.status_code == 200
+            events = [json.loads(line[6:]) for line in response.text.splitlines()
+                      if line.startswith("data: ")]
+            assert [event["type"] for event in events] == [
+                "RUN_STARTED", "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+                "TEXT_MESSAGE_END", "TOOL_CALL_START", "TOOL_CALL_ARGS",
+                "TOOL_CALL_END", "RUN_FINISHED",
+            ]
+            assert events[2]["delta"] == "Opening the view"
+            assert events[-1]["outcome"]["pendingToolCallIds"] == ["call-1"]
+    finally:
+        await service.shutdown()
