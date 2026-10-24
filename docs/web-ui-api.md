@@ -15,7 +15,8 @@ browser assets and the existing Agent API on an ephemeral port. An
 The console displays and opens a local URL with a browser token in its fragment.
 The frontend removes the fragment and keeps the credential within that tab's
 session storage for reloads. The browser token is separate from the API bearer
-credential and can manage the local UI sessions but cannot directly control an\nagent session without its separate exclusive tab lease.
+credential and can manage the local UI sessions but cannot directly control an
+agent session without its separate exclusive tab lease.
 Browser state-changing requests must carry the same-origin Origin header and
 an explicit browser marker. Host validation and loopback-only binding remain in
 place. The API mode does not write LLM context dumps.
@@ -76,7 +77,9 @@ and its usual explicit port.
 ## Tests and limitations
 
 `tests/test_web_ui_api.py` covers route authentication, context and tool
-switches, history reset, session runs, setup commands and output writing.\n`tests/test_web_ui_sessions.py` covers tab isolation, new-session tickets,\nreopening, lease validation/expiry, and session cleanup.
+switches, history reset, session runs, setup commands and output writing.
+`tests/test_web_ui_sessions.py` covers tab isolation, new-session tickets,
+reopening, lease validation/expiry, and session cleanup.
 The preexisting API tests cover SSE event replay, run isolation and approval
 lifecycle. A manual browser smoke test (especially tool approval, page reload,
 and Ctrl+C/shutdown) is recommended in addition to CI.
