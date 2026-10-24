@@ -20,6 +20,9 @@ from .web_ui import WebUiApprovalBroker
 API_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_SESSIONS = 8
+# Browsers commonly permit six HTTP/1.1 connections per origin. Keep at
+# least two free for approval POSTs, session heartbeat and UI controls.
+MAX_CONCURRENT_BROWSER_RUNS = 4
 MAX_PROMPT_BYTES = 512 * 1024
 # Replay keeps a full supported run, including the optional initial knowledge
 # phase and its two permitted re-entry searches. Five events per tool covers
@@ -28,6 +31,9 @@ MAX_EVENTS_PER_RUN = 8_192
 REPLAY_EVENTS_PER_TOOL = 5
 REPLAY_LIFECYCLE_ALLOWANCE = 32
 MAX_JSON_BYTES = 1024 * 1024
+# A UI run must not execute before its SSE consumer is attached.
+# A bounded wait prevents abandoned/browser-blocked requests from hanging a session.
+BROWSER_SSE_CONNECT_TIMEOUT = 15.0
 
 
 @dataclass
@@ -39,6 +45,10 @@ class AgentRun:
     # Subscribers belong to this run, not the parent session. A slow
     # subscriber draining a previous run must never authorize a new run.
     listeners: int = 0
+    # Only embedded-browser runs require an SSE subscriber before execution.
+    # Headless API runs retain their existing fire-and-poll semantics.
+    require_listener: bool = False
+    subscriber_ready: asyncio.Event = field(default_factory=asyncio.Event)
     answer: str | None = None
     error: str | None = None
     events: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
@@ -76,9 +86,21 @@ class AgentSession:
         factory: Callable[["AgentSession"], Any],
         *,
         approval_workspace: Any = None,
+        output_target: Any = None,
+        initial_commands: tuple[str, ...] = (),
+        debug_errors: bool = False,
     ) -> None:
+        self.debug_errors = debug_errors
+        self.initial_commands = initial_commands
+        self.initial_messages: list[str] = []
+        self.ui_messages: list[dict[str, str]] = []
+        self.output_target = output_target
         self.id = uuid.uuid4().hex
         self._factory = factory
+        # Only agent/MCP startup is subject to the 30-second startup deadline.
+        # Initial web-context fetches run after startup and have their own
+        # provider/network bounds rather than sharing that aggregate limit.
+        self._startup_ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._queue: asyncio.Queue[AgentRun | None] = asyncio.Queue(maxsize=1)
         self._task: asyncio.Task[None] | None = None
@@ -93,7 +115,8 @@ class AgentSession:
     async def start(self) -> None:
         self._task = asyncio.create_task(self._worker())
         try:
-            await asyncio.wait_for(self._ready, timeout=30)
+            await asyncio.wait_for(self._startup_ready, timeout=30)
+            await self._ready
         except BaseException:
             await self.close()
             raise
@@ -103,6 +126,10 @@ class AgentSession:
             agent = self._factory(self)
             async with agent:
                 self.agent = agent
+                if not self._startup_ready.done():
+                    self._startup_ready.set_result(None)
+                for initial_command in self.initial_commands:
+                    self.initial_messages.append(await agent.ask(initial_command))
                 if not self._ready.done():
                     self._ready.set_result(None)
                 while True:
@@ -112,33 +139,55 @@ class AgentSession:
                     run.status = "running"
                     run.emit({"type": "RUN_STARTED", "threadId": self.id, "runId": run.id})
                     try:
+                        if run.require_listener:
+                            await self._await_run_subscriber(run)
+                        self._remember("user", run.prompt)
                         answer = await agent.ask(run.prompt)
                         if not isinstance(answer, str):
                             raise TypeError("Agentenantwort muss Text sein.")
                         run.answer = answer
+                        self._remember("assistant", answer)
                         message_id = uuid.uuid4().hex
                         run.emit({"type": "TEXT_MESSAGE_START", "messageId": message_id, "role": "assistant"})
                         run.emit({"type": "TEXT_MESSAGE_CONTENT", "messageId": message_id, "delta": answer})
                         run.emit({"type": "TEXT_MESSAGE_END", "messageId": message_id})
+                        if self.output_target is not None:
+                            from .file_context import is_local_agent_command
+                            if not is_local_agent_command(run.prompt):
+                                try:
+                                    self.output_target.write_text(answer)
+                                except Exception:
+                                    run.emit({"type": "CUSTOM", "name": "output_error",
+                                              "value": {"message": "Ausgabedatei konnte nicht geschrieben werden."}})
                         run.status = "completed"
                         run.emit({"type": "RUN_FINISHED", "threadId": self.id, "runId": run.id})
                     except Exception as exc:
                         run.status = "failed"
-                        run.error = f"{type(exc).__name__}: {exc}"
+                        if self.debug_errors:
+                            import traceback
+                            run.error = "".join(traceback.format_exception(exc))
+                        else:
+                            run.error = f"{type(exc).__name__}: {exc}"
                         # Do not disclose internal exception details in stream events.
                         run.emit({"type": "RUN_ERROR", "message": "Agentenlauf fehlgeschlagen."})
                     finally:
                         self._busy = False
                         run.changed.set()
         except asyncio.CancelledError:
-            if not self._ready.done():
-                self._ready.set_exception(RuntimeError("Session-Start abgebrochen."))
+            if not self._startup_ready.done():
+                self._startup_ready.cancel()
+                self._ready.cancel()
+            elif not self._ready.done():
+                self._ready.cancel()
             if self._run is not None and not self._run.done:
                 self._run.status = "cancelled"
                 self._run.emit({"type": "RUN_ERROR", "message": "Agentenlauf abgebrochen."})
             raise
         except BaseException as exc:
-            if not self._ready.done():
+            if not self._startup_ready.done():
+                self._startup_ready.set_exception(exc)
+                self._ready.cancel()
+            elif not self._ready.done():
                 self._ready.set_exception(exc)
             else:
                 if self._run is not None and not self._run.done:
@@ -150,6 +199,32 @@ class AgentSession:
             self.broker.detach(self._approval_sender)
             if self._run is not None:
                 self._run.changed.set()
+
+    async def _await_run_subscriber(self, run: AgentRun) -> None:
+        """Wait until an actual SSE listener exists, before executing a UI run.
+
+        Do not confuse a previous run's listener or a stale/disconnected
+        subscriber with an active consumer of *this* run.
+        """
+        deadline = asyncio.get_running_loop().time() + BROWSER_SSE_CONNECT_TIMEOUT
+        while run.listeners == 0:
+            run.subscriber_ready.clear()
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("Kein SSE-Client für den Agentenlauf verbunden.")
+            try:
+                await asyncio.wait_for(run.subscriber_ready.wait(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    "Kein SSE-Client für den Agentenlauf verbunden."
+                ) from exc
+
+    def _remember(self, role: str, content: str) -> None:
+        # Bounded, in-memory chat display history. Never retain MCP payloads,
+        # approval arguments or internal LLM context as browser transcript.
+        self.ui_messages.append({"role": role, "content": content[:100_000]})
+        if len(self.ui_messages) > 200:
+            del self.ui_messages[:-200]
 
     def _replay_capacity(self) -> int:
         """Ensure a run's replay buffer covers configured tool-call budgets.
@@ -169,7 +244,7 @@ class AgentSession:
         calculated = tool_budget * REPLAY_EVENTS_PER_TOOL + REPLAY_LIFECYCLE_ALLOWANCE
         return max(MAX_EVENTS_PER_RUN, calculated)
 
-    def submit(self, prompt: str) -> AgentRun:
+    def submit(self, prompt: str, *, require_listener: bool = False) -> AgentRun:
         if self._closed:
             raise RuntimeError("Session ist geschlossen.")
         if self._busy:
@@ -178,6 +253,7 @@ class AgentSession:
         run = AgentRun(
             id=uuid.uuid4().hex, thread_id=self.id, prompt=prompt,
             max_events=self._replay_capacity(),
+            require_listener=require_listener,
         )
         self._run = run
         self._queue.put_nowait(run)
@@ -207,6 +283,7 @@ class AgentSession:
 
     def subscribe(self, run: AgentRun) -> None:
         run.listeners += 1
+        run.subscriber_ready.set()
 
     def unsubscribe(self, run: AgentRun) -> None:
         run.listeners -= 1
@@ -214,8 +291,10 @@ class AgentSession:
             raise RuntimeError("SSE-Listener-Zähler untergelaufen.")
         # Only losing the *current* run's final subscriber invalidates
         # pending approvals. Disconnects of earlier runs are irrelevant.
-        if self._run is run and run.listeners == 0:
-            self.broker.deny_all()
+        if run.listeners == 0:
+            run.subscriber_ready.clear()
+            if self._run is run:
+                self.broker.deny_all()
 
     async def _send_approval(self, payload: dict[str, Any]) -> None:
         run = self._run
@@ -245,8 +324,11 @@ class AgentSession:
 
 
 class AgentApiService:
-    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None) -> None:
+    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None, output_target: Any = None, initial_commands: tuple[str, ...] = (), debug_errors: bool = False) -> None:
+        self.debug_errors = debug_errors
+        self.initial_commands = initial_commands
         self.factory = factory
+        self.output_target = output_target
         self.approval_workspace = approval_workspace
         # Slots are reserved before MCP startup (which may suspend indefinitely).
         self.sessions: dict[str, AgentSession] = {}
@@ -260,7 +342,7 @@ class AgentApiService:
                 raise RuntimeError("API-Server wird beendet.")
             if len(self.sessions) >= MAX_SESSIONS:
                 raise OverflowError("Maximale Anzahl von Sessions erreicht.")
-            session = AgentSession(self.factory, approval_workspace=self.approval_workspace)
+            session = AgentSession(self.factory, approval_workspace=self.approval_workspace, output_target=self.output_target, initial_commands=self.initial_commands, debug_errors=self.debug_errors)
             self.sessions[session.id] = session
 
         try:
@@ -298,11 +380,11 @@ class AgentApiService:
             await session.close()
 
 
-def create_app(service: AgentApiService) -> Any:
-    """Create a loopback-only ASGI application; all API routes need a bearer."""
+def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) -> Any:
+    """Create a loopback-only ASGI app. Browser mode shares the same API service."""
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import JSONResponse, Response, StreamingResponse
+    from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
     from starlette.routing import Route
     from starlette.middleware import Middleware
     from starlette.middleware.base import BaseHTTPMiddleware
@@ -376,13 +458,49 @@ def create_app(service: AgentApiService) -> Any:
         try:
             async with session_from(request) as session:
                 async with checked_json(request) as body:
-                    if set(body) != {"prompt"} or not isinstance(body["prompt"], str):
-                        return error(400, "Genau ein Textfeld 'prompt' wird benötigt.")
-                    prompt = body["prompt"]
+                    browser_run = (
+                        ui is not None
+                        and request.headers.get("x-cli-agent-browser") == "1"
+                    )
+                    if set(body) == {"prompt"} and isinstance(body["prompt"], str):
+                        prompt = body["prompt"]
+                    elif (browser_run and "command" in body
+                          and set(body) in ({"command"}, {"command", "argument"})):
+                        # Keep command buttons distinct from free-text prompts.
+                        # Reuse the legacy strict validator: malformed URLs and
+                        # server names must never fall through to the model.
+                        from .web_ui import _web_ui_command_prompt
+                        prompt = _web_ui_command_prompt(
+                            body["command"], body.get("argument")
+                        )
+                    else:
+                        return error(400, "Genau ein Prompt oder gültiger Web-UI-Befehl erforderlich.")
                     if not prompt.strip() or len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
                         return error(400, "Prompt ist leer oder zu groß.")
+                    # The embedded UI treats exit/quit as local shutdown commands.
+                    # Never allow an alternative browser caller to submit them
+                    # as model prompts (or write their responses to --output).
+                    if (ui is not None
+                            and request.headers.get("x-cli-agent-browser") == "1"
+                            and prompt.strip().casefold() in {"exit", "quit"}):
+                        return error(400, "exit/quit sind lokale Web-UI-Befehle.")
+                    # No await between checking the global browser run count
+                    # and submit(): capacity reservation is atomic on the event
+                    # loop, including simultaneous requests from other tabs.
+                    if browser_run and sum(
+                        other._busy and other._run is not None
+                        and other._run.require_listener
+                        for other in service.sessions.values()
+                    ) >= MAX_CONCURRENT_BROWSER_RUNS:
+                        return error(
+                            429, "Maximal vier parallele Web-UI-Läufe erlaubt. "
+                            "Bitte einen laufenden Agentenlauf abschließen lassen."
+                        )
                     try:
-                        run = session.submit(prompt)
+                        run = session.submit(
+                            prompt,
+                            require_listener=browser_run,
+                        )
                     except RuntimeError:
                         return error(409, "Session ist beschäftigt oder geschlossen.")
                     return JSONResponse({"run_id": run.id, "status": run.status}, status_code=202)
@@ -416,25 +534,50 @@ def create_app(service: AgentApiService) -> Any:
         if run.events and last < run.events[0][0] - 1:
             return error(410, "Event-History ist nicht mehr vollständig.")
 
+        browser_stream = (
+            ui is not None and request.headers.get("x-cli-agent-browser") == "1"
+        )
+        browser_lease = request.headers.get("x-cli-agent-lease")
+
         async def stream():
             cursor = last
             session.subscribe(run)
             try:
                 while True:
+                    # A request authorized when established must not keep an SSE
+                    # subscription after its tab's exclusive lease has expired.
+                    if browser_stream and not ui["registry"].is_owner(
+                        session.id, browser_lease, refresh=False
+                    ):
+                        return
                     if run.events and cursor < run.events[0][0] - 1:
                         return
                     for seq, event in tuple(run.events):
                         if seq > cursor:
                             cursor = seq
+                            # Replayed approval requests must remain actionable.
+                            # Resolved/denied requests are historical audit
+                            # events, not interactive dialogs.
+                            if (event.get("type") == "CUSTOM"
+                                    and event.get("name") == "approval_required"):
+                                request_id = str(event.get("value", {}).get("id", ""))
+                                if not session.broker.is_pending(request_id):
+                                    continue
                             yield f"id: {seq}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    if run.done:
+                    # A fast agent can finish while the SSE generator is
+                    # yielding its first event. Do not terminate until EVERY
+                    # event emitted after the snapshot has been drained.
+                    if run.done and cursor >= run.next_sequence - 1:
                         return
                     run.changed.clear()
                     # New events may have arrived while yield suspended us.
                     # Recheck after clear to avoid an indefinitely lost wakeup.
                     if run.next_sequence > cursor + 1 or run.done:
                         continue
-                    await run.changed.wait()
+                    try:
+                        await asyncio.wait_for(run.changed.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        pass
             finally:
                 session.unsubscribe(run)
 
@@ -513,36 +656,259 @@ def create_app(service: AgentApiService) -> Any:
         except ValueError as exc:
             return error(400, str(exc))
 
+    async def working_context(request: Request) -> Response:
+        session = service.sessions.get(request.path_params["session_id"])
+        if session is None:
+            return error(404, "Session nicht gefunden.")
+        agent = session.agent
+        return JSONResponse({
+            "messages": agent.working_messages_snapshot(),
+            "tools": agent.tool_states_snapshot(),
+            "contexts": agent.context_states_snapshot(),
+            "okf": agent.okf_status_snapshot(),
+        })
+
+    async def reset_history(request: Request) -> Response:
+        session = service.sessions.get(request.path_params["session_id"])
+        if session is None:
+            return error(404, "Session nicht gefunden.")
+        if session._busy or session._closed:
+            return error(409, "Session ist beschäftigt oder geschlossen.")
+        session.broker.deny_all()
+        session.agent.reset_history()
+        session.ui_messages.clear()
+        return JSONResponse({"reset": True})
+
+    async def usage(request: Request) -> Response:
+        session = service.sessions.get(request.path_params["session_id"])
+        if session is None:
+            return error(404, "Session nicht gefunden.")
+        return JSONResponse({"text": session.agent.token_usage_text()})
+
+    def browser_security_headers(response: Response) -> Response:
+        from .web_ui import _security_headers
+        response = _security_headers(response)
+        # The API-backed browser makes same-origin fetch requests only.
+        response.headers["Content-Security-Policy"] = (
+            response.headers["Content-Security-Policy"].replace(" ws://127.0.0.1:*", "")
+        )
+        return response
+
+    async def ui_index(_request: Request) -> Response:
+        from .web_ui import INDEX_HTML
+        return browser_security_headers(HTMLResponse(INDEX_HTML))
+
+    async def ui_css(_request: Request) -> Response:
+        from .web_ui import APP_CSS
+        return browser_security_headers(PlainTextResponse(APP_CSS, media_type="text/css"))
+
+    async def ui_js(_request: Request) -> Response:
+        from .web_ui_api import API_APP_JS
+        return browser_security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
+
+    async def ui_bootstrap(request: Request) -> Response:
+        assert ui is not None
+        from .web_ui_sessions import SessionOccupiedError
+        registry = ui["registry"]
+        try:
+            async with checked_json(request) as body:
+                if set(body) - {"session_id", "ticket"}:
+                    return error(400, "Unbekannte Session-Parameter.")
+                ticket = body.get("ticket")
+                if ticket is not None:
+                    if not isinstance(ticket, str):
+                        return error(400, "Ungültiges Session-Ticket.")
+                    session_id, lease = registry.redeem(ticket)
+                else:
+                    session_id = body.get("session_id", ui["session_id"])
+                    if not isinstance(session_id, str):
+                        return error(400, "Ungültige Session-ID.")
+                    lease = registry.claim(session_id)
+            session = service.sessions[session_id]
+            return JSONResponse({
+                "session_id": session_id, "lease": lease,
+                **ui["info"], "initial_messages": session.initial_messages,
+                "history": session.ui_messages,
+                "active_run": (session._run.id if session._run is not None
+                               and not session._run.done else None),
+            })
+        except SessionOccupiedError as exc:
+            return error(409, str(exc))
+        except KeyError:
+            return error(404, "Session nicht gefunden.")
+        except ValueError as exc:
+            return error(400, str(exc))
+
+    async def ui_sessions(_request: Request) -> Response:
+        assert ui is not None
+        return JSONResponse({"sessions": ui["registry"].list_sessions()})
+
+    async def ui_session_new(_request: Request) -> Response:
+        assert ui is not None
+        from .web_ui_sessions import SessionOccupiedError
+        registry = ui["registry"]
+        try:
+            session = await service.create()
+        except OverflowError:
+            return error(429, "Maximale Anzahl von Sessions erreicht.")
+        except Exception:
+            return error(503, "Session konnte nicht gestartet werden.")
+        registry.register(session.id)
+        try:
+            ticket = registry.invitation(session.id)
+        except (SessionOccupiedError, KeyError):
+            registry.forget(session.id)
+            await service.remove(session.id)
+            return error(409, "Session konnte nicht geöffnet werden.")
+        return JSONResponse({"session_id": session.id, "ticket": ticket}, status_code=201)
+
+    async def ui_session_ticket(request: Request) -> Response:
+        assert ui is not None
+        from .web_ui_sessions import SessionOccupiedError
+        try:
+            ticket = ui["registry"].invitation(request.path_params["session_id"])
+        except KeyError:
+            return error(404, "Session nicht gefunden.")
+        except SessionOccupiedError as exc:
+            return error(409, str(exc))
+        return JSONResponse({"ticket": ticket})
+
+    async def ui_session_delete(request: Request) -> Response:
+        assert ui is not None
+        registry = ui["registry"]
+        session_id = request.path_params["session_id"]
+        try:
+            owner = registry.is_owner(
+                session_id, request.headers.get("x-cli-agent-lease"), refresh=False
+            )
+            if owner:
+                if service.sessions[session_id]._busy:
+                    return error(409, "Session ist beschäftigt.")
+            elif not registry.can_close(session_id):
+                return error(409, "Session ist in einem anderen Tab geöffnet oder beschäftigt.")
+        except KeyError:
+            return error(404, "Session nicht gefunden.")
+        registry.forget(session_id)
+        if not await service.remove(session_id):
+            return error(404, "Session nicht gefunden.")
+        return Response(status_code=204)
+
+    async def ui_release(request: Request) -> Response:
+        assert ui is not None
+        try:
+            async with checked_json(request) as body:
+                if set(body) != {"session_id"} or not isinstance(body["session_id"], str):
+                    return error(400, "Session-ID erforderlich.")
+                if not ui["registry"].release(
+                    body["session_id"], request.headers.get("x-cli-agent-lease")
+                ):
+                    return error(409, "Keine aktive Session-Bindung.")
+                return Response(status_code=204)
+        except ValueError as exc:
+            return error(400, str(exc))
+
+    async def ui_heartbeat(request: Request) -> Response:
+        assert ui is not None
+        try:
+            async with checked_json(request) as body:
+                if set(body) != {"session_id"} or not isinstance(body["session_id"], str):
+                    return error(400, "Session-ID erforderlich.")
+                if not ui["registry"].is_owner(
+                    body["session_id"], request.headers.get("x-cli-agent-lease")
+                ):
+                    return error(409, "Session-Bindung ist abgelaufen.")
+                return Response(status_code=204)
+        except ValueError as exc:
+            return error(400, str(exc))
+
+    async def ui_render(request: Request) -> Response:
+        from .web_ui import _render_markdown
+        try:
+            async with checked_json(request) as body:
+                if set(body) != {"text"} or not isinstance(body["text"], str):
+                    return error(400, "Text erwartet.")
+                if len(body["text"].encode("utf-8")) > MAX_PROMPT_BYTES:
+                    return error(400, "Text zu groß.")
+                return JSONResponse({"html": _render_markdown(body["text"])})
+        except ValueError as exc:
+            return error(400, str(exc))
+
+    async def ui_shutdown(_request: Request) -> Response:
+        assert ui is not None
+        # Closing the local application terminates every UI session.
+        for session in tuple(service.sessions.values()):
+            session.broker.deny_all()
+        ui["shutdown"]()
+        return JSONResponse({"shutdown": True})
+
     async def health(_request: Request) -> Response:
         return JSONResponse({"status": "ok"})
 
     async def authenticate(request: Request, call_next: Any) -> Response:
-        # Host validation also prevents trivial DNS-rebinding attacks.
+        # Reject rebinding / proxies even for public static assets.
         host = request.headers.get("host", "").split(":")[0].lower()
-        if host != API_HOST:
+        if host != API_HOST or request.headers.get("x-forwarded-host") or request.headers.get("forwarded"):
             return error(403, "Unzulässiger Host.")
-        if request.headers.get("origin") is not None:
-            return error(403, "Browser-Origin nicht zugelassen.")
-        if request.headers.get("x-forwarded-host") or request.headers.get("forwarded"):
-            return error(403, "Weitergeleitete Host-Header nicht zugelassen.")
+        path = request.url.path
+        origin = request.headers.get("origin")
+        if ui is not None and path in {"/", "/assets/app.css", "/assets/app.js"}:
+            if request.method != "GET" or origin is not None:
+                return error(403, "Unzulässige Browser-Anfrage.")
+            return await call_next(request)
         header = request.headers.get("authorization", "")
         prefix = "Bearer "
-        if not header.startswith(prefix) or not secrets.compare_digest(header[len(prefix):], service.token):
+        token = header[len(prefix):] if header.startswith(prefix) else ""
+        browser = (
+            ui is not None
+            and secrets.compare_digest(token, ui["token"])
+            and request.headers.get("x-cli-agent-browser") == "1"
+            and ((origin is None or origin == ui["origin"])
+                 if request.method in {"GET", "HEAD"}
+                 else origin == ui["origin"])
+            and (path.startswith("/ui/") or path.startswith("/sessions/"))
+        )
+        if browser:
+            if path.startswith("/sessions/"):
+                parts = path.split("/")
+                if (len(parts) < 4 or request.method == "DELETE"
+                        or not ui["registry"].is_owner(
+                            parts[2], request.headers.get("x-cli-agent-lease"))):
+                    return error(403, "Keine gültige Tab-Bindung für diese Session.")
+            return await call_next(request)
+        if origin is not None:
+            return error(403, "Browser-Origin nicht zugelassen.")
+        if not token or not secrets.compare_digest(token, service.token):
             return error(401, "Authentifizierung erforderlich.")
         return await call_next(request)
 
     app = Starlette(
-        routes=[
+        routes=([
             Route("/health", health, methods=["GET"]),
             Route("/sessions", create_session, methods=["POST"]),
             Route("/sessions/{session_id}", delete_session, methods=["DELETE"]),
             Route("/sessions/{session_id}/context", context, methods=["GET"]),
+            Route("/sessions/{session_id}/working-context", working_context, methods=["GET"]),
+            Route("/sessions/{session_id}/reset", reset_history, methods=["POST"]),
+            Route("/sessions/{session_id}/usage", usage, methods=["GET"]),
             Route("/sessions/{session_id}/context", update_context, methods=["PATCH"]),
             Route("/sessions/{session_id}/runs", start_run, methods=["POST"]),
             Route("/sessions/{session_id}/runs/{run_id}", run_status, methods=["GET"]),
             Route("/sessions/{session_id}/runs/{run_id}/events", run_events, methods=["GET"]),
             Route("/sessions/{session_id}/runs/{run_id}/approvals/{approval_id}", approve, methods=["POST"]),
-        ],
+        ] + ([
+            Route("/", ui_index, methods=["GET"]),
+            Route("/assets/app.css", ui_css, methods=["GET"]),
+            Route("/assets/app.js", ui_js, methods=["GET"]),
+            Route("/ui/bootstrap", ui_bootstrap, methods=["POST"]),
+            Route("/ui/sessions", ui_sessions, methods=["GET"]),
+            Route("/ui/sessions", ui_session_new, methods=["POST"]),
+            Route("/ui/sessions/{session_id}/ticket", ui_session_ticket, methods=["POST"]),
+            Route("/ui/sessions/{session_id}", ui_session_delete, methods=["DELETE"]),
+            Route("/ui/release", ui_release, methods=["POST"]),
+            Route("/ui/heartbeat", ui_heartbeat, methods=["POST"]),
+            Route("/ui/render", ui_render, methods=["POST"]),
+            Route("/ui/shutdown", ui_shutdown, methods=["POST"]),
+        ] if ui is not None else [])),
         lifespan=lifespan,
         middleware=[Middleware(BaseHTTPMiddleware, dispatch=authenticate)],
     )

@@ -390,6 +390,11 @@ class WebUiApprovalBroker:
             if not future.done():
                 future.set_result(False)
 
+    def is_pending(self, request_id: str) -> bool:
+        """Whether a request can still be decided by the current UI."""
+        future = self._pending.get(request_id)
+        return future is not None and not future.done()
+
     def resolve(self, request_id: str, decision: str) -> bool:
         future = self._pending.get(request_id)
         if future is None or future.done() or decision not in {"no", "yes", "session"}:
@@ -1031,6 +1036,8 @@ INDEX_HTML = """<!doctype html>
         <div id="session-meta" class="meta">Verbindung wird hergestellt …</div>
       </div>
       <div class="header-actions">
+        <button id="new-session" class="secondary" type="button">Neue Session in neuem Tab</button>
+        <button id="list-sessions" class="secondary" type="button">Sessions</button>
         <button id="reset-history" class="secondary" type="button">History zurücksetzen</button>
         <button id="show-working-context" class="secondary" type="button">LLM Context</button>
         <button id="quit" class="secondary" type="button">Sitzung beenden</button>
@@ -1050,6 +1057,16 @@ INDEX_HTML = """<!doctype html>
       <button id="send" type="submit">Senden</button>
     </form>
   </main>
+  <dialog id="sessions-dialog" class="working-context-dialog">
+    <div class="dialog-header">
+      <h2>Sessions</h2>
+      <button id="close-sessions" class="secondary" type="button">Schließen</button>
+    </div>
+    <p class="meta">Jede Session kann nur in einem aktiven Browser-Tab geöffnet sein.
+       Freie Sessions lassen sich erneut öffnen oder beenden.</p>
+    <div id="sessions-list" class="state-list"></div>
+    <button id="refresh-sessions" class="secondary" type="button">Aktualisieren</button>
+  </dialog>
   <dialog id="working-context-dialog" class="working-context-dialog">
     <div class="dialog-header">
       <div>
