@@ -596,6 +596,143 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             return error(404, "Session nicht gefunden.")
         return Response(status_code=204)
 
+    async def ag_ui_run(request: Request) -> Response:
+        """AG-UI 1.0 HTTP/SSE binding: one POST and one streamed response.
+
+        Optional cli-agent configuration is deliberately kept on separate
+        endpoints. AG-UI peers need no cli-agent-specific run or approval API.
+        """
+        from .ag_ui_protocol import parse_run_input, encode_sse
+        accept = request.headers.get("accept", "")
+        if "text/event-stream" not in accept and "*/*" not in accept:
+            return error(406, "Accept: text/event-stream erforderlich.")
+        try:
+            async with checked_json(request) as body:
+                incoming = parse_run_input(body)
+        except ValueError as exc:
+            return error(400, str(exc))
+
+        browser = (
+            ui is not None and request.headers.get("x-cli-agent-browser") == "1"
+        )
+        if browser:
+            assert ui is not None
+            if not ui["registry"].is_owner(
+                incoming.thread_id, request.headers.get("x-cli-agent-lease")
+            ):
+                return error(403, "Keine gültige Browser-Bindung für diesen Thread.")
+            session = service.sessions.get(incoming.thread_id)
+            if session is None:
+                return error(404, "Session nicht gefunden.")
+        else:
+            try:
+                session = await service.resolve_agui_thread(incoming.thread_id)
+            except OverflowError:
+                return error(429, "Zu viele AG-UI-Threads.")
+            except Exception:
+                return error(503, "Thread konnte nicht erstellt werden.")
+
+        if browser and sum(
+            other._busy and other._run is not None and other._run.agui
+            for other in service.sessions.values()
+        ) >= MAX_CONCURRENT_BROWSER_RUNS and not (
+            session._busy and session._pending_interrupt is not None
+        ):
+            return error(429, "Maximal vier parallele Web-UI-Läufe erlaubt.")
+
+        # Only plain user/assistant messages are submitted to the model's
+        # conversation history. AG-UI system/developer messages have no power
+        # to modify cli-agent's own system prompt or configured policy.
+        if incoming.resume:
+            if len(incoming.resume) != 1:
+                return error(400, "Alle offenen Interrupts müssen beantwortet werden.")
+            try:
+                run = session.resume_agui(
+                    thread_id=incoming.thread_id,
+                    run_id=incoming.run_id,
+                    response=incoming.resume[0],
+                )
+            except (ValueError, RuntimeError) as exc:
+                return error(409, str(exc))
+        else:
+            if session._busy or session._pending_interrupt is not None:
+                return error(409, "Thread ist beschäftigt oder wartet auf Resume.")
+            if not incoming.prompt.strip():
+                return error(400, "Eine Benutzer-Nachricht ist erforderlich.")
+            if incoming.prompt.strip().casefold() in {"exit", "quit"} and browser:
+                return error(400, "Lokale Shutdown-Befehle gehören nicht zum AG-UI-Run.")
+            # Client history is authoritative at the run boundary. Rebuild
+            # the simple user/assistant model history, rather than duplicating
+            # previous turns held by the long-lived agent worker.
+            history = []
+            for message in incoming.messages:
+                if message.get("role") in {"user", "assistant"}:
+                    content = message.get("content")
+                    if isinstance(content, str):
+                        history.append({"role": message["role"], "content": content})
+            # The final user turn is passed to agent.ask() separately.
+            if history and history[-1] == {"role": "user", "content": incoming.prompt}:
+                history.pop()
+            if hasattr(session.agent, "history"):
+                session.agent.history[:] = history
+            session.agui_messages = list(incoming.messages)
+            session.agui_state = incoming.state
+            session.agui_context = list(incoming.context)
+            if hasattr(session.agent, "_agui_external_context"):
+                session.agent._agui_external_context = list(incoming.context)
+            else:
+                setattr(session.agent, "_agui_external_context", list(incoming.context))
+            try:
+                run = session.submit(
+                    incoming.prompt, require_listener=True, agui=True,
+                    thread_id=incoming.thread_id, run_id=incoming.run_id,
+                )
+            except ValueError as exc:
+                return error(409, str(exc))
+            except RuntimeError:
+                return error(409, "Thread ist beschäftigt.")
+        lease = request.headers.get("x-cli-agent-lease")
+
+        async def stream():
+            cursor = 0
+            session.subscribe(run)
+            try:
+                if run.resume_approval is not None:
+                    # An active SSE listener must exist BEFORE approving.
+                    # The broker validates the original write preview again
+                    # against the current workspace (TOCTOU defense).
+                    approval_id, decision = run.resume_approval
+                    if not session.broker.resolve(approval_id, decision):
+                        run.status = "failed"
+                        run.emit({"type": "RUN_ERROR", "message": "Freigabe ist abgelaufen."})
+                while True:
+                    if browser and not ui["registry"].is_owner(
+                        session.id, lease, refresh=False
+                    ):
+                        return
+                    for sequence, event in tuple(run.events):
+                        if sequence > cursor:
+                            cursor = sequence
+                            yield encode_sse(event)
+                    if run.done and cursor >= run.next_sequence - 1:
+                        return
+                    run.changed.clear()
+                    if run.next_sequence > cursor + 1 or run.done:
+                        continue
+                    try:
+                        await asyncio.wait_for(run.changed.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        # Keep browser intermediaries from silently closing
+                        # quiet runs without generating protocol events.
+                        yield ": keep-alive\\n\\n".replace("\\\\n", "\\n")
+            finally:
+                session.unsubscribe(run)
+
+        return StreamingResponse(
+            stream(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
     async def start_run(request: Request) -> Response:
         try:
             async with session_from(request) as session:
@@ -1007,7 +1144,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             and ((origin is None or origin == ui["origin"])
                  if request.method in {"GET", "HEAD"}
                  else origin == ui["origin"])
-            and (path.startswith("/ui/") or path.startswith("/sessions/"))
+            and (path.startswith("/ui/") or path.startswith("/sessions/") or path == "/ag-ui")
         )
         if browser:
             if path.startswith("/sessions/"):
@@ -1026,6 +1163,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
     app = Starlette(
         routes=([
             Route("/health", health, methods=["GET"]),
+            Route("/ag-ui", ag_ui_run, methods=["POST"]),
             Route("/sessions", create_session, methods=["POST"]),
             Route("/sessions/{session_id}", delete_session, methods=["DELETE"]),
             Route("/sessions/{session_id}/context", context, methods=["GET"]),
