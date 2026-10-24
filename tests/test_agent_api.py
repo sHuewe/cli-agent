@@ -675,3 +675,151 @@ async def test_replay_capacity_adapts_to_knowledge_and_custom_limits():
     run = session.submit("custom")
     assert run.max_events == capacity
     await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_browser_run_waits_for_sse_subscription_before_immediate_approval():
+    """A fast tool call must not be denied between POST /runs and SSE attach."""
+    from cli_agent.web_ui_sessions import BrowserSessionRegistry
+
+    service, agents = make_test_service()
+    session = await service.create()
+    origin = "http://127.0.0.1:8765"
+    ui = {
+        "token": "browser-test-secret", "origin": origin,
+        "session_id": session.id,
+        "registry": BrowserSessionRegistry(service, session.id),
+        "info": {"model": "fake", "workspace": ".", "mcp_servers": []},
+        "shutdown": lambda: None,
+    }
+    app = create_app(service, ui=ui)
+    browser = {
+        "Authorization": "Bearer browser-test-secret",
+        "X-Cli-Agent-Browser": "1", "Origin": origin,
+    }
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=origin
+        ) as client:
+            claim = await client.post("/ui/bootstrap", json={}, headers=browser)
+            assert claim.status_code == 200
+            browser["X-Cli-Agent-Lease"] = claim.json()["lease"]
+            url = f"/sessions/{session.id}"
+            posted = await client.post(
+                url + "/runs", json={"prompt": "needs approval"}, headers=browser
+            )
+            assert posted.status_code == 202
+            rid = posted.json()["run_id"]
+            run = session.run(rid)
+            assert run.require_listener
+            # Force the worker to reach the SSE gate before opening the stream.
+            for _ in range(100):
+                if run.status == "running":
+                    break
+                await asyncio.sleep(0.005)
+            assert run.status == "running"
+            assert not agents[0].history  # agent.ask has NOT started
+            assert not session.broker._pending
+
+            stream_task = asyncio.create_task(
+                client.get(url + f"/runs/{rid}/events", headers=browser)
+            )
+            try:
+                for _ in range(200):
+                    if session.broker._pending:
+                        break
+                    await asyncio.sleep(0.005)
+                assert session.broker._pending
+                request_id = next(iter(session.broker._pending))
+                decision = await client.post(
+                    url + f"/runs/{rid}/approvals/{request_id}",
+                    json={"decision": "yes"}, headers=browser,
+                )
+                assert decision.status_code == 200
+                completed = await asyncio.wait_for(stream_task, 5)
+                assert completed.status_code == 200
+                events = [
+                    json.loads(line[6:])
+                    for line in completed.text.splitlines()
+                    if line.startswith("data: ")
+                ]
+                assert any(event.get("name") == "approval_required" for event in events)
+                assert events[-1]["type"] == "RUN_FINISHED"
+                assert run.answer == "approved=True"
+            finally:
+                if not stream_task.done():
+                    stream_task.cancel()
+                    await asyncio.gather(stream_task, return_exceptions=True)
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_browser_run_without_sse_times_out_and_releases_session(monkeypatch):
+    from cli_agent import agent_api
+    monkeypatch.setattr(agent_api, "BROWSER_SSE_CONNECT_TIMEOUT", 0.04)
+    service, agents = make_test_service()
+    session = await service.create()
+    try:
+        waiting = session.submit("needs approval", require_listener=True)
+        for _ in range(200):
+            if waiting.done:
+                break
+            await asyncio.sleep(0.005)
+        assert waiting.status == "failed"
+        assert "SSE-Client" in (waiting.error or "")
+        assert not agents[0].history
+        assert not session._busy
+        # Headless clients continue to be able to run without an SSE listener.
+        next_run = session.submit("hello")
+        for _ in range(100):
+            if next_run.done:
+                break
+            await asyncio.sleep(0.005)
+        assert next_run.answer == "reply hello"
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_old_sse_run_subscriber_cannot_unlock_new_browser_run():
+    service, agents = make_test_service()
+    session = await service.create()
+    try:
+        previous = session.submit("first")
+        for _ in range(100):
+            if previous.done:
+                break
+            await asyncio.sleep(0.005)
+        assert previous.done
+        session.subscribe(previous)
+        current = session.submit("needs approval", require_listener=True)
+        try:
+            for _ in range(100):
+                if current.status == "running":
+                    break
+                await asyncio.sleep(0.005)
+            assert current.status == "running"
+            assert not session.broker._pending
+            assert agents[0].history == ["first"]
+            session.subscribe(current)
+            for _ in range(100):
+                if session.broker._pending:
+                    break
+                await asyncio.sleep(0.005)
+            assert session.broker._pending
+            session.unsubscribe(previous)
+            assert session.broker._pending
+            session.broker.deny_all()
+            for _ in range(100):
+                if current.done:
+                    break
+                await asyncio.sleep(0.005)
+            assert current.answer == "approved=False"
+        finally:
+            if current.listeners:
+                session.unsubscribe(current)
+            if previous.listeners:
+                session.unsubscribe(previous)
+    finally:
+        await service.shutdown()
