@@ -672,7 +672,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                 "httpBinary": False, "resumable": False,
             },
             "tools": {
-                "supported": True, "clientProvided": False,
+                "supported": True, "clientProvided": True,
                 "parallelCalls": False,
             },
             "output": {"supportedMimeTypes": ["text/plain"]},
@@ -1070,6 +1070,11 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         session.broker.deny_all()
         session.agent.reset_history()
         session.ui_messages.clear()
+        session.agui_messages.clear()
+        session._pending_frontend = None
+        session._pending_frontend_thread_id = None
+        if hasattr(session.agent, "_agui_pending_working_messages"):
+            session.agent._agui_pending_working_messages = None
         return JSONResponse({"reset": True})
 
     async def usage(request: Request) -> Response:
@@ -1247,6 +1252,8 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                     body.get("command"), body.get("argument")
                 )
             session = service.sessions[sid]
+            if session._pending_frontend:
+                return error(409, "Offene Frontend-Tool-Aufrufe müssen zuerst beantwortet werden.")
             # Local commands still run on the same MCP-owning worker.
             run = session.submit(prompt, require_listener=False)
             while not run.done:
