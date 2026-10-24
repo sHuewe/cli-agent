@@ -308,3 +308,86 @@ async def test_replay_omits_resolved_or_denied_tool_approvals():
             assert any(item["type"] == "RUN_FINISHED" for item in payloads)
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_browser_run_limit_reserves_connections_for_heartbeat_and_approvals():
+    """With 8 possible sessions, only 4 may hold long-lived browser streams.
+
+    Otherwise six HTTP/1.1 SSE requests can exhaust a browser origin pool
+    and block the POSTs required to approve tools or renew tab leases.
+    """
+    from cli_agent.agent_api import MAX_CONCURRENT_BROWSER_RUNS
+
+    assert MAX_CONCURRENT_BROWSER_RUNS == 4
+    service = AgentApiService(lambda session: _Agent(session))
+    sessions = [await service.create() for _ in range(6)]
+    registry = BrowserSessionRegistry(service, sessions[0].id)
+    for session in sessions[1:]:
+        registry.register(session.id)
+    origin = "http://127.0.0.1:9191"
+    ui = {
+        "token": "browser-secret", "origin": origin,
+        "session_id": sessions[0].id, "registry": registry,
+        "info": {"model": "test", "workspace": ".", "mcp_servers": []},
+        "shutdown": lambda: None,
+    }
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+            base_url=origin,
+        ) as client:
+            leases = []
+            for session in sessions:
+                claimed = await client.post(
+                    "/ui/bootstrap", headers=_headers(origin=origin),
+                    json={"session_id": session.id},
+                )
+                assert claimed.status_code == 200
+                leases.append(claimed.json()["lease"])
+
+            running = []
+            for session, lease in zip(sessions[:4], leases[:4]):
+                response = await client.post(
+                    f"/sessions/{session.id}/runs",
+                    json={"prompt": "hello"},
+                    headers=_headers(lease, origin=origin),
+                )
+                assert response.status_code == 202
+                running.append(session._run)
+            # The fifth browser run is rejected *before* occupying its
+            # session; no SSE connection is opened by the rejected request.
+            rejected = await client.post(
+                f"/sessions/{sessions[4].id}/runs",
+                json={"prompt": "hello"},
+                headers=_headers(leases[4], origin=origin),
+            )
+            assert rejected.status_code == 429
+            assert not sessions[4]._busy
+            assert sessions[4]._run is None
+
+            # Control requests must retain capacity while those runs are live.
+            heartbeat = await client.post(
+                "/ui/heartbeat", json={"session_id": sessions[4].id},
+                headers=_headers(leases[4], origin=origin),
+            )
+            assert heartbeat.status_code == 204
+            listing = await client.get("/ui/sessions", headers=_headers())
+            assert listing.status_code == 200
+
+            # Completing a run immediately frees its slot. Other sessions
+            # may run concurrently, and the standalone API has no such cap.
+            sessions[0].subscribe(running[0])
+            for _ in range(100):
+                if running[0].done:
+                    break
+                await asyncio.sleep(0.005)
+            assert running[0].status == "completed"
+            accepted = await client.post(
+                f"/sessions/{sessions[4].id}/runs",
+                json={"prompt": "hello"},
+                headers=_headers(leases[4], origin=origin),
+            )
+            assert accepted.status_code == 202
+    finally:
+        await service.shutdown()
