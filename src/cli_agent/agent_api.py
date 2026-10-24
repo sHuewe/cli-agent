@@ -531,7 +531,10 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                                 if not session.broker.is_pending(request_id):
                                     continue
                             yield f"id: {seq}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    if run.done:
+                    # A fast agent can finish while the SSE generator is
+                    # yielding its first event. Do not terminate until EVERY
+                    # event emitted after the snapshot has been drained.
+                    if run.done and cursor >= run.next_sequence - 1:
                         return
                     run.changed.clear()
                     # New events may have arrived while yield suspended us.
