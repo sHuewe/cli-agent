@@ -392,7 +392,7 @@ API_APP_JS = """
     // historical GET stream is used solely for reconnecting a pre-existing
     // in-flight run after a browser reload (AG-UI has no SSE resumption).
     const res = response || await api(
-      "/sessions/" + sessionId + "/runs/" + activeRun + "/events"
+      "/ui/reconnect/" + sessionId + "/" + activeRun
     );
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
