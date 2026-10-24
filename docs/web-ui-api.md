@@ -58,14 +58,11 @@ Starlette server. To reserve HTTP/1.1 connections for tool approvals, lease
 heartbeats and UI control requests, no more than four embedded-browser runs
 may be active simultaneously. The fifth concurrent run request returns HTTP
 429 and can be retried once another run completes. This limit does not affect
-headless API clients or prevent idle UI sessions from remaining open. At most four browser agent runs may be active simultaneously:
-this reserves HTTP/1.1 browser connections for approval requests, heartbeat
-renewals, and UI controls even when multiple sessions stream events. Additional
-sessions remain available and can start a run when an active run completes;
-the API returns HTTP 429 while the browser-run limit is reached. Standalone
-API-only runs are not subject to this browser transport limit. Click **Neue Session in neuem Tab** to create a new session
-and open it in a new tab. The **Sessions** dialog lists existing sessions and
-allows opening unoccupied sessions and deleting idle sessions. The currently\nopen session can also be deleted from the dialog without terminating the server.
+headless API clients or prevent idle UI sessions from remaining open. Click **Neue Session in neuem Tab** to create a session and open it in
+a new tab. The **Sessions** dialog lists existing sessions, allows reopening
+unoccupied sessions (including those awaiting tool approval), and deleting
+sessions that are not actively executing a run. An approval-interrupted
+session can be reopened or explicitly closed without affecting other tabs.
 
 The new-tab URL includes a short-lived **single-use ticket** and the browser
 access token in its URL fragment. The fragment is removed on load. Copying the
@@ -85,8 +82,9 @@ Each session has its own agent, MCP transport lifetime, conversation, tools and
 contexts. A bounded in-memory user/assistant transcript is returned when
 reopening a session; in-flight runs can be followed again via SSE. Sessions
 and their transcripts are discarded when the server exits. Closing a tab does
-**not** delete its session. The **Sitzung beenden** button still shuts down the
-entire local Web UI application, as it did before.
+**not** delete its session. The **Session beenden** button deletes only the current agent session and its
+MCP connections. Other sessions remain active. To shut down the entire server,
+press Ctrl+C in the terminal.
 
 The built-in UI is launched only with the CLI option. Standalone
 `cli-agent-api` remains a non-browser API server with its own bearer token
@@ -99,5 +97,7 @@ switches, history reset, session runs, setup commands and output writing.
 `tests/test_web_ui_sessions.py` covers tab isolation, new-session tickets,
 reopening, lease validation/expiry, and session cleanup.
 The preexisting API tests cover SSE event replay, run isolation and approval
-lifecycle. A manual browser smoke test (especially tool approval, page reload,
-and Ctrl+C/shutdown) is recommended in addition to CI.
+lifecycle. The API launcher is covered by isolated startup/cleanup tests, and the active
+JavaScript is checked with Node.js (including cancellation of session deletion).
+A manual browser smoke test (especially tool approval, page reload, and Ctrl+C
+in the terminal) is still recommended in addition to CI.
