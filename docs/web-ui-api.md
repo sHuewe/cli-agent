@@ -23,15 +23,19 @@ place. The API mode does not write LLM context dumps.
 
 ## API communication
 
-The frontend creates a run with `POST /sessions/{id}/runs`, receives
-run events through `GET /sessions/{id}/runs/{run_id}/events` (SSE), and
-sends approval decisions through the run-scoped approval endpoint. For embedded
-browser runs, the agent worker waits for an actual subscriber to the specific
-run's SSE stream before entering `agent.ask()`. An abandoned run fails after a
-bounded 15-second connection window rather than denying fast tool calls
-because the stream is not yet connected. Standalone API runs continue
-immediately and remain safe-by-default when approvals lack subscribers.
-Existing write-diff safeguards and fail-closed disconnect behavior remain server-side.
+The frontend sends standard AG-UI 1.0 `RunAgentInput` requests to
+`POST /ag-ui` and reads the streamed SSE response from that **same**
+HTTP request. This includes user/assistant messages, backend tool events,
+and human approval via `RUN_FINISHED` interrupt plus a subsequent new AG-UI
+run with `resume` decision. There is no separate `POST /runs` / `GET /events`
+handshake in the normal UI workflow.
+
+CLI-only commands such as `tokens`, `add_web_context`,
+`clear_web_context`, `enable` and `disable` use the validated
+`POST /ui/command` extension. These commands are deliberately not part
+of AG-UI and are not required by generic clients.
+
+See [Native AG-UI API](ag-ui.md) for the protocol and SignalDeck integration.
 
 The Working Context dialog uses
 `GET /sessions/{id}/working-context` and
