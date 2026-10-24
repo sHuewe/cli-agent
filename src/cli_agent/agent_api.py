@@ -194,10 +194,16 @@ class AgentSession:
                         if isinstance(exc, FrontendToolHandoff) and run.agui:
                             yielded = self._run
                             if yielded is None or yielded.done:
-                                raise RuntimeError("Frontend-Tool-Run ist nicht verfügbar.") from exc
+                                run.status = "failed"
+                                run.emit({"type": "RUN_ERROR",
+                                          "message": "Frontend-Tool-Run ist nicht verfügbar."})
+                                continue
                             pending = tuple(exc.calls)
                             if not pending:
-                                raise RuntimeError("Leerer Frontend-Tool-Handoff.") from exc
+                                yielded.status = "failed"
+                                yielded.emit({"type": "RUN_ERROR",
+                                              "message": "Leerer Frontend-Tool-Handoff."})
+                                continue
                             existing_ids = {
                                 event.get("toolCallId")
                                 for _, event in yielded.events
@@ -206,7 +212,10 @@ class AgentSession:
                             offered_ids = [call.id for call in pending]
                             if (len(set(offered_ids)) != len(offered_ids)
                                     or existing_ids.intersection(offered_ids)):
-                                raise RuntimeError("Doppelte Tool-Call-ID im Frontend-Handoff.") from exc
+                                yielded.status = "failed"
+                                yielded.emit({"type": "RUN_ERROR",
+                                              "message": "Doppelte Tool-Call-ID im Frontend-Handoff."})
+                                continue
                             self._pending_frontend = pending
                             self._pending_frontend_thread_id = yielded.thread_id
                             calls = []
