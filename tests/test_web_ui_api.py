@@ -517,3 +517,51 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
     assert "#token=" in opened[0]
     assert server_configs[0][1]["host"] == "127.0.0.1"
     assert server_configs[0][1]["proxy_headers"] is False
+
+
+def test_api_backed_browser_javascript_syntax():
+    """Validate the actual browser script; Python coverage cannot inspect it."""
+    import shutil
+    import subprocess
+
+    from cli_agent.web_ui_api import API_APP_JS
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is not installed")
+    result = subprocess.run(
+        [node, "--check", "--input-type=commonjs"],
+        input=API_APP_JS, text=True, capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_cancelled_session_close_does_not_issue_delete_request():
+    """Exercise the browser's real confirmation handler in Node.js."""
+    import shutil
+    import subprocess
+
+    from cli_agent.web_ui_api import API_APP_JS
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is not installed")
+    start = API_APP_JS.index("  async function deleteUnusedSession(sid) {")
+    end = API_APP_JS.index("  async function refreshSessions()", start)
+    snippet = API_APP_JS[start:end]
+    script = (
+        'const window = {confirm: () => false};\n'
+        'let calls = 0;\n'
+        'async function api() { calls++; throw new Error("unexpected request"); }\n'
+        + snippet +
+        '\n(async () => {\n'
+        ' await deleteUnusedSession("active-session");\n'
+        ' if (calls !== 0) throw new Error("cancel attempted a request");\n'
+        ' console.log("ok");\n'
+        '})().catch(error => { console.error(error); process.exitCode = 1; });\n'
+    )
+    result = subprocess.run(
+        [node, "-e", script], text=True, capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
