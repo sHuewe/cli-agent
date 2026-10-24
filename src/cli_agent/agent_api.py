@@ -20,6 +20,9 @@ from .web_ui import WebUiApprovalBroker
 API_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_SESSIONS = 8
+# Browsers commonly permit six HTTP/1.1 connections per origin. Keep at
+# least two free for approval POSTs, session heartbeat and UI controls.
+MAX_CONCURRENT_BROWSER_RUNS = 4
 MAX_PROMPT_BYTES = 512 * 1024
 # Replay keeps a full supported run, including the optional initial knowledge
 # phase and its two permitted re-entry searches. Five events per tool covers
@@ -467,13 +470,26 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                             and request.headers.get("x-cli-agent-browser") == "1"
                             and prompt.strip().casefold() in {"exit", "quit"}):
                         return error(400, "exit/quit sind lokale Web-UI-Befehle.")
+                    browser_run = (
+                        ui is not None
+                        and request.headers.get("x-cli-agent-browser") == "1"
+                    )
+                    # No await between checking the global browser run count
+                    # and submit(): capacity reservation is atomic on the event
+                    # loop, including simultaneous requests from other tabs.
+                    if browser_run and sum(
+                        other._busy and other._run is not None
+                        and other._run.require_listener
+                        for other in service.sessions.values()
+                    ) >= MAX_CONCURRENT_BROWSER_RUNS:
+                        return error(
+                            429, "Maximal vier parallele Web-UI-Läufe erlaubt. "
+                            "Bitte einen laufenden Agentenlauf abschließen lassen."
+                        )
                     try:
                         run = session.submit(
                             prompt,
-                            require_listener=(
-                                ui is not None
-                                and request.headers.get("x-cli-agent-browser") == "1"
-                            ),
+                            require_listener=browser_run,
                         )
                     except RuntimeError:
                         return error(409, "Session ist beschäftigt oder geschlossen.")
