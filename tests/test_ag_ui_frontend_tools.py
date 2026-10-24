@@ -317,6 +317,7 @@ async def test_real_conversation_mixin_resumes_checkpoint_without_replaying_prom
             self.calls = 0
 
         def _model_tools(self): return []
+        def _dump_context(self, *_args, **_kwargs): pass
 
         async def _run_model_loop(self, **kwargs):
             self.calls += 1
