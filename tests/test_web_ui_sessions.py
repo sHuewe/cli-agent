@@ -374,3 +374,85 @@ async def test_browser_agui_run_limit_keeps_heartbeats_available():
     finally:
         gate.set()
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_abandoned_approval_session_can_be_reopened_or_deleted_without_stopping_others():
+    """A paused approval is busy but must remain recoverable after tab release."""
+    class ApprovalAgent(_Agent):
+        async def ask(self, prompt):
+            if prompt == "needs approval":
+                self.session.agent._agui_approval_call_id = "approval-call"
+                approved = await self.session.approve("os__write_file", {"path": "test.txt"})
+                return f"approved={approved}"
+            return await super().ask(prompt)
+
+    service = AgentApiService(lambda session: ApprovalAgent(session))
+    first = await service.create()
+    registry = BrowserSessionRegistry(service, first.id)
+    origin = "http://127.0.0.1:9191"
+    ui = {
+        "token": "browser-secret", "origin": origin, "session_id": first.id,
+        "registry": registry,
+        "info": {"model": "test", "workspace": ".", "mcp_servers": []},
+        "shutdown": lambda: None,
+    }
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+            base_url=origin,
+        ) as client:
+            claimed = await client.post("/ui/bootstrap", json={},
+                                        headers=_headers(origin=origin))
+            lease = claimed.json()["lease"]
+            second_response = await client.post(
+                "/ui/sessions", json={}, headers=_headers(origin=origin)
+            )
+            assert second_response.status_code == 201
+            second = second_response.json()["session_id"]
+            response = await client.post("/ag-ui", json={
+                "threadId": first.id, "runId": "approval-run",
+                "protocolVersion": "1.0",
+                "messages": [{"id": "u", "role": "user",
+                              "content": "needs approval"}],
+            }, headers={
+                **_headers(lease, origin=origin), "Accept": "text/event-stream",
+            })
+            assert response.status_code == 200
+            assert '"type": "interrupt"' in response.text
+            assert first._busy
+            assert first._pending_interrupt is not None
+
+            assert (await client.post("/ui/release", json={"session_id": first.id},
+                                      headers=_headers(lease, origin=origin))).status_code == 204
+            listed = (await client.get("/ui/sessions", headers=_headers())).json()["sessions"]
+            paused = next(entry for entry in listed if entry["session_id"] == first.id)
+            assert paused["busy"] is True
+            assert paused["approval_pending"] is True
+            assert paused["occupied"] is False
+
+            ticket_response = await client.post(
+                f"/ui/sessions/{first.id}/ticket", json={},
+                headers=_headers(origin=origin),
+            )
+            assert ticket_response.status_code == 200
+            reopened = await client.post(
+                "/ui/bootstrap", json={"ticket": ticket_response.json()["ticket"]},
+                headers=_headers(origin=origin),
+            )
+            assert reopened.status_code == 200
+            assert reopened.json()["pending_interrupt"] is not None
+
+            # An occupied session cannot be deleted without its tab lease.
+            assert (await client.delete(f"/ui/sessions/{first.id}",
+                                        headers=_headers(origin=origin))).status_code == 409
+            assert (await client.delete(
+                f"/ui/sessions/{first.id}",
+                headers=_headers(reopened.json()["lease"], origin=origin),
+            )).status_code == 204
+            assert first.id not in service.sessions
+            assert second in service.sessions
+            assert (await client.get("/ui/sessions",
+                                     headers=_headers())).status_code == 200
+    finally:
+        await service.shutdown()
