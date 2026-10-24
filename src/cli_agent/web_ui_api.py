@@ -367,6 +367,11 @@ API_APP_JS = """
     emit({ type: "working_context", ...body });
   }
 
+  function dismissApproval() {
+    pendingApprovalId = null;
+    if (approval.open) approval.close();
+  }
+
   async function watchRun(activeRun) {
     const res = await api("/sessions/" + sessionId + "/runs/" + activeRun + "/events");
     const reader = res.body.getReader();
@@ -393,10 +398,12 @@ API_APP_JS = """
             if (event.name === "mcp_user_message") emit({type: "mcp_user_message", ...event.value});
             if (event.name === "output_error") emit({type: "error", content: event.value?.message});
           } else if (event.type === "RUN_ERROR") {
+            dismissApproval();
             const details = await (await api("/sessions/" + sessionId + "/runs/" + activeRun)).json();
             emit({type: "error", content: String(details.error || event.message || "Agentenlauf fehlgeschlagen.")});
             finished = true;
           } else if (event.type === "RUN_FINISHED") {
+            dismissApproval();
             finished = true;
           }
         }
@@ -407,6 +414,7 @@ API_APP_JS = """
       }
       if (!finished) throw new Error("Agenten-Eventstream vorzeitig beendet.");
     } finally {
+      dismissApproval();
       reader.releaseLock();
       runId = null;
       emit({type: "busy", value: false});
@@ -447,8 +455,14 @@ API_APP_JS = """
     }
     if (msg.type === "approval_response") {
       if (!runId) return;
-      await api(base + "/runs/" + runId + "/approvals/" + encodeURIComponent(msg.id),
-        "POST", {decision: msg.decision});
+      try {
+        await api(base + "/runs/" + runId + "/approvals/" + encodeURIComponent(msg.id),
+          "POST", {decision: msg.decision});
+      } catch (error) {
+        // A reload/disconnect may invalidate the pending approval meanwhile.
+        if (!String(error.message).includes("Freigabe ist ungültig") &&
+            !String(error.message).includes("Run ist nicht aktiv")) throw error;
+      }
       return;
     }
     if (msg.type === "quit") {
@@ -703,8 +717,8 @@ API_APP_JS = """
       leaseToken = response.lease;
       try { window.sessionStorage.setItem("cli-agent-session-id", sessionId); }
       catch (_error) {}
-      emit({type: "session", ...response});
       chat.replaceChildren();
+      emit({type: "session", ...response});
       for (const message of response.history || []) {
         if (message.role === "assistant") {
           // Render only server-sanitized Markdown; never inject model HTML.
