@@ -245,6 +245,13 @@ async def test_frontend_handoff_and_followup_without_replaying_agent_call():
                 "TOOL_CALL_END", "RUN_FINISHED",
             ]
             assert events[-1]["outcome"]["pendingToolCallIds"] == ["call-1"]
+            from importlib.resources import files
+            from jsonschema import Draft202012Validator
+            schema = json.loads(
+                files("cli_agent").joinpath("ag_ui_schema_1_0.json").read_text("utf-8")
+            )
+            for event in events:
+                Draft202012Validator(schema).validate(event)
             assert agents[0].started == 1
             session = next(iter(service.sessions.values()))
             assert session._pending_frontend is not None
