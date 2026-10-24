@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from cli_agent.agent_api import AgentApiService, create_app
+from cli_agent.web_ui_sessions import BrowserSessionRegistry
 
 
 class BrowserAgent:
@@ -72,6 +73,7 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
     stopped = []
     ui = {
         "token": "browser-secret", "session_id": session.id,
+        "registry": BrowserSessionRegistry(service, session.id),
         "origin": "http://127.0.0.1:9191",
         "info": {"model": "test", "workspace": "/workspace", "mcp_servers": []},
         "shutdown": lambda: stopped.append(True),
