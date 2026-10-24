@@ -683,8 +683,14 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         registry = ui["registry"]
         session_id = request.path_params["session_id"]
         try:
-            if not registry.can_close(session_id):
-                return error(409, "Session ist geöffnet oder beschäftigt.")
+            owner = registry.is_owner(
+                session_id, request.headers.get("x-cli-agent-lease"), refresh=False
+            )
+            if owner:
+                if service.sessions[session_id]._busy:
+                    return error(409, "Session ist beschäftigt.")
+            elif not registry.can_close(session_id):
+                return error(409, "Session ist in einem anderen Tab geöffnet oder beschäftigt.")
         except KeyError:
             return error(404, "Session nicht gefunden.")
         registry.forget(session_id)
