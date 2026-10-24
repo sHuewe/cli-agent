@@ -47,7 +47,7 @@ the agent's worker task before its session becomes ready.
 The built-in UI can manage up to eight independent agent sessions on the same
 Starlette server. Click **Neue Session in neuem Tab** to create a new session
 and open it in a new tab. The **Sessions** dialog lists existing sessions and
-allows opening or deleting a currently unoccupied session.
+allows opening unoccupied sessions and deleting idle sessions. The currently\nopen session can also be deleted from the dialog without terminating the server.
 
 The new-tab URL includes a short-lived **single-use ticket** and the browser
 access token in its URL fragment. The fragment is removed on load. Copying the
