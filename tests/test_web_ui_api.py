@@ -405,7 +405,9 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
     import types
 
     from cli_agent import cli, file_context, model_factory, os_operations, web_ui_api
-    from cli_agent import agent_api
+    from cli_agent import agent_api, logging_setup
+
+    monkeypatch.setattr(logging_setup, "configure_logging", lambda _config: None)
 
     created = []
     shutdowns = []
