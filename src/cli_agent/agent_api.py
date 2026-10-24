@@ -450,11 +450,22 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         if run.events and last < run.events[0][0] - 1:
             return error(410, "Event-History ist nicht mehr vollständig.")
 
+        browser_stream = (
+            ui is not None and request.headers.get("x-cli-agent-browser") == "1"
+        )
+        browser_lease = request.headers.get("x-cli-agent-lease")
+
         async def stream():
             cursor = last
             session.subscribe(run)
             try:
                 while True:
+                    # A request authorized when established must not keep an SSE
+                    # subscription after its tab's exclusive lease has expired.
+                    if browser_stream and not ui["registry"].is_owner(
+                        session.id, browser_lease, refresh=False
+                    ):
+                        return
                     if run.events and cursor < run.events[0][0] - 1:
                         return
                     for seq, event in tuple(run.events):
@@ -468,7 +479,10 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                     # Recheck after clear to avoid an indefinitely lost wakeup.
                     if run.next_sequence > cursor + 1 or run.done:
                         continue
-                    await run.changed.wait()
+                    try:
+                        await asyncio.wait_for(run.changed.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        pass
             finally:
                 session.unsubscribe(run)
 
