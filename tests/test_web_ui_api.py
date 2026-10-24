@@ -118,6 +118,14 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
             headers={**headers, "Origin": ui["origin"]})).status_code == 200
         assert agents[0].reset_count == 1
 
+        for command in ("exit", "QUIT", " Quit "):
+            response = await client.post(
+                uri + "/runs", json={"prompt": command}, headers=auth
+            )
+            assert response.status_code == 400
+        assert agents[0].requests == []
+        assert stopped == []
+
         rid = (await client.post(uri + "/runs", json={"prompt": "hi"},
             headers={**headers, "Origin": ui["origin"]})).json()["run_id"]
         # Embedded-browser runs wait for their SSE consumer before execution.
@@ -185,3 +193,26 @@ def test_bootstrap_preserves_initial_context_diagnostics():
     assert 'for (const message of payload.initial_messages || [])' in API_APP_JS
     assert "function dismissApproval()" in API_APP_JS
     assert "event.type === \"RUN_FINISHED\"" in API_APP_JS
+
+
+def test_browser_rendering_failures_fall_back_to_plain_text():
+    """A failed optional Markdown request must never hide the model answer."""
+    from cli_agent.web_ui_api import API_APP_JS
+
+    assert 'async function renderAnswer(text)' in API_APP_JS
+    assert 'catch (_error) {' in API_APP_JS.split(
+        "async function renderAnswer(text)", 1
+    )[1].split("async function watchRun", 1)[0]
+    assert 'emit({type: "answer", content: answer, html: await renderAnswer(answer)});' in API_APP_JS
+    assert 'addMessage("assistant", content, await renderAnswer(content));' in API_APP_JS
+    assert 'element.textContent = content;' in API_APP_JS
+
+
+def test_local_exit_and_quit_are_not_sent_to_agent():
+    from cli_agent.web_ui_api import API_APP_JS
+
+    dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
+    assert '["exit", "quit"].includes(promptText.trim().toLowerCase())' in dispatch
+    assert dispatch.index('await dispatchAction({type: "quit"});') < dispatch.index(
+        'api(base + "/runs", "POST", {prompt: promptText})'
+    )
