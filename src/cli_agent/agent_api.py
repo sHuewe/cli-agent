@@ -87,6 +87,10 @@ class AgentSession:
         self.output_target = output_target
         self.id = uuid.uuid4().hex
         self._factory = factory
+        # Only agent/MCP startup is subject to the 30-second startup deadline.
+        # Initial web-context fetches run after startup and have their own
+        # provider/network bounds rather than sharing that aggregate limit.
+        self._startup_ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._queue: asyncio.Queue[AgentRun | None] = asyncio.Queue(maxsize=1)
         self._task: asyncio.Task[None] | None = None
@@ -101,7 +105,8 @@ class AgentSession:
     async def start(self) -> None:
         self._task = asyncio.create_task(self._worker())
         try:
-            await asyncio.wait_for(self._ready, timeout=30)
+            await asyncio.wait_for(self._startup_ready, timeout=30)
+            await self._ready
         except BaseException:
             await self.close()
             raise
@@ -111,6 +116,8 @@ class AgentSession:
             agent = self._factory(self)
             async with agent:
                 self.agent = agent
+                if not self._startup_ready.done():
+                    self._startup_ready.set_result(None)
                 for initial_command in self.initial_commands:
                     self.initial_messages.append(await agent.ask(initial_command))
                 if not self._ready.done():
@@ -155,14 +162,20 @@ class AgentSession:
                         self._busy = False
                         run.changed.set()
         except asyncio.CancelledError:
-            if not self._ready.done():
-                self._ready.set_exception(RuntimeError("Session-Start abgebrochen."))
+            if not self._startup_ready.done():
+                self._startup_ready.cancel()
+                self._ready.cancel()
+            elif not self._ready.done():
+                self._ready.cancel()
             if self._run is not None and not self._run.done:
                 self._run.status = "cancelled"
                 self._run.emit({"type": "RUN_ERROR", "message": "Agentenlauf abgebrochen."})
             raise
         except BaseException as exc:
-            if not self._ready.done():
+            if not self._startup_ready.done():
+                self._startup_ready.set_exception(exc)
+                self._ready.cancel()
+            elif not self._ready.done():
                 self._ready.set_exception(exc)
             else:
                 if self._run is not None and not self._run.done:
