@@ -323,7 +323,8 @@ class AgentSession:
 
     def submit(self, prompt: str, *, require_listener: bool = False,
                agui: bool = False, thread_id: str | None = None,
-               run_id: str | None = None) -> AgentRun:
+               run_id: str | None = None,
+               frontend_results: list[dict[str, Any]] | None = None) -> AgentRun:
         if self._closed:
             raise RuntimeError("Session ist geschlossen.")
         if self._busy:
@@ -333,6 +334,7 @@ class AgentSession:
             id=run_id or uuid.uuid4().hex, thread_id=thread_id or self.id, prompt=prompt,
             max_events=self._replay_capacity(),
             require_listener=require_listener, agui=agui,
+            frontend_results=frontend_results,
         )
         if agui:
             if run.id in self._agui_seen_run_ids:
@@ -731,6 +733,22 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         ) >= MAX_CONCURRENT_BROWSER_RUNS:
             return error(429, "Maximal vier parallele Web-UI-Läufe erlaubt.")
 
+        from .ag_ui_frontend_tools import (
+            normalize_frontend_tools, checked_frontend_results,
+            history_for_model,
+        )
+        reserved_names = set(getattr(session.agent, "_tool_routes", {}))
+        if hasattr(session.agent, "tool_states_snapshot"):
+            reserved_names.update(
+                item["name"] for item in session.agent.tool_states_snapshot()
+            )
+        try:
+            frontend_tools = normalize_frontend_tools(
+                incoming.tools, server_names=reserved_names
+            )
+        except ValueError as exc:
+            return error(400, str(exc))
+
         # Only plain user/assistant messages are submitted to the model's
         # conversation history. AG-UI system/developer messages have no power
         # to modify cli-agent's own system prompt or configured policy.
@@ -748,40 +766,45 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         else:
             if session._busy or session._pending_interrupt is not None:
                 return error(409, "Thread ist beschäftigt oder wartet auf Resume.")
-            if not incoming.prompt.strip():
+            pending = session._pending_frontend
+            frontend_results = None
+            if pending:
+                if session._pending_frontend_thread_id != incoming.thread_id:
+                    return error(409, "Frontend-Tool-Ergebnis gehört zu anderem Thread.")
+                try:
+                    frontend_results = checked_frontend_results(incoming.messages, pending)
+                except ValueError as exc:
+                    return error(409, str(exc))
+            elif not incoming.prompt.strip():
                 return error(400, "Eine Benutzer-Nachricht ist erforderlich.")
-            if incoming.prompt.strip().casefold() in {"exit", "quit"} and browser:
+            if incoming.prompt.strip().casefold() in {"exit", "quit"} and browser and not pending:
                 return error(400, "Lokale Shutdown-Befehle gehören nicht zum AG-UI-Run.")
-            # Client history is authoritative at the run boundary. Rebuild
-            # the simple user/assistant model history, rather than duplicating
-            # previous turns held by the long-lived agent worker.
-            history = []
-            for message in incoming.messages:
-                if message.get("role") in {"user", "assistant"}:
-                    content = message.get("content")
-                    if isinstance(content, str):
-                        history.append({"role": message["role"], "content": content})
-            # The final user turn is passed to agent.ask() separately.
-            if history and history[-1] == {"role": "user", "content": incoming.prompt}:
+            history = history_for_model(incoming.messages)
+            if not pending and history and history[-1] == {
+                "role": "user", "content": incoming.prompt
+            }:
                 history.pop()
-            if hasattr(session.agent, "history"):
+            if not pending and hasattr(session.agent, "history"):
                 session.agent.history[:] = history
-            session.agui_messages = list(incoming.messages)
-            session.agui_state = incoming.state
-            session.agui_context = list(incoming.context)
-            if hasattr(session.agent, "_agui_external_context"):
-                session.agent._agui_external_context = list(incoming.context)
-            else:
-                setattr(session.agent, "_agui_external_context", list(incoming.context))
             try:
                 run = session.submit(
-                    incoming.prompt, require_listener=True, agui=True,
+                    incoming.prompt if not pending else "",
+                    require_listener=True, agui=True,
                     thread_id=incoming.thread_id, run_id=incoming.run_id,
+                    frontend_results=frontend_results,
                 )
             except ValueError as exc:
                 return error(409, str(exc))
             except RuntimeError:
                 return error(409, "Thread ist beschäftigt.")
+            session.agent._agui_frontend_tools = frontend_tools
+            session.agui_messages = list(incoming.messages)
+            session.agui_state = incoming.state
+            session.agui_context = list(incoming.context)
+            session.agent._agui_external_context = list(incoming.context)
+            if pending:
+                session._pending_frontend = None
+                session._pending_frontend_thread_id = None
         lease = request.headers.get("x-cli-agent-lease")
 
         async def stream():
