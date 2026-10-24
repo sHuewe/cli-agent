@@ -64,13 +64,29 @@ def parse_run_input(body: dict[str, Any]) -> AgUiInput:
     normalized = []
     for message in messages:
         if not isinstance(message, dict) or message.get("role") not in {
-            "user", "assistant", "system", "developer", "tool", "activity"
+            "user", "assistant", "system", "developer", "tool", "activity", "reasoning"
         }:
             raise ValueError("Ungültige AG-UI-Nachricht.")
         mid = message.get("id")
         if not isinstance(mid, str) or not mid:
             raise ValueError("Jede AG-UI-Nachricht benötigt eine ID.")
-        if message["role"] == "user":
+        role = message["role"]
+        if role in {"system", "developer"} and not isinstance(message.get("content"), str):
+            raise ValueError("System-/Developer-Nachrichten benötigen Text.")
+        if role == "assistant" and "content" in message and not isinstance(message["content"], str):
+            raise ValueError("Assistant-Text muss eine Zeichenkette sein.")
+        if role == "tool" and (
+            not isinstance(message.get("toolCallId"), str) or "content" not in message
+        ):
+            raise ValueError("Tool-Nachrichten benötigen toolCallId und content.")
+        if role == "activity" and (
+            not isinstance(message.get("activityType"), str)
+            or not isinstance(message.get("content"), dict)
+        ):
+            raise ValueError("Ungültige Activity-Nachricht.")
+        if role == "user":
+            if "content" not in message:
+                raise ValueError("Benutzernachricht ohne Inhalt.")
             text = _message_text(message)
             if len(text.encode("utf-8")) > MAX_AG_UI_TEXT_BYTES:
                 raise ValueError("Nachricht ist zu groß.")
@@ -91,8 +107,9 @@ def parse_run_input(body: dict[str, Any]) -> AgUiInput:
                 or not isinstance(tool.get("description"), str)):
             raise ValueError("Ungültige Tool-Definition.")
     for item in context:
-        if not isinstance(item, dict) or not isinstance(item.get("description"), str):
-            raise ValueError("Ungültiger AG-UI-Kontext.")
+        if (not isinstance(item, dict) or not isinstance(item.get("description"), str)
+                or not isinstance(item.get("value"), str)):
+            raise ValueError("AG-UI-Kontext benötigt description und value als Text.")
     if "state" in body and body["state"] is None:
         raise ValueError("state darf nicht null sein.")
     prompt = ""
