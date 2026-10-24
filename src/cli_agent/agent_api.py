@@ -490,8 +490,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                             if (event.get("type") == "CUSTOM"
                                     and event.get("name") == "approval_required"):
                                 request_id = str(event.get("value", {}).get("id", ""))
-                                future = session.broker._pending.get(request_id)
-                                if future is None or future.done():
+                                if not session.broker.is_pending(request_id):
                                     continue
                             yield f"id: {seq}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
                     if run.done:
