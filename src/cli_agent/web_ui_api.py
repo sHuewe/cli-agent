@@ -600,6 +600,16 @@ API_APP_JS = """
   async function deleteUnusedSession(sid) {
     if (!window.confirm("Diese Session dauerhaft beenden?")) return;
     await api("/ui/sessions/" + encodeURIComponent(sid), "DELETE");
+    if (sid === sessionId) {
+      sessionId = null;
+      leaseToken = null;
+      runId = null;
+      try { window.sessionStorage.removeItem("cli-agent-session-id"); }
+      catch (_error) {}
+      chat.replaceChildren();
+      meta.textContent = "Session beendet. Neue Session in neuem Tab öffnen.";
+      setBusy(true);
+    }
     await refreshSessions();
   }
 
@@ -625,7 +635,7 @@ API_APP_JS = """
       close.type = "button";
       close.className = "secondary";
       close.textContent = "Beenden";
-      close.disabled = item.occupied || item.busy;
+      close.disabled = (item.occupied && !current) || item.busy;
       close.addEventListener("click", () => {
         void deleteUnusedSession(item.session_id).catch(showApiError);
       });
