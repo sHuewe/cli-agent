@@ -9,6 +9,8 @@ API_APP_JS = """
   const prompt = document.getElementById("prompt");
   const send = document.getElementById("send");
   const quit = document.getElementById("quit");
+  // The API-backed UI supports multiple sessions; this only closes this tab's agent.
+  quit.textContent = "Session beenden";
   const newSessionButton = document.getElementById("new-session");
   const listSessionsButton = document.getElementById("list-sessions");
   const sessionsDialog = document.getElementById("sessions-dialog");
@@ -1136,7 +1138,7 @@ async def run_web_ui_via_api(
             multiline=False, escape_invisible_formatting=True,
         ))
         print("Web-UI Access Token:", browser_token)
-        print("Zum Beenden Strg+C im Terminal oder 'Sitzung beenden' im Browser.")
+        print("Zum Beenden des Servers Strg+C im Terminal verwenden.")
         server_task = asyncio.create_task(server.serve(sockets=[sock]))
         while not server.started and not server_task.done():
             await asyncio.sleep(0.01)
