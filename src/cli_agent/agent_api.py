@@ -209,7 +209,12 @@ class AgentSession:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise TimeoutError("Kein SSE-Client für den Agentenlauf verbunden.")
-            await asyncio.wait_for(run.subscriber_ready.wait(), timeout=remaining)
+            try:
+                await asyncio.wait_for(run.subscriber_ready.wait(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    "Kein SSE-Client für den Agentenlauf verbunden."
+                ) from exc
 
     def _remember(self, role: str, content: str) -> None:
         # Bounded, in-memory chat display history. Never retain MCP payloads,
