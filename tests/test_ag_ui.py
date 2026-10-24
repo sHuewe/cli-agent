@@ -452,3 +452,75 @@ async def test_agui_resume_requires_valid_pending_interrupt_and_boolean_decision
             assert any(e.get("delta") == "approved=False" for e in continued)
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agui_session_run_buffers_are_bounded_and_lifecycle_is_isolated():
+    from cli_agent.agent_api import AgentRun
+
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    session = await service.create()
+    try:
+        run = AgentRun(id="run-a", thread_id="thread", prompt="hello",
+                       max_events=3, agui=True)
+        assert not run.done
+        assert run.snapshot() == {
+            "run_id": "run-a", "status": "queued",
+            "answer": None, "error": None,
+        }
+        for idx in range(5):
+            run.emit({"type": "CUSTOM", "name": f"progress-{idx}", "value": {}})
+        assert [seq for seq, _ in run.events] == [3, 4, 5]
+        assert run.next_sequence == 6
+        assert run.changed.is_set()
+        session.subscribe(run)
+        assert run.listeners == 1
+        session.unsubscribe(run)
+        assert run.listeners == 0
+        with pytest.raises(RuntimeError, match="untergelaufen"):
+            session.unsubscribe(run)
+        run.status = "failed"
+        run.error = "simulated"
+        assert run.done
+        assert run.snapshot()["error"] == "simulated"
+
+        assert session.run("unknown") is None
+        assert not await service.remove("unknown")
+        assert await service.remove(session.id)
+        assert session.id not in service.sessions
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agui_mcp_tool_events_keep_consistent_ids_and_only_safe_results():
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    session = await service.create()
+    from cli_agent.agent_api import AgentRun
+    session._run = AgentRun(id="run", thread_id="thread", prompt="x",
+                            agui=True, status="running")
+    run = session._run
+    try:
+        session._pending_tool_id = None
+        await session.on_agent_event("tool_started", {
+            "call_id": "model-call", "tool": "os__read_file",
+        })
+        await session.on_agent_event("tool_finished", {
+            "call_id": "model-call", "status": "success",
+            "secret": "not for clients",
+        })
+        assert [event["type"] for _, event in run.events] == [
+            "TOOL_CALL_START", "TOOL_CALL_END", "TOOL_CALL_RESULT",
+        ]
+        assert run.events[-1][1]["toolCallId"] == "model-call"
+        assert "secret" not in str(run.events)
+        assert not session._opened_tool_calls
+        assert session._pending_tool_id is None
+        run.status = "completed"
+        before = len(run.events)
+        await session.on_agent_event("tool_started", {
+            "call_id": "late", "tool": "os__read_file",
+        })
+        assert len(run.events) == before
+    finally:
+        await service.shutdown()
