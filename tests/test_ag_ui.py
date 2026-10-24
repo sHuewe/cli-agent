@@ -524,3 +524,117 @@ async def test_agui_mcp_tool_events_keep_consistent_ids_and_only_safe_results():
         assert len(run.events) == before
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_external_agui_threads_can_be_deleted_by_client_known_thread_id():
+    """Sequential standalone conversations must not permanently exhaust slots."""
+    from cli_agent.agent_api import MAX_SESSIONS
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    auth = {"Authorization": f"Bearer {service.token}", "Accept": "text/event-stream"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            for index in range(MAX_SESSIONS + 3):
+                thread = f"external-{index}"
+                response = await client.post(
+                    "/ag-ui", json=_input(thread, "hello"),
+                    headers=auth,
+                )
+                assert _events(response)[-1]["type"] == "RUN_FINISHED"
+                internal_id = service._agui_threads[thread]
+                assert internal_id != thread
+                assert internal_id in service.sessions
+                assert (await client.delete(
+                    f"/threads/{thread}",
+                    headers={"Authorization": f"Bearer {service.token}"},
+                )).status_code == 204
+                assert internal_id not in service.sessions
+                assert thread not in service._agui_threads
+                assert not service.sessions
+                assert (await client.delete(
+                    f"/threads/{thread}",
+                    headers={"Authorization": f"Bearer {service.token}"},
+                )).status_code == 404
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_deleting_internal_session_invalidates_agui_thread_mapping():
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    try:
+        session = await service.resolve_agui_thread("client-thread")
+        assert service._agui_threads["client-thread"] == session.id
+        assert await service.remove(session.id)
+        assert "client-thread" not in service._agui_threads
+        replacement = await service.resolve_agui_thread("client-thread")
+        assert replacement.id != session.id
+        assert len(service.sessions) == 1
+        assert not await service.remove_agui_thread(session.id)
+        assert await service.remove_agui_thread("client-thread")
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agui_thread_delete_requires_service_token_and_cannot_close_browser_session():
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    browser_session = await service.create()
+    origin = "http://127.0.0.1:9191"
+    ui = {
+        "token": "browser-secret", "session_id": browser_session.id,
+        "registry": BrowserSessionRegistry(service, browser_session.id),
+        "origin": origin,
+        "info": {"model": "fake", "workspace": ".", "mcp_servers": []},
+        "shutdown": lambda: None,
+    }
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+            base_url=origin,
+        ) as client:
+            assert (await client.delete(f"/threads/{browser_session.id}")).status_code == 401
+            assert (await client.delete(
+                f"/threads/{browser_session.id}",
+                headers={"Authorization": "Bearer browser-secret"},
+            )).status_code == 401
+            assert (await client.delete(
+                f"/threads/{browser_session.id}",
+                headers={"Authorization": f"Bearer {service.token}"},
+            )).status_code == 404
+            assert browser_session.id in service.sessions
+            assert service._agui_threads == {}
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agui_thread_deletion_releases_interrupted_agent_and_worker():
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            token = {"Authorization": f"Bearer {service.token}"}
+            first = _events(await client.post(
+                "/ag-ui", json=_input("paused", "needs approval"),
+                headers={**token, "Accept": "text/event-stream"},
+            ))
+            assert first[-1]["outcome"]["type"] == "interrupt"
+            session = service.sessions[service._agui_threads["paused"]]
+            assert session._busy
+            assert (await client.delete("/threads/paused", headers=token)).status_code == 204
+            assert session._closed
+            assert not session._busy or session._task.done()
+            assert session.id not in service.sessions
+            assert not service._agui_threads
+            assert _events(await client.post(
+                "/ag-ui", json=_input("paused", "new conversation"),
+                headers={**token, "Accept": "text/event-stream"},
+            ))[-1]["type"] == "RUN_FINISHED"
+    finally:
+        await service.shutdown()
