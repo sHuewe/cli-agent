@@ -29,12 +29,16 @@ class AgUiAgent:
     async def ask(self, prompt):
         self.calls.append(prompt)
         if prompt == "needs approval":
-            await self.session.on_agent_event(
-                "tool_started", {"call_id": "tool-1", "tool": "os__write_file"}
-            )
+            # The real tool dispatcher asks for authorization BEFORE
+            # announcing tool_started. It passes the model's original ID.
+            self._agui_approval_call_id = "tool-1"
             approved = await self.session.approve(
                 "os__write_file", {"path": "test.txt", "content": "content"}
             )
+            if approved:
+                await self.session.on_agent_event(
+                    "tool_started", {"call_id": "tool-1", "tool": "os__write_file"}
+                )
             await self.session.on_agent_event(
                 "tool_finished", {"call_id": "tool-1", "status": "success" if approved else "denied"}
             )
@@ -171,6 +175,11 @@ async def test_agui_interrupt_and_resume_without_restarting_agent_or_tool(approv
             assert continued[0]["type"] == "RUN_STARTED"
             assert continued[0]["runId"] == resumed["runId"]
             assert any(e["type"] == "TOOL_CALL_RESULT" for e in continued)
+            assert not any(e["type"] == "TOOL_CALL_START" for e in continued)
+            assert any(
+                e["type"] == "TOOL_CALL_RESULT" and e["toolCallId"] == "tool-1"
+                for e in continued
+            )
             assert continued[-1]["type"] == "RUN_FINISHED"
             assert any(e.get("delta") == f"approved={approved}"
                        for e in continued)
