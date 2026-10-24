@@ -226,3 +226,97 @@ def test_agui_known_input_shapes():
     assert "data: " in encode_sse({"type": "RUN_STARTED", "runId": "a"})
     with pytest.raises(ValueError):
         parse_run_input({**_input("t", "hi"), "protocolVersion": "2.0"})
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda x: x.pop("threadId"),
+        lambda x: x.update({"threadId": ""}),
+        lambda x: x.update({"threadId": 42}),
+        lambda x: x.update({"runId": 3}),
+        lambda x: x.update({"protocolVersion": 1}),
+        lambda x: x.update({"messages": {}}),
+        lambda x: x.update({"messages": [{}]}),
+        lambda x: x.update({"messages": [{"id": 9, "role": "user", "content": "x"}]}),
+        lambda x: x.update({"messages": [{"id": "u", "role": "user", "content": 7}]}),
+        lambda x: x.update({"messages": [{"id": "u", "role": "user", "content": [False]}]}),
+        lambda x: x.update({"messages": [{"id": "u", "role": "user", "content": [{"type": "text", "text": 7}]}]}),
+        lambda x: x.update({"resume": "not-an-array"}),
+        lambda x: x.update({"resume": [{"interruptId": "x", "status": "bad"}]}),
+        lambda x: x.update({"resume": [{"interruptId": 7, "status": "resolved"}]}),
+        lambda x: x.update({"tools": "not-an-array"}),
+        lambda x: x.update({"tools": [{"description": "missing-name"}]}),
+        lambda x: x.update({"context": "not-an-array"}),
+        lambda x: x.update({"context": [{"value": "missing-description"}]}),
+        lambda x: x.update({"state": None}),
+    ],
+)
+def test_agui_rejects_malformed_known_fields(mutation):
+    payload = _input("th", "prompt")
+    mutation(payload)
+    with pytest.raises(ValueError):
+        parse_run_input(payload)
+
+
+def test_agui_accepts_partial_multimodal_user_text_without_image_access():
+    payload = _input("th", "")
+    payload["messages"] = [
+        {"id": "m", "role": "user", "content": [
+            {"type": "image", "source": {"type": "url", "value": "https://example.org/a.png"}},
+            {"type": "text", "text": "Describe whatever you can"},
+        ]}
+    ]
+    assert parse_run_input(payload).prompt == "Describe whatever you can"
+
+
+@pytest.mark.asyncio
+async def test_browser_local_commands_stay_outside_agui_transport():
+    called = []
+    def factory(session):
+        agent = AgUiAgent(session)
+        called.append(agent)
+        return agent
+
+    service = AgentApiService(factory)
+    initial = await service.create()
+    origin = "http://127.0.0.1:9191"
+    ui = {
+        "token": "browser-secret", "session_id": initial.id,
+        "registry": BrowserSessionRegistry(service, initial.id),
+        "origin": origin,
+        "info": {"model": "fake", "workspace": ".", "mcp_servers": []},
+        "shutdown": lambda: None,
+    }
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+            base_url=origin
+        ) as client:
+            headers = {"Authorization": "Bearer browser-secret",
+                       "X-Cli-Agent-Browser": "1", "Origin": origin}
+            # No valid lease: cannot call the local-only command API.
+            assert (await client.post("/ui/command", json={
+                "session_id": initial.id, "command": "tokens",
+            }, headers=headers)).status_code == 403
+            claim = await client.post("/ui/bootstrap", json={}, headers=headers)
+            headers["X-Cli-Agent-Lease"] = claim.json()["lease"]
+            for body in (
+                {"session_id": initial.id, "command": "add_web_context", "argument": "example.com"},
+                {"session_id": initial.id, "command": "enable", "argument": "two words"},
+                {"session_id": initial.id, "command": "tokens", "argument": "extra"},
+                {"session_id": initial.id, "command": "unknown"},
+                {"session_id": initial.id, "command": "add_web_context"},
+                {"command": "tokens"},
+            ):
+                assert (await client.post("/ui/command", json=body,
+                    headers=headers)).status_code == 400
+            assert called[0].calls == []
+            valid = await client.post("/ui/command", json={
+                "session_id": initial.id, "command": "tokens",
+            }, headers=headers)
+            assert valid.status_code == 200
+            assert valid.json()["answer"] == "reply tokens"
+            assert called[0].calls == ["tokens"]
+    finally:
+        await service.shutdown()
