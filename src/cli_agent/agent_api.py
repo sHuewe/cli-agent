@@ -563,6 +563,9 @@ class AgentApiService:
         self._lifecycle_lock = asyncio.Lock()
         self._agui_thread_lock = asyncio.Lock()
         self._agui_threads: dict[str, str] = {}
+        # One shared startup task per external thread; unrelated threads
+        # must never wait for each other's MCP initialization.
+        self._agui_thread_inits: dict[str, asyncio.Task[AgentSession]] = {}
         self._shutting_down = False
         self.token = secrets.token_urlsafe(32)
 
@@ -592,23 +595,59 @@ class AgentApiService:
             raise RuntimeError("Session wurde beim Start geschlossen.")
         return session
 
-    async def resolve_agui_thread(self, thread_id: str) -> AgentSession:
-        """Map arbitrary AG-UI thread IDs to isolated agent sessions.
+    async def _start_agui_thread(self, thread_id: str) -> AgentSession:
+        """Start one external thread, publishing it only while still reserved."""
+        session: AgentSession | None = None
+        try:
+            session = await self.create()
+            async with self._agui_thread_lock:
+                if (self._agui_thread_inits.get(thread_id) is not asyncio.current_task()
+                        or self._shutting_down
+                        or self.sessions.get(session.id) is not session):
+                    raise RuntimeError("AG-UI-Thread wurde beim Start geschlossen.")
+                self._agui_threads[thread_id] = session.id
+            return session
+        except BaseException:
+            # A concurrent delete/shutdown must not leave a started, unowned
+            # MCP worker behind even if startup completed just beforehand.
+            if session is not None:
+                await self.remove(session.id)
+            raise
+        finally:
+            async with self._agui_thread_lock:
+                if self._agui_thread_inits.get(thread_id) is asyncio.current_task():
+                    del self._agui_thread_inits[thread_id]
 
-        The lock prevents concurrent requests for a new thread from creating
-        multiple MCP workers for the same logical conversation.
+    async def resolve_agui_thread(self, thread_id: str) -> AgentSession:
+        """Map external thread IDs to sessions without serializing MCP startup.
+
+        Concurrent requests for the same thread await the same initialization.
+        Shielding prevents cancellation of one HTTP client from aborting a
+        startup still needed by other clients.
         """
         async with self._agui_thread_lock:
-            # Standalone AG-UI IDs must never alias an unrelated internal
-            # session ID (for example one owned by the embedded browser).
+            if self._shutting_down:
+                raise RuntimeError("API-Server wird beendet.")
             current_id = self._agui_threads.get(thread_id)
             current = self.sessions.get(current_id) if current_id is not None else None
             if current is not None:
                 return current
             self._agui_threads.pop(thread_id, None)
-            session = await self.create()
-            self._agui_threads[thread_id] = session.id
-            return session
+            pending = self._agui_thread_inits.get(thread_id)
+            if pending is None:
+                pending = asyncio.create_task(self._start_agui_thread(thread_id))
+                # Retrieve exceptions even if the only requesting client
+                # disconnects before the shared startup finishes.
+                pending.add_done_callback(
+                    lambda completed: completed.exception() if not completed.cancelled() else None
+                )
+                self._agui_thread_inits[thread_id] = pending
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            if pending.cancelled():
+                raise RuntimeError("AG-UI-Thread wurde beim Start geschlossen.") from None
+            raise
 
     async def _remove_session_locked(self, session_id: str) -> bool:
         """Delete a session and every external thread alias under thread lock."""
@@ -625,12 +664,19 @@ class AgentApiService:
         return True
 
     async def remove_agui_thread(self, thread_id: str) -> bool:
-        """Close a standalone client's thread using its original AG-UI ID."""
+        """Close a standalone thread, including an unfinished startup."""
         async with self._agui_thread_lock:
+            pending = self._agui_thread_inits.pop(thread_id, None)
             session_id = self._agui_threads.get(thread_id)
-            if session_id is None:
-                return False
-            return await self._remove_session_locked(session_id)
+            removed = (
+                await self._remove_session_locked(session_id)
+                if session_id is not None else False
+            )
+            if pending is not None:
+                pending.cancel()
+        if pending is not None:
+            await asyncio.gather(pending, return_exceptions=True)
+        return removed or pending is not None
 
     async def remove(self, session_id: str) -> bool:
         async with self._agui_thread_lock:
@@ -640,12 +686,18 @@ class AgentApiService:
         async with self._agui_thread_lock:
             async with self._lifecycle_lock:
                 self._shutting_down = True
+                pending = tuple(self._agui_thread_inits.values())
+                self._agui_thread_inits.clear()
                 sessions = tuple(self.sessions.values())
                 self.sessions.clear()
                 self._agui_threads.clear()
+            for task in pending:
+                task.cancel()
             # Include sessions whose start() is still in progress.
             for session in sessions:
                 await session.close()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) -> Any:
