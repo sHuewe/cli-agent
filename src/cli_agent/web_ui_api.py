@@ -440,19 +440,23 @@ API_APP_JS = """
       let promptText = msg.content;
       if (msg.type === "command") {
         const spec = COMMANDS[msg.command];
-        if (!spec || (spec.argument && typeof msg.argument !== "string")) {
+        if (!spec || (spec.argument && typeof msg.argument !== "string") ||
+            (!spec.argument && msg.argument != null && msg.argument !== "")) {
           throw new Error("Ungültiger lokaler Befehl.");
         }
-        promptText = msg.command + (spec.argument ? " " + msg.argument : "");
+      } else if (typeof promptText !== "string") {
+        throw new Error("Ungültiger Prompt.");
       }
-      if (typeof promptText !== "string") throw new Error("Ungültiger Prompt.");
       // Preserve the legacy Web-UI's local exit/quit commands. Never send
       // these to the model or touch the configured output file.
       if (msg.type === "message" && ["exit", "quit"].includes(promptText.trim().toLowerCase())) {
         await dispatchAction({type: "quit"});
         return;
       }
-      const response = await (await api(base + "/runs", "POST", {prompt: promptText})).json();
+      const payload = msg.type === "command"
+        ? {command: msg.command, argument: msg.argument == null ? null : msg.argument}
+        : {prompt: promptText};
+      const response = await (await api(base + "/runs", "POST", payload)).json();
       runId = response.run_id;
       await watchRun(runId);
       return;
