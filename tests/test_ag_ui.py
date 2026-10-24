@@ -1,6 +1,7 @@
 """AG-UI 1.0 endpoint: HTTP/SSE, thread history, tool approvals and validation."""
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from importlib.resources import files
@@ -636,5 +637,137 @@ async def test_agui_thread_deletion_releases_interrupted_agent_and_worker():
                 "/ag-ui", json=_input("paused", "new conversation"),
                 headers={**token, "Accept": "text/event-stream"},
             ))[-1]["type"] == "RUN_FINISHED"
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_slow_agui_thread_start_does_not_block_other_threads():
+    """MCP startup is per-thread, not a global gate for all AG-UI runs."""
+    from cli_agent.agent_api import AgentSession
+
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    existing = await service.resolve_agui_thread("existing")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_start = AgentSession.start
+
+    async def slow_first_start(self):
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+        await original_start(self)
+
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(AgentSession, "start", slow_first_start)
+            first = asyncio.create_task(service.resolve_agui_thread("slow"))
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            second = asyncio.create_task(service.resolve_agui_thread("slow"))
+            await asyncio.sleep(0)
+            assert not first.done()
+            assert not second.done()
+
+            assert await asyncio.wait_for(
+                service.resolve_agui_thread("existing"), timeout=2
+            ) is existing
+            unrelated = await asyncio.wait_for(
+                service.resolve_agui_thread("other"), timeout=2
+            )
+            assert unrelated is not existing
+            release.set()
+            first_session, second_session = await asyncio.wait_for(
+                asyncio.gather(first, second), timeout=2
+            )
+            assert first_session is second_session
+            assert first_session is not unrelated
+            assert len(service.sessions) == 3
+            assert len(service._agui_threads) == 3
+            assert not service._agui_thread_inits
+    finally:
+        release.set()
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agui_thread_start_failure_releases_slot_and_allows_retry():
+    """All awaiters share the failed startup and can later retry the thread."""
+    from cli_agent.agent_api import AgentSession
+
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    original_start = AgentSession.start
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail_first_start(self):
+        if not started.is_set():
+            started.set()
+            await release.wait()
+            raise RuntimeError("MCP connection failed")
+        await original_start(self)
+
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(AgentSession, "start", fail_first_start)
+            first = asyncio.create_task(service.resolve_agui_thread("retry"))
+            await asyncio.wait_for(started.wait(), timeout=2)
+            second = asyncio.create_task(service.resolve_agui_thread("retry"))
+            await asyncio.sleep(0)
+            release.set()
+            results = await asyncio.wait_for(
+                asyncio.gather(first, second, return_exceptions=True), timeout=2
+            )
+            assert all(
+                isinstance(item, RuntimeError) and "MCP connection failed" in str(item)
+                for item in results
+            )
+            assert not service.sessions
+            assert not service._agui_threads
+            assert not service._agui_thread_inits
+            retried = await service.resolve_agui_thread("retry")
+            assert retried.id in service.sessions
+    finally:
+        release.set()
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["delete", "shutdown"])
+async def test_agui_thread_start_cancelled_during_cleanup(action):
+    """Deletion/shutdown must also release a not-yet-published MCP session."""
+    from cli_agent.agent_api import AgentSession
+
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    started = asyncio.Event()
+    original_start = AgentSession.start
+
+    async def stalled_start(self):
+        if not started.is_set():
+            started.set()
+            await asyncio.Event().wait()
+        await original_start(self)
+
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(AgentSession, "start", stalled_start)
+            waiting = asyncio.create_task(service.resolve_agui_thread("abandoned"))
+            await asyncio.wait_for(started.wait(), timeout=2)
+            assert len(service.sessions) == 1
+            if action == "delete":
+                assert await asyncio.wait_for(
+                    service.remove_agui_thread("abandoned"), timeout=2
+                )
+            else:
+                await asyncio.wait_for(service.shutdown(), timeout=2)
+            result = await asyncio.gather(waiting, return_exceptions=True)
+            assert isinstance(result[0], RuntimeError)
+            assert not service.sessions
+            assert not service._agui_threads
+            assert not service._agui_thread_inits
+            if action == "delete":
+                assert (await service.resolve_agui_thread("abandoned")).id in service.sessions
+            else:
+                with pytest.raises(RuntimeError, match="beendet"):
+                    await service.resolve_agui_thread("abandoned")
     finally:
         await service.shutdown()
