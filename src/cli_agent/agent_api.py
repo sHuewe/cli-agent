@@ -28,6 +28,9 @@ MAX_EVENTS_PER_RUN = 8_192
 REPLAY_EVENTS_PER_TOOL = 5
 REPLAY_LIFECYCLE_ALLOWANCE = 32
 MAX_JSON_BYTES = 1024 * 1024
+# A UI run must not execute before its SSE consumer is attached.
+# A bounded wait prevents abandoned/browser-blocked requests from hanging a session.
+BROWSER_SSE_CONNECT_TIMEOUT = 15.0
 
 
 @dataclass
@@ -39,6 +42,10 @@ class AgentRun:
     # Subscribers belong to this run, not the parent session. A slow
     # subscriber draining a previous run must never authorize a new run.
     listeners: int = 0
+    # Only embedded-browser runs require an SSE subscriber before execution.
+    # Headless API runs retain their existing fire-and-poll semantics.
+    require_listener: bool = False
+    subscriber_ready: asyncio.Event = field(default_factory=asyncio.Event)
     answer: str | None = None
     error: str | None = None
     events: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
@@ -127,9 +134,11 @@ class AgentSession:
                     if run is None:
                         return
                     run.status = "running"
-                    self._remember("user", run.prompt)
                     run.emit({"type": "RUN_STARTED", "threadId": self.id, "runId": run.id})
                     try:
+                        if run.require_listener:
+                            await self._await_run_subscriber(run)
+                        self._remember("user", run.prompt)
                         answer = await agent.ask(run.prompt)
                         if not isinstance(answer, str):
                             raise TypeError("Agentenantwort muss Text sein.")
@@ -188,6 +197,20 @@ class AgentSession:
             if self._run is not None:
                 self._run.changed.set()
 
+    async def _await_run_subscriber(self, run: AgentRun) -> None:
+        """Wait until an actual SSE listener exists, before executing a UI run.
+
+        Do not confuse a previous run's listener or a stale/disconnected
+        subscriber with an active consumer of *this* run.
+        """
+        deadline = asyncio.get_running_loop().time() + BROWSER_SSE_CONNECT_TIMEOUT
+        while run.listeners == 0:
+            run.subscriber_ready.clear()
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("Kein SSE-Client für den Agentenlauf verbunden.")
+            await asyncio.wait_for(run.subscriber_ready.wait(), timeout=remaining)
+
     def _remember(self, role: str, content: str) -> None:
         # Bounded, in-memory chat display history. Never retain MCP payloads,
         # approval arguments or internal LLM context as browser transcript.
@@ -213,7 +236,7 @@ class AgentSession:
         calculated = tool_budget * REPLAY_EVENTS_PER_TOOL + REPLAY_LIFECYCLE_ALLOWANCE
         return max(MAX_EVENTS_PER_RUN, calculated)
 
-    def submit(self, prompt: str) -> AgentRun:
+    def submit(self, prompt: str, *, require_listener: bool = False) -> AgentRun:
         if self._closed:
             raise RuntimeError("Session ist geschlossen.")
         if self._busy:
@@ -222,6 +245,7 @@ class AgentSession:
         run = AgentRun(
             id=uuid.uuid4().hex, thread_id=self.id, prompt=prompt,
             max_events=self._replay_capacity(),
+            require_listener=require_listener,
         )
         self._run = run
         self._queue.put_nowait(run)
@@ -251,6 +275,7 @@ class AgentSession:
 
     def subscribe(self, run: AgentRun) -> None:
         run.listeners += 1
+        run.subscriber_ready.set()
 
     def unsubscribe(self, run: AgentRun) -> None:
         run.listeners -= 1
@@ -258,8 +283,10 @@ class AgentSession:
             raise RuntimeError("SSE-Listener-Zähler untergelaufen.")
         # Only losing the *current* run's final subscriber invalidates
         # pending approvals. Disconnects of earlier runs are irrelevant.
-        if self._run is run and run.listeners == 0:
-            self.broker.deny_all()
+        if run.listeners == 0:
+            run.subscriber_ready.clear()
+            if self._run is run:
+                self.broker.deny_all()
 
     async def _send_approval(self, payload: dict[str, Any]) -> None:
         run = self._run
@@ -429,7 +456,13 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                     if not prompt.strip() or len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
                         return error(400, "Prompt ist leer oder zu groß.")
                     try:
-                        run = session.submit(prompt)
+                        run = session.submit(
+                            prompt,
+                            require_listener=(
+                                ui is not None
+                                and request.headers.get("x-cli-agent-browser") == "1"
+                            ),
+                        )
                     except RuntimeError:
                         return error(409, "Session ist beschäftigt oder geschlossen.")
                     return JSONResponse({"run_id": run.id, "status": run.status}, status_code=202)
