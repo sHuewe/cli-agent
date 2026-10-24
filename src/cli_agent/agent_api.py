@@ -458,9 +458,23 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         try:
             async with session_from(request) as session:
                 async with checked_json(request) as body:
-                    if set(body) != {"prompt"} or not isinstance(body["prompt"], str):
-                        return error(400, "Genau ein Textfeld 'prompt' wird benötigt.")
-                    prompt = body["prompt"]
+                    browser_run = (
+                        ui is not None
+                        and request.headers.get("x-cli-agent-browser") == "1"
+                    )
+                    if set(body) == {"prompt"} and isinstance(body["prompt"], str):
+                        prompt = body["prompt"]
+                    elif (browser_run and "command" in body
+                          and set(body) in ({"command"}, {"command", "argument"})):
+                        # Keep command buttons distinct from free-text prompts.
+                        # Reuse the legacy strict validator: malformed URLs and
+                        # server names must never fall through to the model.
+                        from .web_ui import _web_ui_command_prompt
+                        prompt = _web_ui_command_prompt(
+                            body["command"], body.get("argument")
+                        )
+                    else:
+                        return error(400, "Genau ein Prompt oder gültiger Web-UI-Befehl erforderlich.")
                     if not prompt.strip() or len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
                         return error(400, "Prompt ist leer oder zu groß.")
                     # The embedded UI treats exit/quit as local shutdown commands.
@@ -470,10 +484,6 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                             and request.headers.get("x-cli-agent-browser") == "1"
                             and prompt.strip().casefold() in {"exit", "quit"}):
                         return error(400, "exit/quit sind lokale Web-UI-Befehle.")
-                    browser_run = (
-                        ui is not None
-                        and request.headers.get("x-cli-agent-browser") == "1"
-                    )
                     # No await between checking the global browser run count
                     # and submit(): capacity reservation is atomic on the event
                     # loop, including simultaneous requests from other tabs.
