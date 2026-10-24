@@ -514,3 +514,63 @@ def test_frontend_history_reduces_result_content_parts_and_error():
         "role": "tool", "tool_call_id": "call",
         "content": "FEHLER: denied\ndone",
     }]
+
+
+def test_multiple_frontend_tools_require_all_results_in_issued_order():
+    pending = (
+        FrontendToolCall("first", "show_view", '{"view":"energy"}'),
+        FrontendToolCall("second", "highlight", '{"id":"sensor1"}'),
+    )
+    messages = [
+        {"id": "assistant", "role": "assistant", "toolCalls": [
+            {"id": "first", "type": "function",
+             "function": {"name": "show_view", "arguments": '{"view":"energy"}'}},
+            {"id": "second", "type": "function",
+             "function": {"name": "highlight", "arguments": '{"id":"sensor1"}'}},
+        ]},
+        {"id": "t2", "role": "tool", "toolCallId": "second", "content": "done second"},
+        {"id": "t1", "role": "tool", "toolCallId": "first", "content": "done first"},
+    ]
+    assert checked_frontend_results(messages, pending) == [
+        {"role": "tool", "tool_call_id": "first", "content": "done first"},
+        {"role": "tool", "tool_call_id": "second", "content": "done second"},
+    ]
+    messages.pop()
+    with pytest.raises(ValueError, match="Nicht alle"):
+        checked_frontend_results(messages, pending)
+
+
+@pytest.mark.asyncio
+async def test_model_loop_routes_only_advertised_frontend_tool_calls():
+    class FakeModel:
+        async def chat(self, **kwargs):
+            return {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "client", "type": "function",
+                 "function": {"name": "show_view", "arguments": "{}"}},
+                {"id": "unknown", "type": "function",
+                 "function": {"name": "not_advertised", "arguments": "{}"}},
+            ]}
+
+    class FakeAgent:
+        model_client = FakeModel()
+        logging_config = SimpleNamespace(log_model_messages=False, log_tool_calls=False)
+        _agui_frontend_tools = normalize_frontend_tools([definition()], server_names=set())
+
+        def _dump_context(self, *_args, **_kwargs): pass
+        def _append_tool_error(self, messages, tool_call, name, text):
+            item = {"role": "tool", "content": text, "tool_call_id": tool_call["id"]}
+            messages.append(item)
+            return item
+
+    messages = [{"role": "system", "content": "trusted"}]
+    with pytest.raises(FrontendToolHandoff) as raised:
+        await run_model_loop(
+            FakeAgent(), messages=messages,
+            tools=list(FakeAgent._agui_frontend_tools.values()),
+            routes={}, enabled_server_names=set(), max_tool_calls=4,
+            phase="main",
+        )
+    assert len(raised.value.calls) == 1
+    assert raised.value.calls[0].id == "client"
+    assert any("existiert nicht" in item.get("content", "")
+               for item in messages if item.get("role") == "tool")
