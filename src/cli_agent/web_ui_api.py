@@ -9,6 +9,12 @@ API_APP_JS = """
   const prompt = document.getElementById("prompt");
   const send = document.getElementById("send");
   const quit = document.getElementById("quit");
+  const newSessionButton = document.getElementById("new-session");
+  const listSessionsButton = document.getElementById("list-sessions");
+  const sessionsDialog = document.getElementById("sessions-dialog");
+  const sessionsList = document.getElementById("sessions-list");
+  const closeSessionsButton = document.getElementById("close-sessions");
+  const refreshSessionsButton = document.getElementById("refresh-sessions");
   const resetHistory = document.getElementById("reset-history");
   const meta = document.getElementById("session-meta");
   const showWorkingContext = document.getElementById("show-working-context");
@@ -312,6 +318,7 @@ API_APP_JS = """
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
   let reconnectAttempts = 0;
   let sessionId = null;
+  let leaseToken = null; // Page-instance secret, deliberately NOT in sessionStorage.
   let runId = null;
   let streamController = null;
   const socketBridge = {
@@ -331,6 +338,7 @@ API_APP_JS = """
       "X-Cli-Agent-Browser": "1"
     };
     if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (leaseToken) headers["X-Cli-Agent-Lease"] = leaseToken;
     // Browsers set Origin themselves for POST/PATCH; it is a forbidden header.
     const response = await fetch(path, {
       method, headers, body: body === undefined ? undefined : JSON.stringify(body),
@@ -542,19 +550,169 @@ API_APP_JS = """
     }
   }
 
-  async function bootstrap() {
+  function sessionLink(ticket) {
+    return window.location.origin + "/#token=" +
+      encodeURIComponent(token) + "&ticket=" + encodeURIComponent(ticket);
+  }
+
+  function openTicketInTab(ticket, tab) {
+    tab.opener = null;
+    tab.location.replace(sessionLink(ticket));
+  }
+
+  async function createNewTab() {
+    // Open synchronously in the click handler; otherwise popup blockers
+    // might reject it after waiting for the API response.
+    const tab = window.open("about:blank", "_blank");
+    if (!tab) {
+      addMessage("error", "Browser hat das Öffnen eines neuen Tabs blockiert.");
+      return;
+    }
     try {
-      const response = await (await api("/ui/bootstrap")).json();
+      const response = await (await api("/ui/sessions", "POST", {})).json();
+      openTicketInTab(response.ticket, tab);
+      if (sessionsDialog.open) await refreshSessions();
+    } catch (error) {
+      tab.close();
+      showApiError(error);
+    }
+  }
+
+  async function openExistingSession(sid) {
+    const tab = window.open("about:blank", "_blank");
+    if (!tab) {
+      addMessage("error", "Browser hat das Öffnen eines neuen Tabs blockiert.");
+      return;
+    }
+    try {
+      const response = await (
+        await api("/ui/sessions/" + encodeURIComponent(sid) + "/ticket", "POST", {})
+      ).json();
+      openTicketInTab(response.ticket, tab);
+      await refreshSessions();
+    } catch (error) {
+      tab.close();
+      showApiError(error);
+    }
+  }
+
+  async function deleteUnusedSession(sid) {
+    if (!window.confirm("Diese Session dauerhaft beenden?")) return;
+    await api("/ui/sessions/" + encodeURIComponent(sid), "DELETE");
+    await refreshSessions();
+  }
+
+  async function refreshSessions() {
+    const result = await (await api("/ui/sessions")).json();
+    sessionsList.replaceChildren();
+    for (const item of result.sessions) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const name = document.createElement("div");
+      name.className = "state-name";
+      const current = item.session_id === sessionId;
+      name.textContent = item.session_id.slice(0, 12) +
+        (current ? " · aktueller Tab" : item.occupied ? " · geöffnet" : " · frei");
+      const actions = document.createElement("div");
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "secondary";
+      open.textContent = "Öffnen";
+      open.disabled = item.occupied || item.busy;
+      open.addEventListener("click", () => { void openExistingSession(item.session_id); });
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "secondary";
+      close.textContent = "Beenden";
+      close.disabled = item.occupied || item.busy;
+      close.addEventListener("click", () => {
+        void deleteUnusedSession(item.session_id).catch(showApiError);
+      });
+      actions.append(open, close);
+      row.append(name, actions);
+      sessionsList.appendChild(row);
+    }
+  }
+
+  let heartbeat = null;
+  function startHeartbeat() {
+    if (heartbeat !== null) window.clearInterval(heartbeat);
+    heartbeat = window.setInterval(async () => {
+      if (!sessionId || !leaseToken) return;
+      try {
+        await api("/ui/heartbeat", "POST", {session_id: sessionId});
+      } catch (_error) {
+        leaseToken = null;
+        sessionId = null;
+        setBusy(true);
+        meta.textContent = "Session-Bindung verloren. Tab erneut öffnen.";
+      }
+    }, 8000);
+  }
+
+  window.addEventListener("pagehide", () => {
+    if (!leaseToken || !sessionId) return;
+    void fetch("/ui/release", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "X-Cli-Agent-Browser": "1",
+        "X-Cli-Agent-Lease": leaseToken,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({session_id: sessionId}),
+      credentials: "omit",
+      cache: "no-store",
+      keepalive: true
+    }).catch(() => {});
+  });
+
+  async function bootstrap() {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const ticket = params.get("ticket");
+    let previous = null;
+    try { previous = window.sessionStorage.getItem("cli-agent-session-id"); }
+    catch (_error) {}
+    const payload = ticket ? {ticket} : (previous ? {session_id: previous} : {});
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    try {
+      let response;
+      // pagehide release on reload is asynchronous. Allow a short handoff
+      // interval, but NEVER steal an active lease from another tab.
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+          response = await (await api("/ui/bootstrap", "POST", payload)).json();
+          break;
+        } catch (error) {
+          if (ticket || !String(error.message).includes("bereits in einem anderen Tab")
+                     || attempt === 5) throw error;
+          await new Promise(resolve => window.setTimeout(resolve, 300));
+        }
+      }
       sessionId = response.session_id;
+      leaseToken = response.lease;
+      try { window.sessionStorage.setItem("cli-agent-session-id", sessionId); }
+      catch (_error) {}
       emit({type: "session", ...response});
       emit({type: "busy", value: false});
+      startHeartbeat();
     } catch (error) {
-      meta.textContent = "Web-UI-Verbindung fehlgeschlagen.";
+      meta.textContent = "Session konnte nicht geöffnet werden.";
       showApiError(error);
     }
   }
   setBusy(true);
   void bootstrap();
+
+  newSessionButton.addEventListener("click", () => { void createNewTab(); });
+  listSessionsButton.addEventListener("click", () => {
+    sessionsDialog.showModal();
+    void refreshSessions().catch(showApiError);
+  });
+  closeSessionsButton.addEventListener("click", () => sessionsDialog.close());
+  refreshSessionsButton.addEventListener("click", () => {
+    void refreshSessions().catch(showApiError);
+  });
 
   showWorkingContext.addEventListener("click", () => {
     workingMessagesJson.textContent = "Wird geladen …";
