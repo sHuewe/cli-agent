@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import uuid
+from importlib.resources import files
 
 import httpx
 import pytest
+from jsonschema import Draft202012Validator
 
 from cli_agent.agent_api import AgentApiService, create_app
 from cli_agent.ag_ui_protocol import parse_run_input, encode_sse
@@ -53,13 +55,25 @@ def _input(thread, prompt, *, run_id=None, messages=None, resume=None):
     return value
 
 
+_AGUI_SCHEMA = json.loads(
+    files("cli_agent").joinpath("ag_ui_schema_1_0.json").read_text("utf-8")
+)
+_EVENT_VALIDATOR = Draft202012Validator(_AGUI_SCHEMA)
+_INPUT_VALIDATOR = Draft202012Validator({
+    **_AGUI_SCHEMA, "$ref": "#/$defs/RunAgentInput"
+})
+
+
 def _events(response):
     assert response.status_code == 200, response.text
     assert "text/event-stream" in response.headers["content-type"]
-    return [
+    events = [
         json.loads(line[6:]) for line in response.text.splitlines()
         if line.startswith("data: ")
     ]
+    for event in events:
+        _EVENT_VALIDATOR.validate(event)
+    return events
 
 
 @pytest.mark.asyncio
@@ -320,3 +334,8 @@ async def test_browser_local_commands_stay_outside_agui_transport():
             assert called[0].calls == ["tokens"]
     finally:
         await service.shutdown()
+
+
+def test_official_ag_ui_1_0_schema_accepts_the_standard_request():
+    _INPUT_VALIDATOR.validate(_input("thread", "Hello"))
+    assert _AGUI_SCHEMA["$id"] == "https://ag-ui.com/spec/1.0/schema.json"
