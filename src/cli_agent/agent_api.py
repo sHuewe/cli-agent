@@ -1367,14 +1367,6 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         except ValueError as exc:
             return error(400, str(exc))
 
-    async def ui_shutdown(_request: Request) -> Response:
-        assert ui is not None
-        # Closing the local application terminates every UI session.
-        for session in tuple(service.sessions.values()):
-            session.broker.deny_all()
-        ui["shutdown"]()
-        return JSONResponse({"shutdown": True})
-
     async def health(_request: Request) -> Response:
         return JSONResponse({"status": "ok"})
 
@@ -1442,7 +1434,6 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/ui/reconnect/{session_id}/{run_id}", ui_reconnect_run, methods=["GET"]),
             Route("/ui/render", ui_render, methods=["POST"]),
             Route("/ui/command", ui_command, methods=["POST"]),
-            Route("/ui/shutdown", ui_shutdown, methods=["POST"]),
         ] if ui is not None else [])),
         lifespan=lifespan,
         middleware=[Middleware(BaseHTTPMiddleware, dispatch=authenticate)],
