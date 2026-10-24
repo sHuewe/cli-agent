@@ -416,6 +416,8 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
     model_calls = []
     preapprovals = []
     server_configs = []
+    server_stopped = asyncio.Event()
+    loop = asyncio.get_running_loop()
 
     class FakeSession:
         id = "initial-browser-session"
@@ -459,7 +461,7 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
             assert len(sockets) == 1
             assert sockets[0].getsockname()[0] == "127.0.0.1"
             self.started = True
-            await asyncio.sleep(0.03)
+            await asyncio.wait_for(server_stopped.wait(), timeout=3)
 
     fake_uvicorn = types.SimpleNamespace(
         Config=lambda app, **options: server_configs.append((app, options)) or
@@ -480,7 +482,8 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
                         ) or fallback)
     monkeypatch.setattr(web_ui_api.webbrowser if hasattr(web_ui_api, "webbrowser")
                         else __import__("webbrowser"), "open",
-                        lambda url, **kwargs: opened.append(url))
+                        lambda url, **kwargs: (opened.append(url),
+                                               loop.call_soon_threadsafe(server_stopped.set)))
     monkeypatch.setattr(
         os_operations.Workspace, "from_directory",
         lambda *a, **kw: previews.append((a, kw)) or object(),
