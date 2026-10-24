@@ -365,3 +365,31 @@ def test_browser_wire_transcript_is_bounded_without_truncating_latest_prompt():
     assert "chat.replaceChildren();" in API_APP_JS
     # The browser display is not truncated when the AG-UI wire history is.
     assert "chat.replaceChildren()" not in bound
+
+
+def test_cancelled_exit_confirmation_keeps_composer_interactive():
+    from cli_agent.web_ui_api import API_APP_JS
+
+    form = API_APP_JS.split('form.addEventListener("submit",', 1)[1].split(
+        'prompt.addEventListener("keydown"', 1
+    )[0]
+    assert '["exit", "quit"].includes(content.toLowerCase())' in form
+    assert form.index('void deleteUnusedSession(sessionId)') < form.index(
+        'addMessage("user", content)'
+    )
+    assert form.index('void deleteUnusedSession(sessionId)') < form.index(
+        'setBusy(true)'
+    )
+    dispatch = API_APP_JS.split('async function dispatchAction(msg)', 1)[1]
+    assert 'if (sessionId) setBusy(false);' in dispatch
+
+
+def test_paused_approval_sessions_are_actionable_in_sessions_dialog():
+    from cli_agent.web_ui_api import API_APP_JS
+
+    rendered = API_APP_JS.split('async function refreshSessions()', 1)[1].split(
+        'let heartbeat = null;', 1
+    )[0]
+    assert 'const executing = item.busy && !item.approval_pending;' in rendered
+    assert 'open.disabled = item.occupied || executing;' in rendered
+    assert 'close.disabled = (item.occupied && !current) || executing;' in rendered
