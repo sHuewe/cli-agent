@@ -484,6 +484,15 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                     for seq, event in tuple(run.events):
                         if seq > cursor:
                             cursor = seq
+                            # Replayed approval requests must remain actionable.
+                            # Resolved/denied requests are historical audit
+                            # events, not interactive dialogs.
+                            if (event.get("type") == "CUSTOM"
+                                    and event.get("name") == "approval_required"):
+                                request_id = str(event.get("value", {}).get("id", ""))
+                                future = session.broker._pending.get(request_id)
+                                if future is None or future.done():
+                                    continue
                             yield f"id: {seq}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
                     if run.done:
                         return
