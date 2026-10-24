@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -419,7 +420,13 @@ async def test_abandoned_approval_session_can_be_reopened_or_deleted_without_sto
                 **_headers(lease, origin=origin), "Accept": "text/event-stream",
             })
             assert response.status_code == 200
-            assert '"type": "interrupt"' in response.text
+            events = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.text.splitlines()
+                if line.startswith("data: ")
+            ]
+            assert events[-1]["type"] == "RUN_FINISHED"
+            assert events[-1]["outcome"]["type"] == "interrupt"
             assert first._busy
             assert first._pending_interrupt is not None
 
