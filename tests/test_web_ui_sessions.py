@@ -273,7 +273,8 @@ async def test_replay_omits_resolved_or_denied_tool_approvals():
         # run. It is deliberately not pending in the broker.
         old = {"type": "CUSTOM", "name": "approval_required",
                "value": {"id": "already-denied", "tool": "os__write_file"}}
-        run.events.insert(1, (run.next_sequence, old))
+        run.events = (run.events[:1] + [(2, old)] +
+                      [(seq + 1, event) for seq, event in run.events[1:]])
         run.next_sequence += 1
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=create_app(service)),
