@@ -132,6 +132,20 @@ async def test_two_independent_sessions_reopen_without_shared_access():
             )
             assert run_a.status_code == 202
             assert run_b.status_code == 202
+            # Browser sessions require an attached SSE stream; verify both
+            # agents can proceed independently once their own tab listens.
+            streams = await asyncio.gather(
+                client.get(
+                    f"/sessions/{initial.id}/runs/{run_a.json()['run_id']}/events",
+                    headers=_headers(lease_a),
+                ),
+                client.get(
+                    f"/sessions/{b_id}/runs/{run_b.json()['run_id']}/events",
+                    headers=_headers(lease_b),
+                ),
+            )
+            assert all(response.status_code == 200 for response in streams)
+            assert all("RUN_FINISHED" in response.text for response in streams)
             for _ in range(100):
                 if agents[0].history and agents[1].history:
                     break
