@@ -889,77 +889,22 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
-    async def start_run(request: Request) -> Response:
-        try:
-            async with session_from(request) as session:
-                async with checked_json(request) as body:
-                    browser_run = (
-                        ui is not None
-                        and request.headers.get("x-cli-agent-browser") == "1"
-                    )
-                    if set(body) == {"prompt"} and isinstance(body["prompt"], str):
-                        prompt = body["prompt"]
-                    elif (browser_run and "command" in body
-                          and set(body) in ({"command"}, {"command", "argument"})):
-                        # Keep command buttons distinct from free-text prompts.
-                        # Reuse the legacy strict validator: malformed URLs and
-                        # server names must never fall through to the model.
-                        from .web_ui import _web_ui_command_prompt
-                        prompt = _web_ui_command_prompt(
-                            body["command"], body.get("argument")
-                        )
-                    else:
-                        return error(400, "Genau ein Prompt oder gültiger Web-UI-Befehl erforderlich.")
-                    if not prompt.strip() or len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-                        return error(400, "Prompt ist leer oder zu groß.")
-                    # The embedded UI treats exit/quit as local shutdown commands.
-                    # Never allow an alternative browser caller to submit them
-                    # as model prompts (or write their responses to --output).
-                    if (ui is not None
-                            and request.headers.get("x-cli-agent-browser") == "1"
-                            and prompt.strip().casefold() in {"exit", "quit"}):
-                        return error(400, "exit/quit sind lokale Web-UI-Befehle.")
-                    # No await between checking the global browser run count
-                    # and submit(): capacity reservation is atomic on the event
-                    # loop, including simultaneous requests from other tabs.
-                    if browser_run and sum(
-                        other._busy and other._run is not None
-                        and other._run.require_listener
-                        for other in service.sessions.values()
-                    ) >= MAX_CONCURRENT_BROWSER_RUNS:
-                        return error(
-                            429, "Maximal vier parallele Web-UI-Läufe erlaubt. "
-                            "Bitte einen laufenden Agentenlauf abschließen lassen."
-                        )
-                    try:
-                        run = session.submit(
-                            prompt,
-                            require_listener=browser_run,
-                        )
-                    except RuntimeError:
-                        return error(409, "Session ist beschäftigt oder geschlossen.")
-                    return JSONResponse({"run_id": run.id, "status": run.status}, status_code=202)
-        except KeyError:
-            return error(404, "Session nicht gefunden.")
-        except ValueError as exc:
-            return error(400, str(exc))
+    async def ui_reconnect_run(request: Request) -> Response:
+        """Browser-only replay of an already-active run after tab reload.
 
-    def fetch_run(request: Request) -> tuple[AgentSession | None, AgentRun | None]:
-        session = service.sessions.get(request.path_params["session_id"])
-        if session is None:
-            return None, None
-        return session, session.run(request.path_params["run_id"])
-
-    async def run_status(request: Request) -> Response:
-        _session, run = fetch_run(request)
-        if run is None:
-            return error(404, "Run nicht gefunden.")
-        return JSONResponse(run.snapshot())
-
-    async def run_events(request: Request) -> Response:
-        session, run = fetch_run(request)
-        if run is None or session is None:
-            return error(404, "Run nicht gefunden.")
+        AG-UI 1.0 does not support SSE stream resumption; keep this
+        optional, access-controlled browser extension, not a public run API.
+        """
+        assert ui is not None
+        sid = request.path_params["session_id"]
+        if not ui["registry"].is_owner(
+            sid, request.headers.get("x-cli-agent-lease"),
+        ):
+            return error(403, "Keine gültige Session-Bindung.")
+        session = service.sessions.get(sid)
+        run = session.run(request.path_params["run_id"]) if session is not None else None
+        if run is None or not run.agui:
+            return error(404, "AG-UI-Run nicht gefunden.")
         try:
             last = int(request.headers.get("last-event-id", "0"))
         except ValueError:
@@ -969,9 +914,6 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         if run.events and last < run.events[0][0] - 1:
             return error(410, "Event-History ist nicht mehr vollständig.")
 
-        browser_stream = (
-            ui is not None and request.headers.get("x-cli-agent-browser") == "1"
-        )
         browser_lease = request.headers.get("x-cli-agent-lease")
 
         async def stream():
@@ -981,7 +923,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                 while True:
                     # A request authorized when established must not keep an SSE
                     # subscription after its tab's exclusive lease has expired.
-                    if browser_stream and not ui["registry"].is_owner(
+                    if not ui["registry"].is_owner(
                         session.id, browser_lease, refresh=False
                     ):
                         return
@@ -1021,25 +963,6 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
-
-    async def approve(request: Request) -> Response:
-        session = service.sessions.get(request.path_params["session_id"])
-        if session is None or session.run(request.path_params["run_id"]) is None:
-            return error(404, "Run nicht gefunden.")
-        if session._run is None or session._run.done:
-            return error(409, "Run ist nicht aktiv.")
-        try:
-            async with checked_json(request) as body:
-                if set(body) != {"decision"} or body["decision"] not in ("yes", "no", "session"):
-                    return error(400, "Entscheidung muss yes, no oder session sein.")
-                if (session._run is None or session._run.id != request.path_params["run_id"]
-                        or session._run.done or session._closed):
-                    return error(409, "Run ist nicht aktiv.")
-                if not session.broker.resolve(request.path_params["approval_id"], body["decision"]):
-                    return error(409, "Freigabe ist ungültig oder abgelaufen.")
-                return JSONResponse({"accepted": True})
-        except ValueError as exc:
-            return error(400, str(exc))
 
     async def context(request: Request) -> Response:
         session = service.sessions.get(request.path_params["session_id"])
@@ -1372,10 +1295,6 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/sessions/{session_id}/reset", reset_history, methods=["POST"]),
             Route("/sessions/{session_id}/usage", usage, methods=["GET"]),
             Route("/sessions/{session_id}/context", update_context, methods=["PATCH"]),
-            Route("/sessions/{session_id}/runs", start_run, methods=["POST"]),
-            Route("/sessions/{session_id}/runs/{run_id}", run_status, methods=["GET"]),
-            Route("/sessions/{session_id}/runs/{run_id}/events", run_events, methods=["GET"]),
-            Route("/sessions/{session_id}/runs/{run_id}/approvals/{approval_id}", approve, methods=["POST"]),
         ] + ([
             Route("/", ui_index, methods=["GET"]),
             Route("/assets/app.css", ui_css, methods=["GET"]),
@@ -1387,6 +1306,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/ui/sessions/{session_id}", ui_session_delete, methods=["DELETE"]),
             Route("/ui/release", ui_release, methods=["POST"]),
             Route("/ui/heartbeat", ui_heartbeat, methods=["POST"]),
+            Route("/ui/reconnect/{session_id}/{run_id}", ui_reconnect_run, methods=["GET"]),
             Route("/ui/render", ui_render, methods=["POST"]),
             Route("/ui/command", ui_command, methods=["POST"]),
             Route("/ui/shutdown", ui_shutdown, methods=["POST"]),
