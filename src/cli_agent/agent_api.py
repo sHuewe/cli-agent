@@ -1,7 +1,8 @@
-"""Local, authenticated agent API with per-session MCP lifetimes.
+"""Local, authenticated AG-UI 1.0 API with per-session MCP lifetimes.
 
-v1 transports an AG-UI event subset over SSE. It does not implement the
-canonical AG-UI RunAgentInput/interrupt-resume contract yet.
+The canonical transport accepts RunAgentInput via HTTP POST and responds
+with SSE, including standard client-tool results and interrupt/resume. Local
+cli-agent configuration remains separate from the AG-UI run contract.
 """
 from __future__ import annotations
 
