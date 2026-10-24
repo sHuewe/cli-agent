@@ -166,3 +166,18 @@ async def test_cli_initial_context_and_output_are_run_on_session_worker():
     assert target.writes == ["Antwort: ordinary"]
     assert created[0].requests == ["add_web_context https://example.org", "ordinary"]
     await service.shutdown()
+
+
+def test_bootstrap_preserves_initial_context_diagnostics():
+    """The web UI must not clear initial context-loading errors on bootstrap."""
+    from cli_agent.web_ui_api import API_APP_JS
+
+    bootstrap = API_APP_JS.split("async function bootstrap() {", 1)[1]
+    # Initial messages are displayed by the session-event handler; the
+    # transcript should be cleared *before* emitting that event.
+    assert bootstrap.index("chat.replaceChildren();") < bootstrap.index(
+        'emit({type: "session", ...response});'
+    )
+    assert 'for (const message of payload.initial_messages || [])' in API_APP_JS
+    assert "function dismissApproval()" in API_APP_JS
+    assert "event.type === \"RUN_FINISHED\"" in API_APP_JS
