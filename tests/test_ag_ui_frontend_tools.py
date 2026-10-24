@@ -268,3 +268,84 @@ async def test_frontend_handoff_and_followup_without_replaying_agent_call():
             assert session._busy is False
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_real_conversation_mixin_resumes_checkpoint_without_replaying_prompt():
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Agent(ConversationMixin):
+        def __init__(self):
+            self.history = []
+            self._agui_pending_original_prompt = "original request"
+            self._agui_pending_working_messages = [
+                {"role": "system", "content": "trusted"},
+                {"role": "user", "content": "original request"},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-1", "type": "function",
+                     "function": {"name": "show_view", "arguments": "{}"}}
+                ]},
+            ]
+            self._tool_routes = {}
+            self._active_servers = set()
+            self.max_tool_calls = 5
+            self._agui_frontend_tools = normalize_frontend_tools(
+                [definition()], server_names=set()
+            )
+            self.calls = 0
+
+        def _model_tools(self): return []
+
+        async def _run_model_loop(self, **kwargs):
+            self.calls += 1
+            self.seen = kwargs
+            return "completed after result"
+
+    agent = Agent()
+    assert await agent.continue_after_frontend_tools([
+        {"role": "tool", "tool_call_id": "call-1", "content": "opened"}
+    ]) == "completed after result"
+    assert agent.calls == 1
+    assert agent.seen["messages"][-1] == {
+        "role": "tool", "tool_call_id": "call-1", "content": "opened"
+    }
+    assert agent.seen["messages"][0] == {"role": "system", "content": "trusted"}
+    assert agent.seen["tools"][0]["function"]["name"] == "show_view"
+    assert agent.history == [
+        {"role": "user", "content": "original request"},
+        {"role": "assistant", "content": "completed after result"},
+    ]
+    with pytest.raises(RuntimeError, match="Checkpoint"):
+        await agent.continue_after_frontend_tools([])
+
+
+@pytest.mark.asyncio
+async def test_conversation_mixin_supports_multiple_frontend_handoffs():
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Agent(ConversationMixin):
+        history = []
+        _tool_routes = {}
+        _active_servers = set()
+        max_tool_calls = 3
+        _agui_frontend_tools = {}
+
+        def _model_tools(self): return []
+
+        async def _run_model_loop(self, *, messages, **_other):
+            raise FrontendToolHandoff(
+                [FrontendToolCall("second", "show_view", "{}")],
+                {"role": "assistant", "content": ""},
+            )
+
+    agent = Agent()
+    agent._agui_pending_original_prompt = "original"
+    agent._agui_pending_working_messages = [
+        {"role": "system", "content": "trusted"}
+    ]
+    with pytest.raises(FrontendToolHandoff):
+        await agent.continue_after_frontend_tools([
+            {"role": "tool", "tool_call_id": "first", "content": "ok"}
+        ])
+    assert agent._agui_pending_original_prompt == "original"
+    assert agent._agui_pending_working_messages[-1]["tool_call_id"] == "first"
