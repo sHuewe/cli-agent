@@ -50,6 +50,7 @@ class AgentRun:
     require_listener: bool = False
     agui: bool = False
     resume_approval: tuple[str, str] | None = None
+    frontend_results: list[dict[str, Any]] | None = None
     subscriber_ready: asyncio.Event = field(default_factory=asyncio.Event)
     answer: str | None = None
     error: str | None = None
@@ -100,6 +101,8 @@ class AgentSession:
         self.agui_state: Any = {}
         self.agui_context: list[dict[str, Any]] = []
         self._pending_interrupt: dict[str, Any] | None = None
+        self._pending_frontend: tuple[Any, ...] | None = None
+        self._pending_frontend_thread_id: str | None = None
         self._pending_tool_id: str | None = None
         self._agui_seen_run_ids: set[str] = set()
         self._opened_tool_calls: set[str] = set()
@@ -151,8 +154,13 @@ class AgentSession:
                     try:
                         if run.require_listener:
                             await self._await_run_subscriber(run)
-                        self._remember("user", run.prompt)
-                        answer = await agent.ask(run.prompt)
+                        if run.frontend_results is not None:
+                            answer = await agent.continue_after_frontend_tools(
+                                run.frontend_results
+                            )
+                        else:
+                            self._remember("user", run.prompt)
+                            answer = await agent.ask(run.prompt)
                         if not isinstance(answer, str):
                             raise TypeError("Agentenantwort muss Text sein.")
                         # An AG-UI approval may have ended one or more earlier
@@ -182,7 +190,94 @@ class AgentSession:
                         finished.emit({"type": "RUN_FINISHED", "threadId": finished.thread_id, "runId": finished.id,
                                        **({"outcome": {"type": "success"}} if finished.agui else {})})
                     except Exception as exc:
-                        failed = self._run if run.agui else run
+                        from .ag_ui_frontend_tools import FrontendToolHandoff
+                        if isinstance(exc, FrontendToolHandoff) and run.agui:
+                            yielded = self._run
+                            if yielded is None or yielded.done:
+                                raise RuntimeError("Frontend-Tool-Run ist nicht verfügbar.") from exc
+                            pending = tuple(exc.calls)
+                            if not pending:
+                                raise RuntimeError("Leerer Frontend-Tool-Handoff.") from exc
+                            self._pending_frontend = pending
+                            self._pending_frontend_thread_id = yielded.thread_id
+                            calls = []
+                            for call in pending:
+                                yielded.emit({
+                                    "type": "TOOL_CALL_START", "toolCallId": call.id,
+                                    "toolCallName": call.name,
+                                })
+                                yielded.emit({
+                                    "type": "TOOL_CALL_ARGS", "toolCallId": call.id,
+                                    "delta": call.arguments,
+                                })
+                                yielded.emit({"type": "TOOL_CALL_END", "toolCallId": call.id})
+                                calls.append({
+                                    "id": call.id, "type": "function",
+                                    "function": {
+                                        "name": call.name, "arguments": call.arguments,
+                                    },
+                                })
+                            self.agui_messages.append({
+                                "id": uuid.uuid4().hex, "role": "assistant",
+                                "content": str(exc.assistant.get("content") or ""),
+                                "toolCalls": calls,
+                            })
+                            yielded.status = "completed"
+                            yielded.emit({
+                                "type": "RUN_FINISHED", "threadId": yielded.thread_id,
+                                "runId": yielded.id,
+                                "outcome": {
+                                    "type": "success",
+                                    "pendingToolCallIds": [call.id for call in pending],
+                                },
+                            })
+                        else:
+                            failed = self._run if run.agui else run
+                            if failed is not None:
+                                failed.status = "failed"
+                                if self.debug_errors:
+                                    import traceback
+                                    failed.error = "".join(traceback.format_exception(exc))
+                                else:
+                                    failed.error = f"{type(exc).__name__}: {exc}"
+                                failed.emit({"type": "RUN_ERROR", "message": "Agentenlauf fehlgeschlagen."})
+                        # The exception is now handled; no frontend tool is
+                        # ever executed by the MCP dispatcher.
+                    finally:
+                        self._busy = False
+                        self._pending_interrupt = None
+                        self._opened_tool_calls.clear()
+                        run.changed.set()
+                        if self._run is not None:
+                            self._run.changed.set()
+        except asyncio.CancelledError:
+            if not self._startup_ready.done():
+                self._startup_ready.cancel()
+                self._ready.cancel()
+            elif not self._ready.done():
+                self._ready.cancel()
+            if self._run is not None and not self._run.done:
+                self._run.status = "cancelled"
+                self._run.emit({"type": "RUN_ERROR", "message": "Agentenlauf abgebrochen."})
+            raise
+        except BaseException as exc:
+            if not self._startup_ready.done():
+                self._startup_ready.set_exception(exc)
+                self._ready.cancel()
+            elif not self._ready.done():
+                self._ready.set_exception(exc)
+            else:
+                if self._run is not None and not self._run.done:
+                    self._run.status = "failed"
+                    self._run.error = "Agentenworker wurde beendet."
+                    self._run.emit({"type": "RUN_ERROR", "message": "Agentenworker wurde beendet."})
+        finally:
+            self._closed = True
+            self.broker.detach(self._approval_sender)
+            if self._run is not None:
+                self._run.changed.set()
+
+    async def _await_run_subscriber
                         if failed is not None:
                             failed.status = "failed"
                             if self.debug_errors:
