@@ -304,6 +304,7 @@ API_APP_JS = """
     } catch (_error) { return value; }
   }
 
+  const entryTicket = new URLSearchParams(window.location.hash.slice(1)).get("ticket");
   const token = tokenFromFragment();
   if (!token) {
     meta.textContent = "Ungültiger Start-Link: Session-Token fehlt.";
@@ -668,8 +669,7 @@ API_APP_JS = """
   });
 
   async function bootstrap() {
-    const params = new URLSearchParams(window.location.hash.slice(1));
-    const ticket = params.get("ticket");
+    const ticket = entryTicket;
     let previous = null;
     try { previous = window.sessionStorage.getItem("cli-agent-session-id"); }
     catch (_error) {}
