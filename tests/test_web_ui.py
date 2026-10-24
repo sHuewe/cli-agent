@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,10 @@ def test_web_ui_approval_fails_closed_without_browser() -> None:
     assert result is False
 
 
+@pytest.mark.parametrize(
+    ("decision", "expected"),
+    [("yes", True), ("no", False), ("session", "session")],
+)
 def test_web_ui_approval_round_trip(decision, expected) -> None:
     async def run():
         broker = web_ui.WebUiApprovalBroker()
@@ -111,6 +116,16 @@ def test_web_ui_markdown_renders_emphasis_lists_code_tables_and_escapes_html() -
     assert "<script>" not in rendered
 
 
+@pytest.mark.parametrize(
+    ("command", "argument", "expected"),
+    [
+        ("tokens", None, "tokens"),
+        ("clear_web_context", None, "clear_web_context"),
+        ("add_web_context", "https://example.com", "add_web_context https://example.com"),
+        ("enable", "os", "enable os"),
+        ("disable", "os", "disable os"),
+    ],
+)
 def test_web_ui_command_prompt_builds_only_local_commands(
     command,
     argument,
@@ -119,6 +134,17 @@ def test_web_ui_command_prompt_builds_only_local_commands(
     assert web_ui._web_ui_command_prompt(command, argument) == expected
 
 
+@pytest.mark.parametrize(
+    ("command", "argument"),
+    [
+        ("unknown", None),
+        ("tokens", "unexpected"),
+        ("add_web_context", None),
+        ("add_web_context", "not-a-url"),
+        ("enable", None),
+        ("disable", ""),
+    ],
+)
 def test_web_ui_command_prompt_rejects_invalid_commands(command, argument) -> None:
     with pytest.raises(ValueError):
         web_ui._web_ui_command_prompt(command, argument)
@@ -301,6 +327,7 @@ def test_external_tool_never_receives_local_file_diff(tmp_path):
     assert snapshot is None
 
 
+@pytest.mark.parametrize("newline", ["\r\n", "\r", "\n"])
 def test_write_diff_ignores_existing_line_ending_style(tmp_path, newline):
     from cli_agent.config import McpServerConfig
     from cli_agent.os_operations import Workspace
@@ -349,6 +376,14 @@ def test_write_diff_escapes_unicode_controls_in_paths_and_content(tmp_path):
     assert "\u2066" not in preview["diff"]
 
 
+@pytest.mark.parametrize(
+    ("before", "after", "removed", "added"),
+    [
+        ("old", "new", "-old\n\\ No newline at end of file", "+new\n\\ No newline at end of file"),
+        ("same", "same\n", "-same\n\\ No newline at end of file", "+same\n"),
+        ("same\n", "same", "-same\n", "+same\n\\ No newline at end of file"),
+    ],
+)
 def test_write_diff_marks_unterminated_lines(tmp_path, before, after, removed, added):
     from cli_agent.config import McpServerConfig
     from cli_agent.os_operations import Workspace
@@ -448,6 +483,7 @@ def test_write_preview_rejects_file_growth_on_confirm(tmp_path):
     assert asyncio.run(run()) is False
 
 
+@pytest.mark.parametrize("decision", ["no", "yes", "session"])
 def test_blocked_write_approval_can_be_dismissed_without_authorizing(tmp_path, decision):
     from cli_agent.config import McpServerConfig
     from cli_agent.os_operations import Workspace
@@ -484,6 +520,7 @@ def test_blocked_write_approval_can_be_dismissed_without_authorizing(tmp_path, d
     assert asyncio.run(run()) is False
 
 
+@pytest.mark.skipif(web_ui.os.name == "nt", reason="POSIX st_ino fallback only")
 def test_write_preview_fails_closed_when_inode_unavailable(tmp_path, monkeypatch):
     from cli_agent.config import McpServerConfig
     from cli_agent.os_operations import Workspace
