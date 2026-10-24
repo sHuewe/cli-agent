@@ -203,6 +203,7 @@ class ConversationMixin:
                 raise
             self._agui_pending_working_messages = working_messages
             self._agui_pending_original_prompt = prompt
+            self._agui_pending_run_state = main_run_state
             raise
         if getattr(self, "response_format", "text") == "json":
             answer, last_error = _normalize_json_response(answer)
@@ -262,6 +263,9 @@ class ConversationMixin:
         prompt = getattr(self, "_agui_pending_original_prompt", "")
         self._agui_pending_working_messages = None
         self._agui_pending_original_prompt = ""
+        run_state = getattr(self, "_agui_pending_run_state", None)
+        if run_state is None:
+            run_state = ModelLoopRunState()
         messages.extend(results)
         tools = self._model_tools()
         if getattr(self, "_agui_frontend_tools", None):
@@ -274,15 +278,51 @@ class ConversationMixin:
                 messages=messages, tools=tools, routes=self._tool_routes,
                 enabled_server_names=set(self._active_servers),
                 max_tool_calls=self.max_tool_calls, phase="main",
+                run_state=run_state,
             )
+            if getattr(self, "response_format", "text") == "json":
+                answer, last_error = _normalize_json_response(answer)
+                repairs = 0
+                while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
+                    repairs += 1
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Deine letzte finale Antwort entspricht nicht dem "
+                            "verlangten JSON-Format. Korrigiere die Antwort jetzt "
+                            "so, dass sie ausschließlich aus syntaktisch gültigem "
+                            "JSON besteht. Behalte die inhaltliche Aufgabe und die "
+                            "verlangte Struktur bei. Du darfst die verfügbaren Tools "
+                            "verwenden, falls das für eine korrekte Antwort "
+                            "erforderlich ist. Verwende keine Markdown-Codeblöcke "
+                            "und keinen Text außerhalb des JSON-Werts. "
+                            f"Validierungsfehler: {last_error}"
+                        ),
+                    })
+                    answer = await self._run_model_loop(
+                        messages=messages, tools=tools, routes=self._tool_routes,
+                        enabled_server_names=set(self._active_servers),
+                        max_tool_calls=self.max_tool_calls, phase="main",
+                        run_state=run_state,
+                    )
+                    answer, last_error = _normalize_json_response(answer)
+                if last_error is not None:
+                    raise ValueError(
+                        "Das Modell hat auch nach "
+                        f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
+                        f"gültiges JSON geliefert: {last_error}"
+                    )
         except FrontendToolHandoff:
             self._agui_pending_working_messages = messages
             self._agui_pending_original_prompt = prompt
+            self._agui_pending_run_state = run_state
             raise
+        self._agui_pending_run_state = None
         self.history.extend([
             {"role": "user", "content": prompt},
             {"role": "assistant", "content": answer},
         ])
+        self._dump_context(messages, phase="main")
         return answer
 
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
