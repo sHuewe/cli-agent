@@ -371,8 +371,10 @@ class AgentSession:
         if call_id not in self._opened_tool_calls:
             run.emit({"type": "TOOL_CALL_START", "toolCallId": call_id,
                       "toolCallName": payload.get("tool", "")})
+        argument_text = payload.get("arguments", {})
         run.emit({"type": "TOOL_CALL_ARGS", "toolCallId": call_id,
-                  "delta": json.dumps(payload.get("arguments", {}), ensure_ascii=False)})
+                  "delta": argument_text if isinstance(argument_text, str)
+                  else json.dumps(argument_text, ensure_ascii=False)})
         run.emit({"type": "TOOL_CALL_END", "toolCallId": call_id})
         self._opened_tool_calls.discard(call_id)
         self._pending_tool_id = call_id
@@ -1008,6 +1010,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                 "session_id": session_id, "lease": lease,
                 **ui["info"], "initial_messages": session.initial_messages,
                 "history": session.ui_messages,
+                "agui_messages": session.agui_messages,
                 "pending_interrupt": session._pending_interrupt,
                 "active_run": (session._run.id if session._run is not None
                                and not session._run.done else None),
