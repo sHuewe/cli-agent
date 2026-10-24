@@ -340,3 +340,22 @@ def test_browser_agui_messages_are_trimmed_before_post_and_restored_after_reject
     assert "aguiMessages.pop();" in dispatch
     assert 'const MAX_SYNCED_MESSAGES = 480;' in API_APP_JS
     assert 'const MAX_SYNCED_REQUEST_BYTES = 800000;' in API_APP_JS
+
+
+def test_browser_wire_transcript_is_bounded_without_truncating_latest_prompt():
+    from cli_agent.web_ui_api import API_APP_JS
+
+    bound = API_APP_JS.split("function boundAguiMessages() {", 1)[1].split(
+        "function aguiInput(", 1
+    )[0]
+    assert "MAX_WIRE_MESSAGES = 240" in API_APP_JS
+    assert "MAX_WIRE_BYTES = 400 * 1024" in API_APP_JS
+    assert "new TextEncoder()" in bound
+    assert "aguiMessages.length - MAX_WIRE_MESSAGES" in bound
+    assert "aguiMessages = aguiMessages.slice(start)" in bound
+    assert "if (start >= aguiMessages.length)" in bound
+    assert "aguiMessages[0].role !== \"user\"" in bound
+    assert "messages: boundAguiMessages()" in API_APP_JS
+    assert "chat.replaceChildren();" in API_APP_JS
+    # The browser display is not truncated when the AG-UI wire history is.
+    assert "chat.replaceChildren()" not in bound
