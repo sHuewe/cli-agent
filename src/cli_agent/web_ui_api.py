@@ -372,6 +372,19 @@ API_APP_JS = """
     if (approval.open) approval.close();
   }
 
+  async function renderAnswer(text) {
+    // Markdown rendering is optional: a large answer (> the JSON/render
+    // request limit), a renderer failure, or a transient HTTP error must not
+    // hide a successfully completed agent response. The caller renders
+    // a null result using textContent, never unsanitized innerHTML.
+    try {
+      const rendered = await (await api("/ui/render", "POST", {text})).json();
+      return typeof rendered.html === "string" ? rendered.html : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   async function watchRun(activeRun) {
     const res = await api("/sessions/" + sessionId + "/runs/" + activeRun + "/events");
     const reader = res.body.getReader();
@@ -409,8 +422,7 @@ API_APP_JS = """
         }
       }
       if (answer) {
-        const rendered = await (await api("/ui/render", "POST", {text: answer})).json();
-        emit({type: "answer", content: answer, html: rendered.html});
+        emit({type: "answer", content: answer, html: await renderAnswer(answer)});
       }
       if (!finished) throw new Error("Agenten-Eventstream vorzeitig beendet.");
     } finally {
@@ -434,6 +446,12 @@ API_APP_JS = """
         promptText = msg.command + (spec.argument ? " " + msg.argument : "");
       }
       if (typeof promptText !== "string") throw new Error("Ungültiger Prompt.");
+      // Preserve the legacy Web-UI's local exit/quit commands. Never send
+      // these to the model or touch the configured output file.
+      if (msg.type === "message" && ["exit", "quit"].includes(promptText.trim().toLowerCase())) {
+        await dispatchAction({type: "quit"});
+        return;
+      }
       const response = await (await api(base + "/runs", "POST", {prompt: promptText})).json();
       runId = response.run_id;
       await watchRun(runId);
@@ -722,10 +740,8 @@ API_APP_JS = """
       for (const message of response.history || []) {
         if (message.role === "assistant") {
           // Render only server-sanitized Markdown; never inject model HTML.
-          const rendered = await (await api("/ui/render", "POST", {
-            text: String(message.content || "")
-          })).json();
-          addMessage("assistant", String(message.content || ""), rendered.html);
+          const content = String(message.content || "");
+          addMessage("assistant", content, await renderAnswer(content));
         } else if (message.role === "user") {
           addMessage("user", String(message.content || ""));
         }
