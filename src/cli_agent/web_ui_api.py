@@ -95,6 +95,7 @@ API_APP_JS = """
     send.disabled = busy || disconnected;
     showWorkingContext.disabled = disconnected;
     resetHistory.disabled = busy || disconnected;
+    quit.disabled = busy || disconnected;
 
     for (const button of commandButtons) {
       button.disabled = busy || disconnected;
@@ -534,7 +535,7 @@ API_APP_JS = """
     if (msg.type === "message") {
       if (typeof msg.content !== "string") throw new Error("Ungültiger Prompt.");
       if (["exit", "quit"].includes(msg.content.trim().toLowerCase())) {
-        await dispatchAction({type: "quit"});
+        await deleteUnusedSession(sessionId);
         return;
       }
       aguiMessages.push({id: crypto.randomUUID(), role: "user", content: msg.content});
@@ -601,11 +602,6 @@ API_APP_JS = """
       await watchRun(runId, response);
       return;
     }
-    if (msg.type === "quit") {
-      await api("/ui/shutdown", "POST", {});
-      try { window.sessionStorage.removeItem("cli-agent-browser-token"); } catch (_error) {}
-      emit({type:"shutdown", content:"Web-UI wird beendet."});
-    }
   }
 
   function processServerMessage(event) {
@@ -619,7 +615,6 @@ API_APP_JS = """
 
     if (payload.type === "session") {
       reconnectAttempts = 0;
-      quit.disabled = false;
       const servers = Array.isArray(payload.mcp_servers)
         ? payload.mcp_servers.join(", ")
         : "";
@@ -695,10 +690,6 @@ API_APP_JS = """
       approval.showModal();
       return;
     }
-    if (payload.type === "shutdown") {
-      addMessage("system", String(payload.content || "Sitzung beendet."));
-      setBusy(true);
-    }
   }
 
   function sessionLink(ticket) {
@@ -748,16 +739,25 @@ API_APP_JS = """
   }
 
   async function deleteUnusedSession(sid) {
-    if (!window.confirm("Diese Session dauerhaft beenden?")) return;
+    if (!window.confirm("Diese Session dauerhaft beenden? Andere Sessions bleiben geöffnet.")) return;
     await api("/ui/sessions/" + encodeURIComponent(sid), "DELETE");
     if (sid === sessionId) {
+      // Only the current agent worker was removed, not the API server.
+      // Do not clear the browser access token; it is also used for other tabs.
       sessionId = null;
       leaseToken = null;
       runId = null;
+      aguiMessages = [];
+      dismissApproval();
+      resetPendingCommand();
+      if (heartbeat !== null) {
+        window.clearInterval(heartbeat);
+        heartbeat = null;
+      }
       try { window.sessionStorage.removeItem("cli-agent-session-id"); }
       catch (_error) {}
       chat.replaceChildren();
-      meta.textContent = "Session beendet. Neue Session in neuem Tab öffnen.";
+      meta.textContent = "Session beendet. Andere Sessions laufen weiter. Neue Session in neuem Tab öffnen.";
       setBusy(true);
     }
     await refreshSessions();
@@ -1008,8 +1008,8 @@ API_APP_JS = """
   });
 
   quit.addEventListener("click", () => {
-    if (sessionId) {
-      socket.send(JSON.stringify({ type: "quit" }));
+    if (sessionId && !busy) {
+      void deleteUnusedSession(sessionId).catch(showApiError);
     }
   });
 })();
