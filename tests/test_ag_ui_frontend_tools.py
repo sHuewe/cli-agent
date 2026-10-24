@@ -107,7 +107,7 @@ def test_frontend_results_error_and_content_part_reduction():
     ]
     messages[-1]["error"] = "permission denied"
     result = checked_frontend_results(messages, pending)[0]
-    assert result["content"] == "FEHLER: permission denied\nopenedsuccess"
+    assert result["content"] == "FEHLER: permission denied\nopened\nsuccess"
     messages[-1]["error"] = 14
     with pytest.raises(ValueError, match="Fehler"):
         checked_frontend_results(messages, pending)
