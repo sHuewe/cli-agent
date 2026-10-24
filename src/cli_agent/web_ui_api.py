@@ -538,6 +538,7 @@ API_APP_JS = """
       if (typeof msg.content !== "string") throw new Error("Ungültiger Prompt.");
       if (["exit", "quit"].includes(msg.content.trim().toLowerCase())) {
         await deleteUnusedSession(sessionId);
+        if (sessionId) setBusy(false);
         return;
       }
       aguiMessages.push({id: crypto.randomUUID(), role: "user", content: msg.content});
@@ -774,6 +775,7 @@ API_APP_JS = """
       const name = document.createElement("div");
       name.className = "state-name";
       const current = item.session_id === sessionId;
+      const executing = item.busy && !item.approval_pending;
       name.textContent = item.session_id.slice(0, 12) +
         (current ? " · aktueller Tab" : item.occupied ? " · geöffnet" : " · frei");
       const actions = document.createElement("div");
@@ -781,13 +783,13 @@ API_APP_JS = """
       open.type = "button";
       open.className = "secondary";
       open.textContent = "Öffnen";
-      open.disabled = item.occupied || item.busy;
+      open.disabled = item.occupied || executing;
       open.addEventListener("click", () => { void openExistingSession(item.session_id); });
       const close = document.createElement("button");
       close.type = "button";
       close.className = "secondary";
       close.textContent = "Beenden";
-      close.disabled = (item.occupied && !current) || item.busy;
+      close.disabled = (item.occupied && !current) || executing;
       close.addEventListener("click", () => {
         void deleteUnusedSession(item.session_id).catch(showApiError);
       });
@@ -947,6 +949,12 @@ API_APP_JS = """
     }
     const content = prompt.value.trim();
     if (!content) {
+      return;
+    }
+    // A rejected session-exit confirmation is not a run. Do not mark the
+    // composer busy or append a fake conversation turn before confirmation.
+    if (!pendingCommand && ["exit", "quit"].includes(content.toLowerCase())) {
+      void deleteUnusedSession(sessionId).catch(showApiError);
       return;
     }
     addMessage("user", content);
