@@ -58,6 +58,7 @@ class BrowserSessionRegistry:
                 "session_id": sid,
                 "occupied": self._occupied(sid),
                 "busy": bool(self.service.sessions[sid]._busy),
+                "approval_pending": self.service.sessions[sid]._pending_interrupt is not None,
             }
             for sid in sorted(self._managed)
             if sid in self.service.sessions
