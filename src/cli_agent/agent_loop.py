@@ -342,6 +342,14 @@ async def run_model_loop(
              not in getattr(agent, "_agui_frontend_tools", {})]
             if frontend_calls else tool_calls
         )
+        # Reserve the full batch BEFORE executing any backend side effects.
+        # Frontend calls are just as much part of max_tool_calls as MCP calls.
+        if calls + len(frontend_calls) + len(backend_calls) > max_tool_calls:
+            raise RuntimeError(
+                f"Abbruch in Phase {phase!r} nach {max_tool_calls} Tool-Aufrufen."
+            )
+        calls += len(frontend_calls)
+        state.tool_calls = calls
         calls, knowledge_concept_limit_notice_pending = await process_tool_calls(
             agent,
             assistant_message=message,
