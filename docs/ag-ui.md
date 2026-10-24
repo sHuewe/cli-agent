@@ -36,7 +36,17 @@ is not part of AG-UI 1.0. It accepts the client's original `threadId`, not
 the private internal session ID. Closing an interrupted thread also stops its
 MCP-owning worker and releases its session slot. Browser-managed sessions are
 not accessible through this endpoint and are managed exclusively via
-`/ui/sessions`. `runId` must be new on every run. The incoming `messages` list is
+/ui/sessions`. Alternatively, a standalone API client may call
+`POST /sessions` first, configure the returned session via the
+`/sessions/{id}/...` control routes, and use its `session_id` as the
+AG-UI `threadId`; this reuses the configured MCP-owning agent instead
+of creating a second one. For automatically created external threads,
+successful `POST /ag-ui` responses carry
+`X-Cli-Agent-Session-Id` with the internal session ID for the same
+control routes. This is cli-agent-specific authenticated response
+metadata, not an AG-UI 1.0 event. Embedded browser sessions are never
+registered by the standalone session route and cannot be attached by
+external AG-UI clients. `runId` must be new on every run. The incoming `messages` list is
 used to synchronize ordinary user/assistant conversation history. Application
 `context` is included as **untrusted reference information**, never as a
 server policy or an instruction with elevated trust. Multimodal parts that
