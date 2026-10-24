@@ -477,7 +477,15 @@ API_APP_JS = """
       }
       aguiMessages.push({id: crypto.randomUUID(), role: "user", content: msg.content});
       const input = aguiInput();
-      const response = await api("/ag-ui", "POST", input);
+      let response;
+      try {
+        response = await api("/ag-ui", "POST", input);
+      } catch (error) {
+        // A rejected run never started: do not retain an unprocessed user
+        // message as if it were part of the authoritative conversation.
+        aguiMessages.pop();
+        throw error;
+      }
       runId = input.runId;
       await watchRun(runId, response);
       return;
