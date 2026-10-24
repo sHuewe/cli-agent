@@ -171,9 +171,11 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
 
         assert (await client.post("/ui/render", json={"text": "**safe**"},
             headers={**headers, "Origin": ui["origin"]})).status_code == 200
+        # A browser must not be able to shut down the entire Python process.
         assert (await client.post("/ui/shutdown", json={},
-            headers={**headers, "Origin": ui["origin"]})).status_code == 200
-        assert stopped == [True]
+            headers={**headers, "Origin": ui["origin"]})).status_code == 404
+        assert stopped == []
+        assert session.id in service.sessions
     await service.shutdown()
 
 
@@ -243,9 +245,13 @@ def test_local_exit_and_quit_are_not_sent_to_agent():
 
     dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
     assert '["exit", "quit"].includes(msg.content.trim().toLowerCase())' in dispatch
-    assert dispatch.index('await dispatchAction({type: "quit"});') < dispatch.index(
+    assert dispatch.index('await deleteUnusedSession(sessionId);') < dispatch.index(
         'api("/ag-ui", "POST", input)'
     )
+    assert 'api("/ui/shutdown"' not in API_APP_JS
+    assert 'quit.textContent = "Session beenden";' in API_APP_JS
+    assert 'quit.disabled = busy || disconnected;' in API_APP_JS
+    assert 'void deleteUnusedSession(sessionId).catch(showApiError);' in API_APP_JS
 
 
 def test_browser_buttons_submit_structured_commands():
