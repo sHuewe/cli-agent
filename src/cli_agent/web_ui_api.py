@@ -380,11 +380,11 @@ API_APP_JS = """
         if (next.done) break;
         buffer += decoder.decode(next.value, {stream: true});
         let pos;
-        while ((pos = buffer.indexOf("\n\n")) !== -1) {
+        while ((pos = buffer.indexOf("\\n\\n")) !== -1) {
           const block = buffer.slice(0, pos);
           buffer = buffer.slice(pos + 2);
-          const data = block.split("\n").filter(line => line.startsWith("data:"))
-            .map(line => line.slice(5).trimStart()).join("\n");
+          const data = block.split("\\n").filter(line => line.startsWith("data:"))
+            .map(line => line.slice(5).trimStart()).join("\\n");
           if (!data) continue;
           const event = JSON.parse(data);
           if (event.type === "TEXT_MESSAGE_CONTENT") answer += String(event.delta || "");
