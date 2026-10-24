@@ -661,3 +661,105 @@ async def test_duplicate_frontend_tool_ids_fail_run_without_killing_worker():
             assert '"type":"RUN_FINISHED"' in second.text
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_frontend_tool_budget_is_counted_before_any_backend_side_effect():
+    from cli_agent.agent_loop import ModelLoopRunState
+
+    class Model:
+        async def chat(self, **_kwargs):
+            return {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "f1", "type": "function", "function": {
+                    "name": "show_view", "arguments": "{}"}},
+                {"id": "f2", "type": "function", "function": {
+                    "name": "show_view", "arguments": "{}"}},
+            ]}
+
+    class Agent:
+        model_client = Model()
+        logging_config = SimpleNamespace(log_model_messages=False)
+        _agui_frontend_tools = normalize_frontend_tools(
+            [definition()], server_names=set()
+        )
+        def _dump_context(self, *_args, **_kwargs): pass
+
+    with pytest.raises(RuntimeError, match="Tool-Aufrufen"):
+        await run_model_loop(
+            Agent(), messages=[{"role": "system", "content": "trusted"}],
+            tools=list(Agent._agui_frontend_tools.values()), routes={},
+            enabled_server_names=set(), max_tool_calls=1, phase="main",
+            run_state=ModelLoopRunState(),
+        )
+    state = ModelLoopRunState(tool_calls=2)
+    with pytest.raises(RuntimeError, match="Tool-Aufrufen"):
+        await run_model_loop(
+            Agent(), messages=[{"role": "system", "content": "trusted"}],
+            tools=list(Agent._agui_frontend_tools.values()), routes={},
+            enabled_server_names=set(), max_tool_calls=3, phase="main",
+            run_state=state,
+        )
+    assert state.tool_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_frontend_continuation_repairs_json_response_and_preserves_budget():
+    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.agent_loop import ModelLoopRunState
+
+    class Agent(ConversationMixin):
+        def __init__(self):
+            self.history = []
+            self.max_tool_calls = 5
+            self.response_format = "json"
+            self._tool_routes = {}
+            self._active_servers = set()
+            self._agui_frontend_tools = {}
+            self._agui_pending_run_state = ModelLoopRunState(tool_calls=3)
+            self._agui_pending_original_prompt = "Return JSON"
+            self._agui_pending_working_messages = [
+                {"role": "system", "content": "trusted"},
+                {"role": "user", "content": "Return JSON"},
+            ]
+            self.calls = 0
+
+        def _model_tools(self): return []
+        def _dump_context(self, *_args, **_kwargs): pass
+
+        async def _run_model_loop(self, **kwargs):
+            assert kwargs["run_state"].tool_calls == 3
+            self.calls += 1
+            return "not json" if self.calls == 1 else '{"status":"ok"}'
+
+    agent = Agent()
+    answer = await agent.continue_after_frontend_tools([
+        {"role": "tool", "tool_call_id": "call1", "content": "done"}
+    ])
+    assert answer == '{"status":"ok"}'
+    assert agent.calls == 2
+    assert agent.history[-1] == {"role": "assistant", "content": answer}
+    assert agent._agui_pending_run_state is None
+
+
+@pytest.mark.asyncio
+async def test_frontend_continuation_rejects_json_after_exhausted_repairs():
+    from cli_agent.agent_conversation import ConversationMixin
+
+    class Agent(ConversationMixin):
+        history = []
+        max_tool_calls = 5
+        response_format = "json"
+        _tool_routes = {}
+        _active_servers = set()
+        _agui_frontend_tools = {}
+        _agui_pending_original_prompt = "Return JSON"
+        _agui_pending_working_messages = [
+            {"role": "system", "content": "trusted"}
+        ]
+        def _model_tools(self): return []
+        async def _run_model_loop(self, **_kwargs): return "still invalid"
+
+    agent = Agent()
+    with pytest.raises(ValueError, match="kein gültiges JSON"):
+        await agent.continue_after_frontend_tools([])
+    assert agent.history == []
