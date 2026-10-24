@@ -257,3 +257,86 @@ def test_browser_buttons_submit_structured_commands():
     assert 'api("/ag-ui", "POST", input)' in dispatch
     # Do not assemble unchecked commands into ordinary prompt strings.
     assert 'promptText = msg.command +' not in dispatch
+
+
+def test_browser_agui_transcript_compaction_with_real_javascript():
+    """Drive the embedded JS compactor, not a Python reimplementation."""
+    import json
+    import shutil
+    import subprocess
+
+    from cli_agent.web_ui_api import API_APP_JS
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is needed for embedded browser JS assertions.")
+    start = API_APP_JS.index("  const MAX_SYNCED_MESSAGES")
+    stop = API_APP_JS.index("  async function dispatchAction(msg)", start)
+    logic = API_APP_JS[start:stop]
+    script = logic + """
+    const makeInput = messages => ({
+      threadId: "thread", runId: "run", protocolVersion: "1.0", messages
+    });
+    const messages = [];
+    for (let n = 0; n < 300; n++) {
+      messages.push({id: "u" + n, role: "user", content: "question"});
+      messages.push({id: "a" + n, role: "assistant", content: "answer"});
+    }
+    const bounded = compactAguiHistory(makeInput(messages));
+    if (bounded.length > 480 || bounded.length <= 0)
+      throw new Error("Message bound ineffective");
+    if (bounded[0].role !== "user" ||
+        bounded[bounded.length - 1].id !== "a299")
+      throw new Error("Turn boundaries or latest response lost");
+
+    const big = [];
+    for (let n = 0; n < 24; n++) {
+      big.push({id: "u" + n, role: "user", content: "Ü".repeat(25000)});
+      big.push({id: "a" + n, role: "assistant", content: "🎯".repeat(8000)});
+    }
+    const byteBounded = compactAguiHistory(makeInput(big));
+    const bytes = new TextEncoder().encode(JSON.stringify(makeInput(byteBounded))).length;
+    if (bytes > 800000) throw new Error("UTF-8 payload limit ineffective");
+    if (byteBounded.at(-1).id !== "a23")
+      throw new Error("Latest response lost to byte limit");
+    if (byteBounded[0].role !== "user")
+      throw new Error("Oversized trim breaks conversation turns");
+
+    const last = makeInput([{id: "latest", role: "user", content: "x".repeat(810000)}]);
+    let rejected = false;
+    try { compactAguiHistory(last); }
+    catch (err) { rejected = String(err.message).includes("zu groß"); }
+    if (!rejected) throw new Error("Overlarge latest turn must be rejected");
+
+    const resume = makeInput([
+      {id: "old", role: "user", content: "x".repeat(550000)},
+      {id: "old-answer", role: "assistant", content: "ok"},
+      {id: "current", role: "user", content: "approve this"},
+      {id: "pending", role: "assistant", content: "",
+       toolCalls: [{id:"tool1", type:"function",
+                    function:{name:"show", arguments:"{}"}}]},
+      {id: "result", role: "tool", toolCallId: "tool1", content: "done"},
+    ]);
+    const compactedResume = compactAguiHistory(resume);
+    if (compactedResume.at(-1).id !== "result")
+      throw new Error("Latest tool result was removed");
+    console.log("ok");
+    """
+    result = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_browser_agui_messages_are_trimmed_before_post_and_restored_after_rejection():
+    from cli_agent.web_ui_api import API_APP_JS
+
+    assert "result.messages = compactAguiHistory(result);" in API_APP_JS
+    dispatch = API_APP_JS.split('if (msg.type === "message") {', 1)[1]
+    assert "input = aguiInput();" in dispatch
+    assert "aguiMessages = input.messages;" in dispatch
+    assert "aguiMessages.pop();" in dispatch
+    assert 'const MAX_SYNCED_MESSAGES = 480;' in API_APP_JS
+    assert 'const MAX_SYNCED_REQUEST_BYTES = 800000;' in API_APP_JS
