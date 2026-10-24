@@ -393,3 +393,127 @@ def test_paused_approval_sessions_are_actionable_in_sessions_dialog():
     assert 'const executing = item.busy && !item.approval_pending;' in rendered
     assert 'open.disabled = item.occupied || executing;' in rendered
     assert 'close.disabled = (item.occupied && !current) || executing;' in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("os_access", ["read", "write"])
+async def test_cli_embedded_ui_startup_configuration_and_cleanup(
+    monkeypatch, tmp_path, os_access,
+):
+    """Exercise the real --with-web-ui startup path without a networked LLM."""
+    import sys
+    import types
+
+    from cli_agent import cli, file_context, model_factory, os_operations, web_ui_api
+    from cli_agent import agent_api
+
+    created = []
+    shutdowns = []
+    opened = []
+    previews = []
+    model_calls = []
+    preapprovals = []
+    server_configs = []
+
+    class FakeSession:
+        id = "initial-browser-session"
+        async def approve(self, *_args):
+            return True
+        async def on_agent_event(self, *_args):
+            return None
+        async def _send_user_message(self, *_args):
+            return None
+        class Broker:
+            async def show_mcp_user_message(self, *_args):
+                return None
+            def set_event_sender(self, sender):
+                self.sender = sender
+        def __init__(self):
+            self.broker = self.Broker()
+
+    class FakeAgent:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            created.append(self)
+
+    class FakeService:
+        def __init__(self, factory, **kwargs):
+            self.factory = factory
+            self.options = kwargs
+            self.agent_session = FakeSession()
+            self.agent = factory(self.agent_session)
+        async def create(self):
+            return self.agent_session
+        async def shutdown(self):
+            shutdowns.append(True)
+
+    class FakeServer:
+        def __init__(self, config):
+            self.started = False
+            self.should_exit = False
+            self.config = config
+        async def serve(self, *, sockets):
+            assert len(sockets) == 1
+            assert sockets[0].getsockname()[0] == "127.0.0.1"
+            self.started = True
+            await asyncio.sleep(0.03)
+
+    fake_uvicorn = types.SimpleNamespace(
+        Config=lambda app, **options: server_configs.append((app, options)) or
+        SimpleNamespace(app=app, **options),
+        Server=FakeServer,
+    )
+
+    fake_model = object()
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+    monkeypatch.setattr(agent_api, "AgentApiService", FakeService)
+    monkeypatch.setattr(agent_api, "create_app", lambda svc, *, ui: ui)
+    monkeypatch.setattr(file_context, "ContextFileCliAgent", FakeAgent)
+    monkeypatch.setattr(model_factory, "create_model_client",
+                        lambda *a, **kw: model_calls.append((a, kw)) or fake_model)
+    monkeypatch.setattr(cli, "build_preapproval_callback",
+                        lambda allowed, *, fallback: preapprovals.append(
+                            (allowed, fallback)
+                        ) or fallback)
+    monkeypatch.setattr(web_ui_api.webbrowser if hasattr(web_ui_api, "webbrowser")
+                        else __import__("webbrowser"), "open",
+                        lambda url, **kwargs: opened.append(url))
+    monkeypatch.setattr(
+        os_operations.Workspace, "from_directory",
+        lambda *a, **kw: previews.append((a, kw)) or object(),
+    )
+    args = SimpleNamespace(
+        config=tmp_path / "cli-agent.toml",
+        os_access=os_access, approve_tool=("safe__read",),
+        debug=True, add_web_context=("https://example.org",),
+        response_format="json",
+    )
+    cfg = SimpleNamespace(
+        logging=object(),
+        model=SimpleNamespace(model="fake-model"),
+        mcp_servers=(SimpleNamespace(name="os"),),
+        okf=None, knowledge_vector=None,
+    )
+    admin = SimpleNamespace(
+        network=object(), model_credentials=(),
+        web=SimpleNamespace(providers=()), mcp=object(),
+    )
+    await web_ui_api.run_web_ui_via_api(
+        args=args, config=cfg, admin_config=admin,
+        workspace=tmp_path, file_contexts=(),
+        output_target=None, excluded_paths=(tmp_path / "secret",),
+    )
+    assert shutdowns == [True]
+    assert len(created) == 1
+    assert created[0].args[1] is fake_model
+    assert created[0].kwargs["workspace_access"] == os_access
+    assert created[0].kwargs["response_format"] == "json"
+    assert created[0].event_callback == preapprovals[0][1].__self__.on_agent_event
+    assert preapprovals[0][0] == ("safe__read",)
+    assert model_calls
+    assert len(previews) == (1 if os_access == "write" else 0)
+    assert opened and opened[0].startswith("http://127.0.0.1:")
+    assert "#token=" in opened[0]
+    assert server_configs[0][1]["host"] == "127.0.0.1"
+    assert server_configs[0][1]["proxy_headers"] is False
