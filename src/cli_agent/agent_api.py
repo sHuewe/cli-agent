@@ -905,6 +905,27 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                     frontend_results = checked_frontend_results(incoming.messages, pending)
                 except ValueError as exc:
                     return error(409, str(exc))
+                # The model resumes a *server-owned* checkpoint. Additional
+                # user instructions in the tool-result request would not be
+                # visible to that continuation. Reject them explicitly rather
+                # than silently claiming they were accepted.
+                accepted_users = {
+                    message["id"]: message["content"]
+                    for message in session.agui_messages
+                    if message.get("role") == "user"
+                }
+                if any(
+                    message.get("role") == "user" and (
+                        message["id"] not in accepted_users
+                        or message["content"] != accepted_users[message["id"]]
+                    )
+                    for message in incoming.messages
+                ):
+                    return error(
+                        409,
+                        "Neue oder geänderte Benutzernachrichten sind während "
+                        "eines Frontend-Tool-Resumes nicht erlaubt.",
+                    )
             elif not incoming.prompt.strip():
                 return error(400, "Eine Benutzer-Nachricht ist erforderlich.")
             if incoming.prompt.strip().casefold() in {"exit", "quit"} and browser and not pending:
