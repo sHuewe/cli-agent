@@ -455,6 +455,37 @@ API_APP_JS = """
     }
   }
 
+  // The server accepts at most 512 messages and 1 MiB of request JSON.
+  // Keep a safety margin for envelope fields and UTF-8 string escaping.
+  const MAX_SYNCED_MESSAGES = 480;
+  const MAX_SYNCED_REQUEST_BYTES = 800000;
+  const jsonEncoder = new TextEncoder();
+
+  function compactAguiHistory(input) {
+    const messages = input.messages.slice();
+    const size = () => jsonEncoder.encode(
+      JSON.stringify({...input, messages})
+    ).length;
+    // Remove *whole* prior conversation turns. Never discard the newest
+    // user turn or an in-progress tool/approval exchange to make room.
+    while ((messages.length > MAX_SYNCED_MESSAGES ||
+            size() > MAX_SYNCED_REQUEST_BYTES) && messages.length > 1) {
+      const lastUser = messages.findLastIndex(item => item.role === "user");
+      if (lastUser <= 0) break;
+      let next = 1;
+      while (next < lastUser && messages[next].role !== "user") next += 1;
+      messages.splice(0, next);
+    }
+    if (messages.length > MAX_SYNCED_MESSAGES ||
+        size() > MAX_SYNCED_REQUEST_BYTES) {
+      throw new Error(
+        "Die aktuelle Nachricht oder Tool-Fortsetzung ist zu groß. " +
+        "Bitte den Inhalt verkürzen."
+      );
+    }
+    return messages;
+  }
+
   function aguiInput(resume = undefined) {
     const result = {
       threadId: sessionId,
@@ -463,6 +494,7 @@ API_APP_JS = """
       messages: aguiMessages
     };
     if (resume) result.resume = resume;
+    result.messages = compactAguiHistory(result);
     return result;
   }
 
@@ -476,9 +508,10 @@ API_APP_JS = """
         return;
       }
       aguiMessages.push({id: crypto.randomUUID(), role: "user", content: msg.content});
-      const input = aguiInput();
       let response;
+      let input;
       try {
+        input = aguiInput();
         response = await api("/ag-ui", "POST", input);
       } catch (error) {
         // A rejected run never started: do not retain an unprocessed user
@@ -486,6 +519,7 @@ API_APP_JS = """
         aguiMessages.pop();
         throw error;
       }
+      aguiMessages = input.messages;
       runId = input.runId;
       await watchRun(runId, response);
       return;
@@ -531,6 +565,7 @@ API_APP_JS = """
         }
       }]);
       const response = await api("/ag-ui", "POST", input);
+      aguiMessages = input.messages;
       pendingApprovalId = null;
       runId = input.runId;
       await watchRun(runId, response);
