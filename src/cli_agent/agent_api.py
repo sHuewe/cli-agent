@@ -294,13 +294,30 @@ class AgentSession:
         tool_id = str(payload.get("call_id") or uuid.uuid4().hex)
         name = str(payload.get("tool") or "")
         if kind == "tool_started":
+            self._pending_tool_id = tool_id
+            self._opened_tool_calls.add(tool_id)
             run.emit({"type": "TOOL_CALL_START", "toolCallId": tool_id, "toolCallName": name})
+            if run.agui:
+                # Arguments may be unavailable at start; they are supplied by
+                # the approval broker (which sanitizes them) if approval is
+                # required, or closed on finish for non-approval calls.
+                return
         elif kind == "tool_finished":
-            run.emit({"type": "TOOL_CALL_END", "toolCallId": tool_id})
-            # Keep tool results and arguments within the policy-controlled core.
-            run.emit({"type": "CUSTOM", "name": "tool_status", "value": {
-                "toolCallId": tool_id, "status": str(payload.get("status") or "finished")
-            }})
+            if run.agui:
+                if tool_id in self._opened_tool_calls:
+                    run.emit({"type": "TOOL_CALL_END", "toolCallId": tool_id})
+                    self._opened_tool_calls.discard(tool_id)
+                if self._pending_tool_id == tool_id:
+                    self._pending_tool_id = None
+                # Only publish safe status, never arbitrary MCP payload data.
+                run.emit({"type": "TOOL_CALL_RESULT",
+                          "toolCallId": tool_id, "messageId": uuid.uuid4().hex,
+                          "content": str(payload.get("status") or "finished")})
+            else:
+                run.emit({"type": "TOOL_CALL_END", "toolCallId": tool_id})
+                run.emit({"type": "CUSTOM", "name": "tool_status", "value": {
+                    "toolCallId": tool_id, "status": str(payload.get("status") or "finished")
+                }})
 
     async def _send_user_message(self, payload: dict[str, Any]) -> None:
         if self._run is not None and not self._run.done:
