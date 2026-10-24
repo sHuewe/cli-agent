@@ -668,12 +668,15 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             except Exception:
                 return error(503, "Thread konnte nicht erstellt werden.")
 
+        # Interrupted AG-UI runs have already CLOSED their SSE stream;
+        # they must not consume one of the browser's HTTP/1.1 connection
+        # reservations. A resume reserves a new streaming slot just like
+        # an ordinary run, however, and must not bypass the limit.
         if browser and sum(
             other._busy and other._run is not None and other._run.agui
+            and other._run.status != "interrupted"
             for other in service.sessions.values()
-        ) >= MAX_CONCURRENT_BROWSER_RUNS and not (
-            session._busy and session._pending_interrupt is not None
-        ):
+        ) >= MAX_CONCURRENT_BROWSER_RUNS:
             return error(429, "Maximal vier parallele Web-UI-Läufe erlaubt.")
 
         # Only plain user/assistant messages are submitted to the model's
