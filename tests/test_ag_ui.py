@@ -362,7 +362,7 @@ async def test_agui_capabilities_match_the_standard_and_advertise_only_supported
             _CAPABILITIES_VALIDATOR.validate(capabilities)
             assert capabilities["transport"]["streaming"] is True
             assert capabilities["humanInTheLoop"]["interrupts"] is True
-            assert capabilities["tools"]["clientProvided"] is False
+            assert capabilities["tools"]["clientProvided"] is True
             assert capabilities["transport"]["resumable"] is False
     finally:
         await service.shutdown()
