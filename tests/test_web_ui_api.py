@@ -85,14 +85,21 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
         assert (await client.get("/")).status_code == 200
         assert (await client.get("/assets/app.js")).status_code == 200
         assert "WebSocket(wsUrl)" not in (await client.get("/assets/app.js")).text
-        assert (await client.get("/ui/bootstrap")).status_code == 401
+        assert (await client.post("/ui/bootstrap", json={})).status_code == 401
         headers = browser_headers()
-        assert (await client.get("/ui/bootstrap", headers=headers)).json()["session_id"] == session.id
-        assert (await client.get("/ui/bootstrap", headers={**headers, "Host": "evil.example"})).status_code == 403
-        assert (await client.get("/ui/bootstrap", headers={**headers, "X-Forwarded-Host": "evil.example"})).status_code == 403
+        auth = {**headers, "Origin": ui["origin"]}
+        claimed = (await client.post("/ui/bootstrap", json={}, headers=auth)).json()
+        assert claimed["session_id"] == session.id
+        assert claimed["lease"]
+        headers = {**headers, "X-Cli-Agent-Lease": claimed["lease"]}
+        auth = {**headers, "Origin": ui["origin"]}
+        assert (await client.post("/ui/bootstrap", json={}, headers=auth)).status_code == 409
+        assert (await client.post("/ui/bootstrap", json={}, headers={**auth, "Host": "evil.example"})).status_code == 403
+        assert (await client.post("/ui/bootstrap", json={}, headers={**auth, "X-Forwarded-Host": "evil.example"})).status_code == 403
         assert (await client.get("/health", headers=headers)).status_code == 401
         assert (await client.post("/sessions", json={}, headers={**headers, "Origin": ui["origin"]})).status_code == 403
-        assert (await client.get("/sessions/not-ours/working-context", headers=headers)).status_code == 401
+        assert (await client.get("/sessions/not-ours/working-context", headers=headers)).status_code == 403
+        assert (await client.get(f"/sessions/{session.id}/working-context", headers=browser_headers())).status_code == 403
 
         uri = f"/sessions/{session.id}"
         working = (await client.get(uri + "/working-context", headers=headers)).json()
