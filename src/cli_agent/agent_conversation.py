@@ -187,6 +187,8 @@ class ConversationMixin:
         routes = self._tool_routes
         enabled_server_names = set(self._active_servers)
         main_run_state = ModelLoopRunState()
+        self._agui_pending_json_repairs = 0
+        from .ag_ui_frontend_tools import FrontendToolHandoff
         try:
             answer = await self._run_model_loop(
                 messages=working_messages,
@@ -197,52 +199,21 @@ class ConversationMixin:
                 phase="main",
                 run_state=main_run_state,
             )
-        except Exception as exc:
-            from .ag_ui_frontend_tools import FrontendToolHandoff
-            if not isinstance(exc, FrontendToolHandoff):
-                raise
+            answer = await self._ensure_json_response(
+                answer,
+                messages=working_messages,
+                tools=tools,
+                routes=routes,
+                enabled_server_names=enabled_server_names,
+                run_state=main_run_state,
+            )
+        except FrontendToolHandoff:
+            # A frontend call can arise in the first model loop OR during
+            # JSON repair. Both must retain identical trusted model context.
             self._agui_pending_working_messages = working_messages
             self._agui_pending_original_prompt = prompt
             self._agui_pending_run_state = main_run_state
             raise
-        if getattr(self, "response_format", "text") == "json":
-            answer, last_error = _normalize_json_response(answer)
-            repairs = 0
-            while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
-                repairs += 1
-                working_messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Deine letzte finale Antwort entspricht nicht dem "
-                            "verlangten JSON-Format. Korrigiere die Antwort jetzt "
-                            "so, dass sie ausschließlich aus syntaktisch gültigem "
-                            "JSON besteht. Behalte die inhaltliche Aufgabe und die "
-                            "verlangte Struktur bei. Du darfst die verfügbaren Tools "
-                            "verwenden, falls das für eine korrekte Antwort "
-                            "erforderlich ist. Verwende keine Markdown-Codeblöcke "
-                            "und keinen Text außerhalb des JSON-Werts. "
-                            f"Validierungsfehler: {last_error}"
-                        ),
-                    }
-                )
-                answer = await self._run_model_loop(
-                    messages=working_messages,
-                    tools=tools,
-                    routes=routes,
-                    enabled_server_names=enabled_server_names,
-                    max_tool_calls=self.max_tool_calls,
-                    phase="main",
-                    run_state=main_run_state,
-                )
-                answer, last_error = _normalize_json_response(answer)
-
-            if last_error is not None:
-                raise ValueError(
-                    "Das Modell hat auch nach "
-                    f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
-                    f"gültiges JSON geliefert: {last_error}"
-                )
 
         self.history.extend(
             [
@@ -251,6 +222,63 @@ class ConversationMixin:
             ]
         )
         self._dump_context(working_messages, phase="main")
+        return answer
+
+    async def _ensure_json_response(
+        self,
+        answer: str,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        routes: dict[str, ToolRoute],
+        enabled_server_names: set[str],
+        run_state: ModelLoopRunState,
+    ) -> str:
+        """Validate and repair JSON with a single budget across UI handoffs.
+
+        The repair counter is incremented *before* calling the model.
+        A FrontendToolHandoff from a repair attempt propagates to the caller,
+        which checkpoints the model messages and tool-call run state.
+        On resume, the same repair budget is used, not a fresh allowance.
+        """
+        if getattr(self, "response_format", "text") != "json":
+            return answer
+        answer, last_error = _normalize_json_response(answer)
+        repairs = getattr(self, "_agui_pending_json_repairs", 0)
+        while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
+            repairs += 1
+            self._agui_pending_json_repairs = repairs
+            messages.append({
+                "role": "user",
+                "content": (
+                    "Deine letzte finale Antwort entspricht nicht dem "
+                    "verlangten JSON-Format. Korrigiere die Antwort jetzt "
+                    "so, dass sie ausschließlich aus syntaktisch gültigem "
+                    "JSON besteht. Behalte die inhaltliche Aufgabe und die "
+                    "verlangte Struktur bei. Du darfst die verfügbaren Tools "
+                    "verwenden, falls das für eine korrekte Antwort "
+                    "erforderlich ist. Verwende keine Markdown-Codeblöcke "
+                    "und keinen Text außerhalb des JSON-Werts. "
+                    f"Validierungsfehler: {last_error}"
+                ),
+            })
+            answer = await self._run_model_loop(
+                messages=messages,
+                tools=tools,
+                routes=routes,
+                enabled_server_names=enabled_server_names,
+                max_tool_calls=self.max_tool_calls,
+                phase="main",
+                run_state=run_state,
+            )
+            answer, last_error = _normalize_json_response(answer)
+        if last_error is not None:
+            raise ValueError(
+                "Das Modell hat auch nach "
+                f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
+                f"gültiges JSON geliefert: {last_error}"
+            )
+        self._agui_pending_json_repairs = 0
         return answer
 
     async def continue_after_frontend_tools(
@@ -280,38 +308,14 @@ class ConversationMixin:
                 max_tool_calls=self.max_tool_calls, phase="main",
                 run_state=run_state,
             )
-            if getattr(self, "response_format", "text") == "json":
-                answer, last_error = _normalize_json_response(answer)
-                repairs = 0
-                while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
-                    repairs += 1
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "Deine letzte finale Antwort entspricht nicht dem "
-                            "verlangten JSON-Format. Korrigiere die Antwort jetzt "
-                            "so, dass sie ausschließlich aus syntaktisch gültigem "
-                            "JSON besteht. Behalte die inhaltliche Aufgabe und die "
-                            "verlangte Struktur bei. Du darfst die verfügbaren Tools "
-                            "verwenden, falls das für eine korrekte Antwort "
-                            "erforderlich ist. Verwende keine Markdown-Codeblöcke "
-                            "und keinen Text außerhalb des JSON-Werts. "
-                            f"Validierungsfehler: {last_error}"
-                        ),
-                    })
-                    answer = await self._run_model_loop(
-                        messages=messages, tools=tools, routes=self._tool_routes,
-                        enabled_server_names=set(self._active_servers),
-                        max_tool_calls=self.max_tool_calls, phase="main",
-                        run_state=run_state,
-                    )
-                    answer, last_error = _normalize_json_response(answer)
-                if last_error is not None:
-                    raise ValueError(
-                        "Das Modell hat auch nach "
-                        f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
-                        f"gültiges JSON geliefert: {last_error}"
-                    )
+            answer = await self._ensure_json_response(
+                answer,
+                messages=messages,
+                tools=tools,
+                routes=self._tool_routes,
+                enabled_server_names=set(self._active_servers),
+                run_state=run_state,
+            )
         except FrontendToolHandoff:
             self._agui_pending_working_messages = messages
             self._agui_pending_original_prompt = prompt
