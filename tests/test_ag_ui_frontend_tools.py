@@ -43,6 +43,10 @@ def test_frontend_tools_validate_schema_names_bounds_and_collisions():
         normalize_frontend_tools([{"name": "a", "description": "x" * 4097}], server_names=set())
     with pytest.raises(ValueError, match="Objekt"):
         normalize_frontend_tools([{"name": "a", "description": "x", "parameters": []}], server_names=set())
+    with pytest.raises(ValueError, match="Parameterschema"):
+        normalize_frontend_tools([{"name": "a", "description": "x",
+                                  "parameters": {"type": "not-a-json-schema-type"}}],
+                                 server_names=set())
     with pytest.raises(ValueError, match="groß"):
         normalize_frontend_tools([{"name": "a", "description": "x",
                                    "parameters": {"x": "z" * 66000}}], server_names=set())
@@ -98,7 +102,7 @@ def test_frontend_results_require_exactly_once_and_original_call():
 
 
 def test_frontend_results_error_and_content_part_reduction():
-    pending = (FrontendToolCall("call-1", "show_view", "{}"),)
+    pending = (FrontendToolCall("call-1", "show_view", '{"view":"energy"}'),)
     messages = completed_messages()
     messages[-1]["content"] = [
         {"type": "image", "source": {"type": "url", "value": "https://example.org/i.png"}},
@@ -111,6 +115,14 @@ def test_frontend_results_error_and_content_part_reduction():
     messages[-1]["error"] = 14
     with pytest.raises(ValueError, match="Fehler"):
         checked_frontend_results(messages, pending)
+    tampered = completed_messages()
+    tampered[1]["toolCalls"][0]["function"]["name"] = "os__write_file"
+    with pytest.raises(ValueError, match="verändert"):
+        checked_frontend_results(tampered, pending)
+    tampered = completed_messages()
+    tampered[1]["toolCalls"][0]["function"]["arguments"] = '{"view":"other"}'
+    with pytest.raises(ValueError, match="verändert"):
+        checked_frontend_results(tampered, pending)
 
 
 def test_history_for_model_keeps_tool_roundtrip_but_ignores_privileged_roles():
