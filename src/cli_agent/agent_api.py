@@ -595,6 +595,22 @@ class AgentApiService:
             raise RuntimeError("Session wurde beim Start geschlossen.")
         return session
 
+    async def create_standalone_session(self) -> AgentSession:
+        """Create a managed API session whose ID is also its AG-UI threadId.
+
+        Only the standalone /sessions endpoint registers this alias. Browser
+        sessions, created independently by the UI registry, remain isolated.
+        """
+        session = await self.create()
+        async with self._agui_thread_lock:
+            if (not self._shutting_down
+                    and self.sessions.get(session.id) is session):
+                self._agui_threads[session.id] = session.id
+                return session
+        # Shutdown/removal raced with startup; never return an orphan ID.
+        await self.remove(session.id)
+        raise RuntimeError("Session wurde beim Start geschlossen.")
+
     async def _start_agui_thread(self, thread_id: str) -> AgentSession:
         """Start one external thread, publishing it only while still reserved."""
         session: AgentSession | None = None
@@ -762,7 +778,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
 
     async def create_session(_request: Request) -> Response:
         try:
-            session = await service.create()
+            session = await service.create_standalone_session()
         except OverflowError:
             return error(429, "Zu viele Sessions.")
         except Exception:
@@ -777,9 +793,10 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
     async def delete_agui_thread(request: Request) -> Response:
         """Standalone AG-UI management extension (not part of AG-UI 1.0).
 
-        External clients only know their threadId, never the private random
-        internal session ID. Browser sessions remain managed exclusively by
-        /ui/sessions and are deliberately not addressable via this endpoint.
+        A standalone session created via POST /sessions uses its own ID as
+        threadId. Auto-created AG-UI threads retain their client's threadId
+        and expose the internal ID via an authenticated response header.
+        Browser sessions are not addressable through this endpoint.
         """
         thread_id = request.path_params["thread_id"]
         if not isinstance(thread_id, str) or not 0 < len(thread_id) <= 128:
@@ -995,7 +1012,13 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
 
         return StreamingResponse(
             stream(), media_type="text/event-stream",
-            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+                # Nonstandard management metadata for authenticated external
+                # API clients only. Keep AG-UI event payloads interoperable.
+                **({} if browser else {"X-Cli-Agent-Session-Id": session.id}),
+            },
         )
 
     async def ui_reconnect_run(request: Request) -> Response:
