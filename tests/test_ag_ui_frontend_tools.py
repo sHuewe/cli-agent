@@ -612,3 +612,44 @@ async def test_frontend_handoff_streams_assistant_text_before_pending_tool_calls
             assert events[-1]["outcome"]["pendingToolCallIds"] == ["call-1"]
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_frontend_tool_ids_fail_run_without_killing_worker():
+    class MalformedAgent(FrontendFakeAgent):
+        async def ask(self, prompt):
+            if prompt == "regular":
+                return "worker still alive"
+            repeated = FrontendToolCall("same-id", "show_view", "{}")
+            raise FrontendToolHandoff(
+                [repeated, repeated], {"role": "assistant", "content": ""}
+            )
+
+    service = AgentApiService(lambda session: MalformedAgent(session))
+    headers = {"Authorization": "Bearer " + service.token,
+               "Accept": "text/event-stream"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            payload = {
+                "threadId": "t", "runId": "bad",
+                "messages": [{"id": "u", "role": "user", "content": "open"}],
+                "tools": [definition()],
+            }
+            first = await client.post("/ag-ui", json=payload, headers=headers)
+            assert first.status_code == 200
+            assert '"type":"RUN_ERROR"' in first.text
+            session = next(iter(service.sessions.values()))
+            assert session._task is not None and not session._task.done()
+            assert session._pending_frontend is None
+            assert not session._busy
+            second = await client.post("/ag-ui", json={
+                **payload, "runId": "good",
+                "messages": [{"id": "u", "role": "user", "content": "regular"}],
+            }, headers=headers)
+            assert second.status_code == 200
+            assert '"type":"RUN_FINISHED"' in second.text
+    finally:
+        await service.shutdown()
