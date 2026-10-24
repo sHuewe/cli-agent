@@ -179,59 +179,41 @@ class ConversationMixin:
         self._last_working_messages = working_messages
 
         tools = self._model_tools()
+        if getattr(self, "_agui_frontend_tools", None):
+            tools = [*tools, *self._agui_frontend_tools.values()]
         # Keep the exact tool definitions used for the current/last main-loop
         # request available for local diagnostics such as the Web UI.
         self._last_working_tools = tools
         routes = self._tool_routes
         enabled_server_names = set(self._active_servers)
         main_run_state = ModelLoopRunState()
-        answer = await self._run_model_loop(
-            messages=working_messages,
-            tools=tools,
-            routes=routes,
-            enabled_server_names=enabled_server_names,
-            max_tool_calls=self.max_tool_calls,
-            phase="main",
-            run_state=main_run_state,
-        )
-        if getattr(self, "response_format", "text") == "json":
-            answer, last_error = _normalize_json_response(answer)
-            repairs = 0
-            while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
-                repairs += 1
-                working_messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Deine letzte finale Antwort entspricht nicht dem "
-                            "verlangten JSON-Format. Korrigiere die Antwort jetzt "
-                            "so, dass sie ausschließlich aus syntaktisch gültigem "
-                            "JSON besteht. Behalte die inhaltliche Aufgabe und die "
-                            "verlangte Struktur bei. Du darfst die verfügbaren Tools "
-                            "verwenden, falls das für eine korrekte Antwort "
-                            "erforderlich ist. Verwende keine Markdown-Codeblöcke "
-                            "und keinen Text außerhalb des JSON-Werts. "
-                            f"Validierungsfehler: {last_error}"
-                        ),
-                    }
-                )
-                answer = await self._run_model_loop(
-                    messages=working_messages,
-                    tools=tools,
-                    routes=routes,
-                    enabled_server_names=enabled_server_names,
-                    max_tool_calls=self.max_tool_calls,
-                    phase="main",
-                    run_state=main_run_state,
-                )
-                answer, last_error = _normalize_json_response(answer)
-
-            if last_error is not None:
-                raise ValueError(
-                    "Das Modell hat auch nach "
-                    f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
-                    f"gültiges JSON geliefert: {last_error}"
-                )
+        self._agui_pending_json_repairs = 0
+        from .ag_ui_frontend_tools import FrontendToolHandoff
+        try:
+            answer = await self._run_model_loop(
+                messages=working_messages,
+                tools=tools,
+                routes=routes,
+                enabled_server_names=enabled_server_names,
+                max_tool_calls=self.max_tool_calls,
+                phase="main",
+                run_state=main_run_state,
+            )
+            answer = await self._ensure_json_response(
+                answer,
+                messages=working_messages,
+                tools=tools,
+                routes=routes,
+                enabled_server_names=enabled_server_names,
+                run_state=main_run_state,
+            )
+        except FrontendToolHandoff:
+            # A frontend call can arise in the first model loop OR during
+            # JSON repair. Both must retain identical trusted model context.
+            self._agui_pending_working_messages = working_messages
+            self._agui_pending_original_prompt = prompt
+            self._agui_pending_run_state = main_run_state
+            raise
 
         self.history.extend(
             [
@@ -240,6 +222,111 @@ class ConversationMixin:
             ]
         )
         self._dump_context(working_messages, phase="main")
+        return answer
+
+    async def _ensure_json_response(
+        self,
+        answer: str,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        routes: dict[str, ToolRoute],
+        enabled_server_names: set[str],
+        run_state: ModelLoopRunState,
+    ) -> str:
+        """Validate and repair JSON with a single budget across UI handoffs.
+
+        The repair counter is incremented *before* calling the model.
+        A FrontendToolHandoff from a repair attempt propagates to the caller,
+        which checkpoints the model messages and tool-call run state.
+        On resume, the same repair budget is used, not a fresh allowance.
+        """
+        if getattr(self, "response_format", "text") != "json":
+            return answer
+        answer, last_error = _normalize_json_response(answer)
+        repairs = getattr(self, "_agui_pending_json_repairs", 0)
+        while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
+            repairs += 1
+            self._agui_pending_json_repairs = repairs
+            messages.append({
+                "role": "user",
+                "content": (
+                    "Deine letzte finale Antwort entspricht nicht dem "
+                    "verlangten JSON-Format. Korrigiere die Antwort jetzt "
+                    "so, dass sie ausschließlich aus syntaktisch gültigem "
+                    "JSON besteht. Behalte die inhaltliche Aufgabe und die "
+                    "verlangte Struktur bei. Du darfst die verfügbaren Tools "
+                    "verwenden, falls das für eine korrekte Antwort "
+                    "erforderlich ist. Verwende keine Markdown-Codeblöcke "
+                    "und keinen Text außerhalb des JSON-Werts. "
+                    f"Validierungsfehler: {last_error}"
+                ),
+            })
+            answer = await self._run_model_loop(
+                messages=messages,
+                tools=tools,
+                routes=routes,
+                enabled_server_names=enabled_server_names,
+                max_tool_calls=self.max_tool_calls,
+                phase="main",
+                run_state=run_state,
+            )
+            answer, last_error = _normalize_json_response(answer)
+        if last_error is not None:
+            raise ValueError(
+                "Das Modell hat auch nach "
+                f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
+                f"gültiges JSON geliefert: {last_error}"
+            )
+        self._agui_pending_json_repairs = 0
+        return answer
+
+    async def continue_after_frontend_tools(
+        self, results: list[dict[str, Any]]
+    ) -> str:
+        """Continue with the trusted, previously captured model context."""
+        messages = getattr(self, "_agui_pending_working_messages", None)
+        if not isinstance(messages, list):
+            raise RuntimeError("Kein Frontend-Tool-Checkpoint vorhanden.")
+        prompt = getattr(self, "_agui_pending_original_prompt", "")
+        self._agui_pending_working_messages = None
+        self._agui_pending_original_prompt = ""
+        run_state = getattr(self, "_agui_pending_run_state", None)
+        if run_state is None:
+            run_state = ModelLoopRunState()
+        messages.extend(results)
+        tools = self._model_tools()
+        if getattr(self, "_agui_frontend_tools", None):
+            tools = [*tools, *self._agui_frontend_tools.values()]
+        self._last_working_messages = messages
+        self._last_working_tools = tools
+        from .ag_ui_frontend_tools import FrontendToolHandoff
+        try:
+            answer = await self._run_model_loop(
+                messages=messages, tools=tools, routes=self._tool_routes,
+                enabled_server_names=set(self._active_servers),
+                max_tool_calls=self.max_tool_calls, phase="main",
+                run_state=run_state,
+            )
+            answer = await self._ensure_json_response(
+                answer,
+                messages=messages,
+                tools=tools,
+                routes=self._tool_routes,
+                enabled_server_names=set(self._active_servers),
+                run_state=run_state,
+            )
+        except FrontendToolHandoff:
+            self._agui_pending_working_messages = messages
+            self._agui_pending_original_prompt = prompt
+            self._agui_pending_run_state = run_state
+            raise
+        self._agui_pending_run_state = None
+        self.history.extend([
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": answer},
+        ])
+        self._dump_context(messages, phase="main")
         return answer
 
     def working_messages_snapshot(self) -> list[dict[str, Any]]:

@@ -245,6 +245,17 @@ class WebContextCliAgent(CliAgent):
         ]
         if enabled_contexts:
             payload["web_contexts"] = [context.as_dict() for context in enabled_contexts]
+        # AG-UI context is untrusted reference data, never an instruction or
+        # policy override. Keep it inside the existing guarded reference
+        # payload instead of appending it as a privileged system message.
+        application_context = getattr(self, "_agui_external_context", ())
+        if application_context:
+            payload["application_context"] = [
+                {"description": str(entry["description"])[:256],
+                 "value": entry.get("value")}
+                for entry in application_context[:32]
+                if isinstance(entry, dict) and isinstance(entry.get("description"), str)
+            ]
         return payload
 
     def context_states_snapshot(self) -> list[dict[str, Any]]:

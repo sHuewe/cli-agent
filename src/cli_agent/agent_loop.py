@@ -317,11 +317,44 @@ async def run_model_loop(
 
         if tool_calls:
             empty_responses = 0
+        frontend_calls = []
+        if phase == "main":
+            frontend = getattr(agent, "_agui_frontend_tools", {})
+            if frontend:
+                from .ag_ui_frontend_tools import FrontendToolCall, FrontendToolHandoff
+                import uuid
+                for call in tool_calls:
+                    function = call.get("function") or {}
+                    if function.get("name") in frontend:
+                        arguments = function.get("arguments") or {}
+                        arguments = (arguments if isinstance(arguments, str)
+                                     else json.dumps(arguments, ensure_ascii=False))
+                        frontend_calls.append(
+                            FrontendToolCall(
+                                id=str(call.get("id") or uuid.uuid4().hex),
+                                name=function["name"],
+                                arguments=arguments,
+                            )
+                        )
+        backend_calls = (
+            [call for call in tool_calls
+             if call.get("function", {}).get("name")
+             not in getattr(agent, "_agui_frontend_tools", {})]
+            if frontend_calls else tool_calls
+        )
+        # Reserve the full batch BEFORE executing any backend side effects.
+        # Frontend calls are just as much part of max_tool_calls as MCP calls.
+        if calls + len(frontend_calls) + len(backend_calls) > max_tool_calls:
+            raise RuntimeError(
+                f"Abbruch in Phase {phase!r} nach {max_tool_calls} Tool-Aufrufen."
+            )
+        calls += len(frontend_calls)
+        state.tool_calls = calls
         calls, knowledge_concept_limit_notice_pending = await process_tool_calls(
             agent,
             assistant_message=message,
             messages=messages,
-            tool_calls=tool_calls,
+            tool_calls=backend_calls,
             routes=routes,
             enabled_server_names=enabled_server_names,
             max_tool_calls=max_tool_calls,
@@ -333,6 +366,11 @@ async def run_model_loop(
             transient_rejections=transient_rejections,
         )
         state.tool_calls = calls
+        if frontend_calls:
+            from .ag_ui_frontend_tools import FrontendToolHandoff
+            # All backend calls from the same model response have been handled
+            # locally first. Frontend calls must never enter MCP routing.
+            raise FrontendToolHandoff(frontend_calls, message)
 
         if knowledge_concept_limit_notice_pending and knowledge_state is not None:
             knowledge_selection_only_mode = True

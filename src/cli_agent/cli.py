@@ -668,48 +668,31 @@ async def run(args: argparse.Namespace) -> None:
         print(_status_text(f"Output-Datei: {output_target.path}"))
 
     web_ui = bool(getattr(args, "with_web_ui", False))
-    web_approval_broker = None
     if web_ui:
-        from .web_ui import (
-            WebUiApprovalBroker,
-            ensure_web_ui_available,
-            run_web_ui,
-        )
-
-        # Validate the optional dependency set before model/MCP construction.
+        from .web_ui import ensure_web_ui_available
         ensure_web_ui_available()
-        # Mirror the OS MCP server's protected workspace boundaries for previews.
-        # This must not permit inspecting files excluded from the agent's access.
-        protected_for_preview = (
-            args.config or default_config_file(),
-            *resolved_excluded_paths,
-        )
-        web_approval_broker = WebUiApprovalBroker(
-            workspace=Workspace.from_directory(
-                workspace,
-                McpServerConfig(name="os", config={"allow_write_files": True}),
-                protected_paths=tuple(protected_for_preview),
-                mutation_protected_paths=tuple(
-                    file.source_path for file in file_contexts
-                ) + (
-                    (prompt_file.source_path,) if prompt_file is not None else ()
-                ),
-            ) if args.os_access == "write" else None
-        )
-        approval_callback = build_preapproval_callback(
-            getattr(args, "approve_tool", ()),
-            fallback=web_approval_broker.approve_tool_call,
-        )
-    else:
-        approval_callback = build_approval_callback(
-            getattr(args, "approve_tool", ())
-        )
+    approval_callback = build_approval_callback(
+        getattr(args, "approve_tool", ())
+    )
 
     if web_ui and one_shot_prompt is not None:
         raise ValueError(
             "--with-web-ui ist nur für den interaktiven Modus ohne positional "
             "Prompt oder --prompt-file vorgesehen."
         )
+
+    if web_ui:
+        from .web_ui_api import run_web_ui_via_api
+        await run_web_ui_via_api(
+            args=args,
+            config=config,
+            admin_config=admin_config,
+            workspace=workspace,
+            file_contexts=file_contexts,
+            output_target=output_target,
+            excluded_paths=resolved_excluded_paths,
+        )
+        return
 
     if one_shot_prompt is not None:
         result = await run_once(
@@ -760,11 +743,7 @@ async def run(args: argparse.Namespace) -> None:
         web_providers=admin_config.web.providers,
         mcp_policy=admin_config.mcp,
         approval_callback=approval_callback,
-        user_message_callback=(
-            web_approval_broker.show_mcp_user_message
-            if web_approval_broker is not None
-            else _show_mcp_user_message
-        ),
+        user_message_callback=_show_mcp_user_message,
         okf=config.okf,
         knowledge_vector=config.knowledge_vector,
         model_credential_rules=admin_config.model_credentials,
@@ -774,27 +753,9 @@ async def run(args: argparse.Namespace) -> None:
     )
 
     async with agent:
-        web_context_statuses: list[str] = []
         for url in getattr(args, "add_web_context", ()):
             status = await agent.ask(f"add_web_context {url}")
-            if web_ui:
-                web_context_statuses.append(status)
-            else:
-                print(sanitize_terminal_text(status, multiline=True))
-
-        if web_ui:
-            assert web_approval_broker is not None
-            await run_web_ui(
-                agent=agent,
-                approval_broker=web_approval_broker,
-                workspace=workspace,
-                model=config.model.model,
-                mcp_servers=tuple(server.name for server in config.mcp_servers),
-                output_target=output_target,
-                initial_messages=tuple(web_context_statuses),
-                debug=args.debug,
-            )
-            return
+            print(sanitize_terminal_text(status, multiline=True))
 
         print("Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung.")
         while True:
