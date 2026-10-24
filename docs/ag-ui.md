@@ -29,7 +29,14 @@ Example request:
 
 The `threadId` identifies a persistent MCP-owning agent session; a new thread
 is created automatically on first use (subject to the global eight-session
-limit). `runId` must be new on every run. The incoming `messages` list is
+limit). An external client closes an abandoned or completed conversation via
+`DELETE /threads/{threadId}` (service bearer token required, HTTP 204 on
+success, HTTP 404 if unknown). This **cli-agent-specific management endpoint**
+is not part of AG-UI 1.0. It accepts the client's original `threadId`, not
+the private internal session ID. Closing an interrupted thread also stops its
+MCP-owning worker and releases its session slot. Browser-managed sessions are
+not accessible through this endpoint and are managed exclusively via
+`/ui/sessions`. `runId` must be new on every run. The incoming `messages` list is
 used to synchronize ordinary user/assistant conversation history. Application
 `context` is included as **untrusted reference information**, never as a
 server policy or an instruction with elevated trust. Multimodal parts that
