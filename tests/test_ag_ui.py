@@ -366,3 +366,43 @@ async def test_agui_capabilities_match_the_standard_and_advertise_only_supported
             assert capabilities["transport"]["resumable"] is False
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_session_can_be_closed_after_tab_release():
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    initial = await service.create()
+    origin = "http://127.0.0.1:9191"
+    ui = {
+        "token": "browser-secret", "session_id": initial.id,
+        "registry": BrowserSessionRegistry(service, initial.id),
+        "origin": origin, "info": {"model": "fake", "workspace": ".", "mcp_servers": []},
+        "shutdown": lambda: None,
+    }
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+            base_url=origin,
+        ) as client:
+            headers = {"Authorization": "Bearer browser-secret",
+                       "X-Cli-Agent-Browser": "1", "Origin": origin,
+                       "Accept": "text/event-stream"}
+            claim = await client.post("/ui/bootstrap", json={}, headers=headers)
+            headers["X-Cli-Agent-Lease"] = claim.json()["lease"]
+            result = _events(await client.post(
+                "/ag-ui", json=_input(initial.id, "needs approval"),
+                headers=headers,
+            ))
+            assert result[-1]["outcome"]["type"] == "interrupt"
+            assert initial._busy
+            released = await client.post(
+                "/ui/release", json={"session_id": initial.id}, headers=headers
+            )
+            assert released.status_code == 204
+            deleted = await client.delete(
+                "/ui/sessions/" + initial.id, headers=headers
+            )
+            assert deleted.status_code == 204
+            assert initial.id not in service.sessions
+    finally:
+        await service.shutdown()
