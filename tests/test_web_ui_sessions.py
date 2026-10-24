@@ -186,6 +186,11 @@ async def test_two_independent_sessions_reopen_without_shared_access():
             )).status_code == 204
             assert b_id not in service.sessions
             assert initial.id in service.sessions
+            assert (await client.delete(
+                f"/ui/sessions/{initial.id}",
+                headers=_headers(reopened.json()["lease"], origin=origin),
+            )).status_code == 204
+            assert initial.id not in service.sessions
     finally:
         await service.shutdown()
 
