@@ -68,8 +68,17 @@ class BrowserSessionRegistry:
             raise KeyError("Session nicht gefunden.")
         if self._occupied(session_id):
             raise SessionOccupiedError("Session ist bereits in einem anderen Tab geöffnet.")
+        now = time.monotonic()
+        self._tickets = {
+            ticket: entry for ticket, entry in self._tickets.items()
+            if entry[1] > now
+        }
+        # A browser can request multiple open tickets but should never cause
+        # unbounded growth in this in-memory registry.
+        if len(self._tickets) >= 256:
+            raise SessionOccupiedError("Zu viele ausstehende Session-Links.")
         ticket = secrets.token_urlsafe(32)
-        self._tickets[ticket] = (session_id, time.monotonic() + TICKET_TTL_SECONDS)
+        self._tickets[ticket] = (session_id, now + TICKET_TTL_SECONDS)
         return ticket
 
     def _acquire(self, session_id: str) -> str:
