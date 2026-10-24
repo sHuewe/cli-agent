@@ -126,6 +126,30 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
         assert agents[0].requests == []
         assert stopped == []
 
+        # Browser command buttons are server-validated, unlike free-form
+        # prompts. Invalid inputs must not reach the model or --output.
+        for invalid in (
+            {"command": "add_web_context", "argument": "example.com"},
+            {"command": "enable", "argument": "server with spaces"},
+            {"command": "tokens", "argument": "extra"},
+            {"command": "unknown", "argument": "x"},
+            {"command": "add_web_context"},
+        ):
+            bad = await client.post(uri + "/runs", json=invalid, headers=auth)
+            assert bad.status_code == 400
+        assert agents[0].requests == []
+        assert session._run is None
+
+        valid = await client.post(
+            uri + "/runs", json={"command": "tokens"}, headers=auth
+        )
+        assert valid.status_code == 202
+        valid_stream = await client.get(
+            uri + f"/runs/{valid.json()['run_id']}/events", headers=headers
+        )
+        assert "RUN_FINISHED" in valid_stream.text
+        assert agents[0].requests == ["tokens"]
+
         rid = (await client.post(uri + "/runs", json={"prompt": "hi"},
             headers={**headers, "Origin": ui["origin"]})).json()["run_id"]
         # Embedded-browser runs wait for their SSE consumer before execution.
@@ -214,5 +238,16 @@ def test_local_exit_and_quit_are_not_sent_to_agent():
     dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
     assert '["exit", "quit"].includes(promptText.trim().toLowerCase())' in dispatch
     assert dispatch.index('await dispatchAction({type: "quit"});') < dispatch.index(
-        'api(base + "/runs", "POST", {prompt: promptText})'
+        'api(base + "/runs", "POST", payload)'
     )
+
+
+def test_browser_buttons_submit_structured_commands():
+    from cli_agent.web_ui_api import API_APP_JS
+
+    dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
+    assert 'msg.type === "command"' in dispatch
+    assert '{command: msg.command, argument: msg.argument == null ? null : msg.argument}' in dispatch
+    assert 'api(base + "/runs", "POST", payload)' in dispatch
+    # Do not assemble unchecked commands into ordinary prompt strings.
+    assert 'promptText = msg.command +' not in dispatch
