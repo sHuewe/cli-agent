@@ -598,6 +598,34 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             return error(404, "Session nicht gefunden.")
         return Response(status_code=204)
 
+    async def ag_ui_capabilities(_request: Request) -> Response:
+        """Optional application-specific discovery using AG-UI's standard shape.
+
+        The AG-UI 1.0 specification defines AgentCapabilities but intentionally
+        does not prescribe a discovery URL. Never advertise unsupported
+        frontend tools, multimodal input or stream resumption.
+        """
+        return JSONResponse({
+            "identity": {"name": "cli-agent", "type": "cli-agent", "version": "1.0.0"},
+            "transport": {
+                "streaming": True, "websocket": False,
+                "httpBinary": False, "resumable": False,
+            },
+            "tools": {
+                "supported": True, "clientProvided": False,
+                "parallelCalls": False,
+            },
+            "output": {"supportedMimeTypes": ["text/plain"]},
+            "state": {
+                "snapshots": False, "deltas": False,
+                "persistentState": True,
+            },
+            "humanInTheLoop": {
+                "supported": True, "approvals": True,
+                "interrupts": True, "approveWithEdits": False,
+            },
+        })
+
     async def ag_ui_run(request: Request) -> Response:
         """AG-UI 1.0 HTTP/SSE binding: one POST and one streamed response.
 
@@ -1182,7 +1210,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             and ((origin is None or origin == ui["origin"])
                  if request.method in {"GET", "HEAD"}
                  else origin == ui["origin"])
-            and (path.startswith("/ui/") or path.startswith("/sessions/") or path == "/ag-ui")
+            and (path.startswith("/ui/") or path.startswith("/sessions/") or path.startswith("/ag-ui"))
         )
         if browser:
             if path.startswith("/sessions/"):
@@ -1202,6 +1230,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         routes=([
             Route("/health", health, methods=["GET"]),
             Route("/ag-ui", ag_ui_run, methods=["POST"]),
+            Route("/ag-ui/capabilities", ag_ui_capabilities, methods=["GET"]),
             Route("/sessions", create_session, methods=["POST"]),
             Route("/sessions/{session_id}", delete_session, methods=["DELETE"]),
             Route("/sessions/{session_id}/context", context, methods=["GET"]),
