@@ -390,6 +390,11 @@ class WebUiApprovalBroker:
             if not future.done():
                 future.set_result(False)
 
+    def is_pending(self, request_id: str) -> bool:
+        """Whether a request can still be decided by the current UI."""
+        future = self._pending.get(request_id)
+        return future is not None and not future.done()
+
     def resolve(self, request_id: str, decision: str) -> bool:
         future = self._pending.get(request_id)
         if future is None or future.done() or decision not in {"no", "yes", "session"}:
