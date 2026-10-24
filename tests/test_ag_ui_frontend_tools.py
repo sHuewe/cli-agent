@@ -277,6 +277,41 @@ async def test_frontend_handoff_and_followup_without_replaying_agent_call():
                      "toolCallId": "call-1", "content": "view open"},
                 ],
             }
+            # A client may append another user instruction alongside tool
+            # results. The pending checkpoint cannot incorporate it, so reject
+            # the combined request without consuming the pending tool batch.
+            with_new_user = {
+                **followup,
+                "runId": "rejected-new-message",
+                "messages": [
+                    *followup["messages"],
+                    {"id": "new-user", "role": "user", "content": "use another view"},
+                ],
+            }
+            rejected = await client.post(
+                "/ag-ui", json=with_new_user, headers=headers
+            )
+            assert rejected.status_code == 409
+            assert "Benutzernachrichten" in rejected.json()["error"]
+            assert session._pending_frontend is not None
+            assert agents[0].resume_data == []
+
+            # Reusing an accepted ID with modified content must not silently
+            # replace the message in the (immutable) server-side checkpoint.
+            modified = {
+                **followup,
+                "runId": "rejected-modified-message",
+                "messages": [
+                    {**followup["messages"][0], "content": "different instructions"},
+                    *followup["messages"][1:],
+                ],
+            }
+            rejected = await client.post(
+                "/ag-ui", json=modified, headers=headers
+            )
+            assert rejected.status_code == 409
+            assert session._pending_frontend is not None
+
             reply = await client.post("/ag-ui", json=followup, headers=headers)
             assert reply.status_code == 200
             result = [json.loads(line[6:]) for line in reply.text.splitlines()
