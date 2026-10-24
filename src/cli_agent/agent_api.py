@@ -101,6 +101,7 @@ class AgentSession:
         self.agui_context: list[dict[str, Any]] = []
         self._pending_interrupt: dict[str, Any] | None = None
         self._pending_tool_id: str | None = None
+        self._agui_seen_run_ids: set[str] = set()
         self._opened_tool_calls: set[str] = set()
         self.output_target = output_target
         self.id = uuid.uuid4().hex
@@ -145,7 +146,8 @@ class AgentSession:
                     if run is None:
                         return
                     run.status = "running"
-                    run.emit({"type": "RUN_STARTED", "threadId": self.id, "runId": run.id})
+                    run.emit({"type": "RUN_STARTED", "threadId": run.thread_id, "runId": run.id,
+                              **({"protocolVersion": "1.0"} if run.agui else {})})
                     try:
                         if run.require_listener:
                             await self._await_run_subscriber(run)
@@ -280,6 +282,11 @@ class AgentSession:
             max_events=self._replay_capacity(),
             require_listener=require_listener, agui=agui,
         )
+        if agui:
+            if run.id in self._agui_seen_run_ids:
+                self._busy = False
+                raise ValueError("runId wurde bereits verwendet.")
+            self._agui_seen_run_ids.add(run.id)
         self._run = run
         self._queue.put_nowait(run)
         return run
@@ -417,6 +424,9 @@ class AgentSession:
             status="running",
             resume_approval=(pending["id"], decision),
         )
+        if run_id in self._agui_seen_run_ids:
+            raise ValueError("runId wurde bereits verwendet.")
+        self._agui_seen_run_ids.add(run_id)
         self._run = next_run
         next_run.emit({"type": "RUN_STARTED", "threadId": thread_id,
                        "runId": run_id, "protocolVersion": "1.0"})
@@ -447,6 +457,8 @@ class AgentApiService:
         # Slots are reserved before MCP startup (which may suspend indefinitely).
         self.sessions: dict[str, AgentSession] = {}
         self._lifecycle_lock = asyncio.Lock()
+        self._agui_thread_lock = asyncio.Lock()
+        self._agui_threads: dict[str, str] = {}
         self._shutting_down = False
         self.token = secrets.token_urlsafe(32)
 
@@ -476,6 +488,21 @@ class AgentApiService:
             raise RuntimeError("Session wurde beim Start geschlossen.")
         return session
 
+    async def resolve_agui_thread(self, thread_id: str) -> AgentSession:
+        """Map arbitrary AG-UI thread IDs to isolated agent sessions.
+
+        The lock prevents concurrent requests for a new thread from creating
+        multiple MCP workers for the same logical conversation.
+        """
+        async with self._agui_thread_lock:
+            current_id = self._agui_threads.get(thread_id, thread_id)
+            current = self.sessions.get(current_id)
+            if current is not None:
+                return current
+            session = await self.create()
+            self._agui_threads[thread_id] = session.id
+            return session
+
     async def remove(self, session_id: str) -> bool:
         async with self._lifecycle_lock:
             session = self.sessions.pop(session_id, None)
@@ -489,6 +516,7 @@ class AgentApiService:
             self._shutting_down = True
             sessions = tuple(self.sessions.values())
             self.sessions.clear()
+            self._agui_threads.clear()
         # Include sessions whose start() is still in progress.
         for session in sessions:
             await session.close()
