@@ -122,7 +122,10 @@ class BrowserSessionRegistry:
     def can_close(self, session_id: str) -> bool:
         if not self._valid(session_id):
             raise KeyError("Session nicht gefunden.")
-        if self._occupied(session_id) or self.service.sessions[session_id]._busy:
+        session = self.service.sessions[session_id]
+        if self._occupied(session_id) or (
+            session._busy and session._pending_interrupt is None
+        ):
             return False
         return True
 
