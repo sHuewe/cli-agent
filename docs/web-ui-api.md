@@ -15,7 +15,7 @@ browser assets and the existing Agent API on an ephemeral port. An
 The console displays and opens a local URL with a browser token in its fragment.
 The frontend removes the fragment and keeps the credential within that tab's
 session storage for reloads. The browser token is separate from the API bearer
-credential and can access only the active UI session and local UI endpoints.
+credential and can manage the local UI sessions but cannot directly control an\nagent session without its separate exclusive tab lease.
 Browser state-changing requests must carry the same-origin Origin header and
 an explicit browser marker. Host validation and loopback-only binding remain in
 place. The API mode does not write LLM context dumps.
@@ -41,6 +41,34 @@ CLI options, including `--context-file`, `--add-web-context`, `--output`,
 passed into the local API-backed agent. Initial web contexts are loaded on
 the agent's worker task before its session becomes ready.
 
+## Multiple browser sessions
+
+The built-in UI can manage up to eight independent agent sessions on the same
+Starlette server. Click **Neue Session in neuem Tab** to create a new session
+and open it in a new tab. The **Sessions** dialog lists existing sessions and
+allows opening or deleting a currently unoccupied session.
+
+The new-tab URL includes a short-lived **single-use ticket** and the browser
+access token in its URL fragment. The fragment is removed on load. Copying the
+cleaned URL into another tab is not a supported way to open a session. Each
+claimed session receives a random server-side lease whose secret exists only
+in the JavaScript context of the active page, not in sessionStorage.
+
+Each agent session may have **at most one active tab**, enforced by the API
+middleware for every session-scoped request. A second tab gets HTTP 409 on
+claim rather than attaching to the existing session. On page unload the tab
+releases the lease using a keepalive request. A heartbeat refreshes an active
+lease; a stale lease expires after 120 seconds if the tab is closed without
+releasing it. Reloading a page reacquires its existing session; if its prior
+unload release has not finished yet, the frontend retries the claim briefly.
+
+Each session has its own agent, MCP transport lifetime, conversation, tools and
+contexts. A bounded in-memory user/assistant transcript is returned when
+reopening a session; in-flight runs can be followed again via SSE. Sessions
+and their transcripts are discarded when the server exits. Closing a tab does
+**not** delete its session. The **Sitzung beenden** button still shuts down the
+entire local Web UI application, as it did before.
+
 The built-in UI is launched only with the CLI option. Standalone
 `cli-agent-api` remains a non-browser API server with its own bearer token
 and its usual explicit port.
@@ -48,7 +76,7 @@ and its usual explicit port.
 ## Tests and limitations
 
 `tests/test_web_ui_api.py` covers route authentication, context and tool
-switches, history reset, session runs, setup commands and output writing.
+switches, history reset, session runs, setup commands and output writing.\n`tests/test_web_ui_sessions.py` covers tab isolation, new-session tickets,\nreopening, lease validation/expiry, and session cleanup.
 The preexisting API tests cover SSE event replay, run isolation and approval
 lifecycle. A manual browser smoke test (especially tool approval, page reload,
 and Ctrl+C/shutdown) is recommended in addition to CI.
