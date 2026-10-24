@@ -62,6 +62,9 @@ _EVENT_VALIDATOR = Draft202012Validator(_AGUI_SCHEMA)
 _INPUT_VALIDATOR = Draft202012Validator({
     **_AGUI_SCHEMA, "$ref": "#/$defs/RunAgentInput"
 })
+_CAPABILITIES_VALIDATOR = Draft202012Validator({
+    **_AGUI_SCHEMA, "$ref": "#/$defs/AgentCapabilities"
+})
 
 
 def _events(response):
@@ -339,3 +342,27 @@ async def test_browser_local_commands_stay_outside_agui_transport():
 def test_official_ag_ui_1_0_schema_accepts_the_standard_request():
     _INPUT_VALIDATOR.validate(_input("thread", "Hello"))
     assert _AGUI_SCHEMA["$id"] == "https://ag-ui.com/spec/1.0/schema.json"
+
+
+@pytest.mark.asyncio
+async def test_agui_capabilities_match_the_standard_and_advertise_only_supported_features():
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            assert (await client.get("/ag-ui/capabilities")).status_code == 401
+            response = await client.get(
+                "/ag-ui/capabilities",
+                headers={"Authorization": "Bearer " + service.token},
+            )
+            assert response.status_code == 200
+            capabilities = response.json()
+            _CAPABILITIES_VALIDATOR.validate(capabilities)
+            assert capabilities["transport"]["streaming"] is True
+            assert capabilities["humanInTheLoop"]["interrupts"] is True
+            assert capabilities["tools"]["clientProvided"] is False
+            assert capabilities["transport"]["resumable"] is False
+    finally:
+        await service.shutdown()
