@@ -57,6 +57,11 @@ def normalize_frontend_tools(
         schema = item.get("parameters", {"type": "object", "properties": {}})
         if not isinstance(schema, dict):
             raise ValueError("Frontend-Tool-Parameter müssen ein JSON-Schema-Objekt sein.")
+        from jsonschema import Draft202012Validator
+        try:
+            Draft202012Validator.check_schema(schema)
+        except Exception as exc:
+            raise ValueError("Ungültiges Frontend-Tool-Parameterschema.") from exc
         try:
             encoded = json.dumps(item, ensure_ascii=False, allow_nan=False)
         except (TypeError, ValueError) as exc:
@@ -84,6 +89,7 @@ def checked_frontend_results(
     accepts a new answer for an id not issued in the pending tool batch.
     """
     required = {call.id for call in expected}
+    originals = {call.id: call for call in expected}
     if len(required) != len(expected):
         raise ValueError("Doppelte Frontend-Tool-Call-ID.")
     if not required:
@@ -92,8 +98,17 @@ def checked_frontend_results(
     assistant_found = False
     for message in messages:
         if message.get("role") == "assistant":
-            names = {call.get("id") for call in message.get("toolCalls", []) if isinstance(call, dict)}
-            if required.issubset(names):
+            listed = {
+                call.get("id"): call for call in message.get("toolCalls", [])
+                if isinstance(call, dict)
+            }
+            if required.issubset(listed):
+                for call_id, issued in originals.items():
+                    info = listed[call_id].get("function", {})
+                    if (not isinstance(info, dict)
+                            or info.get("name") != issued.name
+                            or info.get("arguments") != issued.arguments):
+                        raise ValueError("Frontend-Tool-Definition wurde beim Wiederaufnehmen verändert.")
                 assistant_found = True
         elif message.get("role") == "tool" and message.get("toolCallId") in required:
             call_id = message["toolCallId"]
