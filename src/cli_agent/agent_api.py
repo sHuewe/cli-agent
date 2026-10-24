@@ -763,7 +763,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                     except asyncio.TimeoutError:
                         # Keep browser intermediaries from silently closing
                         # quiet runs without generating protocol events.
-                        yield ": keep-alive\\n\\n".replace("\\\\n", "\\n")
+                        yield ": keep-alive\n\n"
             finally:
                 session.unsubscribe(run)
 
