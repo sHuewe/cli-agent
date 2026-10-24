@@ -586,10 +586,111 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         from .web_ui_api import API_APP_JS
         return browser_security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
 
-    async def ui_bootstrap(_request: Request) -> Response:
+    async def ui_bootstrap(request: Request) -> Response:
         assert ui is not None
-        session = service.sessions[ui["session_id"]]
-        return JSONResponse({"session_id": session.id, **ui["info"], "initial_messages": session.initial_messages})
+        from .web_ui_sessions import SessionOccupiedError
+        registry = ui["registry"]
+        try:
+            async with checked_json(request) as body:
+                if set(body) - {"session_id", "ticket"}:
+                    return error(400, "Unbekannte Session-Parameter.")
+                ticket = body.get("ticket")
+                if ticket is not None:
+                    if not isinstance(ticket, str):
+                        return error(400, "Ungültiges Session-Ticket.")
+                    session_id, lease = registry.redeem(ticket)
+                else:
+                    session_id = body.get("session_id", ui["session_id"])
+                    if not isinstance(session_id, str):
+                        return error(400, "Ungültige Session-ID.")
+                    lease = registry.claim(session_id)
+            session = service.sessions[session_id]
+            return JSONResponse({
+                "session_id": session_id, "lease": lease,
+                **ui["info"], "initial_messages": session.initial_messages,
+            })
+        except SessionOccupiedError as exc:
+            return error(409, str(exc))
+        except KeyError:
+            return error(404, "Session nicht gefunden.")
+        except ValueError as exc:
+            return error(400, str(exc))
+
+    async def ui_sessions(_request: Request) -> Response:
+        assert ui is not None
+        return JSONResponse({"sessions": ui["registry"].list_sessions()})
+
+    async def ui_session_new(_request: Request) -> Response:
+        assert ui is not None
+        from .web_ui_sessions import SessionOccupiedError
+        registry = ui["registry"]
+        try:
+            session = await service.create()
+        except OverflowError:
+            return error(429, "Maximale Anzahl von Sessions erreicht.")
+        except Exception:
+            return error(503, "Session konnte nicht gestartet werden.")
+        registry.register(session.id)
+        try:
+            ticket = registry.invitation(session.id)
+        except (SessionOccupiedError, KeyError):
+            registry.forget(session.id)
+            await service.remove(session.id)
+            return error(409, "Session konnte nicht geöffnet werden.")
+        return JSONResponse({"session_id": session.id, "ticket": ticket}, status_code=201)
+
+    async def ui_session_ticket(request: Request) -> Response:
+        assert ui is not None
+        from .web_ui_sessions import SessionOccupiedError
+        try:
+            ticket = ui["registry"].invitation(request.path_params["session_id"])
+        except KeyError:
+            return error(404, "Session nicht gefunden.")
+        except SessionOccupiedError as exc:
+            return error(409, str(exc))
+        return JSONResponse({"ticket": ticket})
+
+    async def ui_session_delete(request: Request) -> Response:
+        assert ui is not None
+        registry = ui["registry"]
+        session_id = request.path_params["session_id"]
+        try:
+            if not registry.can_close(session_id):
+                return error(409, "Session ist geöffnet oder beschäftigt.")
+        except KeyError:
+            return error(404, "Session nicht gefunden.")
+        registry.forget(session_id)
+        if not await service.remove(session_id):
+            return error(404, "Session nicht gefunden.")
+        return Response(status_code=204)
+
+    async def ui_release(request: Request) -> Response:
+        assert ui is not None
+        try:
+            async with checked_json(request) as body:
+                if set(body) != {"session_id"} or not isinstance(body["session_id"], str):
+                    return error(400, "Session-ID erforderlich.")
+                if not ui["registry"].release(
+                    body["session_id"], request.headers.get("x-cli-agent-lease")
+                ):
+                    return error(409, "Keine aktive Session-Bindung.")
+                return Response(status_code=204)
+        except ValueError as exc:
+            return error(400, str(exc))
+
+    async def ui_heartbeat(request: Request) -> Response:
+        assert ui is not None
+        try:
+            async with checked_json(request) as body:
+                if set(body) != {"session_id"} or not isinstance(body["session_id"], str):
+                    return error(400, "Session-ID erforderlich.")
+                if not ui["registry"].is_owner(
+                    body["session_id"], request.headers.get("x-cli-agent-lease")
+                ):
+                    return error(409, "Session-Bindung ist abgelaufen.")
+                return Response(status_code=204)
+        except ValueError as exc:
+            return error(400, str(exc))
 
     async def ui_render(request: Request) -> Response:
         from .web_ui import _render_markdown
@@ -605,7 +706,9 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
 
     async def ui_shutdown(_request: Request) -> Response:
         assert ui is not None
-        service.sessions[ui["session_id"]].broker.deny_all()
+        # Closing the local application terminates every UI session.
+        for session in tuple(service.sessions.values()):
+            session.broker.deny_all()
         ui["shutdown"]()
         return JSONResponse({"shutdown": True})
 
@@ -633,11 +736,15 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             and ((origin is None or origin == ui["origin"])
                  if request.method in {"GET", "HEAD"}
                  else origin == ui["origin"])
-            and (path.startswith("/ui/") or
-                 (path.startswith(f'/sessions/{ui["session_id"]}/')
-                  and request.method != "DELETE"))
+            and (path.startswith("/ui/") or path.startswith("/sessions/"))
         )
         if browser:
+            if path.startswith("/sessions/"):
+                parts = path.split("/")
+                if (len(parts) < 4 or request.method == "DELETE"
+                        or not ui["registry"].is_owner(
+                            parts[2], request.headers.get("x-cli-agent-lease"))):
+                    return error(403, "Keine gültige Tab-Bindung für diese Session.")
             return await call_next(request)
         if origin is not None:
             return error(403, "Browser-Origin nicht zugelassen.")
@@ -663,7 +770,13 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/", ui_index, methods=["GET"]),
             Route("/assets/app.css", ui_css, methods=["GET"]),
             Route("/assets/app.js", ui_js, methods=["GET"]),
-            Route("/ui/bootstrap", ui_bootstrap, methods=["GET"]),
+            Route("/ui/bootstrap", ui_bootstrap, methods=["POST"]),
+            Route("/ui/sessions", ui_sessions, methods=["GET"]),
+            Route("/ui/sessions", ui_session_new, methods=["POST"]),
+            Route("/ui/sessions/{session_id}/ticket", ui_session_ticket, methods=["POST"]),
+            Route("/ui/sessions/{session_id}", ui_session_delete, methods=["DELETE"]),
+            Route("/ui/release", ui_release, methods=["POST"]),
+            Route("/ui/heartbeat", ui_heartbeat, methods=["POST"]),
             Route("/ui/render", ui_render, methods=["POST"]),
             Route("/ui/shutdown", ui_shutdown, methods=["POST"]),
         ] if ui is not None else [])),
