@@ -570,3 +570,73 @@ def test_cancelled_session_close_does_not_issue_delete_request():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_approval_resume_rejection_preserves_dialog_and_allows_retry():
+    """Run the real approval branch in Node: HTTP 429 must keep approval actionable."""
+    import shutil
+    import subprocess
+
+    from cli_agent.web_ui_api import API_APP_JS
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    dispatch = API_APP_JS.split('    if (msg.type === "approval_response") {', 1)[1].split(
+        '\n  }\n\n  function processServerMessage', 1
+    )[0]
+    branch = '    if (msg.type === "approval_response") {' + dispatch
+    script = '''
+let pendingApprovalId = "approval-1";
+let approvalSubmitting = false;
+let sessionId = "session-1";
+let aguiMessages = [];
+let runId = null;
+let busy = true;
+let attempts = 0;
+let closed = 0;
+const buttons = [{disabled: false}, {disabled: false}];
+const approval = {querySelectorAll: () => buttons};
+const errors = [];
+const addMessage = (_type, text) => errors.push(text);
+const setBusy = value => { busy = value; };
+const aguiInput = resume => ({messages: [], runId: "next-run", resume});
+const api = async () => {
+  attempts++;
+  if (attempts === 1) throw new Error("HTTP 429");
+  return {body: "accepted"};
+};
+const dismissApproval = () => { pendingApprovalId = null; closed++; };
+const watchRun = async () => {};
+async function action(msg) {
+''' + branch + '''
+}
+(async () => {
+  await action({type:"approval_response",id:"approval-1",decision:"yes"});
+  if (pendingApprovalId !== "approval-1" || !busy || closed || attempts !== 1)
+    throw new Error("Rejected resume lost its interrupt");
+  if (buttons.some(x => x.disabled)) throw new Error("Retry controls disabled");
+  await action({type:"approval_response",id:"approval-1",decision:"no"});
+  if (pendingApprovalId !== null || closed !== 1 || attempts !== 2)
+    throw new Error("Retry did not complete");
+  if (errors.length !== 1 || !errors[0].includes("429"))
+    throw new Error("Rejection not reported");
+  console.log("ok");
+})().catch(err => {console.error(err); process.exitCode=1;});
+'''
+    result = subprocess.run([node, "-e", script], capture_output=True,
+                            text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_approval_cancel_and_click_keep_interrupt_until_response():
+    from cli_agent.web_ui_api import API_APP_JS
+
+    handlers = API_APP_JS.split('approval.addEventListener("click"', 1)[1].split(
+        'quit.addEventListener("click"', 1
+    )[0]
+    assert 'pendingApprovalId = null;' not in handlers
+    assert 'approval.close();' not in handlers
+    assert 'event.preventDefault();' in handlers
+    assert 'approvalSubmitting' in handlers
