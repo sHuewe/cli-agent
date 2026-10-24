@@ -486,12 +486,42 @@ API_APP_JS = """
     return messages;
   }
 
+  // Keep the wire transcript below the server limits of 512 messages
+  // and 1 MiB JSON. The visible chat transcript is independent and stays
+  // intact. Keep recent complete turns; never silently truncate a message.
+  const MAX_WIRE_MESSAGES = 240;
+  const MAX_WIRE_BYTES = 400 * 1024;
+  function boundAguiMessages() {
+    const encoder = new TextEncoder();
+    let start = Math.max(0, aguiMessages.length - MAX_WIRE_MESSAGES);
+    let bytes = 0;
+    for (let index = aguiMessages.length - 1; index >= start; index -= 1) {
+      bytes += encoder.encode(JSON.stringify(aguiMessages[index])).length + 1;
+      if (bytes > MAX_WIRE_BYTES) {
+        start = index + 1;
+        break;
+      }
+    }
+    // The latest user message cannot be discarded: the agent must either
+    // receive the whole request or return a clear size error.
+    if (start >= aguiMessages.length) {
+      throw new Error("Letzte Nachricht überschreitet das AG-UI-Limit.");
+    }
+    aguiMessages = aguiMessages.slice(start);
+    // Avoid sending an orphaned tool result or assistant reply as the
+    // earliest retained conversation turn after the truncation.
+    while (aguiMessages.length > 1 && aguiMessages[0].role !== "user") {
+      aguiMessages.shift();
+    }
+    return aguiMessages;
+  }
+
   function aguiInput(resume = undefined) {
     const result = {
       threadId: sessionId,
       runId: crypto.randomUUID(),
       protocolVersion: "1.0",
-      messages: aguiMessages
+      messages: boundAguiMessages()
     };
     if (resume) result.resume = resume;
     result.messages = compactAguiHistory(result);
