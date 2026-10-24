@@ -391,3 +391,92 @@ async def test_browser_run_limit_reserves_connections_for_heartbeat_and_approval
             assert accepted.status_code == 202
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_browser_run_limit_reserves_connections_for_approvals_and_heartbeats():
+    """Four SSE runs leave two of six browser HTTP/1.1 slots free."""
+    from cli_agent.agent_api import MAX_CONCURRENT_BROWSER_RUNS
+
+    assert MAX_CONCURRENT_BROWSER_RUNS <= 4
+    agents = []
+    def factory(session):
+        agent = _Agent(session)
+        agents.append(agent)
+        return agent
+
+    service = AgentApiService(factory)
+    initial = await service.create()
+    registry = BrowserSessionRegistry(service, initial.id)
+    origin = "http://127.0.0.1:9191"
+    app = create_app(service, ui={
+        "token": "browser-secret", "origin": origin,
+        "session_id": initial.id, "registry": registry,
+        "info": {"model": "fake", "workspace": ".", "mcp_servers": []},
+        "shutdown": lambda: None,
+    })
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=origin
+        ) as client:
+            claims = []
+            for index in range(MAX_CONCURRENT_BROWSER_RUNS + 1):
+                if index:
+                    created = await client.post(
+                        "/ui/sessions", headers=_headers(origin=origin), json={}
+                    )
+                    assert created.status_code == 201
+                    body = {"ticket": created.json()["ticket"]}
+                else:
+                    body = {}
+                claimed = await client.post(
+                    "/ui/bootstrap", headers=_headers(origin=origin), json=body
+                )
+                assert claimed.status_code == 200
+                claims.append((claimed.json()["session_id"], claimed.json()["lease"]))
+
+            runs = []
+            for sid, lease in claims[:MAX_CONCURRENT_BROWSER_RUNS]:
+                resp = await client.post(
+                    f"/sessions/{sid}/runs",
+                    json={"prompt": "long running"},
+                    headers=_headers(lease, origin=origin),
+                )
+                assert resp.status_code == 202
+                runs.append((sid, lease, resp.json()["run_id"]))
+
+            overflow_sid, overflow_lease = claims[MAX_CONCURRENT_BROWSER_RUNS]
+            refused = await client.post(
+                f"/sessions/{overflow_sid}/runs",
+                json={"prompt": "overflow"},
+                headers=_headers(overflow_lease, origin=origin),
+            )
+            assert refused.status_code == 429
+            assert service.sessions[overflow_sid]._run is None
+            assert not service.sessions[overflow_sid]._busy
+
+            # A queued fifth run must not monopolize a connection. Ordinary
+            # control requests remain accepted while four runs are active.
+            heartbeat = await client.post(
+                "/ui/heartbeat", json={"session_id": overflow_sid},
+                headers=_headers(overflow_lease, origin=origin),
+            )
+            assert heartbeat.status_code == 204
+            assert (await client.get("/ui/sessions", headers=_headers())).status_code == 200
+
+            # Freeing one run permits a new one.
+            first_sid, first_lease, first_run_id = runs[0]
+            response = await client.get(
+                f"/sessions/{first_sid}/runs/{first_run_id}/events",
+                headers=_headers(first_lease),
+            )
+            assert response.status_code == 200
+            assert service.sessions[first_sid]._run.done
+            accepted = await client.post(
+                f"/sessions/{overflow_sid}/runs",
+                json={"prompt": "now available"},
+                headers=_headers(overflow_lease, origin=origin),
+            )
+            assert accepted.status_code == 202
+    finally:
+        await service.shutdown()
