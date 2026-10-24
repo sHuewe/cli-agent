@@ -50,7 +50,12 @@ the agent's worker task before its session becomes ready.
 ## Multiple browser sessions
 
 The built-in UI can manage up to eight independent agent sessions on the same
-Starlette server. Click **Neue Session in neuem Tab** to create a new session
+Starlette server. At most four browser agent runs may be active simultaneously:
+this reserves HTTP/1.1 browser connections for approval requests, heartbeat
+renewals, and UI controls even when multiple sessions stream events. Additional
+sessions remain available and can start a run when an active run completes;
+the API returns HTTP 429 while the browser-run limit is reached. Standalone
+API-only runs are not subject to this browser transport limit. Click **Neue Session in neuem Tab** to create a new session
 and open it in a new tab. The **Sessions** dialog lists existing sessions and
 allows opening unoccupied sessions and deleting idle sessions. The currently\nopen session can also be deleted from the dialog without terminating the server.
 
