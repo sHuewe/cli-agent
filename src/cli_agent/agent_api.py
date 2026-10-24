@@ -277,49 +277,6 @@ class AgentSession:
             if self._run is not None:
                 self._run.changed.set()
 
-    async def _await_run_subscriber
-                        if failed is not None:
-                            failed.status = "failed"
-                            if self.debug_errors:
-                                import traceback
-                                failed.error = "".join(traceback.format_exception(exc))
-                            else:
-                                failed.error = f"{type(exc).__name__}: {exc}"
-                            failed.emit({"type": "RUN_ERROR", "message": "Agentenlauf fehlgeschlagen."})
-                    finally:
-                        self._busy = False
-                        self._pending_interrupt = None
-                        self._opened_tool_calls.clear()
-                        run.changed.set()
-                        if self._run is not None:
-                            self._run.changed.set()
-        except asyncio.CancelledError:
-            if not self._startup_ready.done():
-                self._startup_ready.cancel()
-                self._ready.cancel()
-            elif not self._ready.done():
-                self._ready.cancel()
-            if self._run is not None and not self._run.done:
-                self._run.status = "cancelled"
-                self._run.emit({"type": "RUN_ERROR", "message": "Agentenlauf abgebrochen."})
-            raise
-        except BaseException as exc:
-            if not self._startup_ready.done():
-                self._startup_ready.set_exception(exc)
-                self._ready.cancel()
-            elif not self._ready.done():
-                self._ready.set_exception(exc)
-            else:
-                if self._run is not None and not self._run.done:
-                    self._run.status = "failed"
-                    self._run.error = "Agentenworker wurde beendet."
-                    self._run.emit({"type": "RUN_ERROR", "message": "Agentenworker wurde beendet."})
-        finally:
-            self._closed = True
-            self.broker.detach(self._approval_sender)
-            if self._run is not None:
-                self._run.changed.set()
-
     async def _await_run_subscriber(self, run: AgentRun) -> None:
         """Wait until an actual SSE listener exists, before executing a UI run.
 
