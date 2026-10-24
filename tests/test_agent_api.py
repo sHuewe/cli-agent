@@ -396,7 +396,7 @@ async def test_agui_http_validation_bounded_json_and_proprietary_routes_removed(
         assert (await client.post(endpoint, content=b"{}", headers={
             **auth, "Content-Type": "text/plain"
         })).status_code == 400
-        assert (await client.post(endpoint, json=data, headers=headers(service))).status_code == 406
+        assert (await client.post(endpoint, json=data, headers={**headers(service), "Accept": "text/plain"})).status_code == 406
         assert (await client.post(endpoint, json=data, headers=auth)).status_code == 200
         assert (await client.post(endpoint, json=data, headers=auth)).status_code == 409
         sid = next(iter(service.sessions))
