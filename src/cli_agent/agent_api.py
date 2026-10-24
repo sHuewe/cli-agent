@@ -1102,7 +1102,8 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                 session_id, request.headers.get("x-cli-agent-lease"), refresh=False
             )
             if owner:
-                if service.sessions[session_id]._busy:
+                target = service.sessions[session_id]
+                if target._busy and target._pending_interrupt is None:
                     return error(409, "Session ist beschäftigt.")
             elif not registry.can_close(session_id):
                 return error(409, "Session ist in einem anderen Tab geöffnet oder beschäftigt.")
