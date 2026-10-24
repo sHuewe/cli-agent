@@ -120,14 +120,25 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
 
         for command in ("exit", "QUIT", " Quit "):
             response = await client.post(
-                uri + "/runs", json={"prompt": command}, headers=auth
+                "/ag-ui", json={
+                    "threadId": session.id, "runId": "exit-" + command,
+                    "protocolVersion": "1.0",
+                    "messages": [{"id": "u", "role": "user", "content": command}],
+                }, headers={**auth, "Accept": "text/event-stream"},
             )
             assert response.status_code == 400
         assert agents[0].requests == []
         assert stopped == []
 
-        # Browser command buttons are server-validated, unlike free-form
-        # prompts. Invalid inputs must not reach the model or --output.
+        # Proprietary run/approval routes were intentionally removed.
+        assert (await client.post(uri + "/runs", json={"prompt": "hi"},
+                                  headers=auth)).status_code == 404
+        assert (await client.get(uri + "/runs/test/events",
+                                 headers=headers)).status_code == 404
+        assert (await client.post(uri + "/runs/test/approvals/a",
+                                  json={"decision": "yes"},
+                                  headers=auth)).status_code == 404
+
         for invalid in (
             {"command": "add_web_context", "argument": "example.com"},
             {"command": "enable", "argument": "server with spaces"},
@@ -135,33 +146,28 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
             {"command": "unknown", "argument": "x"},
             {"command": "add_web_context"},
         ):
-            bad = await client.post(uri + "/runs", json=invalid, headers=auth)
+            bad = await client.post(
+                "/ui/command", json={"session_id": session.id, **invalid},
+                headers=auth,
+            )
             assert bad.status_code == 400
         assert agents[0].requests == []
-        assert session._run is None
 
-        valid = await client.post(
-            uri + "/runs", json={"command": "tokens"}, headers=auth
-        )
-        assert valid.status_code == 202
-        valid_stream = await client.get(
-            uri + f"/runs/{valid.json()['run_id']}/events", headers=headers
-        )
-        assert "RUN_FINISHED" in valid_stream.text
-        assert agents[0].requests == ["tokens"]
+        valid = await client.post("/ui/command", json={
+            "session_id": session.id, "command": "tokens",
+        }, headers=auth)
+        assert valid.status_code == 200
+        assert valid.json()["answer"] == "Antwort: tokens"
 
-        rid = (await client.post(uri + "/runs", json={"prompt": "hi"},
-            headers={**headers, "Origin": ui["origin"]})).json()["run_id"]
-        # Embedded-browser runs wait for their SSE consumer before execution.
-        sse = await client.get(uri + "/runs/" + rid + "/events", headers=headers)
-        assert sse.status_code == 200
-        assert "RUN_FINISHED" in sse.text
-        for _ in range(100):
-            run = (await client.get(uri + "/runs/" + rid, headers=headers)).json()
-            if run["status"] == "completed":
-                break
-            await asyncio.sleep(.005)
-        assert run["answer"] == "Antwort: hi"
+        result = await client.post("/ag-ui", json={
+            "threadId": session.id, "runId": "browser-run",
+            "protocolVersion": "1.0",
+            "messages": [{"id": "u", "role": "user", "content": "hi"}],
+        }, headers={**auth, "Accept": "text/event-stream"})
+        assert result.status_code == 200
+        assert "RUN_FINISHED" in result.text
+        assert "Antwort: hi" in result.text
+        assert agents[0].requests == ["tokens", "hi"]
 
         assert (await client.post("/ui/render", json={"text": "**safe**"},
             headers={**headers, "Origin": ui["origin"]})).status_code == 200
