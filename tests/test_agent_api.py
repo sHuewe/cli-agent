@@ -447,3 +447,39 @@ async def test_agui_limits_session_mutations_while_running():
     finally:
         gate.set()
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_configured_standalone_session_keeps_tool_policy_in_agui_run():
+    """The configured agent, not a fresh default one, handles the AG-UI call."""
+    service, agents = make_test_service()
+    try:
+        async with await client_for(service) as client:
+            auth = headers(service)
+            created = await client.post("/sessions", headers=auth)
+            assert created.status_code == 201
+            sid = created.json()["session_id"]
+            patched = await client.patch(
+                f"/sessions/{sid}/context",
+                json={"tools": {"read": False}}, headers=auth,
+            )
+            assert patched.status_code == 200
+            assert agents[0].enabled["read"] is False
+            response = await client.post(
+                "/ag-ui",
+                json={"threadId": sid, "runId": "bound-run",
+                      "messages": [{"id": "u", "role": "user", "content": "hello"}]},
+                headers={**auth, "Accept": "text/event-stream"},
+            )
+            assert response.status_code == 200
+            assert response.headers["x-cli-agent-session-id"] == sid
+            assert "RUN_FINISHED" in response.text
+            assert len(agents) == 1
+            assert agents[0].enabled["read"] is False
+            assert agents[0].history[-1] == "hello"
+            assert len(service.sessions) == 1
+            assert (await client.get(
+                f"/sessions/{sid}/context", headers=auth
+            )).json()["tools"][0]["enabled"] is False
+    finally:
+        await service.shutdown()
