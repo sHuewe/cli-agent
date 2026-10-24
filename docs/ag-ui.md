@@ -80,8 +80,16 @@ requirement.
 Supported: HTTP/SSE, assistant text messages, MCP/backend tool lifecycle,
 context input, thread continuity, human approval interrupts and resumes.
 
-Not advertised: frontend tools supplied via `RunAgentInput.tools`,
-multimodal model input, HTTP/Protobuf, resumable streams, and approve-with-edits.
+Supported frontend tools: The client advertises validated tools in
+`RunAgentInput.tools`. The model may invoke them, the server emits
+`TOOL_CALL_START` / `TOOL_CALL_ARGS` / `TOOL_CALL_END` and completes the run
+with `RUN_FINISHED.outcome.type = "success"` and `pendingToolCallIds`. The UI
+executes the tools and returns a `tool` message for **every** outstanding ID
+on the next normal `RunAgentInput`. cli-agent never executes these tools
+through MCP, and validates result-to-call correlation and tool-name collisions
+before continuing.
+
+Not advertised: multimodal model input, HTTP/Protobuf, resumable streams, and approve-with-edits.
 AG-UI clients remain interoperable for the supported protocol features.
 Supplying a frontend tool definition does not make cli-agent execute it.
 
