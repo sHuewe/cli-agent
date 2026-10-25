@@ -96,6 +96,11 @@ def test_cli_no_host_override():
     assert API_HOST == "127.0.0.1"
     parser = build_parser()
     assert parser.parse_args(["--with-os-read"]).os_access == "read"
+    assert parser.parse_args([]).approve_tool == []
+    assert parser.parse_args([
+        "--approve-tool", "os__write_file",
+        "--approve-tool", "external__search",
+    ]).approve_tool == ["os__write_file", "external__search"]
     with pytest.raises(SystemExit):
         parser.parse_args(["--host", "0.0.0.0"])
 
@@ -128,7 +133,7 @@ async def test_session_limit_and_shutdown():
 
 @pytest.mark.asyncio
 async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, monkeypatch):
-    from cli_agent import admin_config, config, execution, file_context, logging_setup, model_factory
+    from cli_agent import admin_config, agent_api, config, execution, file_context, logging_setup, model_factory
     from cli_agent.agent_api import build_service
     from dataclasses import dataclass
 
@@ -151,6 +156,13 @@ async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, mo
         mcp=object(),
     )
     captured = []
+    approval_fallbacks = []
+
+    async def approve_from_session(self, tool_name, arguments):
+        approval_fallbacks.append((self, tool_name, arguments))
+        return "session"
+
+    monkeypatch.setattr(agent_api.AgentSession, "approve", approve_from_session)
     monkeypatch.setattr(config, "load_config", lambda _: fake_config)
     monkeypatch.setattr(admin_config, "load_admin_config", lambda: fake_admin)
     monkeypatch.setattr(logging_setup, "configure_logging", lambda _: None)
@@ -174,7 +186,8 @@ async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, mo
     monkeypatch.setattr(file_context, "ContextFileCliAgent", FakeConstructedAgent)
 
     args = build_parser().parse_args([
-        "--workspace", str(tmp_path), "--model", "override", "--with-os-read"
+        "--workspace", str(tmp_path), "--model", "override", "--with-os-read",
+        "--approve-tool", "os__write_file", "--approve-tool", "external__search",
     ])
     service = build_service(args)
     session = await service.create()
@@ -183,7 +196,17 @@ async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, mo
     assert captured[0][1]["workspace_access"] == "read"
     assert captured[0][1]["dump_llm_context"] is False
     assert fake_config.dump_llm_context is True  # API must not mutate CLI configuration
-    assert captured[0][1]["approval_callback"] == session.approve
+    callback = captured[0][1]["approval_callback"]
+    assert await callback("os__write_file", {"path": "a.txt"}) is True
+    assert await callback("external__search", {"query": "q"}) is True
+    assert await callback("os__write_file_extra", {"path": "b.txt"}) == "session"
+    assert await callback("OS__write_file", {}) == "session"
+    assert await callback("os__*", {}) == "session"
+    assert approval_fallbacks == [
+        (session, "os__write_file_extra", {"path": "b.txt"}),
+        (session, "OS__write_file", {}),
+        (session, "os__*", {}),
+    ]
     assert fake_config.model.model == "default"
     await service.shutdown()
 
