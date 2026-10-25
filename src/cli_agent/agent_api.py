@@ -1453,6 +1453,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--with-mcp", action="append", default=[], metavar="NAME")
     parser.add_argument("--with-data", action="store_true")
     parser.add_argument("--exclude-path", action="append", type=Path, default=[])
+    parser.add_argument("--approve-tool", action="append", default=[], metavar="TOOL", help="Pre-approve one exact exposed tool name for this process run; repeat for multiple tools.")
     return parser
 
 
@@ -1461,7 +1462,8 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
     from .config import McpServerConfig, default_config_file, load_config
     from .execution import (
         apply_workspace_access_override, apply_data_override,
-        apply_named_mcp_overrides, resolve_excluded_paths,
+        apply_named_mcp_overrides, build_preapproval_callback,
+        resolve_excluded_paths,
     )
     from .file_context import ContextFileCliAgent
     from .model_factory import create_model_client
@@ -1517,7 +1519,10 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
             network=admin.network,
             web_providers=admin.web.providers,
             mcp_policy=admin.mcp,
-            approval_callback=session.approve,
+            approval_callback=build_preapproval_callback(
+                getattr(args, "approve_tool", ()) or (),
+                fallback=session.approve,
+            ),
             user_message_callback=session.broker.show_mcp_user_message,
             okf=config.okf,
             knowledge_vector=config.knowledge_vector,

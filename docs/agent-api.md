@@ -13,6 +13,21 @@ pipx install "cli-agent[web]"
 cli-agent-api --config config.toml --with-os-read --port 8765
 ```
 
+Für ausdrücklich vertrauenswürdige Automatisierung können einzelne Tools
+prozessweit vorab freigegeben werden, beispielsweise:
+
+```powershell
+cli-agent-api --with-os-write --approve-tool os__write_file --approve-tool external__search
+```
+
+`--approve-tool` kann mehrfach angegeben werden und prüft den **exakten
+exponierten Toolnamen** (keine Wildcards). Anders als eine Freigabe innerhalb
+einer einzelnen Session gilt sie für **alle API-Sessions bis zum Server-Neustart**
+und alle Argumente des betreffenden Tools. Andere zustimmungspflichtige Tools
+verwenden unverändert die API-Freigabe über den Client. Die Option aktiviert
+weder OS-Zugriff noch MCP-Server und umgeht keine Admin-, Netzwerk-, Workspace-
+oder Sensitive-Path-Beschränkung.
+
 Der Server bindet **hart an 127.0.0.1**. Es gibt keine `--host`-Option.
 Es wird beim Start ein zufälliger Bearer-Token auf stdout ausgegeben.
 Er muss von Clients in `Authorization: Bearer <token>` gesendet werden.
@@ -53,9 +68,9 @@ V1 verwendet die AG-UI-Ereignisnamen `RUN_STARTED`, `RUN_FINISHED`,
 `TEXT_MESSAGE_END`, `TOOL_CALL_START`, `TOOL_CALL_END` und
 `CUSTOM` für Freigaben. Tool-Argumente und Tool-Ergebnisse werden nicht
 generell in den Event-Stream übertragen, um keine internen Daten unnötig
-preiszugeben. Benutzerfreigaben bleiben über den vorhandenen
-`WebUiApprovalBroker` an Werkzeug und Lauf gebunden und werden ohne
-aktiven Event-Subscriber verweigert.
+preiszugeben. Nicht vorab freigegebene Tool-Aufrufe verwenden weiterhin den
+`WebUiApprovalBroker`: Benutzerfreigaben sind an Werkzeug und Lauf gebunden
+und werden ohne aktiven Event-Subscriber verweigert.
 
 **AG-UI-Kompatibilitätsgrenze:** Das ist ein erstes AG-UI-inspiriertes Eventprofil,
 **kein** vollständiger AG-UI-`RunAgentInput`-Endpunkt. Insbesondere fehlen
