@@ -229,6 +229,28 @@ def test_many_intervals_keep_summary_visible_without_inlining_all_rows(frames, t
         store.cleanup()
 
 
+def test_analyze_intervals_preserves_nanoseconds_in_duration_and_gap_checks(frames, tmp_path):
+    _write_json(tmp_path, "nanos.json", [
+        {"t": "2026-06-24T00:00:00.000000000Z", "v": 1},
+        {"t": "2026-06-24T00:00:00.000000001Z", "v": 1},
+        {"t": "2026-06-24T00:00:00.000000002Z", "v": 0},
+    ])
+    args = dict(path="nanos.json", time_column="t", value_column="v",
+                condition="eq", threshold=1, records_path="/measurements")
+    accepted = frames.analyze_intervals(**args, max_gap_seconds=1.5e-9)
+    summary = accepted.meta[METADATA_FOR_LLM_KEY]["summary"]
+    assert summary["interval_count"] == 1
+    assert summary["covered_seconds"] == pytest.approx(2e-9)
+    assert summary["total_seconds"] == pytest.approx(2e-9)
+    assert accepted.structuredContent["rows"][0]["duration_seconds"] == pytest.approx(2e-9)
+
+    rejected = frames.analyze_intervals(**args, max_gap_seconds=0.5e-9)
+    summary = rejected.meta[METADATA_FOR_LLM_KEY]["summary"]
+    assert summary["interval_count"] == 0
+    assert summary["covered_seconds"] == 0
+    assert summary["skipped_gaps"] == 2
+
+
 def test_time_series_tools_reject_duplicate_timestamps_and_invalid_gap(frames, tmp_path):
     _write_json(tmp_path, "duplicates.json", [
         {"t": "2026-06-24T00:00:00", "v": 1},

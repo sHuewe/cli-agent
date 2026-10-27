@@ -202,6 +202,13 @@ class DataFrameOperations:
             raise DataOperationError("max_gap_seconds muss zwischen 0 (exklusiv) und 604800 liegen.")
         return float(max_gap_seconds)
 
+    @staticmethod
+    def _elapsed_seconds(start: pd.Timestamp, end: pd.Timestamp) -> float:
+        # Timedelta.total_seconds() discards sub-microsecond remainders in
+        # pandas 2.2. The integer .value is measured in nanoseconds; converting
+        # only after subtraction retains them for duration and gap checks.
+        return (end - start).value / 1_000_000_000
+
     def describe_data(
         self, path: str, *, columns: list[str] | None = None,
         time_column: str | None = None,
@@ -290,13 +297,13 @@ class DataFrameOperations:
                 intervals.append({
                     "start_time": self._artifact_scalar(active_start),
                     "end_time": self._artifact_scalar(active_end),
-                    "duration_seconds": (active_end - active_start).total_seconds(),
+                    "duration_seconds": self._elapsed_seconds(active_start, active_end),
                 })
                 active_start = active_end = None
 
         for index in range(len(series) - 1):
             left, right = series.iloc[index], series.iloc[index + 1]
-            delta = (right["timestamp"] - left["timestamp"]).total_seconds()
+            delta = self._elapsed_seconds(left["timestamp"], right["timestamp"])
             if delta > gap_limit:
                 skipped_gaps += 1
             usable = (0 < delta <= gap_limit and pd.notna(left["value"]) and pd.notna(right["value"]))
@@ -341,7 +348,7 @@ class DataFrameOperations:
         used = skipped_gaps = skipped_nulls = 0
         for index in range(len(series) - 1):
             left, right = series.iloc[index], series.iloc[index + 1]
-            delta = (right["timestamp"] - left["timestamp"]).total_seconds()
+            delta = self._elapsed_seconds(left["timestamp"], right["timestamp"])
             if delta > gap_limit:
                 skipped_gaps += 1
                 continue
