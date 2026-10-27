@@ -425,10 +425,15 @@ class McpLifecycleMixin:
         return session, initialize_result.instructions
 
     async def close(self) -> None:
-        if self._exit_stack is None: return
+        if self._exit_stack is None:
+            self._result_artifacts.cleanup()
+            return
         stack = self._exit_stack; self._exit_stack = None
-        if self._vector_session is not None:
-            self._vector_session.close()
-            self._vector_session = None
-        self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._server_untrusted_instructions.clear(); self._active_servers.clear(); self._knowledge_session = None; self._knowledge_tools.clear(); self._knowledge_routes.clear(); self._knowledge_instructions = None; self.history.clear()
-        await stack.aclose()
+        try:
+            if self._vector_session is not None:
+                self._vector_session.close()
+                self._vector_session = None
+            self._sessions.clear(); self._server_stacks.clear(); self._server_configs.clear(); self._tool_routes.clear(); self._server_tools.clear(); self._server_instructions.clear(); self._server_untrusted_instructions.clear(); self._active_servers.clear(); self._knowledge_session = None; self._knowledge_tools.clear(); self._knowledge_routes.clear(); self._knowledge_instructions = None; self.history.clear()
+            await stack.aclose()
+        finally:
+            self._result_artifacts.cleanup()

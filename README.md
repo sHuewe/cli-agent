@@ -391,6 +391,44 @@ LLM-Kontext geladen werden.
 Details: [Workspace OS MCP](docs/mcp-os.md) und
 [Workspace Data MCP](docs/mcp-data.md).
 
+### Große MCP-Toolantworten als temporäre Session-Dateien
+
+Ein MCP-Tool kann die direkte Übergabe seiner vollständigen Antwort an das LLM
+unterdrücken. Dazu liefert es in der MCP-`_meta` der **Toolantwort** beide Felder:
+
+```json
+{
+  "io.github.shuewe.cli-agent/only_metadata_to_llm": true,
+  "io.github.shuewe.cli-agent/meta_data_for_llm": {
+    "source": "history",
+    "count": 240,
+    "columns": ["timestamp", "value"]
+  }
+}
+```
+
+Dies ist nur aktiv, wenn der eingebaute Data-MCP tatsächlich verfügbar ist und
+Workspace-Schreibzugriff (`--with-os-write`) freigegeben wurde. Dann speichert
+`cli-agent` das normalerweise modell-sichtbare MCP-Toolergebnis in einer
+**selbst benannten, workspace-relativen Datei** (`.json` bei strukturierten
+Ergebnissen, andernfalls `.txt`). An das LLM geht ausschließlich das vom MCP
+gelieferte Metadatenobjekt, ergänzt um `workspace_path` mit dem relativen
+Dateipfad. Ein etwaiges `workspace_path` des MCP-Servers wird dabei ersetzt;
+Dateinamen und Zielverzeichnisse können MCP-Server nicht vorgeben.
+
+Fehlt eine Voraussetzung oder ist das Opt-in nicht exakt `true`, bleibt das
+bisherige Verhalten unverändert. Bei ungültigen Metadaten oder gescheitertem
+Dateischreiben erhält das Modell eine Fehlermeldung **ohne den Rohdatensatz**.
+Es gelten Größenlimits für Dateien und Metadaten.
+
+Die so erzeugten Dateien liegen in einem separaten, zufällig benannten Ordner
+`mcp-data-...` im Workspace und werden **bei regulärem Beenden der Agent-Session**
+automatisch entfernt. Andere Workspace-Dateien, auch eigenständig durch OS-/
+Data-Tools angelegte Dateien, sind davon ausdrücklich nicht betroffen. Bei
+abruptem Prozessabbruch ist eine Bereinigung nicht garantiert. JSON-Dateien
+können derzeit noch nicht direkt über die pfadbasierten Data-MCP-Operationen
+ausgewertet werden; dessen Unterstützung wird separat erweitert.
+
 ## Optionale lokale Web-UI
 
 Der interaktive Agent kann optional in einer kleinen Browser-Oberfläche statt

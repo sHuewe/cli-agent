@@ -24,6 +24,8 @@ from .mcp_limits import (
     enforce_mcp_tool_result_limit,
 )
 from .mcp_schema_guard import validate_mcp_tool_arguments
+from .mcp_result_artifacts import ArtifactError
+from .os_operations import WorkspaceError
 from .message_visibility import (
     CLI_AGENT_MESSAGE_TO_USER_META_KEY,
     MCP_USER_MESSAGE_ROLE,
@@ -371,6 +373,33 @@ async def process_tool_calls(
 
         raw_result_text = enforce_mcp_tool_result_limit(tool_result_text(result))
         model_result_text = raw_result_text
+        artifactized = False
+        store = getattr(agent, "_result_artifacts", None)
+        data_config = getattr(agent, "_server_configs", {}).get("data")
+        if (
+            store is not None
+            and getattr(agent, "workspace_access", "none") == "write"
+            and "data" in getattr(agent, "_active_servers", set())
+            and bool(getattr(data_config, "built_in", False))
+        ):
+            try:
+                metadata_result = store.metadata_result(result, raw_result_text)
+                if metadata_result is not None:
+                    model_result_text = metadata_result
+                    artifactized = True
+            except (ArtifactError, WorkspaceError, OSError) as exc:
+                logger.warning("mcp_result_artifact_failed name=%s error_type=%s", exposed_name, type(exc).__name__)
+                # Never silently send the large original payload when the MCP
+                # server explicitly requested metadata-only delivery.
+                model_result_text = json.dumps(
+                    {
+                        "error": "mcp_result_artifact_failed",
+                        "reason": str(exc) if isinstance(exc, ArtifactError) else
+                        "MCP-Daten konnten nicht sicher im Workspace gespeichert werden.",
+                    },
+                    ensure_ascii=False,
+                )
+                artifactized = True
         compressed = False
 
         if knowledge_selection_token is not None:
@@ -380,7 +409,8 @@ async def process_tool_calls(
         result_text = model_result_text
 
         should_compress = (
-            bool(getattr(server_config, "compress_result", False))
+            not artifactized
+            and bool(getattr(server_config, "compress_result", False))
             and len(result_text)
             >= int(getattr(server_config, "compress_min_chars", 12_000))
             and not is_error
