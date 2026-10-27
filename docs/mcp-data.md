@@ -192,6 +192,9 @@ bleibt `calculate` bzw. die bestehenden Decimal-basierten Aggregationen
 zuständig. Die DataFrame-Verarbeitung ist auf 100.000 Zeilen, 100 Spalten,
 höchstens acht Join-Quellen und 16 MB pro Ergebnis begrenzt. Große Zeiträume
 sollten deshalb nach Möglichkeit schon an der Datenquelle eingegrenzt werden.
+Endliche `float64`-Ergebniswerte werden ohne zusätzliche dezimale Rundung als
+JSON serialisiert und beim erneuten Einlesen bitgenau rekonstruiert; das ist
+keine Zusage exakter Dezimalarithmetik während der Berechnung.
 Das Summieren einer Momentanleistung ist **keine** Berechnung der Energie:
 hierzu muss die Zeitbasis beachtet werden.
 

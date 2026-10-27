@@ -459,6 +459,41 @@ def test_exact_join_retains_fractional_second_timestamps(frames, tmp_path):
     assert result.structuredContent["rows"][0]["timestamp"].endswith(".123456789")
 
 
+def test_dataframe_json_preserves_float64_values_exactly(frames, tmp_path):
+    values = [1.4e-15, 5e-324, -1.2e-18, 1.2345678901234567, 1e308, -0.0]
+    result = DataFrameOperations._result(pd.DataFrame({"value": values}), operation="join_data")
+    serialized_values = [row["value"] for row in result.structuredContent["rows"]]
+    assert [value.hex() for value in serialized_values] == [value.hex() for value in values]
+
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        metadata = json.loads(store.metadata_result(result, json.dumps(result.structuredContent)))
+        columns, rows = frames.base._read_records(metadata["workspace_path"], records_path="/rows")
+        assert columns == ["value"]
+        assert [row["value"].hex() for row in rows] == [value.hex() for value in values]
+    finally:
+        store.cleanup()
+
+
+def test_join_and_followup_derive_keep_small_float_measurements(frames, tmp_path):
+    _write_json(tmp_path, "tiny.json", [
+        {"timestamp": "2026-06-24T07:00:00Z", "power": 1.4e-15},
+    ])
+    joined = frames.join_data([_source("tiny.json", "A"), _source("tiny.json", "B")])
+    assert joined.structuredContent["rows"][0]["A"].hex() == (1.4e-15).hex()
+
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        metadata = json.loads(store.metadata_result(joined, json.dumps(joined.structuredContent)))
+        derived = frames.derive_columns(
+            metadata["workspace_path"], [DerivedColumn("copy", "add", "A", constant=0)],
+            records_path="/rows",
+        )
+        assert derived.structuredContent["rows"][0]["copy"].hex() == (1.4e-15).hex()
+    finally:
+        store.cleanup()
+
+
 def test_empty_join_artifact_preserves_schema_for_followup_tools(frames, tmp_path):
     _write_json(tmp_path, "nonmatching.json", [
         {"timestamp": "2026-06-24T08:00:00", "power": 1},

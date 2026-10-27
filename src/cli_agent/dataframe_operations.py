@@ -11,6 +11,7 @@ import json
 import math
 import re
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 import pandas as pd
@@ -97,6 +98,31 @@ class DataFrameOperations:
         return values
 
     @staticmethod
+    def _artifact_scalar(value: object) -> object:
+        if value is None or value is pd.NA or value is pd.NaT:
+            return None
+        if isinstance(value, pd.Timestamp):
+            # Timestamp.isoformat retains nanoseconds for both naive and
+            # timezone-aware dates; pandas DataFrame.to_json may not.
+            stamp = value.tz_convert("UTC") if value.tzinfo is not None else value
+            iso = stamp.isoformat(timespec="nanoseconds")
+            return iso.replace("+00:00", "Z") if value.tzinfo is not None else iso
+        if isinstance(value, Decimal):
+            # DataFrame operations use float64 arithmetic; keep the same type
+            # at the JSON boundary for any unmodified Decimal input columns.
+            value = float(value)
+        elif not isinstance(value, (str, bool, int, float)) and hasattr(value, "item"):
+            value = value.item()
+        if isinstance(value, float):
+            if math.isnan(value):
+                return None
+            if not math.isfinite(value):
+                raise ValueError("Nichtendliche DataFrame-Zahl im Ergebnis.")
+        if not isinstance(value, (str, bool, int, float)):
+            raise TypeError("Nicht unterstützter DataFrame-Skalar.")
+        return value
+
+    @staticmethod
     def _result(frame: pd.DataFrame, *, operation: str) -> CallToolResult:
         if len(frame) > MAX_FRAME_ROWS or len(frame.columns) > MAX_FRAME_COLUMNS:
             raise DataOperationError("DataFrame-Ergebnis überschreitet das Zeilen-/Spaltenlimit.")
@@ -107,22 +133,14 @@ class DataFrameOperations:
             _validate_column_name(column, source="DataFrame-Ergebnis")
         if not frame.columns.is_unique:
             raise DataOperationError("DataFrame enthält doppelte Spaltennamen.")
-        # pandas handles its own scalar types and timestamps here; the JSON
-        # payload is checked before it reaches the agent's MCP result limits.
+        # Python's JSON encoder preserves every finite float64 value via its
+        # shortest round-trip representation. pandas.to_json(double_precision)
+        # instead rounds to decimal *places*, corrupting tiny measurements.
         try:
-            # Preserve sub-millisecond timestamps for subsequent exact joins.
-            rows = json.loads(frame.to_json(orient="records", date_format="iso", date_unit="ns", double_precision=15))
-            # pandas 3.1's to_json can silently drop nanosecond digits for
-            # timezone-aware datetimes (e.g. .123456789Z -> .123456000Z),
-            # even with date_unit="ns". Serialize these values explicitly so
-            # chained joins keep their original timestamp precision.
-            for column in frame.columns:
-                if isinstance(frame[column].dtype, pd.DatetimeTZDtype):
-                    for index, stamp in enumerate(frame[column]):
-                        rows[index][column] = (
-                            None if pd.isna(stamp)
-                            else stamp.tz_convert("UTC").isoformat(timespec="nanoseconds").replace("+00:00", "Z")
-                        )
+            rows = [
+                {column: DataFrameOperations._artifact_scalar(value) for column, value in row.items()}
+                for row in frame.to_dict(orient="records")
+            ]
             payload = {"columns": list(frame.columns), "rows": rows}
             encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
         except (ValueError, TypeError, OverflowError) as exc:
