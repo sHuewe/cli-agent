@@ -33,6 +33,18 @@ cli-agent --with-os-read --with-data
 cli-agent --with-os-write --with-data
 ```
 
+Für die neuen DataFrame-/Zeitreihen-Operationen wird optional **Pandas**
+benötigt. Die bestehenden Tools benötigen Pandas weiterhin nicht:
+
+```powershell
+pip install "cli-agent[data]"
+```
+
+Die Tools `join_data`, `derive_columns` und `resample_data` erscheinen nur,
+wenn Pandas installiert ist **und** `--with-data --with-os-write` verwendet
+wird. Sie benötigen keine allgemeine Codeausführung und akzeptieren keine
+frei formulierten Python-/Pandas-Ausdrücke.
+
 Ohne `--with-os-read` bzw. `--with-os-write` wird für den Data-MCP gar keine
 `Workspace`-Instanz erzeugt. Die Analyse-Tools bleiben trotzdem verfügbar,
 exponieren in diesem Modus aber bewusst keinen `path`-Parameter. Mit
@@ -46,14 +58,21 @@ abgeleitet.
 
 ## Unterstützte Datenformate
 
-Workspace-Dateien unterstützen `.csv`, `.tsv`, `.jsonl`, `.ndjson`,
+Workspace-Dateien unterstützen `.csv`, `.tsv`, `.json`, `.jsonl`, `.ndjson`,
 `.md` und `.markdown`. Inline-Payloads unterstützen `csv`, `tsv`,
 `json`, `jsonl`, `ndjson` und `markdown`. Für Inline-Tabellen ist
 Markdown das bevorzugte Austauschformat.
 
-Bei `json` muss der Payload ein Array flacher Objekte enthalten. JSONL/NDJSON
-enthält pro nicht-leerer Zeile genau ein Objekt. Verschachtelte Arrays oder
-Objekte werden bewusst abgewiesen. Heterogene JSON-/JSONL-Datensätze bleiben
+Bei `json` muss der ausgewählte Datensatz ein Array flacher Objekte enthalten.
+Bei verschachtelten JSON-Antworten kann dieses Array mit dem optionalen
+**`records_path`** als JSON Pointer (z. B. `/measurements` oder `/rows`)
+ausgewählt werden. `inspect_json(path)` findet geeignete Arrays und gibt deren
+Pfade, Zeilenzahl und Spaltennamen zurück, ohne Zeilen zu übertragen. Das
+einfache JSON-Array an der Wurzel funktioniert weiterhin ohne `records_path`.
+`records_path` gilt auch für Inline-JSON und ist für andere Formate nicht
+zulässig. JSONL/NDJSON enthält pro nicht-leerer Zeile genau ein Objekt.
+Verschachtelte Werte **innerhalb** der ausgewählten Zeilen werden weiterhin
+bewusst abgewiesen. Heterogene JSON-/JSONL-Datensätze bleiben
 intern sparse: fehlende Felder werden nicht für jede Zeile als zusätzliche
 `null`-Einträge materialisiert. Tabellarische Ausgaben behandeln fehlende
 Felder weiterhin wie `null`. CSV/TSV-Werte werden konservativ als `null`,
@@ -78,11 +97,80 @@ damit große Quelldatensätze nicht ungefiltert in den LLM-Kontext gelangen.
 | --- | --- |
 | `calculate(expression)` | Wertet einen begrenzten arithmetischen Ausdruck deterministisch mit Dezimalarithmetik aus. |
 | `extract_markdown_tables(markdown)` | Extrahiert und normalisiert alle Pipe-Tabellen aus einem vollständigen Markdown-Dokument und gibt sie wieder als Markdown zurück. |
+| `inspect_json(path)` | Findet Record-Arrays in verschachtelten Workspace-JSON-Dateien ohne die einzelnen Messwerte auszugeben; nur bei Dateileserechten. |
 | `inspect_schema(...)` | Liefert Schema-/Profil-Metadaten ohne Datensätze: Zeilenzahl, Spaltennamen, Typinferenz, Null-/Unique-Zahlen und bei niedriger Kardinalität die vollständige Distinct-Wertedomäne. |
 | `preview_data(...)` | Liefert Schema-Metadaten plus eine bewusst begrenzte Vorschau vollständiger Zeilen. Für reine Schema-Erkundung ist `inspect_schema` vorzuziehen. |
 | `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert höchstens 1.000 Zeilen. |
 | `value_counts(...)` | Zählt unterschiedliche Werte einer Spalte. |
 | `aggregate_data(...)` | Gruppiert und aggregiert Daten deterministisch. |
+
+### Zeitreihen und DataFrames (Pandas, `--with-os-write`)
+
+Die neuen Tools sind auf die Analyse vieler Messwerte ausgelegt. Ihr Ergebnis
+ist ein strukturiertes JSON mit `columns` und `rows`, wird aber bei Nutzung
+mit cli-agent **nicht vollständig in den LLM-Kontext geschrieben**: Über das
+MCP-Feld `_meta.io.github.shuewe.cli-agent/only_metadata_to_llm` wird
+stattdessen das bereits vorhandene Session-Artefakt-Verfahren genutzt. Das
+Modell erhält ausschließlich die durch Data-MCP definierten Metadaten
+(`operation`, `row_count`, `columns`, `records_path`) und den vom Agenten
+ergänzten `workspace_path`.
+
+Beispiel-Workflow für L1/L3-Phasenmessungen:
+
+1. `inspect_json` auf eine zuvor im Workspace gespeicherte MCP-Antwort
+   aufrufen, um z. B. `records_path="/measurements"` zu finden.
+2. Mit `join_data` zwei Zeitreihen anhand exakt gleicher Zeitstempel
+   zusammenführen. Beide Quellen benennen `path`, `alias`, `time_column`,
+   `value_column` und bei Bedarf `records_path`:
+
+   ```json
+   {
+     "sources": [
+       {"path": "l1.json", "records_path": "/measurements", "alias": "L1", "time_column": "timestamp", "value_column": "power"},
+       {"path": "l3.json", "records_path": "/measurements", "alias": "L3", "time_column": "timestamp", "value_column": "power"}
+     ],
+     "direction": "exact",
+     "how": "inner"
+   }
+   ```
+
+3. Die Antwort liefert unter anderem `workspace_path` (z. B.
+   `mcp-data-<id>/r-<id>.json`) und `records_path="/rows"`. Damit kann
+   `derive_columns` auf dem bereits verknüpften DataFrame arbeiten:
+
+   ```json
+   {
+     "path": "mcp-data-<id>/r-<id>.json",
+     "records_path": "/rows",
+     "operations": [
+       {"name": "D", "operation": "subtract", "column": "L1", "other_column": "L3"}
+     ]
+   }
+   ```
+
+4. Für übersichtliche Trends kann `resample_data` das Ergebnis z. B. in
+   5-Minuten-Fenstern mit `mean` oder `max` zusammenfassen. Die Antwort
+   enthält wieder `workspace_path` und `records_path="/rows"`.
+
+| Tool | Zweck / Grenzen |
+| --- | --- |
+| `join_data(sources, direction, how, tolerance_seconds)` | Exakter Join ist der Standard und interpoliert nichts; bei unterschiedlichen Abtastraten sind `nearest`, `backward` oder `forward` nur mit expliziter maximaler Toleranz und `how="left"` möglich. Doppelte Zeitstempel werden abgewiesen. |
+| `derive_columns(path, operations, records_path)` | Nur `add`, `subtract`, `multiply`, `divide`, `diff`, `cumsum`, `rolling_mean`. Binäre Operationen verwenden Spaltennamen oder einen konstanten Wert; `rolling_mean.window` zählt Zeilen. |
+| `resample_data(path, frequency, aggregations, time_column, records_path)` | Begrenztes Raster wie `30s`, `5min`, `1h`, `1d`. Aggregationen `mean`, `min`, `max`, `sum`, `count`, ohne Interpolation. Die Zeitstempel bezeichnen den Beginn der Intervalle. |
+
+Diese Tools nutzen Pandas-`float64`-Berechnungen. Für exakte Dezimalarithmetik
+bleibt `calculate` bzw. die bestehenden Decimal-basierten Aggregationen
+zuständig. Die DataFrame-Verarbeitung ist auf 100.000 Zeilen, 100 Spalten,
+höchstens acht Join-Quellen und 8 MB pro Ergebnis begrenzt. Große Zeiträume
+sollten deshalb nach Möglichkeit schon an der Datenquelle eingegrenzt werden.
+Das Summieren einer Momentanleistung ist **keine** Berechnung der Energie:
+hierzu muss die Zeitbasis beachtet werden.
+
+Die temporären Artefakte gehören zur laufenden cli-agent-Session und werden
+beim regulären Session-Ende inklusive ihres Session-Unterordners gelöscht.
+Andere Workspace-Dateien – insbesondere solche, die der Nutzer oder
+`*_to_file`-Tools explizit anlegen – werden dadurch nicht gelöscht. Nach
+einem Prozessabsturz kann eine Bereinigung ausgeblieben sein.
 
 ### Markdown-Tabellen
 

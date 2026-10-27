@@ -20,6 +20,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+data = [
+    "pandas>=2.2,<4",
+]
 web = [
     "starlette>=1.6,<2",
     "uvicorn>=0.35,<1",

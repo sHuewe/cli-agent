@@ -127,6 +127,16 @@ def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> Non
     ]
 
 
+def test_inline_mode_can_select_nested_json_record_array(monkeypatch) -> None:
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    calls = []
+    server = data_mcp_server.create_server(_operations(calls), access="none")
+    assert server.tools["preview_data"](
+        data='{"records":[{"x":1}]}', data_format="json", records_path="/records",
+    ) == "inspected"
+    assert calls[0][2]["records_path"] == "/records"
+
+
 def test_read_mode_exposes_path_but_not_write_tools(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
@@ -136,7 +146,7 @@ def test_read_mode_exposes_path_but_not_write_tools(monkeypatch) -> None:
         access="read",
     )
 
-    assert set(server.tools) == BASE_TOOLS
+    assert set(server.tools) == BASE_TOOLS | {"inspect_json"}
     assert "path" in inspect.signature(server.tools["inspect_schema"]).parameters
     assert "path" in inspect.signature(server.tools["preview_data"]).parameters
     assert "path" in inspect.signature(server.tools["select_data"]).parameters
@@ -184,7 +194,7 @@ def test_write_mode_adds_file_tools_and_prefers_path_workflows(monkeypatch) -> N
         access="write",
     )
 
-    assert set(server.tools) == BASE_TOOLS | {
+    assert set(server.tools) == BASE_TOOLS | {"inspect_json"} | {
         "select_data_to_file",
         "aggregate_data_to_file",
     }
