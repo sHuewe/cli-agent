@@ -211,6 +211,39 @@ def test_markdown_artifact_is_readable_and_removed_on_close(tmp_path: Path) -> N
     assert not artifact.exists()
 
 
+def test_markdown_inline_budget_is_five_thousand_utf8_bytes() -> None:
+    from cli_agent.data_result_metadata import INLINE_RESULT_BYTES, markdown_result
+
+    assert INLINE_RESULT_BYTES == 5_000
+    at_limit = markdown_result("ä" * 2_500, ["value"], 1, operation="select_data")
+    over_limit = markdown_result("ä" * 2_501, ["value"], 1, operation="select_data")
+    assert "result" in at_limit.meta[METADATA_FOR_LLM_KEY]
+    assert "result" not in over_limit.meta[METADATA_FOR_LLM_KEY]
+
+
+def test_artifact_metadata_allows_results_above_generic_mcp_limit(tmp_path: Path, monkeypatch) -> None:
+    from cli_agent import mcp_limits
+
+    monkeypatch.setattr(mcp_limits, "MAX_MCP_TOOL_RESULT_CHARS", 100)
+    agent = _agent(tmp_path, access="read")
+    response = _response()
+    response.structuredContent = {"points": "x" * 200}
+    try:
+        result = json.loads(asyncio.run(_execute(agent, response)))
+        assert "points" not in result
+        assert json.loads((tmp_path / result["workspace_path"]).read_text())["points"] == "x" * 200
+    finally:
+        asyncio.run(agent.close())
+
+    agent = _agent(tmp_path, access="read")
+    try:
+        response.meta[ONLY_METADATA_TO_LLM_KEY] = False
+        with pytest.raises(RuntimeError, match="Sicherheitslimit"):
+            asyncio.run(_execute(agent, response))
+    finally:
+        asyncio.run(agent.close())
+
+
 def test_untrusted_data_server_does_not_disable_artifact_mode(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
     agent._server_configs["data"] = McpServerConfig(name="data", command="unused")

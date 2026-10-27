@@ -421,6 +421,7 @@ def test_oversized_full_result_fails_instead_of_truncating(
 ) -> None:
     from cli_agent import data_operations
 
+    assert data_operations.MAX_FULL_RESULT_BYTES == 16_000_000
     (tmp_path / "many.csv").write_text(
         "group,value\na,1\nb,2\n",
         encoding="utf-8",

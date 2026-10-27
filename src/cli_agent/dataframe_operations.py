@@ -22,7 +22,7 @@ from .mcp_result_artifacts import METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY
 
 MAX_FRAME_ROWS = 100_000
 MAX_FRAME_COLUMNS = 100
-MAX_FRAME_RESULT_CHARS = 8_000_000
+MAX_FRAME_RESULT_CHARS = 16_000_000
 MAX_FRAME_SOURCES = 8
 MAX_FRAME_TRANSFORMS = 20
 _FREQUENCY = re.compile(r"[1-9][0-9]{0,3}(?:s|min|h|d)\Z")
@@ -271,6 +271,13 @@ class DataFrameOperations:
                     if spec.column not in valid_counts:
                         valid_counts[spec.column] = resampler[spec.column].count()
                     grouped.loc[valid_counts[spec.column] == 0, spec.alias] = float("nan")
+            for alias in specs:
+                # pandas may overflow finite inputs to +/-inf, which to_json
+                # would silently serialize as null. Genuine missing values are
+                # allowed, but computed infinities must be rejected.
+                values = grouped[alias].dropna()
+                if not values.empty and not values.map(math.isfinite).all():
+                    raise DataOperationError("Resampling erzeugte ein nichtendliches Ergebnis.")
             grouped = grouped.reset_index()
         except (ValueError, TypeError, OverflowError) as exc:
             raise DataOperationError(f"Resampling fehlgeschlagen: {exc}") from exc

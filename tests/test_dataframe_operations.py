@@ -242,6 +242,17 @@ def test_resample_sums_preserve_nulls_per_column(frames, tmp_path):
     assert [row["l3_samples"] for row in rows] == [0, 1, 1, 0, 0]
 
 
+def test_resample_rejects_aggregation_overflow(frames, tmp_path):
+    _write_json(tmp_path, "overflow.json", [
+        {"timestamp": "2026-06-24T07:00:00", "power": 1e308},
+        {"timestamp": "2026-06-24T07:00:10", "power": 1e308},
+    ])
+    with pytest.raises(DataOperationError, match="nichtendliches Ergebnis"):
+        frames.resample_data("overflow.json", "1min", [
+            ResampleAggregation("power", "sum", "total"),
+        ], records_path="/measurements")
+
+
 def test_resample_rejects_huge_sparse_span_before_allocating(frames, tmp_path, monkeypatch):
     _write_json(tmp_path, "year.json", [
         {"timestamp": "2025-01-01T00:00:00", "power": 100},
@@ -313,6 +324,18 @@ def test_large_frame_metadata_omits_rows_while_retaining_full_artifact(frames, t
     result = frames.join_data([_source("large.json", "A"), _source("large.json", "B")])
     assert len(result.structuredContent["rows"]) == 200
     assert "rows" not in result.meta[METADATA_FOR_LLM_KEY]
+
+
+def test_dataframe_result_inline_boundary_is_five_kilobytes():
+    from cli_agent.dataframe_operations import INLINE_RESULT_BYTES, MAX_FRAME_RESULT_CHARS
+
+    assert INLINE_RESULT_BYTES == 5_000
+    assert MAX_FRAME_RESULT_CHARS == 16_000_000
+    # Exercise the same serialization and metadata logic as the Pandas tools.
+    small = DataFrameOperations._result(pd.DataFrame({"value": ["x" * 10]}), operation="join_data")
+    large = DataFrameOperations._result(pd.DataFrame({"value": ["x" * 5_000]}), operation="join_data")
+    assert "rows" in small.meta[METADATA_FOR_LLM_KEY]
+    assert "rows" not in large.meta[METADATA_FOR_LLM_KEY]
 
 
 @pytest.mark.asyncio

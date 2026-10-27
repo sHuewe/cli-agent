@@ -9,7 +9,7 @@ from .mcp_result_artifacts import METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY
 
 # Small complete results remain directly visible, while every result also
 # receives a session path so subsequent file-based tools can reuse it.
-INLINE_RESULT_BYTES = 8_000
+INLINE_RESULT_BYTES = 5_000
 
 
 def markdown_result(

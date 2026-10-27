@@ -84,7 +84,7 @@ Dateigröße angehoben; Inline-Daten bleiben unabhängig davon durch ihr
 Summe aller zu materialisierenden Tabellenzeilen bereits vor der eigentlichen
 Markdown-Tokenisierung geprüft. Tool-Ergebnisse sind zusätzlich durch ein
 Größenbudget begrenzt. `select_data` und `aggregate_data` kürzen Zeilen
-**niemals**: Ist die vollständige Ausgabe zu groß (aktuell 8 MB), wird
+**niemals**: Ist die vollständige Ausgabe zu groß (aktuell 16 MB), wird
 stattdessen ein Fehler zurückgegeben. Bei aktiviertem Workspace-Zugriff
 gelangen große Ergebnisse nur als Session-Dateipfad und Metadaten in den
 LLM-Kontext.
@@ -111,7 +111,7 @@ MCP-Feld `_meta.io.github.shuewe.cli-agent/only_metadata_to_llm` wird
 stattdessen das bereits vorhandene Session-Artefakt-Verfahren genutzt. Das
 Modell erhält die durch Data-MCP definierten Metadaten (`operation`,
 `row_count`, `columns`, `records_path`) und den vom Agenten ergänzten
-`workspace_path`. Bei kleinen Ergebnissen (maximal 8 KB) werden zusätzlich
+`workspace_path`. Bei kleinen Ergebnissen (maximal 5 KB) werden zusätzlich
 alle Ergebniszeilen direkt in den Metadaten bereitgestellt.
 
 Beispiel-Workflow für L1/L3-Phasenmessungen:
@@ -160,7 +160,7 @@ Beispiel-Workflow für L1/L3-Phasenmessungen:
 Diese Tools nutzen Pandas-`float64`-Berechnungen. Für exakte Dezimalarithmetik
 bleibt `calculate` bzw. die bestehenden Decimal-basierten Aggregationen
 zuständig. Die DataFrame-Verarbeitung ist auf 100.000 Zeilen, 100 Spalten,
-höchstens acht Join-Quellen und 8 MB pro Ergebnis begrenzt. Große Zeiträume
+höchstens acht Join-Quellen und 16 MB pro Ergebnis begrenzt. Große Zeiträume
 sollten deshalb nach Möglichkeit schon an der Datenquelle eingegrenzt werden.
 Das Summieren einer Momentanleistung ist **keine** Berechnung der Energie:
 hierzu muss die Zeitbasis beachtet werden.
