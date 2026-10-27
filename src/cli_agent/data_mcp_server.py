@@ -13,7 +13,7 @@ from .mcp_path_policy import read_path_policy
 from .config import McpServerConfig, default_config_file, load_config
 from .data_operations import DataOperationError, DataOperations
 from .data_result_metadata import markdown_result
-from .dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
+from .dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
 from .logging_setup import configure_logging
 from .os_operations import Workspace, WorkspaceError
 
@@ -71,8 +71,10 @@ def _server_instructions(access: str) -> str:
         source_guidance = """\
 Workspace file access is available. Prefer path-based datasets over repeatedly
 passing large inline payloads. For timestamped measurements, prefer the
-declarative join_data, derive_columns and resample_data tools: they can return
-metadata plus a session-scoped workspace_path to the full result. Reuse that
+declarative join_data, derive_columns, resample_data, describe_data,
+analyze_intervals and integrate_data tools. Use concat_data to append tables
+with matching schemas. Tabular tools can return metadata plus a session-scoped
+workspace_path to the full result. Reuse that
 path with records_path='/rows' rather than materializing rows in the LLM.
 The select_data and aggregate_data tools return complete datasets without
 row limits. Their results are kept as session-local Markdown artifacts, with
@@ -621,6 +623,91 @@ def create_server(
                 return frames.resample_data(
                     path, frequency, aggregations,
                     time_column=time_column, records_path=records_path,
+                )
+
+            @mcp.tool()
+            def describe_data(
+                path: str,
+                columns: list[str] | None = None,
+                time_column: str | None = None,
+                records_path: str | None = None,
+            ) -> str:
+                """Return compact numeric statistics without forwarding rows.
+
+                Includes count, missing values, min/max, mean, median, sample
+                std, quartiles, first/last valid values and optionally the
+                timestamps of extrema. Numeric columns are auto-selected by
+                default. Output is bounded to 5 KB; narrow columns if needed.
+                """
+                return frames.describe_data(
+                    path, columns=columns, time_column=time_column,
+                    records_path=records_path,
+                )
+
+            @mcp.tool(structured_output=False)
+            def analyze_intervals(
+                path: str,
+                time_column: str,
+                value_column: str,
+                condition: Literal["lt", "lte", "gt", "gte", "eq", "ne"],
+                threshold: float,
+                max_gap_seconds: float,
+                records_path: str | None = None,
+            ) -> CallToolResult:
+                """Find consecutive measurement intervals meeting a threshold.
+
+                The earlier sample holds until the next timestamp. No
+                extrapolation follows the final sample. Segments with null
+                endpoints or gaps longer than max_gap_seconds are excluded.
+                Metadata contains total/longest duration and interval count;
+                full [start_time,end_time) intervals are session artifacts.
+                """
+                return frames.analyze_intervals(
+                    path, time_column=time_column, value_column=value_column,
+                    condition=condition, threshold=threshold,
+                    max_gap_seconds=max_gap_seconds, records_path=records_path,
+                )
+
+            @mcp.tool()
+            def integrate_data(
+                path: str,
+                time_column: str,
+                value_column: str,
+                max_gap_seconds: float,
+                method: Literal["trapezoid", "previous"] = "trapezoid",
+                time_unit: Literal["seconds", "hours"] = "hours",
+                records_path: str | None = None,
+            ) -> str:
+                """Integrate irregular measurements with an explicit gap limit.
+
+                trapezoid averages consecutive values; previous uses the
+                earlier value throughout its interval. Null endpoints and
+                excessive gaps are excluded. No final-sample extrapolation.
+                The result is input-value-units times seconds or hours:
+                e.g. W * h gives Wh, NOT kWh. Returns compact JSON.
+                """
+                return frames.integrate_data(
+                    path, time_column=time_column, value_column=value_column,
+                    max_gap_seconds=max_gap_seconds, method=method,
+                    time_unit=time_unit, records_path=records_path,
+                )
+
+            @mcp.tool(structured_output=False)
+            def concat_data(
+                sources: list[DataFrameInput],
+                sort_by: list[str] | None = None,
+                unique_by: list[str] | None = None,
+                keep: Literal["first", "last"] = "first",
+            ) -> CallToolResult:
+                """Append 2-8 tables row-wise with identical column names.
+
+                Column order may differ. Rows keep source order and duplicates
+                by default. Optionally sort by columns or explicitly
+                deduplicate on unique_by, keeping the first or last row.
+                Results are session-scoped artifacts with metadata.
+                """
+                return frames.concat_data(
+                    sources, sort_by=sort_by, unique_by=unique_by, keep=keep,
                 )
 
     return mcp

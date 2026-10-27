@@ -34,7 +34,8 @@ cli-agent --with-os-write --with-data
 ```
 
 **Pandas wird bei jeder Installation von cli-agent mitinstalliert.**
-Die Tools `join_data`, `derive_columns` und `resample_data` erscheinen bei
+Die Tools `join_data`, `derive_columns`, `resample_data`, `describe_data`,
+`analyze_intervals`, `integrate_data` und `concat_data` erscheinen bei
 `--with-data --with-os-read` (auch mit `--with-os-write`). Sie benötigen keine allgemeine Codeausführung
 und akzeptieren keine frei formulierten Python-/Pandas-Ausdrücke.
 
@@ -175,6 +176,20 @@ Beispiel-Workflow für L1/L3-Phasenmessungen:
 | `join_data(sources, direction, how, tolerance_seconds)` | Exakter Join ist der Standard und interpoliert nichts; bei unterschiedlichen Abtastraten sind `nearest`, `backward` oder `forward` nur mit expliziter maximaler Toleranz und `how="left"` möglich. Doppelte Zeitstempel werden abgewiesen. |
 | `derive_columns(path, operations, records_path)` | Nur `add`, `subtract`, `multiply`, `divide`, `diff`, `cumsum`, `rolling_mean`. Binäre Operationen verwenden Spaltennamen oder einen konstanten Wert; `rolling_mean.window` zählt Zeilen. |
 | `resample_data(path, frequency, aggregations, time_column, records_path)` | Begrenztes Raster wie `30s`, `5min`, `1h`, `1d`. Aggregationen `mean`, `min`, `max`, `sum`, `count`, ohne Interpolation. Die Zeitstempel bezeichnen den Beginn der Intervalle. |
+| `describe_data(path, columns, time_column, records_path)` | Kompakte JSON-Statistiken (Anzahl, Nullwerte, Min/Max, Mittelwert, Median, Stichproben-Standardabweichung, Quartile, erster/letzter gültiger Wert). Mit `time_column` auch Zeitpunkte der Extremwerte. Ohne `columns` werden numerische Spalten gewählt. Direkte Ausgabe ans LLM, auf 5 KB begrenzt. |
+| `analyze_intervals(path, time_column, value_column, condition, threshold, max_gap_seconds, records_path)` | Findet zusammenhängende Zeiträume für `lt`, `lte`, `gt`, `gte`, `eq`, `ne`. Gibt Anzahl, Gesamtdauer und längstes Intervall direkt als Metadaten zurück; vollständige Zeitintervalle als Session-Artefakt. |
+| `integrate_data(path, time_column, value_column, max_gap_seconds, method, time_unit, records_path)` | Integriert unregelmäßige Messungen mit Trapezregel (`trapezoid`) oder konstantem Vorgängerwert (`previous`). Ergebnis als kompakte JSON-Zahl in *Werteinheit × Stunden* (Standard) oder *Werteinheit × Sekunden*. Watt × Stunden ergeben Wh, nicht kWh. |
+| `concat_data(sources, sort_by, unique_by, keep)` | Hängt zwei bis acht Datensätze mit denselben Spaltennamen untereinander. Die Spaltenreihenfolge darf unterschiedlich sein; Duplikate und Quellreihenfolge bleiben standardmäßig erhalten. Sortierung und Deduplizierung auf `unique_by` sind explizit wählbar. |
+
+Bei `analyze_intervals` gilt ein Messwert vom eigenen Zeitstempel bis zum
+nächsten Punkt (Sample-and-Hold); der letzte Wert wird nicht extrapoliert.
+Bei `integrate_data` wählt `method` alternativ die Trapezregel.
+Beide benötigen das explizite `max_gap_seconds` (größer als 0, maximal 604.800 Sekunden): Abschnitte mit größeren
+Lücken oder fehlenden Endpunktwerten werden ausgelassen. Doppelte Zeitstempel
+sind unzulässig. Die Antworten enthalten die tatsächlich abgedeckte Dauer
+und die ausgelassenen Abschnitte, damit unbeobachtete Zeiten nicht als
+Messwerte erscheinen. Einheitenumrechnung (z. B. Wh zu kWh) erfolgt nicht
+automatisch.
 
 Beim Join werden unterschiedliche Zeitstempelauflösungen (z. B. Mikro- und
 Nanosekunden) vor dem Abgleich verlustfrei vereinheitlicht. Auch bei
@@ -192,7 +207,7 @@ bleibt `calculate` bzw. die bestehenden Decimal-basierten Aggregationen
 zuständig. Nur die für Berechnungen ausgewählten Spalten werden nach `float64`
 konvertiert; nicht veränderte Quellspalten behalten ihre Skalartypen, auch bei
 großen Ganzzahl-IDs mit `null`-Werten. Die DataFrame-Verarbeitung ist auf 100.000 Zeilen, 100 Spalten,
-höchstens acht Join-Quellen und 16 MB pro Ergebnis begrenzt. Große Zeiträume
+höchstens acht Join-/Concat-Quellen und 16 MB pro tabellarischem Ergebnis begrenzt. Große Zeiträume
 sollten deshalb nach Möglichkeit schon an der Datenquelle eingegrenzt werden.
 Endliche `float64`-Ergebniswerte werden ohne zusätzliche dezimale Rundung als
 JSON serialisiert und beim erneuten Einlesen bitgenau rekonstruiert; das ist

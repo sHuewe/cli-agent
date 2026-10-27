@@ -8,7 +8,7 @@ import pytest
 from cli_agent.config import McpServerConfig
 from cli_agent.data_operations import DataOperationError, DataOperations
 from cli_agent.dataframe_operations import DataFrameOperations
-from cli_agent.dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
+from cli_agent.dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
 from cli_agent.mcp_result_artifacts import (
     METADATA_FOR_LLM_KEY,
     ONLY_METADATA_TO_LLM_KEY,
@@ -128,6 +128,212 @@ def frames(tmp_path):
 
 def _source(filename, alias):
     return DataFrameSource(filename, alias, value_column="power", records_path="/measurements")
+
+
+def _input(filename):
+    return DataFrameInput(filename, records_path="/measurements")
+
+
+def test_describe_data_statistics_with_extrema_timestamps(frames, tmp_path):
+    _write_json(tmp_path, "stats.json", [
+        {"timestamp": "2026-06-24T12:00:00Z", "value": 5, "label": "a"},
+        {"timestamp": "2026-06-24T10:00:00Z", "value": 1, "label": "b"},
+        {"timestamp": "2026-06-24T11:00:00Z", "value": None, "label": "c"},
+        {"timestamp": "2026-06-24T13:00:00Z", "value": 3, "label": "d"},
+    ])
+    result = json.loads(frames.describe_data(
+        "stats.json", time_column="timestamp", records_path="/measurements",
+    ))
+    assert result["row_count"] == 4
+    assert set(result["statistics"]) == {"value"}
+    stats = result["statistics"]["value"]
+    assert stats["numeric_count"] == 3
+    assert stats["null_count"] == 1
+    assert stats["minimum"] == 1
+    assert stats["maximum"] == 5
+    assert stats["mean"] == 3
+    assert stats["median"] == 3
+    assert stats["std"] == 2
+    assert (stats["p25"], stats["p75"]) == (2, 4)
+    assert (stats["first_value"], stats["last_value"]) == (1, 3)
+    assert stats["minimum_time"].startswith("2026-06-24T10:00:00")
+    assert stats["maximum_time"].startswith("2026-06-24T12:00:00")
+    assert result["first_time"].startswith("2026-06-24T10:00:00")
+    assert "rows" not in result
+
+
+def test_describe_data_handles_empty_values_and_rejects_large_metadata(frames, tmp_path):
+    _write_json(tmp_path, "nulls.json", [{"v": None}, {"v": None}])
+    result = json.loads(frames.describe_data(
+        "nulls.json", columns=["v"], records_path="/measurements",
+    ))
+    assert result["statistics"]["v"] == {"numeric_count": 0, "null_count": 2}
+    with pytest.raises(DataOperationError, match="columns"):
+        frames.describe_data("nulls.json", columns=["v", "v"], records_path="/measurements")
+
+    _write_json(tmp_path, "wide.json", [
+        {f"column_{i:03d}": i for i in range(100)}
+    ])
+    with pytest.raises(DataOperationError, match="5 KB"):
+        frames.describe_data("wide.json", records_path="/measurements")
+
+
+def test_analyze_intervals_respects_sample_and_hold_gaps_and_nulls(frames, tmp_path):
+    _write_json(tmp_path, "events.json", [
+        {"t": "2026-06-24T00:00:00", "v": 1},
+        {"t": "2026-06-24T00:01:00", "v": 1},
+        {"t": "2026-06-24T00:02:00", "v": 0},
+        {"t": "2026-06-24T00:03:00", "v": 1},
+        {"t": "2026-06-24T00:20:00", "v": 1},  # gap > max_gap: not counted
+        {"t": "2026-06-24T00:21:00", "v": None},
+        {"t": "2026-06-24T00:22:00", "v": 1},
+        {"t": "2026-06-24T00:23:00", "v": 0},
+    ])
+    result = frames.analyze_intervals(
+        "events.json", time_column="t", value_column="v", condition="gte",
+        threshold=1, max_gap_seconds=120, records_path="/measurements",
+    )
+    meta = result.meta[METADATA_FOR_LLM_KEY]
+    assert result.meta[ONLY_METADATA_TO_LLM_KEY] is True
+    assert meta["summary"]["interval_count"] == 2
+    assert meta["summary"]["total_seconds"] == 180
+    assert meta["summary"]["longest_seconds"] == 120
+    assert meta["summary"]["skipped_gaps"] == 1
+    assert meta["summary"]["covered_seconds"] == 240
+    assert meta["records_path"] == "/rows"
+    rows = result.structuredContent["rows"]
+    assert [item["duration_seconds"] for item in rows] == [120, 60]
+    assert rows[0]["start_time"].startswith("2026-06-24T00:00:00")
+    assert rows[0]["end_time"].startswith("2026-06-24T00:02:00")
+
+
+def test_many_intervals_keep_summary_visible_without_inlining_all_rows(frames, tmp_path):
+    _write_json(tmp_path, "many_events.json", [
+        {"t": f"2026-06-24T00:{index // 60:02d}:{index % 60:02d}Z", "v": index % 2}
+        for index in range(400)
+    ])
+    result = frames.analyze_intervals(
+        "many_events.json", time_column="t", value_column="v",
+        condition="eq", threshold=1, max_gap_seconds=2, records_path="/measurements",
+    )
+    meta = result.meta[METADATA_FOR_LLM_KEY]
+    assert meta["summary"]["interval_count"] == 199
+    assert meta["summary"]["total_seconds"] == 199
+    assert "rows" not in meta
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        exposed = store.metadata_result(result, json.dumps(result.structuredContent))
+        assert len(exposed.encode("utf-8")) <= 5_000
+        assert json.loads(exposed)["summary"]["interval_count"] == 199
+    finally:
+        store.cleanup()
+
+
+def test_time_series_tools_reject_duplicate_timestamps_and_invalid_gap(frames, tmp_path):
+    _write_json(tmp_path, "duplicates.json", [
+        {"t": "2026-06-24T00:00:00", "v": 1},
+        {"t": "2026-06-24T00:00:00", "v": 2},
+    ])
+    for fn in (frames.analyze_intervals, frames.integrate_data):
+        with pytest.raises(DataOperationError, match="doppelte"):
+            fn("duplicates.json", time_column="t", value_column="v",
+               max_gap_seconds=60, records_path="/measurements",
+               **({"condition": "lt", "threshold": 2} if fn == frames.analyze_intervals else {}))
+    with pytest.raises(DataOperationError, match="max_gap_seconds"):
+        frames.integrate_data("l1.json", time_column="timestamp", value_column="power",
+                              max_gap_seconds=0, records_path="/measurements")
+
+
+def test_integrate_data_trapezoid_previous_and_skipped_segments(frames, tmp_path):
+    _write_json(tmp_path, "power.json", [
+        {"t": "2026-06-24T00:00:00Z", "w": 100},
+        {"t": "2026-06-24T01:00:00Z", "w": 200},
+        {"t": "2026-06-24T02:00:00Z", "w": None},
+        {"t": "2026-06-24T03:00:00Z", "w": 400},
+        {"t": "2026-06-24T08:00:00Z", "w": 500},
+    ])
+    args = dict(path="power.json", time_column="t", value_column="w",
+                max_gap_seconds=4000, records_path="/measurements")
+    trapezoid = json.loads(frames.integrate_data(**args))
+    assert trapezoid["integral"] == 150  # Wh (not kWh)
+    assert trapezoid["time_unit"] == "hours"
+    assert trapezoid["intervals_used"] == 1
+    assert trapezoid["intervals_skipped_nulls"] == 2
+    assert trapezoid["intervals_skipped_gaps"] == 1
+    assert trapezoid["covered_seconds"] == 3600
+    previous = json.loads(frames.integrate_data(**args, method="previous", time_unit="seconds"))
+    assert previous["integral"] == 360_000  # W*s
+
+
+def test_integrate_data_empty_or_single_point_returns_zero(frames, tmp_path):
+    _write_json(tmp_path, "single.json", [{"t": "2026-06-24T00:00:00", "v": 50}])
+    result = json.loads(frames.integrate_data(
+        "single.json", time_column="t", value_column="v",
+        max_gap_seconds=60, records_path="/measurements",
+    ))
+    assert result["integral"] == 0
+    assert result["intervals_used"] == 0
+    assert result["covered_seconds"] == 0
+
+
+def test_integrate_data_handles_large_finite_values_over_short_intervals(frames, tmp_path):
+    _write_json(tmp_path, "large_power.json", [
+        {"t": "2026-06-24T00:00:00.000000000Z", "v": 1e308},
+        {"t": "2026-06-24T00:00:00.000000001Z", "v": 1e308},
+    ])
+    result = json.loads(frames.integrate_data(
+        "large_power.json", time_column="t", value_column="v",
+        max_gap_seconds=1, time_unit="seconds", records_path="/measurements",
+    ))
+    assert result["integral"] == pytest.approx(1e299)
+
+
+def test_concat_data_strict_schema_reorder_deduplicate_and_artifact_chain(frames, tmp_path):
+    _write_json(tmp_path, "a.json", [{"t": "t1", "v": 1}, {"t": "t2", "v": 2}])
+    _write_json(tmp_path, "b.json", [{"v": 20, "t": "t2"}, {"v": 3, "t": "t3"}])
+    sources = [_input("a.json"), _input("b.json")]
+    kept = frames.concat_data(sources)
+    assert kept.structuredContent["columns"] == ["t", "v"]
+    assert [row["v"] for row in kept.structuredContent["rows"]] == [1, 2, 20, 3]
+    result = frames.concat_data(sources, unique_by=["t"], keep="last", sort_by=["t"])
+    assert [row["v"] for row in result.structuredContent["rows"]] == [1, 20, 3]
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        metadata = json.loads(store.metadata_result(result, json.dumps(result.structuredContent)))
+        assert metadata["records_path"] == "/rows"
+        assert [row["v"] for row in frames.base._read_records(
+            metadata["workspace_path"], records_path="/rows",
+        )[1]] == [1, 20, 3]
+    finally:
+        store.cleanup()
+
+
+def test_concat_preserves_large_integer_ids_without_float_conversion(frames, tmp_path):
+    large = 18_446_744_073_709_551_617
+    _write_json(tmp_path, "huge_a.json", [{"id": large, "v": 1}])
+    _write_json(tmp_path, "huge_b.json", [{"v": 2, "id": None}])
+    result = frames.concat_data([_input("huge_a.json"), _input("huge_b.json")])
+    assert [row["id"] for row in result.structuredContent["rows"]] == [large, None]
+
+
+def test_concat_dedup_keeps_bool_distinct_from_numeric_one(frames, tmp_path):
+    _write_json(tmp_path, "typed_a.json", [{"key": True, "value": "bool"}])
+    _write_json(tmp_path, "typed_b.json", [{"key": 1, "value": "number"}])
+    result = frames.concat_data(
+        [_input("typed_a.json"), _input("typed_b.json")], unique_by=["key"],
+    )
+    assert [row["value"] for row in result.structuredContent["rows"]] == ["bool", "number"]
+
+
+def test_concat_data_rejects_missing_columns_or_implicit_overflow(frames, tmp_path, monkeypatch):
+    _write_json(tmp_path, "wrong.json", [{"other": 1}])
+    with pytest.raises(DataOperationError, match="dieselben Spalten"):
+        frames.concat_data([_input("l1.json"), _input("wrong.json")])
+    with pytest.raises(DataOperationError, match="unique_by"):
+        frames.concat_data([_input("l1.json"), _input("l1.json")], unique_by=["missing"])
+    monkeypatch.setattr("cli_agent.dataframe_operations.MAX_FRAME_ROWS", 5)
+    with pytest.raises(DataOperationError, match="Zeilenlimit"):
+        frames.concat_data([_input("l1.json"), _input("l1.json")])
 
 
 def test_exact_join_derived_difference_and_session_cleanup(frames, tmp_path):
