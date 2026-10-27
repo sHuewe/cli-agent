@@ -24,7 +24,7 @@ from .mcp_limits import (
     enforce_mcp_tool_result_limit,
 )
 from .mcp_schema_guard import validate_mcp_tool_arguments
-from .mcp_result_artifacts import ArtifactError
+from .mcp_result_artifacts import ArtifactError, ONLY_METADATA_TO_LLM_KEY
 from .os_operations import WorkspaceError
 from .message_visibility import (
     CLI_AGENT_MESSAGE_TO_USER_META_KEY,
@@ -371,19 +371,32 @@ async def process_tool_calls(
             knowledge_state.seen_calls.add(knowledge_call_key)
             knowledge_state.successful_followup_calls += 1
 
-        raw_result_text = enforce_mcp_tool_result_limit(tool_result_text(result))
+        raw_result_text = tool_result_text(result)
         model_result_text = raw_result_text
         artifactized = False
         store = getattr(agent, "_result_artifacts", None)
-        if (
+        meta = getattr(result, "meta", None)
+        artifact_requested = (
             store is not None
-            and getattr(agent, "workspace_access", "none") == "write"
-        ):
+            and getattr(agent, "workspace_access", "none") in {"read", "write"}
+            and isinstance(meta, dict)
+            and meta.get(ONLY_METADATA_TO_LLM_KEY) is True
+        )
+        # Metadata-only results are stored with their own bounded artifact
+        # budget. The lower generic MCP context limit still applies whenever
+        # an unabridged result could reach the model.
+        if not artifact_requested:
+            enforce_mcp_tool_result_limit(raw_result_text)
+        if artifact_requested:
             try:
                 metadata_result = store.metadata_result(result, raw_result_text)
                 if metadata_result is not None:
                     model_result_text = metadata_result
                     artifactized = True
+                else:
+                    # Fail safe if a future artifact store declines an opt-in:
+                    # its unabridged payload must still satisfy the normal cap.
+                    enforce_mcp_tool_result_limit(raw_result_text)
             except (ArtifactError, WorkspaceError, OSError) as exc:
                 logger.warning("mcp_result_artifact_failed name=%s error_type=%s", exposed_name, type(exc).__name__)
                 # Never silently send the large original payload when the MCP

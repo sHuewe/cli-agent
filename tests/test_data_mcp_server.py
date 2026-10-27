@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import inspect
+import json
 import sys
-
-from mcp.server.fastmcp.tools.base import Tool
 from pathlib import Path
 from types import SimpleNamespace
 
+from mcp.server.fastmcp.tools.base import Tool
 import pytest
 
 from cli_agent import data_mcp_server
-from cli_agent.data_operations import DataOperationError
+from cli_agent.agent_knowledge import tool_result_text
+from cli_agent.config import McpServerConfig
+from cli_agent.data_operations import DataOperationError, DataOperations
+from cli_agent.mcp_result_artifacts import (
+    METADATA_FOR_LLM_KEY,
+    ONLY_METADATA_TO_LLM_KEY,
+    McpResultArtifacts,
+)
+from cli_agent.os_operations import Workspace
 
 
 class FakeFastMCP:
@@ -20,7 +28,7 @@ class FakeFastMCP:
         self.tools: dict[str, object] = {}
         self.run_transport: str | None = None
 
-    def tool(self):
+    def tool(self, **_options):
         def decorator(function):
             self.tools[function.__name__] = function
             return function
@@ -48,6 +56,9 @@ def _operations(calls):
         select_data=lambda path=None, **kwargs: (
             calls.append(("select", path, kwargs)) or "selected"
         ),
+        _select_records=lambda path=None, **kwargs: (
+            calls.append(("select_records", path, kwargs)) or (["x"], [{"x": 1}])
+        ),
         value_counts=lambda column, path=None, **kwargs: (
             calls.append(("counts", column, path, kwargs)) or "counted"
         ),
@@ -55,16 +66,10 @@ def _operations(calls):
             calls.append(("aggregate", aggregations, path, kwargs))
             or "aggregated"
         ),
-        select_data_to_file=lambda output_path, input_path=None, **kwargs: (
-            calls.append(("select_write", output_path, input_path, kwargs))
-            or "selected-written"
+        _aggregate_records=lambda path=None, **kwargs: (
+            calls.append(("aggregate_records", path, kwargs)) or (["total"], [{"total": 3}])
         ),
-        aggregate_data_to_file=lambda output_path, aggregations, input_path=None, **kwargs: (
-            calls.append(
-                ("aggregate_write", output_path, aggregations, input_path, kwargs)
-            )
-            or "aggregated-written"
-        ),
+        _result=lambda *args, **kwargs: "Rows: 1/1\n\n| x |\n|---|\n| 1 |",
     )
 
 
@@ -105,7 +110,6 @@ def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> Non
     assert (
         server.tools["select_data"](
             "| a | b |\n|---|---|\n| 1 | 2 |",
-            limit=1,
         )
         == "selected"
     )
@@ -121,13 +125,22 @@ def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> Non
                 "filters": None,
                 "sort_by": None,
                 "descending": False,
-                "limit": 1,
             },
         )
     ]
 
 
-def test_read_mode_exposes_path_but_not_write_tools(monkeypatch) -> None:
+def test_inline_mode_can_select_nested_json_record_array(monkeypatch) -> None:
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    calls = []
+    server = data_mcp_server.create_server(_operations(calls), access="none")
+    assert server.tools["preview_data"](
+        data='{"records":[{"x":1}]}', data_format="json", records_path="/records",
+    ) == "inspected"
+    assert calls[0][2]["records_path"] == "/records"
+
+
+def test_read_mode_exposes_path_and_no_write_tools(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
 
@@ -136,12 +149,12 @@ def test_read_mode_exposes_path_but_not_write_tools(monkeypatch) -> None:
         access="read",
     )
 
-    assert set(server.tools) == BASE_TOOLS
+    assert set(server.tools) == BASE_TOOLS | {"inspect_json"}
     assert "path" in inspect.signature(server.tools["inspect_schema"]).parameters
     assert "path" in inspect.signature(server.tools["preview_data"]).parameters
     assert "path" in inspect.signature(server.tools["select_data"]).parameters
     assert "input_path" not in inspect.signature(server.tools["select_data"]).parameters
-    assert "Prefer a workspace path" in server.instructions
+    assert "Workspace file access is available" in server.instructions
 
     assert server.tools["inspect_schema"](
         path="data.csv",
@@ -175,7 +188,7 @@ def test_read_mode_exposes_path_but_not_write_tools(monkeypatch) -> None:
     ]
 
 
-def test_write_mode_adds_file_tools_and_prefers_path_workflows(monkeypatch) -> None:
+def test_write_mode_reuses_read_mode_tools_and_metadata(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
 
@@ -184,29 +197,19 @@ def test_write_mode_adds_file_tools_and_prefers_path_workflows(monkeypatch) -> N
         access="write",
     )
 
-    assert set(server.tools) == BASE_TOOLS | {
-        "select_data_to_file",
-        "aggregate_data_to_file",
-    }
+    assert set(server.tools) == BASE_TOOLS | {"inspect_json"}
     assert "path" in inspect.signature(server.tools["preview_data"]).parameters
-    assert "input_path" in inspect.signature(
-        server.tools["select_data_to_file"]
-    ).parameters
     assert "Prefer path-based datasets" in server.instructions
-    assert "*_to_file" in server.instructions
+    assert "without\nrow limits" in server.instructions
+    assert "limit" not in inspect.signature(server.tools["select_data"]).parameters
+    assert "limit" not in inspect.signature(server.tools["aggregate_data"]).parameters
 
-    assert (
-        server.tools["select_data_to_file"](
-            "filtered.md",
-            input_path="raw.csv",
-            columns=["x"],
-        )
-        == "selected-written"
-    )
+    result = server.tools["select_data"](path="raw.csv", columns=["x"])
+    assert result.meta["io.github.shuewe.cli-agent/only_metadata_to_llm"] is True
+    assert result.meta["io.github.shuewe.cli-agent/meta_data_for_llm"]["row_count"] == 1
     assert calls == [
         (
-            "select_write",
-            "filtered.md",
+            "select_records",
             "raw.csv",
             {
                 "data": None,
@@ -219,6 +222,65 @@ def test_write_mode_adds_file_tools_and_prefers_path_workflows(monkeypatch) -> N
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artifacts(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "source.csv").write_text(
+        "group,value\n" + "".join(f"g{i:04d},{i}\n" for i in range(1_201)),
+        encoding="utf-8",
+    )
+    workspace = Workspace.from_directory(tmp_path, McpServerConfig(name="data", built_in=True))
+    server = data_mcp_server.create_server(DataOperations(workspace), access="read")
+    assert server._tool_manager.get_tool("join_data") is not None
+    assert server._tool_manager.get_tool("derive_columns") is not None
+    assert server._tool_manager.get_tool("resample_data") is not None
+    assert server._tool_manager.get_tool("select_data_to_file") is None
+    assert server._tool_manager.get_tool("aggregate_data_to_file") is None
+    assert "limit" not in server._tool_manager.get_tool("select_data").parameters["properties"]
+    assert "limit" not in server._tool_manager.get_tool("aggregate_data").parameters["properties"]
+
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        selected = await server._tool_manager.call_tool(
+            "select_data", {"path": "source.csv"}, convert_result=True,
+        )
+        assert selected.meta[ONLY_METADATA_TO_LLM_KEY] is True
+        assert "Rows: 1201/1201" in tool_result_text(selected)
+        selected_preview = selected.meta[METADATA_FOR_LLM_KEY]
+        assert "result" not in selected_preview
+        assert selected_preview["sample_rows"][0] == {"group": "g0000", "value": 0}
+        assert selected_preview["sample_rows_complete"] is False
+        assert {stat["column"]: stat for stat in selected_preview["column_stats"]}["value"]["max"] == 1200
+        selected_metadata = store.metadata_result(selected, tool_result_text(selected))
+        result_metadata = json.loads(selected_metadata)
+        path = result_metadata["workspace_path"]
+        assert len(selected_metadata.encode("utf-8")) <= 5_000
+        assert result_metadata["sample_rows"] == selected_preview["sample_rows"]
+        assert (tmp_path / path).suffix == ".md"
+        assert (tmp_path / path).is_file()
+
+        grouped = await server._tool_manager.call_tool(
+            "aggregate_data",
+            {"path": path, "aggregations": [{"column": "value", "function": "sum", "alias": "total"}],
+             "group_by": ["group"]},
+            convert_result=True,
+        )
+        assert grouped.meta[ONLY_METADATA_TO_LLM_KEY] is True
+        assert "Rows: 1201/1201" in tool_result_text(grouped)
+        assert len(DataOperations(workspace)._read_records(
+            data=tool_result_text(grouped), data_format="markdown",
+        )[1]) == 1_201
+        grouped_metadata = store.metadata_result(grouped, tool_result_text(grouped))
+        grouped_summary = json.loads(grouped_metadata)
+        assert (tmp_path / grouped_summary["workspace_path"]).is_file()
+        assert len(grouped_metadata.encode("utf-8")) <= 5_000
+        assert {stat["column"]: stat for stat in grouped_summary["column_stats"]}["total"]["max"] == 1200
+    finally:
+        store.cleanup()
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["source.csv"]
 
 
 def test_extract_tool_description_and_result_are_markdown_oriented(monkeypatch) -> None:

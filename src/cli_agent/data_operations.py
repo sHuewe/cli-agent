@@ -21,13 +21,13 @@ from .data_markdown import (
 )
 from .os_operations import Workspace, WorkspaceError
 
-DATA_SUFFIXES = frozenset({".csv", ".tsv", ".jsonl", ".ndjson", ".md", ".markdown"})
+DATA_SUFFIXES = frozenset({".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".md", ".markdown"})
 DATA_FORMATS = frozenset({"csv", "tsv", "json", "jsonl", "ndjson", "markdown"})
 MAX_DATA_FILE_BYTES = 100_000_000
 MAX_DATA_PAYLOAD_CHARS = 2_000_000
 MAX_DATA_ROWS = 1_000_000
 MAX_CSV_FIELD_CHARS = MAX_DATA_FILE_BYTES
-MAX_RESULT_ROWS = 1_000
+MAX_FULL_RESULT_BYTES = 16_000_000
 MAX_SAMPLE_ROWS = 20
 DEFAULT_DISTINCT_VALUES_LIMIT = 20
 MAX_DISTINCT_VALUES_LIMIT = 100
@@ -313,7 +313,7 @@ class DataOperations:
         if suffix not in DATA_SUFFIXES:
             raise DataOperationError(
                 "Nicht unterstütztes Datenformat. Erlaubt sind .csv, .tsv, "
-                ".jsonl, .ndjson, .md und .markdown."
+                ".json, .jsonl, .ndjson, .md und .markdown."
             )
         return suffix
 
@@ -482,6 +482,7 @@ class DataOperations:
         data: str | None = None,
         data_format: str | None = None,
         table_index: int = 0,
+        records_path: str | None = None,
     ) -> tuple[list[str], list[Record]]:
         source_count = sum(source is not None for source in (path, data))
         if source_count != 1:
@@ -508,6 +509,8 @@ class DataOperations:
                     "csv, tsv, json, jsonl, ndjson und markdown."
                 )
             if normalized_format == "markdown":
+                if records_path is not None:
+                    raise DataOperationError("records_path ist nur für JSON zulässig.")
                 return self._read_markdown_text(
                     data,
                     table_index=table_index,
@@ -517,12 +520,16 @@ class DataOperations:
                     "table_index ist nur für Markdown-Daten zulässig."
                 )
             if normalized_format in {"csv", "tsv"}:
+                if records_path is not None:
+                    raise DataOperationError("records_path ist nur für JSON zulässig.")
                 return self._read_delimited_text(
                     data,
                     delimiter="," if normalized_format == "csv" else "\t",
                 )
             if normalized_format == "json":
-                return self._read_json_array(data)
+                return self._read_json_array(data, records_path=records_path)
+            if records_path is not None:
+                raise DataOperationError("records_path ist nur für JSON zulässig.")
             return self._read_json_lines_text(data)
 
         if data_format is not None:
@@ -538,6 +545,8 @@ class DataOperations:
 
         file_path = self.workspace.resolve_readable_file(path, direct=True)
         suffix = self._validate_suffix(file_path)
+        if records_path is not None and suffix != ".json":
+            raise DataOperationError("records_path ist nur für JSON zulässig.")
         try:
             size = file_path.stat().st_size
         except OSError as exc:
@@ -571,6 +580,14 @@ class DataOperations:
             raise DataOperationError(
                 "table_index ist nur für Markdown-Daten zulässig."
             )
+        if suffix == ".json":
+            try:
+                return self._read_json_array(
+                    file_path.read_text(encoding="utf-8"),
+                    records_path=records_path,
+                )
+            except (UnicodeDecodeError, OSError) as exc:
+                raise DataOperationError("JSON-Datei konnte nicht als UTF-8 gelesen werden.") from exc
         if suffix in {".csv", ".tsv"}:
             return self._read_delimited(
                 file_path,
@@ -675,7 +692,7 @@ class DataOperations:
     def _normalize_json_records(raw_rows: Any) -> tuple[list[str], list[Record]]:
         if not isinstance(raw_rows, list):
             raise DataOperationError(
-                "JSON-Inline-Daten müssen ein Array von Objekten enthalten."
+                "JSON-Daten müssen am ausgewählten records_path ein Array von Objekten enthalten."
             )
         if len(raw_rows) > MAX_DATA_ROWS:
             raise DataOperationError(
@@ -704,14 +721,102 @@ class DataOperations:
         return columns, rows
 
     @classmethod
-    def _read_json_array(cls, data: str) -> tuple[list[str], list[Record]]:
+    def _read_json_array(
+        cls, data: str, *, records_path: str | None = None
+    ) -> tuple[list[str], list[Record]]:
         try:
             raw = json.loads(data, parse_constant=_reject_json_constant)
         except json.JSONDecodeError as exc:
             raise DataOperationError(
                 f"Ungültiges JSON: {exc.msg}"
             ) from exc
-        return cls._normalize_json_records(raw)
+        selected = cls._resolve_json_pointer(raw, records_path)
+        columns, rows = cls._normalize_json_records(selected)
+        # DataFrame artifacts contain a declared schema alongside /rows. An
+        # empty array cannot carry field names, so preserve that schema for
+        # follow-up operations without changing ordinary empty JSON arrays.
+        if records_path == "/rows" and not rows and isinstance(raw, dict) and "columns" in raw:
+            declared = raw["columns"]
+            if not isinstance(declared, list) or len(declared) > 100:
+                raise DataOperationError("JSON-DataFrame benötigt eine Liste mit maximal 100 Spaltennamen.")
+            columns = [
+                _validate_column_name(name, source="JSON-DataFrame-Schema")
+                for name in declared
+            ]
+            if len(columns) != len(set(columns)):
+                raise DataOperationError("JSON-DataFrame-Schema benötigt eindeutige Spaltennamen.")
+        return columns, rows
+
+    @staticmethod
+    def _resolve_json_pointer(raw: Any, pointer: str | None) -> Any:
+        """Select a record array via an RFC 6901 JSON pointer (not JSONPath)."""
+        if pointer is None or pointer == "":
+            return raw
+        if not isinstance(pointer, str) or not pointer.startswith("/"):
+            raise DataOperationError("records_path muss ein JSON Pointer ab '/' sein.")
+        parts = pointer[1:].split("/")
+        if len(parts) > 32:
+            raise DataOperationError("records_path ist zu tief verschachtelt.")
+        current = raw
+        for part in parts:
+            if "~" in part:
+                if any(part[i:i+2] not in {"~0", "~1"} for i, c in enumerate(part) if c == "~"):
+                    raise DataOperationError("Ungültige JSON-Pointer-Escape-Sequenz.")
+                part = part.replace("~1", "/").replace("~0", "~")
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            elif isinstance(current, list) and part.isascii() and part.isdecimal() and (part == "0" or not part.startswith("0")) and int(part) < len(current):
+                current = current[int(part)]
+            else:
+                raise DataOperationError(f"records_path existiert nicht: {pointer!r}.")
+        return current
+
+    def inspect_json(self, path: str) -> str:
+        """Discover JSON record arrays without returning their values."""
+        if self.workspace is None:
+            raise DataOperationError("Dateizugriff ist nicht aktiviert.")
+        file_path = self.workspace.resolve_readable_file(path, direct=True)
+        if file_path.suffix.casefold() != ".json":
+            raise DataOperationError("inspect_json erwartet eine .json-Datei.")
+        if file_path.stat().st_size > MAX_DATA_FILE_BYTES:
+            raise DataOperationError("JSON-Datei überschreitet das Größenlimit.")
+        try:
+            raw = json.loads(file_path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise DataOperationError("JSON-Datei konnte nicht geparst werden.") from exc
+        discovered: list[dict[str, Any]] = []
+        inspected = 0
+        complete = True
+
+        def visit(value: Any, pointer: str, depth: int) -> None:
+            nonlocal inspected, complete
+            if depth > 16 or inspected >= 10_000 or len(discovered) >= 50:
+                complete = False
+                return
+            inspected += 1
+            if isinstance(value, list):
+                if value and all(isinstance(row, dict) for row in value):
+                    # Only describe arrays that the regular tabular reader accepts.
+                    try:
+                        columns, _ = self._normalize_json_records(value)
+                    except DataOperationError:
+                        pass
+                    else:
+                        discovered.append({"records_path": pointer, "row_count": len(value), "columns": columns[:100], "columns_complete": len(columns) <= 100})
+                        return
+                if len(value) > 20:
+                    complete = False
+                for index, item in enumerate(value[:20]):
+                    visit(item, f"{pointer}/{index}", depth + 1)
+            elif isinstance(value, dict):
+                if len(value) > 100:
+                    complete = False
+                for key, item in list(value.items())[:100]:
+                    escaped = key.replace("~", "~0").replace("/", "~1")
+                    visit(item, f"{pointer}/{escaped}", depth + 1)
+
+        visit(raw, "", 0)
+        return json.dumps({"source": path, "record_sets": discovered, "complete": complete}, ensure_ascii=False)
 
     @classmethod
     def _read_json_lines_text(
@@ -781,66 +886,6 @@ class DataOperations:
             ) from exc
 
         return columns, rows
-
-    def _write_records(
-        self,
-        path: str,
-        *,
-        columns: list[str],
-        rows: list[Record],
-    ) -> str:
-        if self.workspace is None:
-            raise DataOperationError(
-                "Dateischreibzugriff ist für den Data-MCP nicht aktiviert."
-            )
-        file_path = self.workspace.resolve_writable_file(path)
-        suffix = self._validate_suffix(file_path)
-        try:
-            if suffix in {".csv", ".tsv"}:
-                delimiter = "," if suffix == ".csv" else "\t"
-                with file_path.open("w", encoding="utf-8", newline="") as handle:
-                    writer = csv.DictWriter(
-                        handle,
-                        fieldnames=columns,
-                        delimiter=delimiter,
-                        extrasaction="raise",
-                    )
-                    writer.writeheader()
-                    writer.writerows(rows)
-            elif suffix in {".md", ".markdown"}:
-                file_path.write_text(
-                    render_markdown_table(
-                        columns,
-                        rows,
-                        preserve_scalar_types=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                    newline="\n",
-                )
-            else:
-                with file_path.open(
-                    "w",
-                    encoding="utf-8",
-                    newline="\n",
-                ) as handle:
-                    for row in rows:
-                        handle.write(_json_dumps_precise(row))
-                        handle.write("\n")
-        except (OSError, csv.Error, TypeError, ValueError) as exc:
-            raise DataOperationError(
-                f"Datendatei konnte nicht geschrieben werden: {path!r}: {exc}"
-            ) from exc
-        relative = file_path.relative_to(self.workspace.directory).as_posix()
-        return json.dumps(
-            {
-                "output_path": relative,
-                "rows_written": len(rows),
-                "columns": columns,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
 
     @staticmethod
     def _require_columns(
@@ -1033,7 +1078,13 @@ class DataOperations:
             )
         except MarkdownTableError as exc:
             raise DataOperationError(str(exc)) from exc
-        return prefix + "\n\n" + table
+        result = prefix + "\n\n" + table
+        if len(result.encode("utf-8")) > MAX_FULL_RESULT_BYTES:
+            raise DataOperationError(
+                "Vollständiges Datenergebnis ist zu groß für einen MCP-Aufruf. "
+                "Bitte Zeitraum oder Spalten eingrenzen."
+            )
+        return result
 
     @staticmethod
     def _column_metadata(
@@ -1236,6 +1287,7 @@ class DataOperations:
         data_format: str | None = None,
         table_index: int = 0,
         distinct_values_limit: int = DEFAULT_DISTINCT_VALUES_LIMIT,
+        records_path: str | None = None,
     ) -> str:
         """Return schema/profile metadata without exposing any dataset rows."""
         distinct_values_limit = self._validate_non_negative_limit(
@@ -1248,6 +1300,7 @@ class DataOperations:
             data=data,
             data_format=data_format,
             table_index=table_index,
+            records_path=records_path,
         )
         metadata = self._column_metadata(
             columns,
@@ -1274,6 +1327,7 @@ class DataOperations:
         data_format: str | None = None,
         table_index: int = 0,
         sample_rows: int = 5,
+        records_path: str | None = None,
     ) -> str:
         """Return schema metadata plus a bounded preview of complete rows."""
         sample_rows = self._validate_limit(
@@ -1286,6 +1340,7 @@ class DataOperations:
             data=data,
             data_format=data_format,
             table_index=table_index,
+            records_path=records_path,
         )
         metadata = self._column_metadata(columns, rows)
         return _json_dumps_precise(
@@ -1313,14 +1368,36 @@ class DataOperations:
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
         descending: bool = False,
-        limit: int = 100,
+        records_path: str | None = None,
     ) -> str:
-        limit = self._validate_limit(limit, maximum=MAX_RESULT_ROWS)
+        selected_columns, ordered = self._select_records(
+            path, data=data, data_format=data_format,
+            table_index=table_index, columns=columns, filters=filters,
+            sort_by=sort_by, descending=descending, records_path=records_path,
+        )
+        return self._result(
+            selected_columns, ordered, total_rows=len(ordered), limit=len(ordered),
+        )
+
+    def _select_records(
+        self,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        table_index: int = 0,
+        columns: list[str] | None = None,
+        filters: list[dict[str, Any]] | None = None,
+        sort_by: list[str] | None = None,
+        descending: bool = False,
+        records_path: str | None = None,
+    ) -> tuple[list[str], list[Record]]:
         source_columns, rows = self._read_records(
             path,
             data=data,
             data_format=data_format,
             table_index=table_index,
+            records_path=records_path,
         )
         selected_columns = self._require_columns(source_columns, columns)
         filtered = self._apply_filters(rows, source_columns, filters)
@@ -1330,12 +1407,7 @@ class DataOperations:
             sort_by,
             descending=descending,
         )
-        return self._result(
-            selected_columns,
-            ordered,
-            total_rows=len(ordered),
-            limit=limit,
-        )
+        return selected_columns, ordered
 
     @staticmethod
     def _aggregation_value(
@@ -1511,12 +1583,14 @@ class DataOperations:
         filters: list[dict[str, Any]] | None,
         sort_by: list[str] | None,
         descending: bool,
+        records_path: str | None = None,
     ) -> tuple[list[str], list[Record]]:
         columns, rows = self._read_records(
             path,
             data=data,
             data_format=data_format,
             table_index=table_index,
+            records_path=records_path,
         )
         groups = (
             []
@@ -1585,14 +1659,14 @@ class DataOperations:
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
         descending: bool = False,
-        limit: int = 200,
+        records_path: str | None = None,
     ) -> str:
-        limit = self._validate_limit(limit, maximum=MAX_RESULT_ROWS)
         result_columns, rows = self._aggregate_records(
             path,
             data=data,
             data_format=data_format,
             table_index=table_index,
+            records_path=records_path,
             group_by=group_by,
             aggregations=aggregations,
             filters=filters,
@@ -1603,7 +1677,7 @@ class DataOperations:
             result_columns,
             rows,
             total_rows=len(rows),
-            limit=limit,
+            limit=len(rows),
         )
 
     def value_counts(
@@ -1616,6 +1690,7 @@ class DataOperations:
         table_index: int = 0,
         filters: list[dict[str, Any]] | None = None,
         limit: int = 50,
+        records_path: str | None = None,
     ) -> str:
         limit = self._validate_limit(
             limit,
@@ -1626,6 +1701,7 @@ class DataOperations:
             data=data,
             data_format=data_format,
             table_index=table_index,
+            records_path=records_path,
         )
         if column not in columns:
             raise DataOperationError(
@@ -1658,84 +1734,4 @@ class DataOperations:
             result_rows,
             total_rows=len(result_rows),
             limit=limit,
-        )
-
-    def select_data_to_file(
-        self,
-        output_path: str,
-        input_path: str | None = None,
-        *,
-        data: str | None = None,
-        data_format: str | None = None,
-        table_index: int = 0,
-        columns: list[str] | None = None,
-        filters: list[dict[str, Any]] | None = None,
-        sort_by: list[str] | None = None,
-        descending: bool = False,
-    ) -> str:
-        source_columns, rows = self._read_records(
-            input_path,
-            data=data,
-            data_format=data_format,
-            table_index=table_index,
-        )
-        selected_columns = self._require_columns(
-            source_columns,
-            columns,
-        )
-        filtered = self._apply_filters(
-            rows,
-            source_columns,
-            filters,
-        )
-        ordered = self._sort_rows(
-            filtered,
-            source_columns,
-            sort_by,
-            descending=descending,
-        )
-        selected_set = set(selected_columns)
-        projected = [
-            {
-                column: value
-                for column, value in row.items()
-                if column in selected_set
-            }
-            for row in ordered
-        ]
-        return self._write_records(
-            output_path,
-            columns=selected_columns,
-            rows=projected,
-        )
-
-    def aggregate_data_to_file(
-        self,
-        output_path: str,
-        aggregations: list[dict[str, str]],
-        input_path: str | None = None,
-        *,
-        data: str | None = None,
-        data_format: str | None = None,
-        table_index: int = 0,
-        group_by: list[str] | None = None,
-        filters: list[dict[str, Any]] | None = None,
-        sort_by: list[str] | None = None,
-        descending: bool = False,
-    ) -> str:
-        columns, rows = self._aggregate_records(
-            input_path,
-            data=data,
-            data_format=data_format,
-            table_index=table_index,
-            group_by=group_by,
-            aggregations=aggregations,
-            filters=filters,
-            sort_by=sort_by,
-            descending=descending,
-        )
-        return self._write_records(
-            output_path,
-            columns=columns,
-            rows=rows,
         )

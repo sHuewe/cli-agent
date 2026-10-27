@@ -100,8 +100,9 @@ def _response(*, metadata: object = None, flag: object = True, error: bool = Fal
     )
 
 
-def test_tool_result_exposes_only_metadata_and_session_path(tmp_path: Path) -> None:
-    agent = _agent(tmp_path)
+@pytest.mark.parametrize("access", ["read", "write"])
+def test_tool_result_exposes_only_metadata_and_session_path(tmp_path: Path, access: str) -> None:
+    agent = _agent(tmp_path, access=access)
     try:
         model_text = asyncio.run(_execute(agent, _response()))
         model_value = json.loads(model_text)
@@ -123,7 +124,8 @@ def test_tool_result_exposes_only_metadata_and_session_path(tmp_path: Path) -> N
     ("access", "flag"),
     [
         ("none", True),
-        ("read", True),
+        ("read", False),
+        ("read", 1),
         ("write", False),
         ("write", 1),
     ],
@@ -187,6 +189,59 @@ def test_text_tool_result_is_saved_without_structured_content(tmp_path: Path) ->
     assert path.read_text(encoding="utf-8") == "time,value\n07:06,-811"
     store.cleanup()
     assert not path.exists()
+
+
+def test_markdown_artifact_is_readable_and_removed_on_close(tmp_path: Path) -> None:
+    from cli_agent.data_result_metadata import markdown_result
+    from cli_agent.data_operations import DataOperations
+
+    agent = _agent(tmp_path, access="read")
+    markdown = "Rows: 1/1\n\n| x |\n|---|\n| 42 |"
+    result = markdown_result(markdown, ["x"], 1, operation="select_data")
+    try:
+        model_result = json.loads(asyncio.run(_execute(agent, result)))
+        assert model_result["result"] == markdown
+        artifact = tmp_path / model_result["workspace_path"]
+        assert artifact.suffix == ".md"
+        assert DataOperations(agent._result_artifacts.workspace).select_data(
+            model_result["workspace_path"]
+        ).startswith("Rows: 1/1")
+    finally:
+        asyncio.run(agent.close())
+    assert not artifact.exists()
+
+
+def test_markdown_inline_budget_is_five_thousand_utf8_bytes() -> None:
+    from cli_agent.data_result_metadata import INLINE_RESULT_BYTES, markdown_result
+
+    assert INLINE_RESULT_BYTES == 5_000
+    at_limit = markdown_result("ä" * 2_500, ["value"], 1, operation="select_data")
+    over_limit = markdown_result("ä" * 2_501, ["value"], 1, operation="select_data")
+    assert "result" in at_limit.meta[METADATA_FOR_LLM_KEY]
+    assert "result" not in over_limit.meta[METADATA_FOR_LLM_KEY]
+
+
+def test_artifact_metadata_allows_results_above_generic_mcp_limit(tmp_path: Path, monkeypatch) -> None:
+    from cli_agent import mcp_limits
+
+    monkeypatch.setattr(mcp_limits, "MAX_MCP_TOOL_RESULT_CHARS", 100)
+    agent = _agent(tmp_path, access="read")
+    response = _response()
+    response.structuredContent = {"points": "x" * 200}
+    try:
+        result = json.loads(asyncio.run(_execute(agent, response)))
+        assert "points" not in result
+        assert json.loads((tmp_path / result["workspace_path"]).read_text())["points"] == "x" * 200
+    finally:
+        asyncio.run(agent.close())
+
+    agent = _agent(tmp_path, access="read")
+    try:
+        response.meta[ONLY_METADATA_TO_LLM_KEY] = False
+        with pytest.raises(RuntimeError, match="Sicherheitslimit"):
+            asyncio.run(_execute(agent, response))
+    finally:
+        asyncio.run(agent.close())
 
 
 def test_untrusted_data_server_does_not_disable_artifact_mode(tmp_path: Path) -> None:

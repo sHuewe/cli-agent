@@ -83,7 +83,7 @@ class McpResultArtifacts:
             return path
         raise ArtifactError("Kein eindeutiger Ablageordner für MCP-Daten verfügbar.")
 
-    def save(self, raw_result_text: str, *, structured: bool) -> str:
+    def save(self, raw_result_text: str, *, structured: bool, text_format: str | None = None) -> str:
         try:
             encoded = raw_result_text.encode("utf-8")
         except UnicodeError as exc:
@@ -94,7 +94,10 @@ class McpResultArtifacts:
             raise ArtifactError("MCP-Daten dieser Session überschreiten das Gesamtkontingent.")
 
         directory = self._ensure_directory()
-        relative = (directory / f"r-{uuid.uuid4().hex[:16]}{'.json' if structured else '.txt'}")
+        # Only a fixed extension may be selected; MCP metadata never controls
+        # the directory or basename. Text Markdown can be consumed by Data MCP.
+        suffix = ".json" if structured else ".md" if text_format == "markdown" else ".txt"
+        relative = (directory / f"r-{uuid.uuid4().hex[:16]}{suffix}")
         relative_name = relative.relative_to(self.workspace.directory).as_posix()
         path = self.workspace.resolve_writable_file(relative_name)
         try:
@@ -127,6 +130,7 @@ class McpResultArtifacts:
         path = self.save(
             raw_result_text,
             structured=getattr(result, "structuredContent", None) is not None,
+            text_format="markdown" if metadata.get("format") == "markdown" else None,
         )
         # workspace_path is reserved for the agent's verified, relative path.
         model_metadata = {**metadata, "workspace_path": path}

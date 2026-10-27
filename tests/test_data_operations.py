@@ -259,7 +259,7 @@ def test_inspect_schema_rejects_invalid_distinct_values_limit(
         operations.inspect_schema("sales.csv", distinct_values_limit=101)
 
 
-def test_select_data_filters_projects_sorts_and_reports_truncation(
+def test_select_data_filters_projects_sorts_without_truncation(
     tmp_path: Path,
 ) -> None:
     _write_csv(tmp_path)
@@ -273,13 +273,13 @@ def test_select_data_filters_projects_sorts_and_reports_truncation(
         ],
         sort_by=["revenue"],
         descending=True,
-        limit=2,
     )
 
-    assert result.startswith("Rows: 2/3 (truncated)")
+    assert result.startswith("Rows: 3/3")
     assert _markdown_rows(result) == [
         {"country": "DE", "revenue": 20},
         {"country": "DE", "revenue": 12},
+        {"country": "DE", "revenue": 10.5},
     ]
 
 
@@ -354,53 +354,89 @@ def test_jsonl_is_normalized_to_union_of_columns(tmp_path: Path) -> None:
     ]
 
 
-def test_select_data_to_file_uses_same_workspace_security_and_writes_csv(
+def test_select_data_returns_rows_without_writing_workspace_files(
     tmp_path: Path,
 ) -> None:
     _write_csv(tmp_path)
     operations = _operations(tmp_path)
 
-    status = json.loads(
-        operations.select_data_to_file(
-            "derived.csv",
-            "sales.csv",
-            columns=["country", "revenue"],
-            filters=[{"column": "country", "op": "eq", "value": "FR"}],
-        )
+    result = operations.select_data(
+        "sales.csv",
+        columns=["country", "revenue"],
+        filters=[{"column": "country", "op": "eq", "value": "FR"}],
     )
-
-    assert status["output_path"] == "derived.csv"
-    assert status["rows_written"] == 1
-    assert (tmp_path / "derived.csv").read_text(encoding="utf-8") == (
-        "country,revenue\nFR,7.5\n"
-    )
+    assert _markdown_rows(result) == [{"country": "FR", "revenue": 7.5}]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["sales.csv"]
 
 
-def test_aggregate_data_to_file_supports_jsonl_output(tmp_path: Path) -> None:
+def test_aggregate_data_returns_all_group_results_without_writing(tmp_path: Path) -> None:
     _write_csv(tmp_path)
     operations = _operations(tmp_path)
 
-    status = json.loads(
-        operations.aggregate_data_to_file(
-            "summary.jsonl",
-            [{"column": "revenue", "function": "sum", "alias": "total"}],
-            "sales.csv",
-            group_by=["country"],
-            sort_by=["country"],
-        )
+    result = operations.aggregate_data(
+        [{"column": "revenue", "function": "sum", "alias": "total"}],
+        "sales.csv",
+        group_by=["country"],
+        sort_by=["country"],
     )
-
-    assert status["rows_written"] == 2
-    lines = [
-        json.loads(line)
-        for line in (tmp_path / "summary.jsonl").read_text(
-            encoding="utf-8"
-        ).splitlines()
-    ]
-    assert lines == [
+    assert _markdown_rows(result) == [
         {"country": "DE", "total": 42.5},
         {"country": "FR", "total": 7.5},
     ]
+    assert not (tmp_path / "summary.jsonl").exists()
+
+
+def test_select_and_aggregate_return_all_rows_beyond_previous_limits(
+    tmp_path: Path,
+) -> None:
+    records = 1_501
+    (tmp_path / "many.csv").write_text(
+        "group,value\n" + "".join(f"g{i:04d},{i}\n" for i in range(records)),
+        encoding="utf-8",
+    )
+    operations = _operations(tmp_path)
+
+    selected = operations.select_data("many.csv", sort_by=["value"])
+    assert selected.startswith("Rows: 1501/1501\n")
+    selected_rows = _markdown_rows(selected)
+    assert len(selected_rows) == records
+    assert selected_rows[-1] == {"group": "g1500", "value": 1500}
+
+    aggregated = operations.aggregate_data(
+        [{"column": "value", "function": "sum", "alias": "total"}],
+        "many.csv",
+        group_by=["group"],
+        sort_by=["group"],
+    )
+    assert aggregated.startswith("Rows: 1501/1501\n")
+    aggregate_rows = _markdown_rows(aggregated)
+    assert len(aggregate_rows) == records
+    assert aggregate_rows[-1] == {"group": "g1500", "total": 1500}
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["many.csv"]
+
+
+@pytest.mark.parametrize("aggregate", [False, True])
+def test_oversized_full_result_fails_instead_of_truncating(
+    tmp_path: Path, monkeypatch, aggregate: bool,
+) -> None:
+    from cli_agent import data_operations
+
+    assert data_operations.MAX_FULL_RESULT_BYTES == 16_000_000
+    (tmp_path / "many.csv").write_text(
+        "group,value\na,1\nb,2\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(data_operations, "MAX_FULL_RESULT_BYTES", 25)
+    operations = _operations(tmp_path)
+    with pytest.raises(DataOperationError, match="zu groß"):
+        if aggregate:
+            operations.aggregate_data(
+                [{"column": "value", "function": "sum"}],
+                "many.csv", group_by=["group"],
+            )
+        else:
+            operations.select_data("many.csv")
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["many.csv"]
 
 
 @pytest.mark.parametrize("path", ["../outside.csv", "/outside.csv"])
@@ -419,20 +455,17 @@ def test_data_read_rejects_protected_path(tmp_path: Path) -> None:
         ).inspect_data("sales.csv")
 
 
-def test_data_write_rejects_protected_path(tmp_path: Path) -> None:
+def test_select_data_cannot_read_protected_path(tmp_path: Path) -> None:
     _write_csv(tmp_path)
-    protected = tmp_path / "derived.csv"
+    protected = tmp_path / "sales.csv"
     operations = _operations(
         tmp_path,
         protected_paths=(protected,),
     )
 
     with pytest.raises(WorkspaceError, match="geschützten"):
-        operations.select_data_to_file(
-            "derived.csv",
-            "sales.csv",
-        )
-    assert not protected.exists()
+        operations.select_data("sales.csv")
+    assert protected.exists()
 
 
 def test_data_operations_reject_unsupported_formats(tmp_path: Path) -> None:
@@ -474,8 +507,7 @@ def test_limits_are_validated(tmp_path: Path) -> None:
 
     with pytest.raises(DataOperationError, match="sample_rows"):
         operations.inspect_data("sales.csv", sample_rows=0)
-    with pytest.raises(DataOperationError, match="limit"):
-        operations.select_data("sales.csv", limit=1001)
+    assert "limit" not in operations.select_data.__code__.co_varnames
 
 
 
@@ -865,20 +897,16 @@ def test_select_data_result_is_normalized_markdown() -> None:
     assert len(table["source_headers"]) == len(table["columns"])
 
 
-def test_markdown_file_can_be_written_and_reused(tmp_path: Path) -> None:
+def test_markdown_result_can_be_chained_without_writing(tmp_path: Path) -> None:
     operations = _operations(tmp_path)
-    status = json.loads(
-        operations.select_data_to_file(
-            "derived.md",
-            data="| a | b |\n|---|---|\n| 1 | 2 |",
-            data_format="markdown",
-        )
+    selected = operations.select_data(
+        data="| a | b |\n|---|---|\n| 1 | 2 |",
+        data_format="markdown",
     )
-
-    assert status["output_path"] == "derived.md"
-    result = json.loads(operations.inspect_data("derived.md"))
+    result = json.loads(operations.inspect_data(data=selected, data_format="markdown"))
     assert result["row_count"] == 1
     assert result["sample"] == [{"a": 1, "b": 2}]
+    assert not list(tmp_path.iterdir())
 
 
 
@@ -978,12 +1006,11 @@ def test_large_integer_statistics_use_decimal_precision() -> None:
     assert str(row["std"]).startswith("0.7071067811865475244")
 
 
-def test_decimal_aggregate_jsonl_write_preserves_numeric_text(
+def test_decimal_aggregate_preserves_exact_value_in_result(
     tmp_path: Path,
 ) -> None:
     operations = _operations(tmp_path)
-    operations.aggregate_data_to_file(
-        "summary.jsonl",
+    result = operations.aggregate_data(
         [{"column": "value", "function": "mean", "alias": "mean"}],
         data=(
             '[{"value":9007199254740992},'
@@ -992,11 +1019,8 @@ def test_decimal_aggregate_jsonl_write_preserves_numeric_text(
         data_format="json",
     )
 
-    assert (
-        tmp_path / "summary.jsonl"
-    ).read_text(encoding="utf-8").strip() == (
-        '{"mean":9007199254740992.5}'
-    )
+    assert _markdown_rows(result) == [{"mean": Decimal("9007199254740992.5")}]
+    assert not list(tmp_path.iterdir())
 
 
 
@@ -1133,7 +1157,7 @@ def test_float_aggregation_rejects_non_finite_result() -> None:
         )
 
 
-def test_failed_non_finite_aggregation_does_not_truncate_output(
+def test_failed_non_finite_aggregation_does_not_change_workspace(
     tmp_path: Path,
 ) -> None:
     operations = _operations(tmp_path)
@@ -1141,8 +1165,7 @@ def test_failed_non_finite_aggregation_does_not_truncate_output(
     output.write_text("keep\n", encoding="utf-8")
 
     with pytest.raises(DataOperationError, match="endliches Ergebnis"):
-        operations.aggregate_data_to_file(
-            "summary.jsonl",
+        operations.aggregate_data(
             [{"column": "value", "function": "sum", "alias": "total"}],
             data="value\n1e308\n1e308\n",
             data_format="csv",
@@ -1195,22 +1218,16 @@ def test_jsonl_file_records_remain_sparse(tmp_path: Path) -> None:
     assert metadata["a"]["unique_count"] == 2
 
 
-def test_sparse_jsonl_to_jsonl_keeps_missing_fields_absent(
+def test_sparse_json_result_can_be_reused_without_writing(
     tmp_path: Path,
 ) -> None:
     operations = _operations(tmp_path)
-    operations.select_data_to_file(
-        "sparse.jsonl",
+    selected = operations.select_data(
         data='[{"a":1},{"b":2}]',
         data_format="json",
     )
-
-    assert (
-        tmp_path / "sparse.jsonl"
-    ).read_text(encoding="utf-8").splitlines() == [
-        '{"a":1}',
-        '{"b":2}',
-    ]
+    assert _markdown_rows(selected) == [{"a": 1, "b": None}, {"a": None, "b": 2}]
+    assert not list(tmp_path.iterdir())
 
 
 def test_decimal_aggregation_rejects_excessive_working_precision() -> None:
@@ -1454,13 +1471,12 @@ def test_markdown_string_codec_round_trips_through_normalization() -> None:
     assert parsed["sample"] == [{"value": expected}]
 
 
-def test_markdown_string_codec_round_trips_through_file(
+def test_markdown_string_codec_round_trips_without_file(
     tmp_path: Path,
 ) -> None:
     operations = _operations(tmp_path)
     expected = "a|b\\c`d\nü"
-    operations.select_data_to_file(
-        "roundtrip.md",
+    selected = operations.select_data(
         data=json.dumps(
             [{"value": expected}],
             ensure_ascii=False,
@@ -1468,9 +1484,10 @@ def test_markdown_string_codec_round_trips_through_file(
         data_format="json",
     )
 
-    parsed = json.loads(operations.inspect_data("roundtrip.md"))
+    parsed = json.loads(operations.inspect_data(data=selected, data_format="markdown"))
 
     assert parsed["sample"] == [{"value": expected}]
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize(

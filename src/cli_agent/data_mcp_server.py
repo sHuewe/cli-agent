@@ -7,10 +7,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 
 from .mcp_path_policy import read_path_policy
 from .config import McpServerConfig, default_config_file, load_config
 from .data_operations import DataOperationError, DataOperations
+from .data_result_metadata import markdown_result
+from .dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
 from .logging_setup import configure_logging
 from .os_operations import Workspace, WorkspaceError
 
@@ -64,18 +67,19 @@ def _serialize_filters(
 
 
 def _server_instructions(access: str) -> str:
-    if access == "write":
+    if access in {"read", "write"}:
         source_guidance = """\
 Workspace file access is available. Prefer path-based datasets over repeatedly
-passing large inline payloads. For multi-step transformations, prefer writing a
-derived dataset once with a *_to_file tool and reuse its workspace path in
-subsequent calls. Inline Markdown remains the preferred transport format when
-the source is not already available as a workspace file."""
-    elif access == "read":
-        source_guidance = """\
-Workspace file reads are available. Prefer a workspace path when the relevant
-dataset already exists as a file. Otherwise prefer inline Markdown for tabular
-reference content."""
+passing large inline payloads. For timestamped measurements, prefer the
+declarative join_data, derive_columns and resample_data tools: they can return
+metadata plus a session-scoped workspace_path to the full result. Reuse that
+path with records_path='/rows' rather than materializing rows in the LLM.
+The select_data and aggregate_data tools return complete datasets without
+row limits. Their results are kept as session-local Markdown artifacts, with
+small complete results also included in metadata for immediate use.
+Use inspect_json to discover JSON arrays and their records_path first.
+Inline Markdown remains the preferred transport when no workspace data file
+is available."""
     else:
         source_guidance = """\
 Workspace file access is not available. Use inline data. Markdown is preferred
@@ -95,7 +99,8 @@ normalized tabular output returned by Data MCP tools as inline data for further
 Data MCP calls. Do not manually reconstruct, copy, merge, relabel, split or
 extract rows, columns or cells in the model and then pass that reconstruction
 back as data. Use select_data whenever a subset, projection or ordering is
-needed, and pass its returned Markdown unchanged to later Data MCP tools.
+needed, and pass its returned Markdown or verified session workspace_path
+unchanged to later Data MCP tools.
 Dependent Data MCP calls must wait for the tool result they consume instead of
 reconstructing that expected result in parallel.
 
@@ -117,7 +122,9 @@ Use preview_data only when a small preview of complete rows is actually needed.
 Do not use preview_data as a substitute for a targeted select_data query.
 Use select_data for actual rows, subsets, projections or ordering, and
 value_counts for frequencies in one column.
-Write derived datasets only when the user explicitly requested a file change.
+Session-scoped MCP result artifacts are temporary computation data and are
+automatically deleted when the cli-agent session ends. Data MCP tools never
+write or overwrite user-named workspace files.
 """
 
 
@@ -175,6 +182,7 @@ def create_server(
             data_format: str = "markdown",
             table_index: int = 0,
             distinct_values_limit: int = 20,
+            records_path: str | None = None,
         ) -> str:
             """
             Inspect schema/profile metadata for one inline tabular dataset.
@@ -205,6 +213,7 @@ def create_server(
                 data_format=data_format,
                 table_index=table_index,
                 distinct_values_limit=distinct_values_limit,
+                **({"records_path": records_path} if records_path is not None else {}),
             )
 
         @mcp.tool()
@@ -213,6 +222,7 @@ def create_server(
             data_format: str = "markdown",
             table_index: int = 0,
             sample_rows: int = 5,
+            records_path: str | None = None,
         ) -> str:
             """
             Preview one inline tabular dataset with complete sample rows.
@@ -235,6 +245,7 @@ def create_server(
                 data_format=data_format,
                 table_index=table_index,
                 sample_rows=sample_rows,
+                **({"records_path": records_path} if records_path is not None else {}),
             )
 
         @mcp.tool()
@@ -246,7 +257,7 @@ def create_server(
             filters: list[DataFilter] | None = None,
             sort_by: list[str] | None = None,
             descending: bool = False,
-            limit: int = 100,
+            records_path: str | None = None,
         ) -> str:
             """
             Select, filter and sort one inline dataset.
@@ -269,7 +280,7 @@ def create_server(
                 filters=_serialize_filters(filters),
                 sort_by=sort_by,
                 descending=descending,
-                limit=limit,
+                **({"records_path": records_path} if records_path is not None else {}),
             )
 
         @mcp.tool()
@@ -280,6 +291,7 @@ def create_server(
             table_index: int = 0,
             filters: list[DataFilter] | None = None,
             limit: int = 50,
+            records_path: str | None = None,
         ) -> str:
             """
             Count distinct values in one inline dataset column.
@@ -296,6 +308,7 @@ def create_server(
                 table_index=table_index,
                 filters=_serialize_filters(filters),
                 limit=limit,
+                **({"records_path": records_path} if records_path is not None else {}),
             )
 
         @mcp.tool()
@@ -308,7 +321,7 @@ def create_server(
             filters: list[DataFilter] | None = None,
             sort_by: list[str] | None = None,
             descending: bool = False,
-            limit: int = 200,
+            records_path: str | None = None,
         ) -> str:
             """
             Deterministically aggregate one inline tabular dataset.
@@ -329,10 +342,19 @@ def create_server(
                 filters=_serialize_filters(filters),
                 sort_by=sort_by,
                 descending=descending,
-                limit=limit,
+                **({"records_path": records_path} if records_path is not None else {}),
             )
 
     else:
+
+        @mcp.tool()
+        def inspect_json(path: str) -> str:
+            """Find tabular record arrays within a workspace JSON file.
+
+            Returns JSON Pointer paths and column names, but no measurement
+            values. Pass a discovered records_path to a subsequent data tool.
+            """
+            return operations.inspect_json(path)
 
         @mcp.tool()
         def inspect_schema(
@@ -341,6 +363,7 @@ def create_server(
             data_format: str | None = None,
             table_index: int = 0,
             distinct_values_limit: int = 20,
+            records_path: str | None = None,
         ) -> str:
             """
             Inspect schema/profile metadata from a workspace path or inline data.
@@ -372,6 +395,7 @@ def create_server(
                 data_format=data_format,
                 table_index=table_index,
                 distinct_values_limit=distinct_values_limit,
+                **({"records_path": records_path} if records_path is not None else {}),
             )
 
         @mcp.tool()
@@ -381,6 +405,7 @@ def create_server(
             data_format: str | None = None,
             table_index: int = 0,
             sample_rows: int = 5,
+            records_path: str | None = None,
         ) -> str:
             """
             Preview one tabular dataset from a workspace path or inline data.
@@ -405,9 +430,10 @@ def create_server(
                 data_format=data_format,
                 table_index=table_index,
                 sample_rows=sample_rows,
+                **({"records_path": records_path} if records_path is not None else {}),
             )
 
-        @mcp.tool()
+        @mcp.tool(structured_output=False)
         def select_data(
             path: str | None = None,
             data: str | None = None,
@@ -417,8 +443,8 @@ def create_server(
             filters: list[DataFilter] | None = None,
             sort_by: list[str] | None = None,
             descending: bool = False,
-            limit: int = 100,
-        ) -> str:
+            records_path: str | None = None,
+        ) -> CallToolResult:
             """
             Select, filter and sort rows from a workspace path or inline data.
 
@@ -432,7 +458,7 @@ def create_server(
             combined with AND; use op="in" for alternatives within one column.
             No Python, SQL, regex or expression evaluation is performed.
             """
-            return operations.select_data(
+            result_columns, result_rows = operations._select_records(
                 path,
                 data=data,
                 data_format=data_format,
@@ -441,7 +467,15 @@ def create_server(
                 filters=_serialize_filters(filters),
                 sort_by=sort_by,
                 descending=descending,
-                limit=limit,
+                **({"records_path": records_path} if records_path is not None else {}),
+            )
+            return markdown_result(
+                operations._result(
+                    result_columns, result_rows,
+                    total_rows=len(result_rows), limit=len(result_rows),
+                ),
+                result_columns, len(result_rows), operation="select_data",
+                rows=result_rows,
             )
 
         @mcp.tool()
@@ -453,6 +487,7 @@ def create_server(
             table_index: int = 0,
             filters: list[DataFilter] | None = None,
             limit: int = 50,
+            records_path: str | None = None,
         ) -> str:
             """
             Count distinct values in one dataset column.
@@ -471,9 +506,10 @@ def create_server(
                 table_index=table_index,
                 filters=_serialize_filters(filters),
                 limit=limit,
+                **({"records_path": records_path} if records_path is not None else {}),
             )
 
-        @mcp.tool()
+        @mcp.tool(structured_output=False)
         def aggregate_data(
             aggregations: list[dict[str, str]],
             path: str | None = None,
@@ -484,8 +520,8 @@ def create_server(
             filters: list[DataFilter] | None = None,
             sort_by: list[str] | None = None,
             descending: bool = False,
-            limit: int = 200,
-        ) -> str:
+            records_path: str | None = None,
+        ) -> CallToolResult:
             """
             Deterministically aggregate a workspace path or inline dataset.
 
@@ -497,95 +533,95 @@ def create_server(
             Supported functions are count, sum, mean, min, max, median, nunique
             and std.
             """
-            return operations.aggregate_data(
-                aggregations,
+            result_columns, result_rows = operations._aggregate_records(
                 path,
                 data=data,
                 data_format=data_format,
                 table_index=table_index,
+                aggregations=aggregations,
                 group_by=group_by,
                 filters=_serialize_filters(filters),
                 sort_by=sort_by,
                 descending=descending,
-                limit=limit,
+                **({"records_path": records_path} if records_path is not None else {}),
+            )
+            return markdown_result(
+                operations._result(
+                    result_columns, result_rows,
+                    total_rows=len(result_rows), limit=len(result_rows),
+                ),
+                result_columns, len(result_rows), operation="aggregate_data",
+                rows=result_rows,
             )
 
-    if access == "write":
+    if access in {"read", "write"}:
+        if getattr(operations, "workspace", None) is not None:
+            from .dataframe_operations import DataFrameOperations
 
-        @mcp.tool()
-        def select_data_to_file(
-            output_path: str,
-            input_path: str | None = None,
-            data: str | None = None,
-            data_format: str | None = None,
-            table_index: int = 0,
-            columns: list[str] | None = None,
-            filters: list[DataFilter] | None = None,
-            sort_by: list[str] | None = None,
-            descending: bool = False,
-        ) -> str:
-            """
-            Write a filtered/projected dataset to a workspace-local data file.
+            frames = DataFrameOperations(operations)
 
-            For multi-step work this is the preferred transformation path:
-            write the derived dataset once, then reuse output_path as path in
-            later data tools instead of repeatedly passing inline content.
-            Prefer input_path when the source already exists in the workspace.
-            Otherwise, for reference-content workflows, use only normalized
-            Markdown returned by a previous Data MCP tool as inline data. Do not
-            manually reconstruct or extract rows or columns in the model; use
-            select_data for subsets and projections. Supported output formats are
-            CSV, TSV, JSONL, NDJSON and Markdown based on output_path suffix.
-            """
-            return operations.select_data_to_file(
-                output_path,
-                input_path,
-                data=data,
-                data_format=data_format,
-                table_index=table_index,
-                columns=columns,
-                filters=_serialize_filters(filters),
-                sort_by=sort_by,
-                descending=descending,
-            )
+            @mcp.tool(structured_output=False)
+            def join_data(
+                sources: list[DataFrameSource],
+                direction: Literal["exact", "nearest", "backward", "forward"] = "exact",
+                how: Literal["inner", "left", "outer"] = "inner",
+                tolerance_seconds: float | None = None,
+            ) -> CallToolResult:
+                """Join 2-8 timestamped workspace datasets by their actual timestamps.
 
-        @mcp.tool()
-        def aggregate_data_to_file(
-            output_path: str,
-            aggregations: list[dict[str, str]],
-            input_path: str | None = None,
-            data: str | None = None,
-            data_format: str | None = None,
-            table_index: int = 0,
-            group_by: list[str] | None = None,
-            filters: list[DataFilter] | None = None,
-            sort_by: list[str] | None = None,
-            descending: bool = False,
-        ) -> str:
-            """
-            Aggregate a dataset and write the result to a workspace-local file.
+                Each source declares path, alias, time_column, value_column, and
+                optional records_path (JSON Pointer such as '/rows'). Default
+                exact matches timestamps without interpolation. For GoodWe vs.
+                Shelly-style unequal sample rates, explicitly choose nearest,
+                backward or forward, use how='left', and provide a maximum
+                tolerance_seconds. Outputs are session-scoped data artifacts:
+                reuse the returned workspace_path and records_path='/rows'.
+                """
+                return frames.join_data(
+                    sources, direction=direction, how=how,
+                    tolerance_seconds=tolerance_seconds,
+                )
 
-            For multi-step work this is the preferred aggregation path: persist
-            the derived result and reuse output_path as path in later calls.
-            Prefer input_path for an existing workspace source. Otherwise, for
-            reference-content workflows, use only normalized Markdown returned
-            by a previous Data MCP tool as inline data. Do not manually
-            reconstruct or extract rows in the model; use select_data first when
-            only a subset is relevant. Supported output formats are CSV, TSV,
-            JSONL, NDJSON and Markdown based on output_path suffix.
-            """
-            return operations.aggregate_data_to_file(
-                output_path,
-                aggregations,
-                input_path,
-                data=data,
-                data_format=data_format,
-                table_index=table_index,
-                group_by=group_by,
-                filters=_serialize_filters(filters),
-                sort_by=sort_by,
-                descending=descending,
-            )
+            @mcp.tool(structured_output=False)
+            def derive_columns(
+                path: str,
+                operations: list[DerivedColumn],
+                records_path: str | None = None,
+            ) -> CallToolResult:
+                """Compute new DataFrame columns without running arbitrary code.
+
+                Allowed operations: add/subtract/multiply/divide with one
+                other_column or constant; diff; cumsum; rolling_mean with a
+                row-count window. For e.g. phase difference, subtract L3 from
+                L1 after an exact join. Results become session-scoped artifacts;
+                chain by workspace_path and records_path='/rows'.
+                """
+                return frames.derive_columns(
+                    path, operations, records_path=records_path,
+                )
+
+            @mcp.tool(structured_output=False)
+            def resample_data(
+                path: str,
+                frequency: str,
+                aggregations: list[ResampleAggregation],
+                time_column: str = "timestamp",
+                records_path: str | None = None,
+            ) -> CallToolResult:
+                """Aggregate a time series into fixed buckets to reduce data volume.
+
+                Specify a frequency like '5min', '30s', '1h' or '1d'. Supported
+                aggregation methods: mean, min, max, sum, count. Each resulting
+                timestamp labels the start of its [start, end) bucket. No
+                interpolation; empty buckets may have null aggregates. Beware:
+                summing power samples is not the same as integrating energy.
+                Results are session-scoped artifacts, reusable via workspace_path
+                and records_path='/rows'.
+                """
+                return frames.resample_data(
+                    path, frequency, aggregations,
+                    time_column=time_column, records_path=records_path,
+                )
 
     return mcp
 

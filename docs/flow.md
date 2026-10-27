@@ -507,8 +507,9 @@ Mit `with_data = true` aktiviert ein Flow-Schritt zusätzlich den eingebauten
 Data-MCP, analog zu `cli-agent --with-data`. Ohne Angabe ist Data-MCP
 deaktiviert. Der Data-MCP übernimmt die Dateirechte des Schritts aus
 `workspace_access`: bei `none` sind nur Inline-Daten erlaubt, bei `read`
-dürfen Workspace-Datendateien gelesen werden und bei `write` stehen zusätzlich
-die expliziten `*_to_file`-Werkzeuge zur Verfügung. Die Option ist statisch in
+dürfen Workspace-Datendateien gelesen und automatische Session-Artefakte
+weiterverarbeitet werden. `write` erweitert lediglich die Rechte des OS-MCP;
+der Data-MCP bietet keine mutierenden Datei-Tools an. Die Option ist statisch in
 der Flow-Datei festgelegt und kann nicht aus LLM-Output parametrisiert werden.
 
 `with_mcp = ["code-validator", "compose"]` aktiviert pro Step zusätzliche
