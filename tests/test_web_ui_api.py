@@ -621,6 +621,8 @@ function assert(condition, message) {
     "tool names must be inserted as textContent");
   assert(activeToolGroup.calls.get("a").textContent === "Erfolgreich", "missing success");
   assert(activeToolGroup.calls.get("b").textContent === "Freigabe nötig", "missing approval");
+  assert(emitted.some(x => x.type === "approval_required" && x.toolCallId === "b"),
+    "approval event lost tool call ID");
   assert(!JSON.stringify(chat).includes("private-arguments"), "tool arguments leaked into UI");
 
   await watchRun("run-2", stream([
@@ -697,8 +699,20 @@ def test_approval_resume_rejection_preserves_dialog_and_allows_retry():
         '\n  }\n\n  function processServerMessage', 1
     )[0]
     branch = '    if (msg.type === "approval_response") {' + dispatch
+    view = API_APP_JS.split("  function toolGroup() {", 1)[1].split(
+        "  function setBusy(value) {", 1
+    )[0]
     script = '''
+class Element {
+  constructor(tag) { this.tag = tag; this.children = []; this.dataset = {}; this.textContent = ""; }
+  append(...children) { this.children.push(...children); }
+  appendChild(child) { this.append(child); }
+}
+const document = {createElement: tag => new Element(tag)};
+const chat = new Element("chat");
+let activeToolGroup = null;
 let pendingApprovalId = "approval-1";
+let pendingApprovalToolCallId = "tool-1";
 let approvalSubmitting = false;
 let sessionId = "session-1";
 let aguiMessages = [];
@@ -717,21 +731,48 @@ const api = async () => {
   if (attempts === 1) throw new Error("HTTP 429");
   return {body: "accepted"};
 };
-const dismissApproval = () => { pendingApprovalId = null; closed++; };
-const watchRun = async () => {};
+const dismissApproval = () => {
+  pendingApprovalId = null;
+  pendingApprovalToolCallId = null;
+  closed++;
+};
+const statusesAtWatch = [];
+let streamFailure = false;
+const watchRun = async () => {
+  statusesAtWatch.push(activeToolGroup.calls.get("tool-1").dataset.state);
+  if (streamFailure) finishPendingTools("error");
+};
+''' + '  function toolGroup() {' + view + '''
 async function action(msg) {
 ''' + branch + '''
 }
 (async () => {
+  toolStarted({toolCallId: "tool-1", toolCallName: "write"});
+  setToolStatus("tool-1", "approval");
   await action({type:"approval_response",id:"approval-1",decision:"yes"});
   if (pendingApprovalId !== "approval-1" || !busy || closed || attempts !== 1)
     throw new Error("Rejected resume lost its interrupt");
+  if (activeToolGroup.calls.get("tool-1").dataset.state !== "approval")
+    throw new Error("Rejected resume changed the approval status");
   if (buttons.some(x => x.disabled)) throw new Error("Retry controls disabled");
   await action({type:"approval_response",id:"approval-1",decision:"no"});
   if (pendingApprovalId !== null || closed !== 1 || attempts !== 2)
     throw new Error("Retry did not complete");
+  if (statusesAtWatch[0] !== "denied")
+    throw new Error("Accepted denial left approval pending");
   if (errors.length !== 1 || !errors[0].includes("429"))
     throw new Error("Rejection not reported");
+  // A second interrupt resumes without another TOOL_CALL_START. Its row
+  // must become running before streaming so a stream error can finish it.
+  pendingApprovalId = "approval-2";
+  pendingApprovalToolCallId = "tool-1";
+  setToolStatus("tool-1", "approval");
+  streamFailure = true;
+  await action({type:"approval_response",id:"approval-2",decision:"session"});
+  if (statusesAtWatch[1] !== "running")
+    throw new Error("Accepted approval did not restart the tool status");
+  if (activeToolGroup.calls.get("tool-1").dataset.state !== "error")
+    throw new Error("Stream failure left the resumed tool awaiting approval");
   console.log("ok");
 })().catch(err => {console.error(err); process.exitCode=1;});
 '''

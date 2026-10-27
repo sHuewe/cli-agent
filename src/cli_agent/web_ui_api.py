@@ -46,6 +46,7 @@ API_APP_JS = """
 
   let socket = null;
   let pendingApprovalId = null;
+  let pendingApprovalToolCallId = null;
   let approvalSubmitting = false;
   let pendingCommand = null;
   let busy = false;
@@ -132,7 +133,7 @@ API_APP_JS = """
     const status = activeToolGroup?.calls.get(String(id || ""));
     if (!status) return;
     const labels = {
-      success: "Erfolgreich", error: "Fehler", denied: "Abgelehnt",
+      running: "Läuft …", success: "Erfolgreich", error: "Fehler", denied: "Abgelehnt",
       approval: "Freigabe nötig", finished: "Beendet"
     };
     const normalized = Object.hasOwn(labels, state) ? state : "finished";
@@ -431,6 +432,7 @@ API_APP_JS = """
 
   function dismissApproval() {
     pendingApprovalId = null;
+    pendingApprovalToolCallId = null;
     if (approval.open) approval.close();
   }
 
@@ -499,7 +501,8 @@ API_APP_JS = """
                   type: "approval_required",
                   id: item.id,
                   tool: item.message || "Tool-Freigabe",
-                  ...extra
+                  ...extra,
+                  toolCallId: item.toolCallId
                 });
               }
             } else {
@@ -674,6 +677,10 @@ API_APP_JS = """
         // Keep the dialog and interrupt ID intact until the POST succeeds.
         const response = await api("/ag-ui", "POST", input);
         aguiMessages = input.messages;
+        // Resumed interrupt IDs intentionally have no new TOOL_CALL_START event.
+        // Only update the row after the server accepts the resume request.
+        setToolStatus(pendingApprovalToolCallId,
+          msg.decision === "yes" || msg.decision === "session" ? "running" : "denied");
         dismissApproval();
         runId = input.runId;
         await watchRun(runId, response);
@@ -758,6 +765,7 @@ API_APP_JS = """
     }
     if (payload.type === "approval_required") {
       pendingApprovalId = String(payload.id);
+      pendingApprovalToolCallId = String(payload.toolCallId || "");
       approvalTool.textContent = String(payload.tool || "");
       approvalArguments.textContent = String(payload.arguments || "{}");
       approvalDiffSection.classList.toggle("hidden", typeof payload.diff !== "string");
@@ -964,7 +972,8 @@ API_APP_JS = """
         emit({
           type: "approval_required", id: item.id,
           tool: item.message || "Tool-Freigabe",
-          ...(item.metadata?.["cli-agent"] || {})
+          ...(item.metadata?.["cli-agent"] || {}),
+          toolCallId: item.toolCallId
         });
         emit({type: "busy", value: true});
       } else if (response.active_run) {
