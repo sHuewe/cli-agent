@@ -237,6 +237,8 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
     assert server._tool_manager.get_tool("join_data") is not None
     assert server._tool_manager.get_tool("derive_columns") is not None
     assert server._tool_manager.get_tool("resample_data") is not None
+    for tool_name in ("describe_data", "analyze_intervals", "integrate_data", "concat_data"):
+        assert server._tool_manager.get_tool(tool_name) is not None
     assert server._tool_manager.get_tool("select_data_to_file") is None
     assert server._tool_manager.get_tool("aggregate_data_to_file") is None
     assert "limit" not in server._tool_manager.get_tool("select_data").parameters["properties"]
@@ -281,6 +283,63 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
     finally:
         store.cleanup()
     assert sorted(path.name for path in tmp_path.iterdir()) == ["source.csv"]
+
+
+@pytest.mark.asyncio
+async def test_new_dataframe_tools_expose_typed_mcp_schemas_and_chain_artifacts(tmp_path: Path) -> None:
+    (tmp_path / "day1.json").write_text(json.dumps({"points": [
+        {"time": "2026-06-24T00:00:00Z", "value": 100},
+        {"time": "2026-06-24T01:00:00Z", "value": 200},
+    ]}), encoding="utf-8")
+    (tmp_path / "day2.json").write_text(json.dumps({"points": [
+        {"time": "2026-06-24T02:00:00Z", "value": 300},
+        {"time": "2026-06-24T03:00:00Z", "value": 400},
+    ]}), encoding="utf-8")
+    workspace = Workspace.from_directory(tmp_path, McpServerConfig(name="data", built_in=True))
+    server = data_mcp_server.create_server(DataOperations(workspace), access="read")
+    concat_tool = server._tool_manager.get_tool("concat_data")
+    assert concat_tool.parameters["$defs"]["DataFrameInput"]["required"] == ["path"]
+    interval_tool = server._tool_manager.get_tool("analyze_intervals")
+    assert set(interval_tool.parameters["properties"]["condition"]["enum"]) == {
+        "lt", "lte", "gt", "gte", "eq", "ne",
+    }
+    assert "max_gap_seconds" in interval_tool.parameters["required"]
+
+    description = await server._tool_manager.call_tool(
+        "describe_data", {"path": "day1.json", "records_path": "/points", "time_column": "time"},
+        convert_result=True,
+    )
+    assert json.loads(description[0][0].text)["statistics"]["value"]["mean"] == 150
+
+    concatenated = await server._tool_manager.call_tool(
+        "concat_data", {"sources": [
+            {"path": "day1.json", "records_path": "/points"},
+            {"path": "day2.json", "records_path": "/points"},
+        ]}, convert_result=True,
+    )
+    assert concatenated.meta[ONLY_METADATA_TO_LLM_KEY] is True
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        stored = json.loads(store.metadata_result(concatenated, tool_result_text(concatenated)))
+        assert stored["row_count"] == 4
+        integrated = await server._tool_manager.call_tool(
+            "integrate_data", {
+                "path": stored["workspace_path"], "records_path": stored["records_path"],
+                "time_column": "time", "value_column": "value", "max_gap_seconds": 4000,
+            }, convert_result=True,
+        )
+        assert json.loads(integrated[0][0].text)["integral"] == 750
+        intervals = await server._tool_manager.call_tool(
+            "analyze_intervals", {
+                "path": stored["workspace_path"], "records_path": stored["records_path"],
+                "time_column": "time", "value_column": "value", "condition": "gt",
+                "threshold": 150, "max_gap_seconds": 4000,
+            }, convert_result=True,
+        )
+        assert intervals.meta[METADATA_FOR_LLM_KEY]["summary"]["total_seconds"] == 7200
+    finally:
+        store.cleanup()
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["day1.json", "day2.json"]
 
 
 def test_extract_tool_description_and_result_are_markdown_oriented(monkeypatch) -> None:

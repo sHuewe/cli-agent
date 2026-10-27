@@ -17,8 +17,8 @@ from typing import Literal
 import pandas as pd
 from mcp.types import CallToolResult, TextContent
 
-from .data_operations import DataOperationError, DataOperations, _validate_column_name
-from .dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
+from .data_operations import DataOperationError, DataOperations, _scalar_identity, _validate_column_name
+from .dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
 from .data_result_metadata import INLINE_RESULT_BYTES, add_large_result_summary
 from .mcp_result_artifacts import METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY
 
@@ -27,6 +27,7 @@ MAX_FRAME_COLUMNS = 100
 MAX_FRAME_RESULT_CHARS = 16_000_000
 MAX_FRAME_SOURCES = 8
 MAX_FRAME_TRANSFORMS = 20
+MAX_DESCRIBE_RESULT_BYTES = 5_000
 _FREQUENCY = re.compile(r"[1-9][0-9]{0,3}(?:s|min|h|d)\Z")
 
 
@@ -127,7 +128,10 @@ class DataFrameOperations:
         return value
 
     @staticmethod
-    def _result(frame: pd.DataFrame, *, operation: str) -> CallToolResult:
+    def _result(
+        frame: pd.DataFrame, *, operation: str,
+        summary: dict[str, object] | None = None,
+    ) -> CallToolResult:
         if len(frame) > MAX_FRAME_ROWS or len(frame.columns) > MAX_FRAME_COLUMNS:
             raise DataOperationError("DataFrame-Ergebnis überschreitet das Zeilen-/Spaltenlimit.")
         # The result is fed back into DataOperations._normalize_json_records
@@ -146,6 +150,8 @@ class DataFrameOperations:
                 for row in frame.to_dict(orient="records")
             ]
             payload = {"columns": list(frame.columns), "rows": rows}
+            if summary is not None:
+                payload["summary"] = summary
             encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
         except (ValueError, TypeError, OverflowError) as exc:
             raise DataOperationError("DataFrame kann nicht als JSON serialisiert werden.") from exc
@@ -161,6 +167,8 @@ class DataFrameOperations:
             "records_path": "/rows",
             "format": "json",
         }
+        if summary is not None:
+            metadata["summary"] = summary
         if len(encoded.encode("utf-8")) <= INLINE_RESULT_BYTES:
             metadata["rows"] = rows
         else:
@@ -173,6 +181,246 @@ class DataFrameOperations:
                 METADATA_FOR_LLM_KEY: metadata,
             }},
         )
+
+    def _ordered_series(
+        self, path: str, records_path: str | None,
+        time_column: str, value_column: str,
+    ) -> pd.DataFrame:
+        frame = self._read_frame(path, records_path)
+        stamps = self._timestamps(frame, time_column)
+        values = self._numeric(frame, value_column)
+        series = pd.DataFrame({"timestamp": stamps, "value": values})
+        series = series.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
+        if series["timestamp"].duplicated().any():
+            raise DataOperationError("Zeitreihe enthält doppelte Zeitstempel.")
+        return series
+
+    @staticmethod
+    def _gap_limit(max_gap_seconds: float) -> float:
+        if (isinstance(max_gap_seconds, bool) or not isinstance(max_gap_seconds, (int, float))
+                or not math.isfinite(max_gap_seconds) or not 0 < max_gap_seconds <= 604_800):
+            raise DataOperationError("max_gap_seconds muss zwischen 0 (exklusiv) und 604800 liegen.")
+        return float(max_gap_seconds)
+
+    @staticmethod
+    def _elapsed_seconds(start: pd.Timestamp, end: pd.Timestamp) -> float:
+        # Timedelta.total_seconds() discards sub-microsecond remainders in
+        # pandas 2.2. The integer .value is measured in nanoseconds; converting
+        # only after subtraction retains them for duration and gap checks.
+        return (end - start).value / 1_000_000_000
+
+    def describe_data(
+        self, path: str, *, columns: list[str] | None = None,
+        time_column: str | None = None,
+        records_path: str | None = None,
+    ) -> str:
+        """Compact descriptive statistics, without forwarding any measurement rows."""
+        frame = self._read_frame(path, records_path)
+        if columns is not None and (not columns or len(columns) != len(set(columns))):
+            raise DataOperationError("columns muss eindeutige, nichtleere Auswahl enthalten.")
+        if time_column is not None:
+            timestamps = self._timestamps(frame, time_column)
+            order = timestamps.argsort(kind="stable")
+            frame = frame.iloc[order].reset_index(drop=True)
+            timestamps = timestamps.iloc[order].reset_index(drop=True)
+        else:
+            timestamps = None
+        selected = columns if columns is not None else [
+            column for column in frame.columns
+            if column != time_column and (
+                frame[column].dropna().empty or all(
+                    isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
+                    for value in frame[column].dropna()
+                )
+            )
+        ]
+        if columns is not None and time_column in columns:
+            raise DataOperationError("Die Zeitspalte darf nicht als numerische Datenspalte gewählt werden.")
+        statistics: dict[str, dict[str, object]] = {}
+        for column in selected:
+            values = self._numeric(frame, column)
+            valid = values.dropna()
+            stats: dict[str, object] = {
+                "numeric_count": len(valid), "null_count": len(values) - len(valid),
+            }
+            if not valid.empty:
+                stats.update(
+                    minimum=float(valid.min()), maximum=float(valid.max()),
+                    mean=float(valid.mean()), median=float(valid.median()),
+                    std=float(valid.std()) if len(valid) > 1 else None,
+                    p25=float(valid.quantile(0.25)), p75=float(valid.quantile(0.75)),
+                    first_value=float(valid.iloc[0]), last_value=float(valid.iloc[-1]),
+                )
+                if timestamps is not None:
+                    stats["minimum_time"] = self._artifact_scalar(timestamps.iloc[values.idxmin()])
+                    stats["maximum_time"] = self._artifact_scalar(timestamps.iloc[values.idxmax()])
+            statistics[column] = stats
+        result = {"row_count": len(frame), "statistics": statistics}
+        if timestamps is not None and len(timestamps):
+            result["first_time"] = self._artifact_scalar(timestamps.iloc[0])
+            result["last_time"] = self._artifact_scalar(timestamps.iloc[-1])
+        try:
+            encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
+        except (ValueError, OverflowError) as exc:
+            raise DataOperationError("Statistik enthält nichtendliche Werte.") from exc
+        if len(encoded.encode("utf-8")) > MAX_DESCRIBE_RESULT_BYTES:
+            raise DataOperationError("Statistikausgabe überschreitet 5 KB; wähle weniger columns.")
+        return encoded
+
+    def analyze_intervals(
+        self, path: str, *, time_column: str, value_column: str,
+        condition: Literal["lt", "lte", "gt", "gte", "eq", "ne"],
+        threshold: float, max_gap_seconds: float,
+        records_path: str | None = None,
+    ) -> CallToolResult:
+        """Contiguous, qualifying sample-and-hold intervals with bounded gaps."""
+        gap_limit = self._gap_limit(max_gap_seconds)
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold):
+            raise DataOperationError("threshold muss eine endliche Zahl sein.")
+        comparisons = {
+            "lt": lambda v: v < threshold, "lte": lambda v: v <= threshold,
+            "gt": lambda v: v > threshold, "gte": lambda v: v >= threshold,
+            "eq": lambda v: v == threshold, "ne": lambda v: v != threshold,
+        }
+        if condition not in comparisons:
+            raise DataOperationError("Unbekannte Intervallbedingung.")
+        series = self._ordered_series(path, records_path, time_column, value_column)
+        intervals: list[dict[str, object]] = []
+        skipped_gaps = 0
+        covered_seconds = 0.0
+        active_start = None
+        active_end = None
+
+        def finish() -> None:
+            nonlocal active_start, active_end
+            if active_start is not None:
+                intervals.append({
+                    "start_time": self._artifact_scalar(active_start),
+                    "end_time": self._artifact_scalar(active_end),
+                    "duration_seconds": self._elapsed_seconds(active_start, active_end),
+                })
+                active_start = active_end = None
+
+        for index in range(len(series) - 1):
+            left, right = series.iloc[index], series.iloc[index + 1]
+            delta = self._elapsed_seconds(left["timestamp"], right["timestamp"])
+            if delta > gap_limit:
+                skipped_gaps += 1
+            usable = (0 < delta <= gap_limit and pd.notna(left["value"]) and pd.notna(right["value"]))
+            if not usable:
+                finish()
+                continue
+            covered_seconds += delta
+            if comparisons[condition](left["value"]):
+                if active_start is None:
+                    active_start = left["timestamp"]
+                active_end = right["timestamp"]
+            else:
+                finish()
+        finish()
+        duration = sum(interval["duration_seconds"] for interval in intervals)
+        summary = {
+            "interval_count": len(intervals), "total_seconds": duration,
+            "longest_seconds": max((item["duration_seconds"] for item in intervals), default=0.0),
+            "covered_seconds": covered_seconds, "skipped_gaps": skipped_gaps,
+            "row_count": len(series), "interval_end_exclusive": True,
+            "method": "sample_and_hold", "max_gap_seconds": gap_limit,
+        }
+        result_frame = pd.DataFrame(intervals, columns=["start_time", "end_time", "duration_seconds"])
+        return self._result(result_frame, operation="analyze_intervals", summary=summary)
+
+    def integrate_data(
+        self, path: str, *, time_column: str, value_column: str,
+        max_gap_seconds: float,
+        method: Literal["trapezoid", "previous"] = "trapezoid",
+        time_unit: Literal["seconds", "hours"] = "hours",
+        records_path: str | None = None,
+    ) -> str:
+        """Integrate irregular samples without extrapolation over missing intervals."""
+        gap_limit = self._gap_limit(max_gap_seconds)
+        if method not in {"trapezoid", "previous"}:
+            raise DataOperationError("Unbekanntes Integrationsverfahren.")
+        if time_unit not in {"seconds", "hours"}:
+            raise DataOperationError("Unbekannte Integrationseinheit.")
+        series = self._ordered_series(path, records_path, time_column, value_column)
+        integral = 0.0
+        covered_seconds = 0.0
+        used = skipped_gaps = skipped_nulls = 0
+        for index in range(len(series) - 1):
+            left, right = series.iloc[index], series.iloc[index + 1]
+            delta = self._elapsed_seconds(left["timestamp"], right["timestamp"])
+            if delta > gap_limit:
+                skipped_gaps += 1
+                continue
+            if pd.isna(left["value"]) or pd.isna(right["value"]):
+                skipped_nulls += 1
+                continue
+            if method == "trapezoid":
+                left_value = float(left["value"])
+                right_value = float(right["value"])
+                combined = left_value + right_value
+                # A finite average may exist even when its unscaled sum
+                # overflows (e.g. two large, equal float64 measurements).
+                value = (combined / 2 if math.isfinite(combined)
+                         else left_value / 2 + right_value / 2)
+            else:
+                value = float(left["value"])
+            part = value * delta
+            if not math.isfinite(part) or not math.isfinite(integral + part):
+                raise DataOperationError("Integration erzeugt ein nichtendliches Ergebnis.")
+            integral += part
+            covered_seconds += delta
+            used += 1
+        result = {
+            "integral": integral / 3600 if time_unit == "hours" else integral,
+            "time_unit": time_unit, "method": method,
+            "covered_seconds": covered_seconds, "intervals_used": used,
+            "intervals_skipped_gaps": skipped_gaps,
+            "intervals_skipped_nulls": skipped_nulls,
+            "row_count": len(series), "max_gap_seconds": gap_limit,
+        }
+        return json.dumps(result, ensure_ascii=False, allow_nan=False)
+
+    def concat_data(
+        self, sources: list[DataFrameInput], *,
+        sort_by: list[str] | None = None,
+        unique_by: list[str] | None = None,
+        keep: Literal["first", "last"] = "first",
+    ) -> CallToolResult:
+        """Row-wise concatenation; no implicit schema union or deduplication."""
+        if not 2 <= len(sources) <= MAX_FRAME_SOURCES:
+            raise DataOperationError("concat_data erwartet 2 bis 8 Quellen.")
+        if keep not in {"first", "last"}:
+            raise DataOperationError("keep muss 'first' oder 'last' sein.")
+        inputs = [self._read_frame(source.path, source.records_path) for source in sources]
+        base_columns = list(inputs[0].columns)
+        if any(set(frame.columns) != set(base_columns) for frame in inputs[1:]):
+            raise DataOperationError("Alle concat_data-Quellen müssen dieselben Spalten besitzen.")
+        if sum(len(frame) for frame in inputs) > MAX_FRAME_ROWS:
+            raise DataOperationError("concat_data überschreitet das Zeilenlimit.")
+        for names, parameter in ((sort_by, "sort_by"), (unique_by, "unique_by")):
+            if names is not None and (not names or len(names) != len(set(names)) or any(name not in base_columns for name in names)):
+                raise DataOperationError(f"{parameter} muss eine gültige Liste eindeutiger Spalten sein.")
+        frame = pd.concat([source[base_columns] for source in inputs], ignore_index=True)
+        if unique_by is not None:
+            # Pandas treats True and 1 as duplicates even though the Data MCP
+            # uses type-aware scalar identity. Keep the same semantics here.
+            records = frame.to_dict(orient="records")
+            positions = range(len(records)) if keep == "first" else range(len(records) - 1, -1, -1)
+            seen: set[tuple[tuple[str, object], ...]] = set()
+            chosen: list[int] = []
+            for index in positions:
+                key = tuple(_scalar_identity(records[index][column]) for column in unique_by)
+                if key not in seen:
+                    seen.add(key)
+                    chosen.append(index)
+            frame = frame.iloc[sorted(chosen)]
+        if sort_by is not None:
+            try:
+                frame = frame.sort_values(sort_by, kind="stable")
+            except (TypeError, ValueError) as exc:
+                raise DataOperationError("sort_by-Spalten können nicht gemeinsam sortiert werden.") from exc
+        return self._result(frame.reset_index(drop=True), operation="concat_data")
 
     def join_data(
         self,

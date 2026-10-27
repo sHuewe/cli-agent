@@ -16,6 +16,14 @@ class DataFrameSource:
 
 
 @dataclass(frozen=True)
+class DataFrameInput:
+    """One workspace dataset for row-wise concatenation."""
+
+    path: str
+    records_path: str | None = None
+
+
+@dataclass(frozen=True)
 class DerivedColumn:
     """One allowlisted calculation; no evaluated expressions or Python code."""
 
