@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from datetime import datetime
 from typing import Literal
 
 import pandas as pd
@@ -50,7 +51,29 @@ class DataFrameOperations:
         if frame[column].isna().any():
             raise DataOperationError("Zeitstempel dürfen nicht leer sein.")
         try:
-            timestamps = pd.to_datetime(frame[column], errors="raise")
+            values = frame[column]
+            if all(isinstance(value, str) for value in values):
+                if any(value.strip().casefold() in {"", "nat"} for value in values):
+                    raise DataOperationError("Zeitstempel dürfen nicht leer sein.")
+                # Python's ISO parser is used only to distinguish aware from
+                # naive values; pandas performs the actual conversion without
+                # losing nanosecond precision. Non-ISO inputs retain the
+                # previous generic pandas parsing behavior.
+                try:
+                    native_times = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in values]
+                except ValueError:
+                    timestamps = pd.to_datetime(values, errors="raise")
+                else:
+                    awareness = {value.tzinfo is not None and value.utcoffset() is not None for value in native_times}
+                    if len(awareness) > 1:
+                        raise DataOperationError("Zeitstempel benötigen eine einheitliche Zeitzone.")
+                    timestamps = pd.to_datetime(
+                        values, format="ISO8601", errors="raise", utc=True in awareness,
+                    )
+            else:
+                timestamps = pd.to_datetime(values, errors="raise")
+        except DataOperationError:
+            raise
         except (TypeError, ValueError, OverflowError) as exc:
             raise DataOperationError("Zeitstempel sind nicht einheitlich parsebar.") from exc
         # Strings such as "" and "NaT" become NaT without raising, even with
@@ -160,6 +183,8 @@ class DataFrameOperations:
             frame = pd.DataFrame({"timestamp": times, source.alias: values})
             frames.append(frame.sort_values("timestamp").reset_index(drop=True))
 
+        if len({frame["timestamp"].dt.tz is not None for frame in frames}) > 1:
+            raise DataOperationError("Join-Quellen dürfen keine Zeitstempel mit und ohne Zeitzone mischen.")
         # pandas 3.x infers datetime resolution per source (e.g. seconds ->
         # microseconds, fractional nanoseconds -> nanoseconds). merge_asof
         # requires identical key dtypes. Use the finest input resolution to

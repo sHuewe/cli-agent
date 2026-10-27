@@ -184,6 +184,103 @@ def test_tolerated_joins_accept_mixed_timestamp_resolutions(frames, tmp_path, di
         assert row["timestamp"].endswith(".123456789Z")
 
 
+@pytest.mark.parametrize("direction", ["nearest", "backward", "forward"])
+def test_tolerated_joins_normalize_aware_timezones(frames, tmp_path, direction):
+    _write_json(tmp_path, "utc.json", [
+        {"timestamp": "2026-06-24T07:00:00Z", "power": 10},
+    ])
+    _write_json(tmp_path, "offset.json", [
+        {"timestamp": "2026-06-24T09:00:00+02:00", "power": 20},
+    ])
+    result = frames.join_data([
+        _source("utc.json", "UTC"), _source("offset.json", "OFFSET"),
+    ], direction=direction, how="left", tolerance_seconds=0)
+    row = result.structuredContent["rows"][0]
+    assert (row["UTC"], row["OFFSET"]) == (10, 20)
+    assert row["timestamp"].startswith("2026-06-24T07:00:00")
+
+
+def test_join_artifact_can_be_rejoined_with_original_offset_source(frames, tmp_path):
+    _write_json(tmp_path, "utc.json", [
+        {"timestamp": "2026-06-24T07:00:00Z", "power": 10},
+    ])
+    _write_json(tmp_path, "offset.json", [
+        {"timestamp": "2026-06-24T09:00:00+02:00", "power": 20},
+    ])
+    result = frames.join_data([
+        _source("utc.json", "UTC"), _source("offset.json", "OFFSET"),
+    ])
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        metadata = json.loads(store.metadata_result(result, json.dumps(result.structuredContent)))
+        again = frames.join_data([
+            DataFrameSource(metadata["workspace_path"], "FROM_ARTIFACT", value_column="OFFSET", records_path="/rows"),
+            _source("offset.json", "FROM_ORIGINAL"),
+        ], direction="nearest", how="left", tolerance_seconds=0)
+        assert again.structuredContent["rows"][0]["FROM_ORIGINAL"] == 20
+    finally:
+        store.cleanup()
+
+
+def test_iso_timestamps_with_optional_fractional_seconds_join_and_resample(frames, tmp_path):
+    _write_json(tmp_path, "mixed_iso.json", [
+        {"timestamp": "2026-06-24T07:00:00Z", "power": 10},
+        {"timestamp": "2026-06-24T07:00:01.123456789Z", "power": 20},
+    ])
+    joined = frames.join_data([
+        _source("mixed_iso.json", "A"), _source("mixed_iso.json", "B"),
+    ])
+    assert [row["A"] for row in joined.structuredContent["rows"]] == [10, 20]
+    assert joined.structuredContent["rows"][1]["timestamp"].endswith(".123456789Z")
+    resampled = frames.resample_data("mixed_iso.json", "1min", [
+        ResampleAggregation("power", "sum", "total"),
+    ], records_path="/measurements")
+    assert [row["total"] for row in resampled.structuredContent["rows"]] == [30]
+
+
+def test_iso_timestamps_with_different_offsets_within_one_source(frames, tmp_path):
+    _write_json(tmp_path, "varying_offsets.json", [
+        {"timestamp": "2026-06-24T07:00:00Z", "power": 10},
+        {"timestamp": "2026-06-24T09:01:00.123456789+02:00", "power": 20},
+    ])
+    joined = frames.join_data([
+        _source("varying_offsets.json", "A"), _source("varying_offsets.json", "B"),
+    ])
+    assert [row["B"] for row in joined.structuredContent["rows"]] == [10, 20]
+    assert joined.structuredContent["rows"][1]["timestamp"].startswith("2026-06-24T07:01:00.123456789Z")
+    resampled = frames.resample_data("varying_offsets.json", "1min", [
+        ResampleAggregation("power", "sum", "total"),
+    ], records_path="/measurements")
+    assert [row["total"] for row in resampled.structuredContent["rows"]] == [10, 20]
+
+
+def test_legacy_non_iso_datetime_input_remains_parseable(frames, tmp_path):
+    _write_json(tmp_path, "legacy.json", [
+        {"timestamp": "2026/06/24 07:00:00", "power": 10},
+    ])
+    joined = frames.join_data([
+        _source("legacy.json", "A"), _source("legacy.json", "B"),
+    ])
+    assert joined.structuredContent["rows"][0]["A"] == 10
+
+
+def test_mixed_aware_and_naive_timestamps_are_not_silently_combined(frames, tmp_path):
+    _write_json(tmp_path, "aware.json", [{"timestamp": "2026-06-24T07:00:00Z", "power": 1}])
+    _write_json(tmp_path, "naive.json", [{"timestamp": "2026-06-24T07:00:00", "power": 2}])
+    with pytest.raises(DataOperationError, match="Zeitzone|Zeitreihen"):
+        frames.join_data([
+            _source("aware.json", "A"), _source("naive.json", "B"),
+        ], direction="nearest", how="left", tolerance_seconds=1)
+    _write_json(tmp_path, "mixed_awareness.json", [
+        {"timestamp": "2026-06-24T07:00:00Z", "power": 1},
+        {"timestamp": "2026-06-24T07:00:01", "power": 2},
+    ])
+    with pytest.raises(DataOperationError, match="Zeitzone"):
+        frames.resample_data("mixed_awareness.json", "1min", [
+            ResampleAggregation("power", "sum", "total"),
+        ], records_path="/measurements")
+
+
 def test_tolerated_join_retains_microseconds_for_distant_dates(frames, tmp_path):
     _write_json(tmp_path, "future_a.json", [{"timestamp": "3000-01-01T00:00:00Z", "power": 1}])
     _write_json(tmp_path, "future_b.json", [{"timestamp": "3000-01-01T00:00:00.123456Z", "power": 2}])

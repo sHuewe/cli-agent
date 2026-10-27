@@ -179,6 +179,11 @@ Beispiel-Workflow für L1/L3-Phasenmessungen:
 Beim Join werden unterschiedliche Zeitstempelauflösungen (z. B. Mikro- und
 Nanosekunden) vor dem Abgleich verlustfrei vereinheitlicht. Auch bei
 zeitzonenbehafteten Zeitstempeln bleiben Nanosekunden im Ergebnis erhalten.
+ISO-Zeitstempel dürfen innerhalb einer Quelle unterschiedlich viele
+Nachkommastellen besitzen. Zeitstempel mit explizitem Zeitzonen-Offset werden
+nach UTC normalisiert; unterschiedliche Offsets lassen sich dadurch gemeinsam
+verarbeiten. Quellen mit und ohne Zeitzonenangabe dürfen dagegen nicht
+vermischt werden.
 Liefert ein Join keine Zeilen, bewahrt sein JSON-Artefakt trotzdem die
 deklarierte `columns`-Liste für `inspect_schema` und nachfolgende DataFrame-Tools.
 
