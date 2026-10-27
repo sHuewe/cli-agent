@@ -684,6 +684,16 @@ h1 { margin: 0 0 4px; font-size: 1.35rem; }
 .message.assistant th, .message.assistant td { border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); padding: 6px 9px; text-align: left; }
 .message.error { align-self: flex-start; border: 1px solid #b42318; }
 .message.mcp-user { align-self: center; max-width: 76%; text-align: center; background: color-mix(in srgb, Highlight 8%, Canvas); border: 1px solid color-mix(in srgb, Highlight 35%, CanvasText 15%); }
+.tool-call-group { align-self: stretch; padding: 10px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, CanvasText 24%, transparent); background: color-mix(in srgb, CanvasText 4%, Canvas); font-size: .88rem; }
+.tool-call-group summary { cursor: pointer; font-weight: 650; }
+.tool-call-group summary:focus-visible { outline: 2px solid Highlight; outline-offset: 3px; }
+.tool-call-list { margin-top: 8px; border-top: 1px solid color-mix(in srgb, CanvasText 14%, transparent); }
+.tool-call-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 7px 0; }
+.tool-call-row + .tool-call-row { border-top: 1px solid color-mix(in srgb, CanvasText 10%, transparent); }
+.tool-call-name { overflow-wrap: anywhere; min-width: 0; }
+.tool-call-status { flex-shrink: 0; opacity: .8; }
+.tool-call-status[data-state="success"] { color: light-dark(#176d38, #77d89a); opacity: 1; }
+.tool-call-status[data-state="error"], .tool-call-status[data-state="denied"] { color: light-dark(#b42318, #ff9088); opacity: 1; }
 .commands { display: flex; flex-wrap: wrap; gap: 8px; }
 .commands button { padding: 7px 10px; font-size: .9rem; }
 .hidden { display: none; }
