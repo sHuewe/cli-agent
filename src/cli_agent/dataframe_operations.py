@@ -43,7 +43,11 @@ class DataFrameOperations:
                 f"DataFrame-Eingabe ist zu groß (maximal {MAX_FRAME_ROWS} Zeilen, "
                 f"{MAX_FRAME_COLUMNS} Spalten). Filtere die Quelle zunächst."
             )
-        return pd.DataFrame.from_records(rows, columns=columns)
+        # Pandas infers float64 for nullable integer columns, irreversibly
+        # rounding identifiers above 2**53 even when a transformation uses
+        # a different column. Keep source scalars unchanged; _numeric performs
+        # explicit float64 conversion only for calculation operands.
+        return pd.DataFrame(rows, columns=columns, dtype=object)
 
     @staticmethod
     def _timestamps(frame: pd.DataFrame, column: str) -> pd.Series:

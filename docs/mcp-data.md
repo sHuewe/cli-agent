@@ -189,7 +189,9 @@ deklarierte `columns`-Liste für `inspect_schema` und nachfolgende DataFrame-Too
 
 Diese Tools nutzen Pandas-`float64`-Berechnungen. Für exakte Dezimalarithmetik
 bleibt `calculate` bzw. die bestehenden Decimal-basierten Aggregationen
-zuständig. Die DataFrame-Verarbeitung ist auf 100.000 Zeilen, 100 Spalten,
+zuständig. Nur die für Berechnungen ausgewählten Spalten werden nach `float64`
+konvertiert; nicht veränderte Quellspalten behalten ihre Skalartypen, auch bei
+großen Ganzzahl-IDs mit `null`-Werten. Die DataFrame-Verarbeitung ist auf 100.000 Zeilen, 100 Spalten,
 höchstens acht Join-Quellen und 16 MB pro Ergebnis begrenzt. Große Zeiträume
 sollten deshalb nach Möglichkeit schon an der Datenquelle eingegrenzt werden.
 Endliche `float64`-Ergebniswerte werden ohne zusätzliche dezimale Rundung als

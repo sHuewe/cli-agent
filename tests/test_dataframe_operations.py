@@ -475,6 +475,50 @@ def test_dataframe_json_preserves_float64_values_exactly(frames, tmp_path):
         store.cleanup()
 
 
+@pytest.mark.parametrize("source_format", ["json", "csv"])
+@pytest.mark.parametrize("larger_id", [9_007_199_254_741_001, 18_446_744_073_709_551_617])
+def test_derive_preserves_untouched_nullable_large_integer_columns(frames, tmp_path, source_format, larger_id):
+    # Nullable integers must not be inferred as float64: integers above 2**53
+    # would otherwise silently change before the arithmetic even begins.
+    large_id = 9_007_199_254_740_993
+    expected_ids = [large_id, None, larger_id]
+    if source_format == "json":
+        _write_json(tmp_path, "ids.json", [
+            {"id": large_id, "value": 1},
+            {"id": None, "value": 2},
+            {"id": larger_id, "value": 3},
+        ])
+        path, records_path = "ids.json", "/measurements"
+    else:
+        (tmp_path / "ids.csv").write_text(
+            f"id,value\n{large_id},1\n,2\n{larger_id},3\n", encoding="utf-8",
+        )
+        path, records_path = "ids.csv", None
+
+    derived = frames.derive_columns(
+        path, [DerivedColumn("double", "multiply", "value", constant=2)],
+        records_path=records_path,
+    )
+    assert [row["id"] for row in derived.structuredContent["rows"]] == expected_ids
+    assert [row["double"] for row in derived.structuredContent["rows"]] == [2, 4, 6]
+    assert all(row["id"] is None or isinstance(row["id"], int)
+               for row in derived.structuredContent["rows"])
+
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        metadata = json.loads(store.metadata_result(derived, json.dumps(derived.structuredContent)))
+        _, saved_rows = frames.base._read_records(metadata["workspace_path"], records_path="/rows")
+        assert [row["id"] for row in saved_rows] == expected_ids
+        repeated = frames.derive_columns(
+            metadata["workspace_path"],
+            [DerivedColumn("triple", "multiply", "value", constant=3)],
+            records_path="/rows",
+        )
+        assert [row["id"] for row in repeated.structuredContent["rows"]] == expected_ids
+    finally:
+        store.cleanup()
+
+
 def test_join_and_followup_derive_keep_small_float_measurements(frames, tmp_path):
     _write_json(tmp_path, "tiny.json", [
         {"timestamp": "2026-06-24T07:00:00Z", "power": 1.4e-15},
