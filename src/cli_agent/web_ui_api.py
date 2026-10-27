@@ -49,6 +49,7 @@ API_APP_JS = """
   let approvalSubmitting = false;
   let pendingCommand = null;
   let busy = false;
+  let activeToolGroup = null;
 
   const COMMANDS = {
     tokens: {
@@ -89,6 +90,61 @@ API_APP_JS = """
     }
     chat.appendChild(element);
     element.scrollIntoView({ block: "end", behavior: "smooth" });
+  }
+
+  function toolGroup() {
+    if (activeToolGroup) return activeToolGroup;
+    const details = document.createElement("details");
+    details.className = "tool-call-group";
+    details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "Tool-Aufrufe (0)";
+    const list = document.createElement("div");
+    list.className = "tool-call-list";
+    details.append(summary, list);
+    chat.appendChild(details);
+    activeToolGroup = {summary, list, calls: new Map()};
+    return activeToolGroup;
+  }
+
+  function toolStarted(event) {
+    const id = String(event.toolCallId || "");
+    if (!id) return;
+    const group = toolGroup();
+    // Approval resumes and SSE reconnects may replay an already shown ID.
+    if (group.calls.has(id)) return;
+    const row = document.createElement("div");
+    row.className = "tool-call-row";
+    const name = document.createElement("code");
+    name.className = "tool-call-name";
+    name.textContent = String(event.toolCallName || "Tool");
+    const status = document.createElement("span");
+    status.className = "tool-call-status";
+    status.dataset.state = "running";
+    status.textContent = "Läuft …";
+    row.append(name, status);
+    group.list.appendChild(row);
+    group.calls.set(id, status);
+    group.summary.textContent = "Tool-Aufrufe (" + group.calls.size + ")";
+  }
+
+  function setToolStatus(id, state) {
+    const status = activeToolGroup?.calls.get(String(id || ""));
+    if (!status) return;
+    const labels = {
+      success: "Erfolgreich", error: "Fehler", denied: "Abgelehnt",
+      approval: "Freigabe nötig", finished: "Beendet"
+    };
+    const normalized = Object.hasOwn(labels, state) ? state : "finished";
+    status.dataset.state = normalized;
+    status.textContent = labels[normalized];
+  }
+
+  function finishPendingTools(state) {
+    if (!activeToolGroup) return;
+    for (const [id, status] of activeToolGroup.calls) {
+      if (status.dataset.state === "running") setToolStatus(id, state);
+    }
   }
 
   function setBusy(value) {
@@ -418,12 +474,17 @@ API_APP_JS = """
           if (!data) continue;
           const event = JSON.parse(data);
           if (event.type === "TEXT_MESSAGE_CONTENT") answer += String(event.delta || "");
-          else if (event.type === "CUSTOM") {
+          else if (event.type === "TOOL_CALL_START") toolStarted(event);
+          else if (event.type === "TOOL_CALL_RESULT") {
+            // The server sends only a safe status, never raw MCP tool output.
+            setToolStatus(event.toolCallId, String(event.content || "").toLowerCase());
+          } else if (event.type === "CUSTOM") {
             if (event.name === "approval_required") emit({type: "approval_required", ...event.value});
             if (event.name === "mcp_user_message") emit({type: "mcp_user_message", ...event.value});
             if (event.name === "output_error") emit({type: "error", content: event.value?.message});
           } else if (event.type === "RUN_ERROR") {
             dismissApproval();
+            finishPendingTools("error");
             emit({type: "error", content: String(event.message || "Agentenlauf fehlgeschlagen.")});
             finished = true;
           } else if (event.type === "RUN_FINISHED") {
@@ -432,6 +493,7 @@ API_APP_JS = """
               interrupted = true;
               const item = event.outcome.interrupts?.[0];
               if (item) {
+                setToolStatus(item.toolCallId, "approval");
                 const extra = item.metadata?.["cli-agent"] || {};
                 emit({
                   type: "approval_required",
@@ -442,6 +504,7 @@ API_APP_JS = """
               }
             } else {
               dismissApproval();
+              finishPendingTools("finished");
             }
           }
         }
@@ -451,6 +514,9 @@ API_APP_JS = """
         emit({type: "answer", content: answer, html: await renderAnswer(answer)});
       }
       if (!finished) throw new Error("Agenten-Eventstream vorzeitig beendet.");
+    } catch (error) {
+      finishPendingTools("error");
+      throw error;
     } finally {
       if (!interrupted) dismissApproval();
       reader.releaseLock();
@@ -686,6 +752,7 @@ API_APP_JS = """
     if (payload.type === "history_reset") {
       resetPendingCommand();
       chat.replaceChildren();
+      activeToolGroup = null;
       addMessage("system", "History wurde zurückgesetzt.");
       return;
     }
@@ -879,6 +946,7 @@ API_APP_JS = """
       try { window.sessionStorage.setItem("cli-agent-session-id", sessionId); }
       catch (_error) {}
       chat.replaceChildren();
+      activeToolGroup = null;
       emit({type: "session", ...response});
       for (const message of response.history || []) {
         if (message.role === "assistant") {
@@ -891,6 +959,8 @@ API_APP_JS = """
       }
       if (response.pending_interrupt) {
         const item = response.pending_interrupt;
+        toolStarted({toolCallId: item.toolCallId, toolCallName: item.message});
+        setToolStatus(item.toolCallId, "approval");
         emit({
           type: "approval_required", id: item.id,
           tool: item.message || "Tool-Freigabe",
@@ -976,6 +1046,8 @@ API_APP_JS = """
       void deleteUnusedSession(sessionId).catch(showApiError);
       return;
     }
+    // Group subsequent tool events with this user turn, across approvals.
+    activeToolGroup = null;
     addMessage("user", content);
     prompt.value = "";
     if (pendingCommand) {

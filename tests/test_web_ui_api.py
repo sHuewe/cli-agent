@@ -541,6 +541,117 @@ def test_api_backed_browser_javascript_syntax():
     assert result.returncode == 0, result.stderr
 
 
+def test_browser_tool_calls_display_all_statuses_and_survive_approval_resume():
+    """Run the actual SSE parser and collapsible tool view in Node.js."""
+    import shutil
+    import subprocess
+
+    from cli_agent.web_ui_api import API_APP_JS
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    view = API_APP_JS.split("  function toolGroup() {", 1)[1].split(
+        "  function setBusy(value) {", 1
+    )[0]
+    watcher = API_APP_JS.split("  async function watchRun(activeRun, response = null) {", 1)[1].split(
+        "  // The server accepts at most", 1
+    )[0]
+    script = r'''
+class Element {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this.dataset = {};
+    this.textContent = "";
+  }
+  append(...children) { this.children.push(...children); }
+  appendChild(child) { this.append(child); }
+}
+const document = {createElement: tag => new Element(tag)};
+const chat = new Element("chat");
+let activeToolGroup = null;
+let runId = "run-1";
+const aguiMessages = [];
+const emitted = [];
+const emit = event => emitted.push(event);
+const renderAnswer = async () => null;
+const dismissApproval = () => {};
+const api = () => { throw new Error("unexpected API request"); };
+const crypto = {randomUUID: () => "new-message"};
+''' + '  function toolGroup() {' + view + (
+        '  async function watchRun(activeRun, response = null) {' + watcher
+    ) + r'''
+function stream(events) {
+  const bytes = new TextEncoder().encode(
+    events.map(event => "data: " + JSON.stringify(event) + "\n\n").join("")
+  );
+  let delivered = false;
+  return {body: {getReader: () => ({
+    read: async () => {
+      if (delivered) return {done: true};
+      delivered = true;
+      return {done: false, value: bytes};
+    },
+    releaseLock: () => {}
+  })}};
+}
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+(async () => {
+  const unsafeName = '<img src=x onerror=alert(1)>';
+  await watchRun("run-1", stream([
+    {type: "TOOL_CALL_START", toolCallId: "a", toolCallName: unsafeName},
+    {type: "TOOL_CALL_START", toolCallId: "a", toolCallName: unsafeName},
+    {type: "TOOL_CALL_START", toolCallId: "b", toolCallName: "os__write_file"},
+    {type: "TOOL_CALL_ARGS", toolCallId: "b", delta: "private-arguments"},
+    {type: "TOOL_CALL_END", toolCallId: "a"},
+    {type: "TOOL_CALL_RESULT", toolCallId: "a", content: "success"},
+    {type: "RUN_FINISHED", outcome: {type: "interrupt", interrupts: [
+      {id: "approval-1", toolCallId: "b", message: "Freigabe nötig"}
+    ]}}
+  ]));
+  assert(chat.children.length === 1, "expected one collapsible group");
+  assert(chat.children[0].tag === "details" && chat.children[0].open,
+    "tool calls are not expandable");
+  assert(activeToolGroup.calls.size === 2, "duplicate call counted twice");
+  assert(activeToolGroup.summary.textContent === "Tool-Aufrufe (2)", "wrong count");
+  assert(activeToolGroup.list.children[0].children[0].textContent === unsafeName,
+    "tool names must be inserted as textContent");
+  assert(activeToolGroup.calls.get("a").textContent === "Erfolgreich", "missing success");
+  assert(activeToolGroup.calls.get("b").textContent === "Freigabe nötig", "missing approval");
+  assert(!JSON.stringify(chat).includes("private-arguments"), "tool arguments leaked into UI");
+
+  await watchRun("run-2", stream([
+    {type: "TOOL_CALL_RESULT", toolCallId: "b", content: "denied"},
+    {type: "RUN_FINISHED"}
+  ]));
+  assert(activeToolGroup.calls.get("b").textContent === "Abgelehnt", "missing denial");
+  assert(chat.children.length === 1, "approval continuation created a second group");
+
+  activeToolGroup = null;  // A new user turn.
+  await watchRun("run-3", stream([
+    {type: "TOOL_CALL_START", toolCallId: "c", toolCallName: "external__search"},
+    {type: "TOOL_CALL_RESULT", toolCallId: "c", content: "error"},
+    {type: "TOOL_CALL_START", toolCallId: "d", toolCallName: "external__other"},
+    {type: "TOOL_CALL_RESULT", toolCallId: "d", content: "private-tool-output"},
+    {type: "RUN_FINISHED"}
+  ]));
+  assert(chat.children.length === 2, "new turn reused previous group");
+  assert(activeToolGroup.calls.get("c").textContent === "Fehler", "missing error");
+  assert(activeToolGroup.calls.get("d").textContent === "Beendet", "unknown status leaked");
+  assert(!JSON.stringify(chat).includes("private-tool-output"), "tool result leaked into UI");
+  console.log("ok");
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+    result = subprocess.run(
+        [node, "-e", script], text=True, capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_cancelled_session_close_does_not_issue_delete_request():
     """Exercise the browser's real confirmation handler in Node.js."""
     import shutil

@@ -30,6 +30,14 @@ and human approval via `RUN_FINISHED` interrupt plus a subsequent new AG-UI
 run with `resume` decision. There is no separate `POST /runs` / `GET /events`
 handshake in the normal UI workflow.
 
+The browser displays backend tool calls in a collapsible **Tool-Aufrufe**
+section for each user turn, including tools that were already approved.
+The list shows only the exposed tool name and execution status, not tool
+arguments or result content. Approval interrupts and their resumed execution
+share one entry. These live event details are not part of the persisted
+user/assistant transcript and are therefore not restored for completed runs
+after a page reload.
+
 CLI-only commands such as `tokens`, `add_web_context`,
 `clear_web_context`, `enable` and `disable` use the validated
 `POST /ui/command` extension. These commands are deliberately not part
