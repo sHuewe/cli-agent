@@ -12,6 +12,7 @@ from mcp.types import CallToolResult
 from .mcp_path_policy import read_path_policy
 from .config import McpServerConfig, default_config_file, load_config
 from .data_operations import DataOperationError, DataOperations
+from .data_result_metadata import markdown_result
 from .dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
 from .logging_setup import configure_logging
 from .os_operations import Workspace, WorkspaceError
@@ -66,22 +67,19 @@ def _serialize_filters(
 
 
 def _server_instructions(access: str) -> str:
-    if access == "write":
+    if access in {"read", "write"}:
         source_guidance = """\
 Workspace file access is available. Prefer path-based datasets over repeatedly
 passing large inline payloads. For timestamped measurements, prefer the
 declarative join_data, derive_columns and resample_data tools: they can return
 metadata plus a session-scoped workspace_path to the full result. Reuse that
 path with records_path='/rows' rather than materializing rows in the LLM.
-Use inspect_json to discover JSON arrays and their records_path first. For
-non-time-series transformations use *_to_file and reuse its path, if a
-persistent output file is explicitly desired. Inline Markdown remains the
-preferred transport format when no workspace data file is available."""
-    elif access == "read":
-        source_guidance = """\
-Workspace file reads are available. Prefer a workspace path when the relevant
-dataset already exists as a file. Otherwise prefer inline Markdown for tabular
-reference content."""
+The select_data and aggregate_data tools return complete datasets without
+row limits. Their results are kept as session-local Markdown artifacts, with
+small complete results also included in metadata for immediate use.
+Use inspect_json to discover JSON arrays and their records_path first.
+Inline Markdown remains the preferred transport when no workspace data file
+is available."""
     else:
         source_guidance = """\
 Workspace file access is not available. Use inline data. Markdown is preferred
@@ -101,7 +99,8 @@ normalized tabular output returned by Data MCP tools as inline data for further
 Data MCP calls. Do not manually reconstruct, copy, merge, relabel, split or
 extract rows, columns or cells in the model and then pass that reconstruction
 back as data. Use select_data whenever a subset, projection or ordering is
-needed, and pass its returned Markdown unchanged to later Data MCP tools.
+needed, and pass its returned Markdown or verified session workspace_path
+unchanged to later Data MCP tools.
 Dependent Data MCP calls must wait for the tool result they consume instead of
 reconstructing that expected result in parallel.
 
@@ -124,8 +123,8 @@ Do not use preview_data as a substitute for a targeted select_data query.
 Use select_data for actual rows, subsets, projections or ordering, and
 value_counts for frequencies in one column.
 Session-scoped MCP result artifacts are temporary computation data and are
-automatically deleted when the cli-agent session ends. Persist user-named
-output files only when the user explicitly requested a file change.
+automatically deleted when the cli-agent session ends. Data MCP tools never
+write or overwrite user-named workspace files.
 """
 
 
@@ -258,7 +257,6 @@ def create_server(
             filters: list[DataFilter] | None = None,
             sort_by: list[str] | None = None,
             descending: bool = False,
-            limit: int = 100,
             records_path: str | None = None,
         ) -> str:
             """
@@ -282,7 +280,6 @@ def create_server(
                 filters=_serialize_filters(filters),
                 sort_by=sort_by,
                 descending=descending,
-                limit=limit,
                 **({"records_path": records_path} if records_path is not None else {}),
             )
 
@@ -324,7 +321,6 @@ def create_server(
             filters: list[DataFilter] | None = None,
             sort_by: list[str] | None = None,
             descending: bool = False,
-            limit: int = 200,
             records_path: str | None = None,
         ) -> str:
             """
@@ -346,7 +342,6 @@ def create_server(
                 filters=_serialize_filters(filters),
                 sort_by=sort_by,
                 descending=descending,
-                limit=limit,
                 **({"records_path": records_path} if records_path is not None else {}),
             )
 
@@ -438,7 +433,7 @@ def create_server(
                 **({"records_path": records_path} if records_path is not None else {}),
             )
 
-        @mcp.tool()
+        @mcp.tool(structured_output=False)
         def select_data(
             path: str | None = None,
             data: str | None = None,
@@ -448,9 +443,8 @@ def create_server(
             filters: list[DataFilter] | None = None,
             sort_by: list[str] | None = None,
             descending: bool = False,
-            limit: int = 100,
             records_path: str | None = None,
-        ) -> str:
+        ) -> CallToolResult:
             """
             Select, filter and sort rows from a workspace path or inline data.
 
@@ -464,7 +458,7 @@ def create_server(
             combined with AND; use op="in" for alternatives within one column.
             No Python, SQL, regex or expression evaluation is performed.
             """
-            return operations.select_data(
+            result_columns, result_rows = operations._select_records(
                 path,
                 data=data,
                 data_format=data_format,
@@ -473,8 +467,14 @@ def create_server(
                 filters=_serialize_filters(filters),
                 sort_by=sort_by,
                 descending=descending,
-                limit=limit,
                 **({"records_path": records_path} if records_path is not None else {}),
+            )
+            return markdown_result(
+                operations._result(
+                    result_columns, result_rows,
+                    total_rows=len(result_rows), limit=len(result_rows),
+                ),
+                result_columns, len(result_rows), operation="select_data",
             )
 
         @mcp.tool()
@@ -508,7 +508,7 @@ def create_server(
                 **({"records_path": records_path} if records_path is not None else {}),
             )
 
-        @mcp.tool()
+        @mcp.tool(structured_output=False)
         def aggregate_data(
             aggregations: list[dict[str, str]],
             path: str | None = None,
@@ -519,9 +519,8 @@ def create_server(
             filters: list[DataFilter] | None = None,
             sort_by: list[str] | None = None,
             descending: bool = False,
-            limit: int = 200,
             records_path: str | None = None,
-        ) -> str:
+        ) -> CallToolResult:
             """
             Deterministically aggregate a workspace path or inline dataset.
 
@@ -533,101 +532,27 @@ def create_server(
             Supported functions are count, sum, mean, min, max, median, nunique
             and std.
             """
-            return operations.aggregate_data(
-                aggregations,
+            result_columns, result_rows = operations._aggregate_records(
                 path,
                 data=data,
                 data_format=data_format,
                 table_index=table_index,
-                group_by=group_by,
-                filters=_serialize_filters(filters),
-                sort_by=sort_by,
-                descending=descending,
-                limit=limit,
-                **({"records_path": records_path} if records_path is not None else {}),
-            )
-
-    if access == "write":
-
-        @mcp.tool()
-        def select_data_to_file(
-            output_path: str,
-            input_path: str | None = None,
-            data: str | None = None,
-            data_format: str | None = None,
-            table_index: int = 0,
-            columns: list[str] | None = None,
-            filters: list[DataFilter] | None = None,
-            sort_by: list[str] | None = None,
-            descending: bool = False,
-            records_path: str | None = None,
-        ) -> str:
-            """
-            Write a filtered/projected dataset to a workspace-local data file.
-
-            For multi-step work this is the preferred transformation path:
-            write the derived dataset once, then reuse output_path as path in
-            later data tools instead of repeatedly passing inline content.
-            Prefer input_path when the source already exists in the workspace.
-            Otherwise, for reference-content workflows, use only normalized
-            Markdown returned by a previous Data MCP tool as inline data. Do not
-            manually reconstruct or extract rows or columns in the model; use
-            select_data for subsets and projections. Supported output formats are
-            CSV, TSV, JSONL, NDJSON and Markdown based on output_path suffix.
-            """
-            return operations.select_data_to_file(
-                output_path,
-                input_path,
-                data=data,
-                data_format=data_format,
-                table_index=table_index,
-                columns=columns,
-                filters=_serialize_filters(filters),
-                sort_by=sort_by,
-                descending=descending,
-                **({"records_path": records_path} if records_path is not None else {}),
-            )
-
-        @mcp.tool()
-        def aggregate_data_to_file(
-            output_path: str,
-            aggregations: list[dict[str, str]],
-            input_path: str | None = None,
-            data: str | None = None,
-            data_format: str | None = None,
-            table_index: int = 0,
-            group_by: list[str] | None = None,
-            filters: list[DataFilter] | None = None,
-            sort_by: list[str] | None = None,
-            descending: bool = False,
-            records_path: str | None = None,
-        ) -> str:
-            """
-            Aggregate a dataset and write the result to a workspace-local file.
-
-            For multi-step work this is the preferred aggregation path: persist
-            the derived result and reuse output_path as path in later calls.
-            Prefer input_path for an existing workspace source. Otherwise, for
-            reference-content workflows, use only normalized Markdown returned
-            by a previous Data MCP tool as inline data. Do not manually
-            reconstruct or extract rows in the model; use select_data first when
-            only a subset is relevant. Supported output formats are CSV, TSV,
-            JSONL, NDJSON and Markdown based on output_path suffix.
-            """
-            return operations.aggregate_data_to_file(
-                output_path,
-                aggregations,
-                input_path,
-                data=data,
-                data_format=data_format,
-                table_index=table_index,
+                aggregations=aggregations,
                 group_by=group_by,
                 filters=_serialize_filters(filters),
                 sort_by=sort_by,
                 descending=descending,
                 **({"records_path": records_path} if records_path is not None else {}),
             )
+            return markdown_result(
+                operations._result(
+                    result_columns, result_rows,
+                    total_rows=len(result_rows), limit=len(result_rows),
+                ),
+                result_columns, len(result_rows), operation="aggregate_data",
+            )
 
+    if access in {"read", "write"}:
         if getattr(operations, "workspace", None) is not None:
             from .dataframe_operations import DataFrameOperations
 

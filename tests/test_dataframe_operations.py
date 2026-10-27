@@ -114,7 +114,7 @@ def test_exact_join_derived_difference_and_session_cleanup(frames, tmp_path):
         records_path=metadata["records_path"],
     )
     assert [row["D"] for row in derived.structuredContent["rows"]] == [5, 600, 700]
-    assert "rows" not in json.loads(store.metadata_result(derived, json.dumps(derived.structuredContent)))
+    assert json.loads(store.metadata_result(derived, json.dumps(derived.structuredContent)))["rows"] == derived.structuredContent["rows"]
     store.cleanup()
     assert not (tmp_path / path).exists()
     assert not list(tmp_path.glob("mcp-data-*"))
@@ -197,6 +197,16 @@ def test_pandas_output_bound_and_non_numeric_data_are_rejected(frames, tmp_path,
     monkeypatch.setattr(dataframe_operations, "MAX_FRAME_RESULT_CHARS", 10)
     with pytest.raises(DataOperationError, match="zu groß"):
         frames.join_data([_source("l1.json", "A"), _source("l3.json", "B")])
+
+
+def test_large_frame_metadata_omits_rows_while_retaining_full_artifact(frames, tmp_path):
+    _write_json(tmp_path, "large.json", [
+        {"timestamp": f"2026-06-24T07:{i // 60:02d}:{i % 60:02d}", "power": i}
+        for i in range(200)
+    ])
+    result = frames.join_data([_source("large.json", "A"), _source("large.json", "B")])
+    assert len(result.structuredContent["rows"]) == 200
+    assert "rows" not in result.meta[METADATA_FOR_LLM_KEY]
 
 
 @pytest.mark.asyncio

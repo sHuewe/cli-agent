@@ -377,7 +377,7 @@ async def process_tool_calls(
         store = getattr(agent, "_result_artifacts", None)
         if (
             store is not None
-            and getattr(agent, "workspace_access", "none") == "write"
+            and getattr(agent, "workspace_access", "none") in {"read", "write"}
         ):
             try:
                 metadata_result = store.metadata_result(result, raw_result_text)

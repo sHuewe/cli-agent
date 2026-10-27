@@ -29,21 +29,22 @@ cli-agent --with-data
 # Inline-Daten + Workspace-Dateien lesen
 cli-agent --with-os-read --with-data
 
-# Inline-Daten + Workspace-Dateien lesen und abgeleitete Datensätze schreiben
+# Inline-Daten + Workspace-Dateien lesen; OS-Tools dürfen zusätzlich schreiben
 cli-agent --with-os-write --with-data
 ```
 
 **Pandas wird bei jeder Installation von cli-agent mitinstalliert.**
 Die Tools `join_data`, `derive_columns` und `resample_data` erscheinen bei
-`--with-data --with-os-write`. Sie benötigen keine allgemeine Codeausführung
+`--with-data --with-os-read` (auch mit `--with-os-write`). Sie benötigen keine allgemeine Codeausführung
 und akzeptieren keine frei formulierten Python-/Pandas-Ausdrücke.
 
 Ohne `--with-os-read` bzw. `--with-os-write` wird für den Data-MCP gar keine
 `Workspace`-Instanz erzeugt. Die Analyse-Tools bleiben trotzdem verfügbar,
 exponieren in diesem Modus aber bewusst keinen `path`-Parameter. Mit
 `--with-os-read` bzw. `--with-os-write` wird `path` zusätzlich im
-Tool-Schema angeboten. Nur mit `--with-os-write` werden die mutierenden
-`*_to_file`-Tools registriert.
+Tool-Schema angeboten. Der Data-MCP selbst registriert unabhängig vom Modus
+keine mutierenden Tools; der Agent darf zur Weiterverarbeitung automatisch
+temporäre Session-Dateien anlegen, sobald OS-Lesezugriff verfügbar ist.
 
 Der Data-MCP ist ein Built-in. Seine Launchparameter werden vom Agenten erzeugt;
 der OS-Zugriffsmodus wird außerhalb der Modellkontrolle aus den CLI-Rechten
@@ -81,8 +82,12 @@ Python-Feldgrößenlimit bewusst bis zur bereits geltenden maximalen
 Dateigröße angehoben; Inline-Daten bleiben unabhängig davon durch ihr
 2.000.000-Zeichen-Limit begrenzt. Bei Markdown wird das Zeilenbudget für die
 Summe aller zu materialisierenden Tabellenzeilen bereits vor der eigentlichen
-Markdown-Tokenisierung geprüft. Tool-Ergebnisse sind zusätzlich begrenzt,
-damit große Quelldatensätze nicht ungefiltert in den LLM-Kontext gelangen.
+Markdown-Tokenisierung geprüft. Tool-Ergebnisse sind zusätzlich durch ein
+Größenbudget begrenzt. `select_data` und `aggregate_data` kürzen Zeilen
+**niemals**: Ist die vollständige Ausgabe zu groß (aktuell 8 MB), wird
+stattdessen ein Fehler zurückgegeben. Bei aktiviertem Workspace-Zugriff
+gelangen große Ergebnisse nur als Session-Dateipfad und Metadaten in den
+LLM-Kontext.
 
 ## Read-/Analyse-Tools
 
@@ -93,20 +98,21 @@ damit große Quelldatensätze nicht ungefiltert in den LLM-Kontext gelangen.
 | `inspect_json(path)` | Findet Record-Arrays in verschachtelten Workspace-JSON-Dateien ohne die einzelnen Messwerte auszugeben; nur bei Dateileserechten. |
 | `inspect_schema(...)` | Liefert Schema-/Profil-Metadaten ohne Datensätze: Zeilenzahl, Spaltennamen, Typinferenz, Null-/Unique-Zahlen und bei niedriger Kardinalität die vollständige Distinct-Wertedomäne. |
 | `preview_data(...)` | Liefert Schema-Metadaten plus eine bewusst begrenzte Vorschau vollständiger Zeilen. Für reine Schema-Erkundung ist `inspect_schema` vorzuziehen. |
-| `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert höchstens 1.000 Zeilen. |
+| `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert alle Ergebniszeilen ohne `limit`-Parameter. |
 | `value_counts(...)` | Zählt unterschiedliche Werte einer Spalte. |
-| `aggregate_data(...)` | Gruppiert und aggregiert Daten deterministisch. |
+| `aggregate_data(...)` | Gruppiert und aggregiert Daten deterministisch; liefert alle Gruppen ohne `limit`-Parameter. |
 
-### Zeitreihen und DataFrames (Pandas, `--with-os-write`)
+### Zeitreihen und DataFrames (Pandas, `--with-os-read`)
 
 Die neuen Tools sind auf die Analyse vieler Messwerte ausgelegt. Ihr Ergebnis
 ist ein strukturiertes JSON mit `columns` und `rows`, wird aber bei Nutzung
 mit cli-agent **nicht vollständig in den LLM-Kontext geschrieben**: Über das
 MCP-Feld `_meta.io.github.shuewe.cli-agent/only_metadata_to_llm` wird
 stattdessen das bereits vorhandene Session-Artefakt-Verfahren genutzt. Das
-Modell erhält ausschließlich die durch Data-MCP definierten Metadaten
-(`operation`, `row_count`, `columns`, `records_path`) und den vom Agenten
-ergänzten `workspace_path`.
+Modell erhält die durch Data-MCP definierten Metadaten (`operation`,
+`row_count`, `columns`, `records_path`) und den vom Agenten ergänzten
+`workspace_path`. Bei kleinen Ergebnissen (maximal 8 KB) werden zusätzlich
+alle Ergebniszeilen direkt in den Metadaten bereitgestellt.
 
 Beispiel-Workflow für L1/L3-Phasenmessungen:
 
@@ -162,7 +168,7 @@ hierzu muss die Zeitbasis beachtet werden.
 Die temporären Artefakte gehören zur laufenden cli-agent-Session und werden
 beim regulären Session-Ende inklusive ihres Session-Unterordners gelöscht.
 Andere Workspace-Dateien – insbesondere solche, die der Nutzer oder
-`*_to_file`-Tools explizit anlegen – werden dadurch nicht gelöscht. Nach
+andere OS-Tools explizit anlegen – werden dadurch nicht gelöscht. Nach
 einem Prozessabsturz kann eine Bereinigung ausgeblieben sein.
 
 ### Markdown-Tabellen
@@ -221,10 +227,12 @@ tabellarischen Ergebnisse als normalisiertes Markdown. Dadurch kann ihr Output
 ohne JSON-Rekonstruktion an einen weiteren Data-Tool-Aufruf weitergegeben werden.
 
 Bei aktiviertem Workspace-Zugriff ist ein vorhandener Dateipfad vorzuziehen.
-Insbesondere mit `--with-os-write` sollen mehrstufige Transformationen nach
-Möglichkeit einmal über ein `*_to_file`-Tool persistiert und anschließend per
-`path` weiterverarbeitet werden. Ohne Schreibzugriff bleibt Markdown das
-bevorzugte stateless Austauschformat.
+Mit `--with-os-read` (oder `--with-os-write`) schreibt der Agent die Ergebnisse
+von `select_data` und `aggregate_data` automatisch in eine geschützte,
+temporäre Markdown-Datei. Die Antwort enthält `workspace_path`, der direkt
+als `path` des nächsten Data-Tools nutzbar ist. Kleine Ergebnisse enthalten
+zusätzlich das vollständige Markdown im Metadatenfeld `result`. Ohne
+Workspace-Zugriff wird das vollständige Markdown direkt zurückgegeben.
 
 ### Schema-Erkundung und Datenvorschau
 
@@ -345,34 +353,31 @@ Präzisionsbereich werden abgewiesen, bevor ein Decimal-Kontext mit dieser
 Präzision angelegt wird. Vorhandene Float-Spalten behalten aus
 Kompatibilitätsgründen ihre bisherige Float-Semantik; nicht-endliche
 Aggregationsergebnisse werden jedoch abgewiesen. Präzise Dezimalwerte bleiben
-beim Markdown-Chaining und beim Schreiben von JSONL als numerische Werte
-erhalten.
+beim Markdown-Chaining erhalten.
 
 Boolesche Werte besitzen bei Gleichheit, Membership, Gruppierung und
 Distinct-Zählungen eine eigene skalare Identität und werden daher nicht mit den
 numerischen Werten `0` bzw. `1` zusammengelegt. Bei Sortierungen bleiben
 Nullwerte unabhängig von auf- oder absteigender Sortierrichtung am Ende.
 
-## Write-Tools
+## Automatische Session-Artefakte
 
-Nur bei `--with-os-write --with-data` werden zusätzlich registriert:
+`select_data` und `aggregate_data` geben ihr Ergebnis vollständig an den
+Agenten zurück. Mit OS-Lesezugriff aktiviert der Agent den vereinbarten
+MCP-`_meta`-Mechanismus automatisch: Er speichert die Daten in einer von ihm
+gewählten `.md`-Datei innerhalb eines eindeutigen Session-Unterordners und
+übermittelt dem LLM nur `workspace_path`, Schema/Zeilenzahl und bei kleinen
+Ergebnissen das vollständige Markdown. Die drei Pandas-Tools verwenden
+dasselbe Verfahren für `.json`-Dateien mit `records_path="/rows"`.
 
-| Tool | Funktion |
-| --- | --- |
-| `select_data_to_file(...)` | Schreibt das Ergebnis einer Filter-/Projektionsoperation in eine neue oder bestehende Datendatei. |
-| `aggregate_data_to_file(...)` | Schreibt ein Aggregationsergebnis in eine Datendatei. |
-
-Diese Tools können ausschließlich die unterstützten Datenformate schreiben und
-sind keine allgemeinen `write_file`-Ersatztools. Dazu gehören auch
-`.md`/`.markdown`; Markdown-Dateien werden dabei kanonisch mit konsistenter
-Spaltenanzahl geschrieben. Für mehrstufige Datenverarbeitung ist dieser
-dateibasierte Weg bei vorhandenem Schreibzugriff der bevorzugte Pfad. Wie die
-mutierenden OS-Built-ins benötigen die Tools standardmäßig eine explizite
-Tool-Freigabe.
+Der Data-MCP erhält dadurch kein Recht, beliebige Dateien zu schreiben.
+Insbesondere existieren `select_data_to_file` und `aggregate_data_to_file`
+nicht mehr. Beim regulären Beenden entfernt der Agent ausschließlich seine
+eigenen Session-Dateien; vorhandene Workspace-Daten werden nicht verändert.
 
 ## Workspace-Sicherheit
 
-Dateipfade werden vor dem Parsen beziehungsweise Schreiben über dieselbe
+Dateipfade werden vor dem Parsen über dieselbe
 `Workspace`-Sicherheitsgrenze wie beim OS-MCP validiert. Insbesondere gelten:
 
 - nur relative Pfade innerhalb des fest gebundenen Workspaces,
@@ -380,18 +385,17 @@ Dateipfade werden vor dem Parsen beziehungsweise Schreiben über dieselbe
 - keine Symlink-/Junction-Indirektion für Data-Dateien,
 - kein Zugriff auf geschützte oder als sensibel klassifizierte Pfade,
 - keine Verarbeitung von Dateien mit mehreren Hardlinks,
-- Zielverzeichnisse müssen bereits existieren,
+- der Agent legt ausschließlich seinen eigenen temporären Session-Ordner an,
 - die aktive Agent-Konfiguration bleibt geschützt.
 
 `--exclude-path` wird bei aktiviertem OS-Zugriff sowohl an den OS-MCP als auch
 an den Data-MCP weitergereicht. Mit `--with-data` allein hat der Data-MCP
 keinen Dateizugriff und benötigt daher keine Workspace-Pfadausschlüsse.
 
-## Implementierungsgrenze der ersten Version
+## Implementierungsgrenze
 
-Die Tool-API ist absichtlich als kleiner deklarativer Tabellen-Wrapper
-geschnitten. Die erste Implementierung verwendet dafür Python-Standardbibliothek
-statt einer zusätzlichen Pandas/NumPy-Laufzeitabhängigkeit. Dadurch bleibt der
-Toolvertrag unabhängig vom konkreten Tabellen-Backend; ein späterer Wechsel auf
-Pandas für größere oder komplexere Operationen kann hinter derselben
-MCP-Schnittstelle erfolgen.
+Die Basisoperationen (`select_data`, `aggregate_data`, `inspect_schema` usw.)
+verwenden weiterhin die Python-Standardbibliothek; die drei erweiterten
+Zeitreihen- und DataFrame-Tools nutzen Pandas. Pandas ist eine reguläre
+Projektabhängigkeit und wird immer mitinstalliert. Alle Operationen bleiben
+deklarativ, ohne beliebige Python-Ausdrücke des Modells auszuführen.

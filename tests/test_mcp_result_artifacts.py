@@ -100,8 +100,9 @@ def _response(*, metadata: object = None, flag: object = True, error: bool = Fal
     )
 
 
-def test_tool_result_exposes_only_metadata_and_session_path(tmp_path: Path) -> None:
-    agent = _agent(tmp_path)
+@pytest.mark.parametrize("access", ["read", "write"])
+def test_tool_result_exposes_only_metadata_and_session_path(tmp_path: Path, access: str) -> None:
+    agent = _agent(tmp_path, access=access)
     try:
         model_text = asyncio.run(_execute(agent, _response()))
         model_value = json.loads(model_text)
@@ -123,7 +124,8 @@ def test_tool_result_exposes_only_metadata_and_session_path(tmp_path: Path) -> N
     ("access", "flag"),
     [
         ("none", True),
-        ("read", True),
+        ("read", False),
+        ("read", 1),
         ("write", False),
         ("write", 1),
     ],
@@ -187,6 +189,26 @@ def test_text_tool_result_is_saved_without_structured_content(tmp_path: Path) ->
     assert path.read_text(encoding="utf-8") == "time,value\n07:06,-811"
     store.cleanup()
     assert not path.exists()
+
+
+def test_markdown_artifact_is_readable_and_removed_on_close(tmp_path: Path) -> None:
+    from cli_agent.data_result_metadata import markdown_result
+    from cli_agent.data_operations import DataOperations
+
+    agent = _agent(tmp_path, access="read")
+    markdown = "Rows: 1/1\n\n| x |\n|---|\n| 42 |"
+    result = markdown_result(markdown, ["x"], 1, operation="select_data")
+    try:
+        model_result = json.loads(asyncio.run(_execute(agent, result)))
+        assert model_result["result"] == markdown
+        artifact = tmp_path / model_result["workspace_path"]
+        assert artifact.suffix == ".md"
+        assert DataOperations(agent._result_artifacts.workspace).select_data(
+            model_result["workspace_path"]
+        ).startswith("Rows: 1/1")
+    finally:
+        asyncio.run(agent.close())
+    assert not artifact.exists()
 
 
 def test_untrusted_data_server_does_not_disable_artifact_mode(tmp_path: Path) -> None:

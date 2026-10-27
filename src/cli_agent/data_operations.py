@@ -27,7 +27,7 @@ MAX_DATA_FILE_BYTES = 100_000_000
 MAX_DATA_PAYLOAD_CHARS = 2_000_000
 MAX_DATA_ROWS = 1_000_000
 MAX_CSV_FIELD_CHARS = MAX_DATA_FILE_BYTES
-MAX_RESULT_ROWS = 1_000
+MAX_FULL_RESULT_BYTES = 8_000_000
 MAX_SAMPLE_ROWS = 20
 DEFAULT_DISTINCT_VALUES_LIMIT = 20
 MAX_DISTINCT_VALUES_LIMIT = 100
@@ -866,66 +866,6 @@ class DataOperations:
 
         return columns, rows
 
-    def _write_records(
-        self,
-        path: str,
-        *,
-        columns: list[str],
-        rows: list[Record],
-    ) -> str:
-        if self.workspace is None:
-            raise DataOperationError(
-                "Dateischreibzugriff ist für den Data-MCP nicht aktiviert."
-            )
-        file_path = self.workspace.resolve_writable_file(path)
-        suffix = self._validate_suffix(file_path)
-        try:
-            if suffix in {".csv", ".tsv"}:
-                delimiter = "," if suffix == ".csv" else "\t"
-                with file_path.open("w", encoding="utf-8", newline="") as handle:
-                    writer = csv.DictWriter(
-                        handle,
-                        fieldnames=columns,
-                        delimiter=delimiter,
-                        extrasaction="raise",
-                    )
-                    writer.writeheader()
-                    writer.writerows(rows)
-            elif suffix in {".md", ".markdown"}:
-                file_path.write_text(
-                    render_markdown_table(
-                        columns,
-                        rows,
-                        preserve_scalar_types=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                    newline="\n",
-                )
-            else:
-                with file_path.open(
-                    "w",
-                    encoding="utf-8",
-                    newline="\n",
-                ) as handle:
-                    for row in rows:
-                        handle.write(_json_dumps_precise(row))
-                        handle.write("\n")
-        except (OSError, csv.Error, TypeError, ValueError) as exc:
-            raise DataOperationError(
-                f"Datendatei konnte nicht geschrieben werden: {path!r}: {exc}"
-            ) from exc
-        relative = file_path.relative_to(self.workspace.directory).as_posix()
-        return json.dumps(
-            {
-                "output_path": relative,
-                "rows_written": len(rows),
-                "columns": columns,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-
     @staticmethod
     def _require_columns(
         columns: list[str],
@@ -1117,7 +1057,13 @@ class DataOperations:
             )
         except MarkdownTableError as exc:
             raise DataOperationError(str(exc)) from exc
-        return prefix + "\n\n" + table
+        result = prefix + "\n\n" + table
+        if len(result.encode("utf-8")) > MAX_FULL_RESULT_BYTES:
+            raise DataOperationError(
+                "Vollständiges Datenergebnis ist zu groß für einen MCP-Aufruf. "
+                "Bitte Zeitraum oder Spalten eingrenzen."
+            )
+        return result
 
     @staticmethod
     def _column_metadata(
@@ -1401,10 +1347,30 @@ class DataOperations:
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
         descending: bool = False,
-        limit: int = 100,
         records_path: str | None = None,
     ) -> str:
-        limit = self._validate_limit(limit, maximum=MAX_RESULT_ROWS)
+        selected_columns, ordered = self._select_records(
+            path, data=data, data_format=data_format,
+            table_index=table_index, columns=columns, filters=filters,
+            sort_by=sort_by, descending=descending, records_path=records_path,
+        )
+        return self._result(
+            selected_columns, ordered, total_rows=len(ordered), limit=len(ordered),
+        )
+
+    def _select_records(
+        self,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        table_index: int = 0,
+        columns: list[str] | None = None,
+        filters: list[dict[str, Any]] | None = None,
+        sort_by: list[str] | None = None,
+        descending: bool = False,
+        records_path: str | None = None,
+    ) -> tuple[list[str], list[Record]]:
         source_columns, rows = self._read_records(
             path,
             data=data,
@@ -1420,12 +1386,7 @@ class DataOperations:
             sort_by,
             descending=descending,
         )
-        return self._result(
-            selected_columns,
-            ordered,
-            total_rows=len(ordered),
-            limit=limit,
-        )
+        return selected_columns, ordered
 
     @staticmethod
     def _aggregation_value(
@@ -1677,10 +1638,8 @@ class DataOperations:
         filters: list[dict[str, Any]] | None = None,
         sort_by: list[str] | None = None,
         descending: bool = False,
-        limit: int = 200,
         records_path: str | None = None,
     ) -> str:
-        limit = self._validate_limit(limit, maximum=MAX_RESULT_ROWS)
         result_columns, rows = self._aggregate_records(
             path,
             data=data,
@@ -1697,7 +1656,7 @@ class DataOperations:
             result_columns,
             rows,
             total_rows=len(rows),
-            limit=limit,
+            limit=len(rows),
         )
 
     def value_counts(
@@ -1754,88 +1713,4 @@ class DataOperations:
             result_rows,
             total_rows=len(result_rows),
             limit=limit,
-        )
-
-    def select_data_to_file(
-        self,
-        output_path: str,
-        input_path: str | None = None,
-        *,
-        data: str | None = None,
-        data_format: str | None = None,
-        table_index: int = 0,
-        columns: list[str] | None = None,
-        filters: list[dict[str, Any]] | None = None,
-        sort_by: list[str] | None = None,
-        descending: bool = False,
-        records_path: str | None = None,
-    ) -> str:
-        source_columns, rows = self._read_records(
-            input_path,
-            data=data,
-            data_format=data_format,
-            table_index=table_index,
-            records_path=records_path,
-        )
-        selected_columns = self._require_columns(
-            source_columns,
-            columns,
-        )
-        filtered = self._apply_filters(
-            rows,
-            source_columns,
-            filters,
-        )
-        ordered = self._sort_rows(
-            filtered,
-            source_columns,
-            sort_by,
-            descending=descending,
-        )
-        selected_set = set(selected_columns)
-        projected = [
-            {
-                column: value
-                for column, value in row.items()
-                if column in selected_set
-            }
-            for row in ordered
-        ]
-        return self._write_records(
-            output_path,
-            columns=selected_columns,
-            rows=projected,
-        )
-
-    def aggregate_data_to_file(
-        self,
-        output_path: str,
-        aggregations: list[dict[str, str]],
-        input_path: str | None = None,
-        *,
-        data: str | None = None,
-        data_format: str | None = None,
-        table_index: int = 0,
-        group_by: list[str] | None = None,
-        filters: list[dict[str, Any]] | None = None,
-        sort_by: list[str] | None = None,
-        descending: bool = False,
-        records_path: str | None = None,
-    ) -> str:
-        columns, rows = self._aggregate_records(
-            input_path,
-            data=data,
-            data_format=data_format,
-            table_index=table_index,
-            records_path=records_path,
-            group_by=group_by,
-            aggregations=aggregations,
-            filters=filters,
-            sort_by=sort_by,
-            descending=descending,
-        )
-        return self._write_records(
-            output_path,
-            columns=columns,
-            rows=rows,
         )
