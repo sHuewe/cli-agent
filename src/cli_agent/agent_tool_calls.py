@@ -375,12 +375,9 @@ async def process_tool_calls(
         model_result_text = raw_result_text
         artifactized = False
         store = getattr(agent, "_result_artifacts", None)
-        data_config = getattr(agent, "_server_configs", {}).get("data")
         if (
             store is not None
             and getattr(agent, "workspace_access", "none") == "write"
-            and "data" in getattr(agent, "_active_servers", set())
-            and bool(getattr(data_config, "built_in", False))
         ):
             try:
                 metadata_result = store.metadata_result(result, raw_result_text)

@@ -31,20 +31,19 @@ class ArtifactError(RuntimeError):
 
 
 def _protected_paths(servers: tuple[McpServerConfig, ...]) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
-    """Honor the same path restrictions configured for the built-in Data MCP."""
+    """Honor the path restrictions of all configured built-in workspace MCPs."""
+    protected: list[Path] = []
+    mutation_protected: list[Path] = []
     for server in servers:
-        if server.name != "data" or not server.built_in:
+        if server.name not in {"os", "data"} or not server.built_in:
             continue
         arguments = tuple(server.literal_args)
-        protected: list[Path] = []
-        mutation_protected: list[Path] = []
         for index, value in enumerate(arguments[:-1]):
             if value == "--protected-path":
                 protected.append(Path(arguments[index + 1]))
             elif value == "--mutation-protected-path":
                 mutation_protected.append(Path(arguments[index + 1]))
-        return tuple(protected), tuple(mutation_protected)
-    return (), ()
+    return tuple(protected), tuple(mutation_protected)
 
 
 class McpResultArtifacts:

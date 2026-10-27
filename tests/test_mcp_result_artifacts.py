@@ -63,16 +63,27 @@ async def _execute(agent: CliAgent, response: object) -> str:
     return next(message["content"] for message in messages if message.get("role") == "tool")
 
 
-def _agent(tmp_path: Path, *, access: str = "write", data_active: bool = True) -> CliAgent:
+def _agent(
+    tmp_path: Path,
+    *,
+    access: str = "write",
+    with_data: bool = False,
+    data_active: bool = False,
+) -> CliAgent:
+    os_config = McpServerConfig(name="os", command="unused", built_in=True)
     data_config = McpServerConfig(name="data", command="unused", built_in=True)
     agent = CliAgent(
         tmp_path,
         OllamaClient(base_url="http://localhost:11434", model="test"),
-        (data_config,),
+        (os_config, data_config) if with_data else (os_config,),
         workspace_access=access,
     )
-    agent._server_configs["data"] = data_config
-    if data_active:
+    agent._server_configs["os"] = os_config
+    if access in {"read", "write"}:
+        agent._active_servers.add("os")
+    if with_data:
+        agent._server_configs["data"] = data_config
+    if with_data and data_active:
         agent._active_servers.add("data")
     return agent
 
@@ -109,22 +120,36 @@ def test_tool_result_exposes_only_metadata_and_session_path(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize(
-    ("access", "data_active", "flag", "is_error"),
+    ("access", "flag"),
     [
-        ("none", True, True, False),
-        ("read", True, True, False),
-        ("write", False, True, False),
-        ("write", True, False, False),
-        ("write", True, 1, False),
+        ("none", True),
+        ("read", True),
+        ("write", False),
+        ("write", 1),
     ],
 )
 def test_raw_tool_result_if_opt_in_conditions_are_absent(
-    tmp_path: Path, access: str, data_active: bool, flag: object, is_error: bool
+    tmp_path: Path, access: str, flag: object
 ) -> None:
-    agent = _agent(tmp_path, access=access, data_active=data_active)
-    model_text = asyncio.run(_execute(agent, _response(flag=flag, error=is_error)))
+    agent = _agent(tmp_path, access=access)
+    model_text = asyncio.run(_execute(agent, _response(flag=flag)))
     assert "points" in json.loads(model_text)
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    ("with_data", "data_active"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_metadata_only_requires_no_data_mcp(
+    tmp_path: Path, with_data: bool, data_active: bool
+) -> None:
+    agent = _agent(tmp_path, with_data=with_data, data_active=data_active)
+    metadata = json.loads(asyncio.run(_execute(agent, _response())))
+    assert metadata["series"] == "L1"
+    assert "points" not in metadata
+    assert (tmp_path / metadata["workspace_path"]).is_file()
+    asyncio.run(agent.close())
 
 
 def test_error_response_with_opt_in_still_uses_metadata(tmp_path: Path) -> None:
@@ -164,26 +189,28 @@ def test_text_tool_result_is_saved_without_structured_content(tmp_path: Path) ->
     assert not path.exists()
 
 
-def test_untrusted_data_server_does_not_enable_artifact_mode(tmp_path: Path) -> None:
+def test_untrusted_data_server_does_not_disable_artifact_mode(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
     agent._server_configs["data"] = McpServerConfig(name="data", command="unused")
+    agent._active_servers.add("data")
     model_result = json.loads(asyncio.run(_execute(agent, _response())))
-    assert "points" in model_result
-    assert not list(tmp_path.iterdir())
+    assert "points" not in model_result
+    assert (tmp_path / model_result["workspace_path"]).is_file()
+    asyncio.run(agent.close())
 
 
 def test_artifact_write_failure_does_not_fall_back_to_raw_data(tmp_path: Path) -> None:
-    data_config = McpServerConfig(
-        name="data", command="unused", built_in=True,
+    os_config = McpServerConfig(
+        name="os", command="unused", built_in=True,
         literal_args=("--protected-path", str(tmp_path)),
     )
     agent = CliAgent(
         tmp_path,
         OllamaClient(base_url="http://localhost:11434", model="test"),
-        (data_config,), workspace_access="write",
+        (os_config,), workspace_access="write",
     )
-    agent._server_configs["data"] = data_config
-    agent._active_servers.add("data")
+    agent._server_configs["os"] = os_config
+    agent._active_servers.add("os")
     metadata = json.loads(asyncio.run(_execute(agent, _response())))
     assert metadata["error"] == "mcp_result_artifact_failed"
     assert "points" not in metadata
@@ -229,11 +256,11 @@ def test_cleanup_also_runs_when_mcp_close_fails(tmp_path: Path) -> None:
 
 
 def test_session_artifact_store_rejects_forbidden_directories(tmp_path: Path) -> None:
-    data = McpServerConfig(
-        name="data", command="unused", built_in=True,
+    os_config = McpServerConfig(
+        name="os", command="unused", built_in=True,
         literal_args=("--protected-path", str(tmp_path)),
     )
-    store = McpResultArtifacts(tmp_path, (data,))
+    store = McpResultArtifacts(tmp_path, (os_config,))
     with pytest.raises((RuntimeError, ArtifactError)):
         store.save("cannot write", structured=False)
     assert not list(tmp_path.iterdir())

@@ -407,8 +407,8 @@ unterdrücken. Dazu liefert es in der MCP-`_meta` der **Toolantwort** beide Feld
 }
 ```
 
-Dies ist nur aktiv, wenn der eingebaute Data-MCP tatsächlich verfügbar ist und
-Workspace-Schreibzugriff (`--with-os-write`) freigegeben wurde. Dann speichert
+Dies ist nur aktiv, wenn Workspace-Schreibzugriff (`--with-os-write`)
+freigegeben wurde. Der Data-MCP ist dafür nicht erforderlich. Dann speichert
 `cli-agent` das normalerweise modell-sichtbare MCP-Toolergebnis in einer
 **selbst benannten, workspace-relativen Datei** (`.json` bei strukturierten
 Ergebnissen, andernfalls `.txt`). An das LLM geht ausschließlich das vom MCP
