@@ -209,6 +209,25 @@ def test_division_by_zero_and_invalid_frequency_rejected(frames):
         frames.resample_data("l1.json", "1D; import os", [ResampleAggregation("power", "mean", "avg")], records_path="/measurements")
 
 
+@pytest.mark.parametrize("invalid_name", [" delta", "delta ", "\tvalue", "value\n"])
+def test_generated_column_names_must_be_readable_by_data_mcp(frames, invalid_name):
+    with pytest.raises(DataOperationError, match="Spaltennamen"):
+        frames.derive_columns(
+            "l1.json", [DerivedColumn(invalid_name, "diff", "power")],
+            records_path="/measurements",
+        )
+    with pytest.raises(DataOperationError, match="Spaltennamen"):
+        frames.resample_data(
+            "l1.json", "1min", [ResampleAggregation("power", "sum", invalid_name)],
+            records_path="/measurements",
+        )
+
+
+def test_dataframe_result_applies_reader_column_validation():
+    with pytest.raises(DataOperationError, match="Spaltennamen"):
+        DataFrameOperations._result(pd.DataFrame({"value ": [1]}), operation="derive_columns")
+
+
 def test_resample_empty_buckets_do_not_invent_power_values(frames, tmp_path):
     _write_json(tmp_path, "sparse.json", [
         {"timestamp": "2026-06-24T07:00:00", "power": 100},

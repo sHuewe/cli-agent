@@ -15,7 +15,7 @@ from typing import Literal
 import pandas as pd
 from mcp.types import CallToolResult, TextContent
 
-from .data_operations import DataOperationError, DataOperations
+from .data_operations import DataOperationError, DataOperations, _validate_column_name
 from .dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
 from .data_result_metadata import INLINE_RESULT_BYTES, add_large_result_summary
 from .mcp_result_artifacts import METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY
@@ -77,8 +77,11 @@ class DataFrameOperations:
     def _result(frame: pd.DataFrame, *, operation: str) -> CallToolResult:
         if len(frame) > MAX_FRAME_ROWS or len(frame.columns) > MAX_FRAME_COLUMNS:
             raise DataOperationError("DataFrame-Ergebnis überschreitet das Zeilen-/Spaltenlimit.")
-        if any(not isinstance(column, str) or not column for column in frame.columns):
-            raise DataOperationError("DataFrame enthält ungültige Spaltennamen.")
+        # The result is fed back into DataOperations._normalize_json_records
+        # on the next tool call. Enforce the same rule before advertising an
+        # artifact that downstream Data MCP tools would be unable to read.
+        for column in frame.columns:
+            _validate_column_name(column, source="DataFrame-Ergebnis")
         if not frame.columns.is_unique:
             raise DataOperationError("DataFrame enthält doppelte Spaltennamen.")
         # pandas handles its own scalar types and timestamps here; the JSON

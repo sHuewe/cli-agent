@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime, timezone
 from decimal import Decimal, DecimalException, localcontext
 from typing import Mapping, Sequence
@@ -24,6 +25,10 @@ _MAX_SUMMARY_COLUMNS = 24
 _MAX_PREVIEW_ROWS = 5
 _MAX_PREVIEW_BYTES = 1_800
 _MAX_DISTINCT_VALUES = 5
+_ISO_TIMESTAMP = re.compile(
+    r"\A\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:[.,](\d+))?)?"
+    r"(?:Z|[+-]\d{2}:\d{2})?)?\Z"
+)
 
 
 def _metadata_fits(metadata: dict[str, object]) -> bool:
@@ -41,7 +46,13 @@ def _json_scalar(value: object) -> object:
     return value
 
 
-def _timestamp_key(value: str) -> tuple[bool, datetime, str] | None:
+def _timestamp_key(value: str) -> tuple[bool, datetime, Decimal] | None:
+    # Only claim a time range for recognized ISO timestamps. datetime's parser
+    # truncates fractions after six digits, so compare any remaining digits as
+    # a decimal fraction of a microsecond, not by their original spelling.
+    match = _ISO_TIMESTAMP.fullmatch(value)
+    if match is None:
+        return None
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         aware = parsed.tzinfo is not None and parsed.utcoffset() is not None
@@ -49,9 +60,10 @@ def _timestamp_key(value: str) -> tuple[bool, datetime, str] | None:
             parsed = parsed.astimezone(timezone.utc)
     except (ValueError, OverflowError):
         return None
-    # Retain the original spelling when parsed microseconds tie, e.g. for
-    # pandas timestamps with nanosecond precision.
-    return aware, parsed, value
+    fractional = match.group(1) or ""
+    extra = fractional[6:]
+    submicroseconds = Decimal("0." + extra) if extra else Decimal(0)
+    return aware, parsed, submicroseconds
 
 
 def _column_statistics(column: str, rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
@@ -81,12 +93,12 @@ def _column_statistics(column: str, rows: Sequence[Mapping[str, object]]) -> dic
             time_key := _timestamp_key(value)
         ) is not None:
             current_kind = "datetime"
-            aware, parsed, original = time_key
+            aware, parsed, submicroseconds = time_key
             if time_zone_aware is not None and time_zone_aware != aware:
                 kind = "mixed"
                 continue
             time_zone_aware = aware
-            current_key = (parsed, original)
+            current_key = (parsed, submicroseconds)
         else:
             current_kind = "categorical"
             current_key = None

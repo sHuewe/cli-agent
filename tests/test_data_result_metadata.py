@@ -94,6 +94,33 @@ def test_time_range_accounts_for_offsets_and_nanosecond_ties():
     assert nanos["column_stats"][0]["min"].endswith("100")
     assert nanos["column_stats"][0]["max"].endswith("789")
 
+    # The extra fractional digits must be compared numerically, even when
+    # another timestamp ends after the sixth digit, before a Z or offset.
+    different_precision = _large_metadata(["timestamp"], [
+        {"timestamp": "2026-10-27T12:00:00.123456100Z"},
+        {"timestamp": "2026-10-27T12:00:00.123456Z"},
+    ])
+    assert different_precision["column_stats"][0]["min"] == "2026-10-27T12:00:00.123456Z"
+    assert different_precision["column_stats"][0]["max"] == "2026-10-27T12:00:00.123456100Z"
+
+    different_offsets = _large_metadata(["timestamp"], [
+        {"timestamp": "2026-10-27T14:00:00.123456100+02:00"},
+        {"timestamp": "2026-10-27T12:00:00.123456Z"},
+    ])
+    assert different_offsets["column_stats"][0]["min"] == "2026-10-27T12:00:00.123456Z"
+    assert different_offsets["column_stats"][0]["max"] == "2026-10-27T14:00:00.123456100+02:00"
+
+    equivalent_precision = _large_metadata(["timestamp"], [
+        {"timestamp": "2026-10-27T12:00:00.1234561Z"},
+        {"timestamp": "2026-10-27T12:00:00.123456100Z"},
+    ])
+    assert equivalent_precision["column_stats"][0]["min"] in [
+        "2026-10-27T12:00:00.1234561Z", "2026-10-27T12:00:00.123456100Z",
+    ]
+    assert equivalent_precision["column_stats"][0]["max"] in [
+        "2026-10-27T12:00:00.1234561Z", "2026-10-27T12:00:00.123456100Z",
+    ]
+
 
 def test_mixed_timezone_styles_do_not_claim_a_time_range():
     metadata = _large_metadata(["timestamp"], [
