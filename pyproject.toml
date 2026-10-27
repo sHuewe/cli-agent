@@ -17,12 +17,10 @@ dependencies = [
     "markdown-it-py>=4.2,<5",
     "PyYAML>=6.0",
     "trafilatura>=2.2,<3",
+    "pandas>=2.2,<4",
 ]
 
 [project.optional-dependencies]
-data = [
-    "pandas>=2.2,<4",
-]
 web = [
     "starlette>=1.6,<2",
     "uvicorn>=0.35,<1",

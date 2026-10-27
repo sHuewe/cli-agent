@@ -6,6 +6,7 @@ import pytest
 
 from cli_agent.config import McpServerConfig
 from cli_agent.data_operations import DataOperationError, DataOperations
+from cli_agent.dataframe_operations import DataFrameOperations
 from cli_agent.dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
 from cli_agent.mcp_result_artifacts import (
     METADATA_FOR_LLM_KEY,
@@ -75,9 +76,6 @@ def test_inline_json_pointer_and_root_json_array(tmp_path):
 
 @pytest.fixture
 def frames(tmp_path):
-    pytest.importorskip("pandas")
-    from cli_agent.dataframe_operations import DataFrameOperations
-
     _write_json(tmp_path, "l1.json", [
         {"timestamp": "2026-06-24T07:00:00", "power": -500},
         {"timestamp": "2026-06-24T07:01:00", "power": -400},

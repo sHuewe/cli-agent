@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,8 +67,7 @@ def _serialize_filters(
 
 def _server_instructions(access: str) -> str:
     if access == "write":
-        if importlib.util.find_spec("pandas") is not None:
-            source_guidance = """\
+        source_guidance = """\
 Workspace file access is available. Prefer path-based datasets over repeatedly
 passing large inline payloads. For timestamped measurements, prefer the
 declarative join_data, derive_columns and resample_data tools: they can return
@@ -79,13 +77,6 @@ Use inspect_json to discover JSON arrays and their records_path first. For
 non-time-series transformations use *_to_file and reuse its path, if a
 persistent output file is explicitly desired. Inline Markdown remains the
 preferred transport format when no workspace data file is available."""
-        else:
-            source_guidance = """\
-Workspace file access is available. Prefer existing workspace paths over large
-inline payloads. Discover JSON record arrays with inspect_json. For multi-step
-transformations, *_to_file can persist a derived dataset when requested.
-For timestamp joins and resampling install the optional cli-agent[data] extra.
-"""
     elif access == "read":
         source_guidance = """\
 Workspace file reads are available. Prefer a workspace path when the relevant
@@ -637,7 +628,7 @@ def create_server(
                 **({"records_path": records_path} if records_path is not None else {}),
             )
 
-        if getattr(operations, "workspace", None) is not None and importlib.util.find_spec("pandas") is not None:
+        if getattr(operations, "workspace", None) is not None:
             from .dataframe_operations import DataFrameOperations
 
             frames = DataFrameOperations(operations)

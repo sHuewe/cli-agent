@@ -33,17 +33,10 @@ cli-agent --with-os-read --with-data
 cli-agent --with-os-write --with-data
 ```
 
-Für die neuen DataFrame-/Zeitreihen-Operationen wird optional **Pandas**
-benötigt. Die bestehenden Tools benötigen Pandas weiterhin nicht:
-
-```powershell
-pip install "cli-agent[data]"
-```
-
-Die Tools `join_data`, `derive_columns` und `resample_data` erscheinen nur,
-wenn Pandas installiert ist **und** `--with-data --with-os-write` verwendet
-wird. Sie benötigen keine allgemeine Codeausführung und akzeptieren keine
-frei formulierten Python-/Pandas-Ausdrücke.
+**Pandas wird bei jeder Installation von cli-agent mitinstalliert.**
+Die Tools `join_data`, `derive_columns` und `resample_data` erscheinen bei
+`--with-data --with-os-write`. Sie benötigen keine allgemeine Codeausführung
+und akzeptieren keine frei formulierten Python-/Pandas-Ausdrücke.
 
 Ohne `--with-os-read` bzw. `--with-os-write` wird für den Data-MCP gar keine
 `Workspace`-Instanz erzeugt. Die Analyse-Tools bleiben trotzdem verfügbar,
