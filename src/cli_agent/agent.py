@@ -28,6 +28,7 @@ from .agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageC
 from .config import LoggingConfig, McpServerConfig
 from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
 from .mcp_contracts import tool_contract_fingerprint
+from .mcp_result_artifacts import McpResultArtifacts
 from .message_visibility import messages_for_model
 from .model import ModelClient
 from .network_policy import NetworkConfig
@@ -101,6 +102,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self.approval_callback = approval_callback
         self.user_message_callback = user_message_callback
         self.workspace_access = normalize_workspace_access(workspace_access)
+        self._result_artifacts = McpResultArtifacts(self.workspace_directory, mcp_servers)
         if response_format not in {"text", "json"}:
             raise ValueError("response_format muss 'text' oder 'json' sein.")
         self.response_format = response_format
