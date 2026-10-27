@@ -730,7 +730,22 @@ class DataOperations:
             raise DataOperationError(
                 f"Ungültiges JSON: {exc.msg}"
             ) from exc
-        return cls._normalize_json_records(cls._resolve_json_pointer(raw, records_path))
+        selected = cls._resolve_json_pointer(raw, records_path)
+        columns, rows = cls._normalize_json_records(selected)
+        # DataFrame artifacts contain a declared schema alongside /rows. An
+        # empty array cannot carry field names, so preserve that schema for
+        # follow-up operations without changing ordinary empty JSON arrays.
+        if records_path == "/rows" and not rows and isinstance(raw, dict) and "columns" in raw:
+            declared = raw["columns"]
+            if not isinstance(declared, list) or len(declared) > 100:
+                raise DataOperationError("JSON-DataFrame benötigt eine Liste mit maximal 100 Spaltennamen.")
+            columns = [
+                _validate_column_name(name, source="JSON-DataFrame-Schema")
+                for name in declared
+            ]
+            if len(columns) != len(set(columns)):
+                raise DataOperationError("JSON-DataFrame-Schema benötigt eindeutige Spaltennamen.")
+        return columns, rows
 
     @staticmethod
     def _resolve_json_pointer(raw: Any, pointer: str | None) -> Any:

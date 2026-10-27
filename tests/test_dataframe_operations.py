@@ -163,6 +163,46 @@ def test_nearest_join_requires_explicit_tolerance(frames):
     assert [row["PV"] for row in result.structuredContent["rows"]] == [1300, None, None]
 
 
+@pytest.mark.parametrize("direction", ["nearest", "backward", "forward"])
+def test_tolerated_joins_accept_mixed_timestamp_resolutions(frames, tmp_path, direction):
+    _write_json(tmp_path, "whole_seconds.json", [
+        {"timestamp": "2026-06-24T07:00:00Z", "power": 10},
+    ])
+    _write_json(tmp_path, "nanoseconds.json", [
+        {"timestamp": "2026-06-24T07:00:00.123456789Z", "power": 50},
+    ])
+    if direction == "backward":
+        sources = [_source("nanoseconds.json", "nano"), _source("whole_seconds.json", "whole")]
+        expected = {"nano": 50, "whole": 10}
+    else:
+        sources = [_source("whole_seconds.json", "whole"), _source("nanoseconds.json", "nano")]
+        expected = {"whole": 10, "nano": 50}
+    result = frames.join_data(sources, direction=direction, how="left", tolerance_seconds=1)
+    row = result.structuredContent["rows"][0]
+    assert {key: row[key] for key in expected} == expected
+    if direction == "backward":
+        assert row["timestamp"].endswith(".123456789Z")
+
+
+def test_tolerated_join_retains_microseconds_for_distant_dates(frames, tmp_path):
+    _write_json(tmp_path, "future_a.json", [{"timestamp": "3000-01-01T00:00:00Z", "power": 1}])
+    _write_json(tmp_path, "future_b.json", [{"timestamp": "3000-01-01T00:00:00.123456Z", "power": 2}])
+    result = frames.join_data([
+        _source("future_a.json", "A"), _source("future_b.json", "B"),
+    ], direction="nearest", how="left", tolerance_seconds=1)
+    assert result.structuredContent["rows"][0]["B"] == 2
+
+
+def test_exact_join_accepts_different_lossless_timestamp_units(frames, tmp_path):
+    _write_json(tmp_path, "second.json", [{"timestamp": "2026-06-24T07:00:00Z", "power": 10}])
+    _write_json(tmp_path, "nanosecond.json", [{"timestamp": "2026-06-24T07:00:00.000000000Z", "power": 20}])
+    joined = frames.join_data([
+        _source("second.json", "A"), _source("nanosecond.json", "B"),
+    ])
+    assert len(joined.structuredContent["rows"]) == 1
+    assert joined.structuredContent["rows"][0]["B"] == 20
+
+
 def test_duplicate_join_timestamps_rejected(frames, tmp_path):
     _write_json(tmp_path, "dup.json", [
         {"timestamp": "2026-06-24T07:00:00", "power": 2},
@@ -320,6 +360,62 @@ def test_exact_join_retains_fractional_second_timestamps(frames, tmp_path):
         _source("nanoseconds.json", "B"),
     ])
     assert result.structuredContent["rows"][0]["timestamp"].endswith(".123456789")
+
+
+def test_empty_join_artifact_preserves_schema_for_followup_tools(frames, tmp_path):
+    _write_json(tmp_path, "nonmatching.json", [
+        {"timestamp": "2026-06-24T08:00:00", "power": 1},
+    ])
+    joined = frames.join_data([
+        _source("l1.json", "L1"), _source("nonmatching.json", "L2"),
+    ])
+    assert joined.structuredContent == {"columns": ["timestamp", "L1", "L2"], "rows": []}
+
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        metadata = json.loads(store.metadata_result(
+            joined, json.dumps(joined.structuredContent, ensure_ascii=False)
+        ))
+        path = metadata["workspace_path"]
+        records_path = metadata["records_path"]
+        columns, rows = frames.base._read_records(path, records_path=records_path)
+        assert columns == ["timestamp", "L1", "L2"]
+        assert rows == []
+        schema = json.loads(frames.base.inspect_schema(path, records_path=records_path))
+        assert [column["name"] for column in schema["columns"]] == columns
+        assert schema["row_count"] == 0
+
+        derived = frames.derive_columns(
+            path, [DerivedColumn("difference", "subtract", "L1", other_column="L2")],
+            records_path=records_path,
+        )
+        assert derived.structuredContent["columns"] == [*columns, "difference"]
+        assert derived.structuredContent["rows"] == []
+        resampled = frames.resample_data(
+            path, "1min", [ResampleAggregation("L1", "sum", "total")],
+            records_path=records_path,
+        )
+        assert resampled.structuredContent["columns"] == ["timestamp", "total"]
+        assert resampled.structuredContent["rows"] == []
+    finally:
+        store.cleanup()
+
+
+@pytest.mark.parametrize("invalid_columns", ["name", ["name ", "value"], ["name", "name"], list(range(101))])
+def test_empty_json_artifact_rejects_invalid_declared_schema(invalid_columns):
+    document = json.dumps({"columns": invalid_columns, "rows": []})
+    with pytest.raises(DataOperationError, match="Spaltennamen|Schema|Spalten"):
+        DataOperations(None)._read_records(
+            data=document, data_format="json", records_path="/rows",
+        )
+
+
+def test_empty_json_array_without_declared_schema_is_unchanged():
+    operations = DataOperations(None)
+    assert operations._read_records(data="[]", data_format="json") == ([], [])
+    assert operations._read_records(
+        data='{"rows":[]}', data_format="json", records_path="/rows",
+    ) == ([], [])
 
 
 def test_pandas_output_bound_and_non_numeric_data_are_rejected(frames, tmp_path, monkeypatch):

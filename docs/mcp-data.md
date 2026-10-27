@@ -176,6 +176,12 @@ Beispiel-Workflow für L1/L3-Phasenmessungen:
 | `derive_columns(path, operations, records_path)` | Nur `add`, `subtract`, `multiply`, `divide`, `diff`, `cumsum`, `rolling_mean`. Binäre Operationen verwenden Spaltennamen oder einen konstanten Wert; `rolling_mean.window` zählt Zeilen. |
 | `resample_data(path, frequency, aggregations, time_column, records_path)` | Begrenztes Raster wie `30s`, `5min`, `1h`, `1d`. Aggregationen `mean`, `min`, `max`, `sum`, `count`, ohne Interpolation. Die Zeitstempel bezeichnen den Beginn der Intervalle. |
 
+Beim Join werden unterschiedliche Zeitstempelauflösungen (z. B. Mikro- und
+Nanosekunden) vor dem Abgleich verlustfrei vereinheitlicht. Auch bei
+zeitzonenbehafteten Zeitstempeln bleiben Nanosekunden im Ergebnis erhalten.
+Liefert ein Join keine Zeilen, bewahrt sein JSON-Artefakt trotzdem die
+deklarierte `columns`-Liste für `inspect_schema` und nachfolgende DataFrame-Tools.
+
 Diese Tools nutzen Pandas-`float64`-Berechnungen. Für exakte Dezimalarithmetik
 bleibt `calculate` bzw. die bestehenden Decimal-basierten Aggregationen
 zuständig. Die DataFrame-Verarbeitung ist auf 100.000 Zeilen, 100 Spalten,

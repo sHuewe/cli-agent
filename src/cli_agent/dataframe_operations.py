@@ -89,6 +89,17 @@ class DataFrameOperations:
         try:
             # Preserve sub-millisecond timestamps for subsequent exact joins.
             rows = json.loads(frame.to_json(orient="records", date_format="iso", date_unit="ns", double_precision=15))
+            # pandas 3.1's to_json can silently drop nanosecond digits for
+            # timezone-aware datetimes (e.g. .123456789Z -> .123456000Z),
+            # even with date_unit="ns". Serialize these values explicitly so
+            # chained joins keep their original timestamp precision.
+            for column in frame.columns:
+                if isinstance(frame[column].dtype, pd.DatetimeTZDtype):
+                    for index, stamp in enumerate(frame[column]):
+                        rows[index][column] = (
+                            None if pd.isna(stamp)
+                            else stamp.tz_convert("UTC").isoformat(timespec="nanoseconds").replace("+00:00", "Z")
+                        )
             payload = {"columns": list(frame.columns), "rows": rows}
             encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
         except (ValueError, TypeError, OverflowError) as exc:
@@ -148,6 +159,25 @@ class DataFrameOperations:
             values = self._numeric(raw, source.value_column)
             frame = pd.DataFrame({"timestamp": times, source.alias: values})
             frames.append(frame.sort_values("timestamp").reset_index(drop=True))
+
+        # pandas 3.x infers datetime resolution per source (e.g. seconds ->
+        # microseconds, fractional nanoseconds -> nanoseconds). merge_asof
+        # requires identical key dtypes. Use the finest input resolution to
+        # normalize losslessly, while keeping distant dates at their usable
+        # lower resolution instead of always forcing ns.
+        resolution_rank = {"s": 0, "ms": 1, "us": 2, "ns": 3}
+        common_unit = max(
+            (frame["timestamp"].dt.unit for frame in frames),
+            key=resolution_rank.__getitem__,
+        )
+        try:
+            for frame in frames:
+                if frame["timestamp"].dt.unit != common_unit:
+                    frame["timestamp"] = frame["timestamp"].dt.as_unit(common_unit)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise DataOperationError(
+                "Zeitstempel können nicht verlustfrei auf eine gemeinsame Auflösung gebracht werden."
+            ) from exc
 
         joined = frames[0]
         try:
