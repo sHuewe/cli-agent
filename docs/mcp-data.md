@@ -114,6 +114,25 @@ Modell erhält die durch Data-MCP definierten Metadaten (`operation`,
 `workspace_path`. Bei kleinen Ergebnissen (maximal 5 KB) werden zusätzlich
 alle Ergebniszeilen direkt in den Metadaten bereitgestellt.
 
+Bei größeren Ergebnissen erhält das Modell stattdessen eine **automatisch
+berechnete Kurz-Zusammenfassung**: bis zu fünf vollständige Beispielzeilen
+(`sample_rows`), `null_count` je betrachteter Spalte, `min`/`max` und
+`mean` bei numerischen Spalten, Zeitbereiche bei ISO-Zeitstempelspalten
+und vollständige `value_counts` bei höchstens fünf unterschiedlichen kurzen
+kategorischen Werten. Der Mittelwert wird näherungsweise als Gleitkommazahl
+ausgegeben. Statistiken beziehen sich stets auf **alle Ergebniszeilen**, nicht
+nur auf die Vorschau. Mehrdeutige oder gemischt typisierte Spalten erhalten
+keine irreführenden numerischen oder zeitlichen Statistiken.
+
+Für die ergänzten Metadaten gilt ein Budget von 5.000 UTF-8-Bytes inklusive
+Platz für den vom Agenten hinzugefügten `workspace_path`. Um es einzuhalten,
+werden ganze Vorschauzeilen oder Spaltenstatistiken weggelassen (niemals
+einzelne Zellwerte abgeschnitten). `sample_rows_complete` und
+`stats_columns_complete` zeigen an, ob die jeweiligen Informationen
+vollständig sind. Bei extrem breiten Schemata werden zusätzlich
+`column_count` und `columns_complete=false` ausgegeben. Auch in diesen
+Fällen bleibt die vollständige Ergebnisdatei unter `workspace_path` lesbar.
+
 Beispiel-Workflow für L1/L3-Phasenmessungen:
 
 1. `inspect_json` auf eine zuvor im Workspace gespeicherte MCP-Antwort

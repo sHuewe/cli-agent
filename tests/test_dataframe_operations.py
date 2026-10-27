@@ -323,7 +323,21 @@ def test_large_frame_metadata_omits_rows_while_retaining_full_artifact(frames, t
     ])
     result = frames.join_data([_source("large.json", "A"), _source("large.json", "B")])
     assert len(result.structuredContent["rows"]) == 200
-    assert "rows" not in result.meta[METADATA_FOR_LLM_KEY]
+    preview = result.meta[METADATA_FOR_LLM_KEY]
+    assert "rows" not in preview
+    assert preview["sample_rows"][0] == {"timestamp": "2026-06-24T07:00:00.000000000", "A": 0, "B": 0}
+    stats = {stat["column"]: stat for stat in preview["column_stats"]}
+    assert stats["A"]["max"] == 199
+    assert stats["timestamp"]["max"].startswith("2026-06-24T07:03:19")
+    store = McpResultArtifacts(tmp_path, ())
+    try:
+        serialized = json.dumps(result.structuredContent, ensure_ascii=False)
+        model_metadata = store.metadata_result(result, serialized)
+        assert len(model_metadata.encode("utf-8")) <= 5_000
+        saved = tmp_path / json.loads(model_metadata)["workspace_path"]
+        assert json.loads(saved.read_text(encoding="utf-8"))["rows"] == result.structuredContent["rows"]
+    finally:
+        store.cleanup()
 
 
 def test_dataframe_result_inline_boundary_is_five_kilobytes():

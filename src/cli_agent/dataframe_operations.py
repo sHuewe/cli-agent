@@ -17,7 +17,7 @@ from mcp.types import CallToolResult, TextContent
 
 from .data_operations import DataOperationError, DataOperations
 from .dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
-from .data_result_metadata import INLINE_RESULT_BYTES
+from .data_result_metadata import INLINE_RESULT_BYTES, add_large_result_summary
 from .mcp_result_artifacts import METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY
 
 MAX_FRAME_ROWS = 100_000
@@ -104,6 +104,8 @@ class DataFrameOperations:
         }
         if len(encoded.encode("utf-8")) <= INLINE_RESULT_BYTES:
             metadata["rows"] = rows
+        else:
+            add_large_result_summary(metadata, list(frame.columns), rows)
         return CallToolResult(
             content=[TextContent(type="text", text="DataFrame-Ergebnis für Session-Datei vorbereitet.")],
             structuredContent=payload,

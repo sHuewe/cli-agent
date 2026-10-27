@@ -249,9 +249,16 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
         )
         assert selected.meta[ONLY_METADATA_TO_LLM_KEY] is True
         assert "Rows: 1201/1201" in tool_result_text(selected)
-        assert "result" not in selected.meta[METADATA_FOR_LLM_KEY]
+        selected_preview = selected.meta[METADATA_FOR_LLM_KEY]
+        assert "result" not in selected_preview
+        assert selected_preview["sample_rows"][0] == {"group": "g0000", "value": 0}
+        assert selected_preview["sample_rows_complete"] is False
+        assert {stat["column"]: stat for stat in selected_preview["column_stats"]}["value"]["max"] == 1200
         selected_metadata = store.metadata_result(selected, tool_result_text(selected))
-        path = json.loads(selected_metadata)["workspace_path"]
+        result_metadata = json.loads(selected_metadata)
+        path = result_metadata["workspace_path"]
+        assert len(selected_metadata.encode("utf-8")) <= 5_000
+        assert result_metadata["sample_rows"] == selected_preview["sample_rows"]
         assert (tmp_path / path).suffix == ".md"
         assert (tmp_path / path).is_file()
 
@@ -267,7 +274,10 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
             data=tool_result_text(grouped), data_format="markdown",
         )[1]) == 1_201
         grouped_metadata = store.metadata_result(grouped, tool_result_text(grouped))
-        assert (tmp_path / json.loads(grouped_metadata)["workspace_path"]).is_file()
+        grouped_summary = json.loads(grouped_metadata)
+        assert (tmp_path / grouped_summary["workspace_path"]).is_file()
+        assert len(grouped_metadata.encode("utf-8")) <= 5_000
+        assert {stat["column"]: stat for stat in grouped_summary["column_stats"]}["total"]["max"] == 1200
     finally:
         store.cleanup()
     assert sorted(path.name for path in tmp_path.iterdir()) == ["source.csv"]

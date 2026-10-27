@@ -475,6 +475,7 @@ def create_server(
                     total_rows=len(result_rows), limit=len(result_rows),
                 ),
                 result_columns, len(result_rows), operation="select_data",
+                rows=result_rows,
             )
 
         @mcp.tool()
@@ -550,6 +551,7 @@ def create_server(
                     total_rows=len(result_rows), limit=len(result_rows),
                 ),
                 result_columns, len(result_rows), operation="aggregate_data",
+                rows=result_rows,
             )
 
     if access in {"read", "write"}:
