@@ -53,6 +53,10 @@ class DataFrameOperations:
             timestamps = pd.to_datetime(frame[column], errors="raise")
         except (TypeError, ValueError, OverflowError) as exc:
             raise DataOperationError("Zeitstempel sind nicht einheitlich parsebar.") from exc
+        # Strings such as "" and "NaT" become NaT without raising, even with
+        # errors="raise". Never let joins match or resampling drop these rows.
+        if timestamps.isna().any():
+            raise DataOperationError("Zeitstempel dürfen nicht leer sein.")
         if not pd.api.types.is_datetime64_any_dtype(timestamps.dtype):
             raise DataOperationError("Zeitstempel benötigen eine einheitliche Zeitzone.")
         return timestamps

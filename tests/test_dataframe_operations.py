@@ -67,6 +67,38 @@ def test_json_pointer_escaping_and_file_access_boundary(tmp_path):
         ops.inspect_json("../nested.json")
 
 
+def test_inspect_json_reports_incomplete_when_traversal_is_truncated(tmp_path):
+    ops = _base(tmp_path)
+    cases = {
+        "properties.json": {**{f"field{i}": i for i in range(100)}, "measurements": [{"power": 1}]},
+        "elements.json": [*range(20), {"measurements": [{"power": 1}]}],
+        "discovered.json": {f"series{i}": [{"value": i}] for i in range(51)},
+    }
+    deep = [{"value": 1}]
+    for _ in range(17):
+        deep = {"nested": deep}
+    cases["depth.json"] = deep
+
+    for name, document in cases.items():
+        (tmp_path / name).write_text(json.dumps(document), encoding="utf-8")
+        result = json.loads(ops.inspect_json(name))
+        assert result["complete"] is False, name
+
+    assert json.loads(ops.inspect_json("properties.json"))["record_sets"] == []
+    assert json.loads(ops.inspect_json("elements.json"))["record_sets"] == []
+    assert len(json.loads(ops.inspect_json("discovered.json"))["record_sets"]) == 50
+
+
+def test_inspect_json_reports_complete_for_fully_examined_documents(tmp_path):
+    (tmp_path / "complete.json").write_text(json.dumps({
+        "metadata": {"source": "sensor"},
+        "measurements": [{"value": 1}, {"value": 2}],
+    }), encoding="utf-8")
+    result = json.loads(_base(tmp_path).inspect_json("complete.json"))
+    assert result["complete"] is True
+    assert result["record_sets"][0]["records_path"] == "/measurements"
+
+
 def test_inline_json_pointer_and_root_json_array(tmp_path):
     ops = DataOperations(None)
     assert ops._read_records(data='[{"x":1}]', data_format="json")[1] == [{"x": 1}]
@@ -138,6 +170,20 @@ def test_duplicate_join_timestamps_rejected(frames, tmp_path):
     ])
     with pytest.raises(DataOperationError, match="doppelte"):
         frames.join_data([_source("l1.json", "L1"), _source("dup.json", "dup")])
+
+
+@pytest.mark.parametrize("missing_timestamp", ["", "NaT"])
+def test_join_and_resample_reject_timestamps_missing_after_conversion(frames, tmp_path, missing_timestamp):
+    _write_json(tmp_path, "missing_time.json", [
+        {"timestamp": "2026-06-24T07:00:00", "power": 1},
+        {"timestamp": missing_timestamp, "power": 2},
+    ])
+    with pytest.raises(DataOperationError, match="Zeitstempel dürfen nicht leer"):
+        frames.join_data([_source("missing_time.json", "A"), _source("l1.json", "B")])
+    with pytest.raises(DataOperationError, match="Zeitstempel dürfen nicht leer"):
+        frames.resample_data("missing_time.json", "1min", [
+            ResampleAggregation("power", "sum", "total"),
+        ], records_path="/measurements")
 
 
 def test_resample_and_rolling_operations(frames):

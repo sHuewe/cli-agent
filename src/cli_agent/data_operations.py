@@ -771,10 +771,12 @@ class DataOperations:
             raise DataOperationError("JSON-Datei konnte nicht geparst werden.") from exc
         discovered: list[dict[str, Any]] = []
         inspected = 0
+        complete = True
 
         def visit(value: Any, pointer: str, depth: int) -> None:
-            nonlocal inspected
+            nonlocal inspected, complete
             if depth > 16 or inspected >= 10_000 or len(discovered) >= 50:
+                complete = False
                 return
             inspected += 1
             if isinstance(value, list):
@@ -787,15 +789,19 @@ class DataOperations:
                     else:
                         discovered.append({"records_path": pointer, "row_count": len(value), "columns": columns[:100], "columns_complete": len(columns) <= 100})
                         return
+                if len(value) > 20:
+                    complete = False
                 for index, item in enumerate(value[:20]):
                     visit(item, f"{pointer}/{index}", depth + 1)
             elif isinstance(value, dict):
+                if len(value) > 100:
+                    complete = False
                 for key, item in list(value.items())[:100]:
                     escaped = key.replace("~", "~0").replace("/", "~1")
                     visit(item, f"{pointer}/{escaped}", depth + 1)
 
         visit(raw, "", 0)
-        return json.dumps({"source": path, "record_sets": discovered, "complete": inspected < 10_000 and len(discovered) < 50}, ensure_ascii=False)
+        return json.dumps({"source": path, "record_sets": discovered, "complete": complete}, ensure_ascii=False)
 
     @classmethod
     def _read_json_lines_text(
