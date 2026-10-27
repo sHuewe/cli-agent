@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pandas as pd
 import pytest
 
 from cli_agent.config import McpServerConfig
@@ -173,6 +174,65 @@ def test_resample_empty_buckets_do_not_invent_power_values(frames, tmp_path):
     ], records_path="/measurements")
     assert [row["total"] for row in result.structuredContent["rows"]] == [100, None, 300]
     assert [row["samples"] for row in result.structuredContent["rows"]] == [1, 0, 1]
+
+
+def test_resample_sums_preserve_nulls_per_column(frames, tmp_path):
+    _write_json(tmp_path, "nullable.json", [
+        {"timestamp": "2026-06-24T07:00:00", "L1": 100, "L3": None},
+        {"timestamp": "2026-06-24T07:00:20", "L1": 200, "L3": None},
+        {"timestamp": "2026-06-24T07:01:00", "L1": 0, "L3": 0},
+        {"timestamp": "2026-06-24T07:01:20", "L1": None, "L3": None},
+        {"timestamp": "2026-06-24T07:02:00", "L1": 300, "L3": 100},
+        {"timestamp": "2026-06-24T07:04:00", "L1": 400, "L3": None},
+    ])
+    result = frames.resample_data("nullable.json", "1min", [
+        ResampleAggregation("L1", "sum", "l1_total"),
+        ResampleAggregation("L3", "sum", "l3_total"),
+        ResampleAggregation("L3", "count", "l3_samples"),
+    ], records_path="/measurements")
+    rows = result.structuredContent["rows"]
+    assert [row["l1_total"] for row in rows] == [300, 0, 300, None, 400]
+    assert [row["l3_total"] for row in rows] == [None, 0, 100, None, None]
+    assert [row["l3_samples"] for row in rows] == [0, 1, 1, 0, 0]
+
+
+def test_resample_rejects_huge_sparse_span_before_allocating(frames, tmp_path, monkeypatch):
+    _write_json(tmp_path, "year.json", [
+        {"timestamp": "2025-01-01T00:00:00", "power": 100},
+        {"timestamp": "2026-01-01T00:00:00", "power": 200},
+    ])
+
+    def unexpected_resample(*args, **kwargs):
+        raise AssertionError("Dense resampling must not start for an oversized span")
+
+    monkeypatch.setattr(pd.DataFrame, "resample", unexpected_resample)
+    with pytest.raises(DataOperationError, match="Zeilenlimit"):
+        frames.resample_data("year.json", "1s", [
+            ResampleAggregation("power", "sum", "total"),
+        ], records_path="/measurements")
+
+
+def test_resample_checks_exact_bucket_count_at_limit(frames, tmp_path, monkeypatch):
+    from cli_agent import dataframe_operations
+
+    monkeypatch.setattr(dataframe_operations, "MAX_FRAME_ROWS", 3)
+    _write_json(tmp_path, "three.json", [
+        {"timestamp": "2026-06-24T00:00:59", "power": 1},
+        {"timestamp": "2026-06-24T00:02:00", "power": 2},
+    ])
+    result = frames.resample_data("three.json", "1min", [
+        ResampleAggregation("power", "sum", "total"),
+    ], records_path="/measurements")
+    assert [row["total"] for row in result.structuredContent["rows"]] == [1, None, 2]
+
+    _write_json(tmp_path, "four.json", [
+        {"timestamp": "2026-06-24T00:00:59", "power": 1},
+        {"timestamp": "2026-06-24T00:03:00", "power": 2},
+    ])
+    with pytest.raises(DataOperationError, match="Zeilenlimit"):
+        frames.resample_data("four.json", "1min", [
+            ResampleAggregation("power", "sum", "total"),
+        ], records_path="/measurements")
 
 
 def test_exact_join_retains_fractional_second_timestamps(frames, tmp_path):

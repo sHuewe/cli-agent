@@ -234,18 +234,41 @@ class DataFrameOperations:
                 raise DataOperationError(f"Unbekannte Aggregation: {spec.method!r}.")
             specs[spec.alias] = (spec.column, spec.method)
         try:
+            if not frame.empty:
+                # Even two input rows can produce millions of empty buckets.
+                # All supported frequencies are fixed-length ticks. pandas
+                # anchors these to the first day's midnight by default. Count
+                # the occupied range of buckets *before* allocating its dense
+                # resample index, including potentially empty buckets.
+                timestamps = frame[time_column]
+                interval = pd.Timedelta(frequency)
+                first = timestamps.min()
+                origin = first.normalize()
+                bucket_count = (
+                    (timestamps.max() - origin) // interval
+                    - (first - origin) // interval
+                    + 1
+                )
+                if bucket_count > MAX_FRAME_ROWS:
+                    raise DataOperationError(
+                        "Resampling überschreitet das Zeilenlimit. "
+                        "Wähle einen kürzeren Zeitraum oder ein größeres Intervall."
+                    )
             resampler = frame.set_index(time_column).sort_index().resample(
                 frequency, closed="left", label="left"
             )
             grouped = resampler.agg(**specs)
-            empty = resampler.size() == 0
+            valid_counts: dict[str, pd.Series] = {}
             for spec in aggregations:
                 if spec.method == "sum":
-                    # pandas.sum defaults to 0 for an empty bucket, which
-                    # would invent a measurement where none was recorded.
-                    grouped.loc[empty, spec.alias] = float("nan")
+                    # pandas.sum defaults to 0 both for empty buckets and
+                    # buckets containing only null measurements. The check
+                    # must be per column: another sensor may have valid data.
+                    if spec.column not in valid_counts:
+                        valid_counts[spec.column] = resampler[spec.column].count()
+                    grouped.loc[valid_counts[spec.column] == 0, spec.alias] = float("nan")
             grouped = grouped.reset_index()
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OverflowError) as exc:
             raise DataOperationError(f"Resampling fehlgeschlagen: {exc}") from exc
         if time_column != "timestamp":
             grouped = grouped.rename(columns={time_column: "timestamp"})
