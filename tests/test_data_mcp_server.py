@@ -141,6 +141,7 @@ def test_read_mode_exposes_path_and_no_write_tools(monkeypatch) -> None:
     assert server.tools["preview_data"](
         path="data.csv",
         sample_rows=3,
+        offset=2,
     ) == "inspected"
     assert calls == [
         (
@@ -158,6 +159,7 @@ def test_read_mode_exposes_path_and_no_write_tools(monkeypatch) -> None:
             {
                 "table_index": 0,
                 "sample_rows": 3,
+                "offset": 2,
                 "records_path": None,
             },
         )
@@ -218,6 +220,11 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
     assert server._tool_manager.get_tool("aggregate_data_to_file") is None
     assert "limit" not in server._tool_manager.get_tool("select_data").parameters["properties"]
     assert "limit" not in server._tool_manager.get_tool("aggregate_data").parameters["properties"]
+    preview_schema = server._tool_manager.get_tool("preview_data").parameters["properties"]
+    assert preview_schema["sample_rows"]["minimum"] == 1
+    assert preview_schema["sample_rows"]["maximum"] == 50
+    assert preview_schema["offset"]["minimum"] == 0
+    assert preview_schema["offset"]["maximum"] == 1_000_000
 
     store = McpResultArtifacts(tmp_path, ())
     try:
@@ -238,6 +245,19 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
         assert result_metadata["sample_rows"] == selected_preview["sample_rows"]
         assert (tmp_path / path).suffix == ".json"
         assert (tmp_path / path).is_file()
+
+        # A full structured artifact remains available for bounded page reads.
+        page_result = await server._tool_manager.call_tool(
+            "preview_data", {"path": path, "records_path": "/rows", "sample_rows": 50, "offset": 50},
+            convert_result=True,
+        )
+        page = json.loads(page_result[0][0].text)
+        if "result" in page:  # FastMCP wraps string-returning tools.
+            page = json.loads(page["result"])
+        assert page["row_count"] == 1_201
+        assert page["offset"] == 50
+        assert [row["value"] for row in page["sample"]] == list(range(50, 100))
+        assert page["next_offset"] == 100
 
         grouped = await server._tool_manager.call_tool(
             "aggregate_data",

@@ -29,7 +29,7 @@ MAX_DATA_PAYLOAD_CHARS = 2_000_000
 MAX_DATA_ROWS = 1_000_000
 MAX_CSV_FIELD_CHARS = MAX_DATA_FILE_BYTES
 MAX_FULL_RESULT_BYTES = 16_000_000
-MAX_SAMPLE_ROWS = 20
+MAX_SAMPLE_ROWS = 50
 DEFAULT_DISTINCT_VALUES_LIMIT = 20
 MAX_DISTINCT_VALUES_LIMIT = 100
 MAX_SCHEMA_DISTINCT_VALUE_CHARS = 100_000
@@ -1488,6 +1488,7 @@ class DataOperations:
         data_format: str | None = None,
         table_index: int = 0,
         sample_rows: int = 5,
+        offset: int = 0,
         records_path: str | None = None,
     ) -> str:
         """Return schema metadata plus a bounded preview of complete rows."""
@@ -1495,6 +1496,9 @@ class DataOperations:
             sample_rows,
             maximum=MAX_SAMPLE_ROWS,
             name="sample_rows",
+        )
+        offset = self._validate_non_negative_limit(
+            offset, maximum=MAX_DATA_ROWS, name="offset",
         )
         columns, rows = self._read_records(
             path,
@@ -1504,6 +1508,10 @@ class DataOperations:
             records_path=records_path,
         )
         metadata = self._column_metadata(columns, rows)
+        sample = rows[offset:offset + sample_rows]
+        next_offset = offset + len(sample)
+        if next_offset >= len(rows):
+            next_offset = None
         return _json_dumps_precise(
             {
                 "source": (
@@ -1513,7 +1521,9 @@ class DataOperations:
                 ),
                 "row_count": len(rows),
                 "columns": metadata,
-                "sample": rows[:sample_rows],
+                "offset": offset,
+                "sample": sample,
+                "next_offset": next_offset,
             },
             indent=2,
         )
