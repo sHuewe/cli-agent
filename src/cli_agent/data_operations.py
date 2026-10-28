@@ -188,6 +188,23 @@ def _typed_equal(left: Scalar, right: Scalar) -> bool:
     return _scalar_identity(left) == _scalar_identity(right)
 
 
+def _filter_comparison_values(left: Scalar, right: Scalar) -> tuple[Scalar, Scalar]:
+    """Compare numeric filter operands by their decimal *values*.
+
+    JSON readers can preserve exact fractional values as Decimal, while MCP
+    filter arguments arrive as floats. Decimal('0.1') != float(0.1) and even
+    their ordering differs, so normalize both operands before comparison.
+    Keep bool separate from numeric types (True is not the number 1).
+    """
+    numeric = (int, float, Decimal)
+    if (
+        isinstance(left, numeric) and not isinstance(left, bool)
+        and isinstance(right, numeric) and not isinstance(right, bool)
+    ):
+        return _decimal_value(left), _decimal_value(right)
+    return left, right
+
+
 def _require_finite_float_result(
     value: float,
     *,
@@ -857,19 +874,22 @@ class DataOperations:
                 restored.append({key: cls._restore_artifact_value(value) for key, value in row.items()})
             selected = restored
         columns, rows = cls._normalize_json_records(selected)
-        # DataFrame artifacts contain a declared schema alongside /rows. An
-        # empty array cannot carry field names, so preserve that schema for
-        # follow-up operations without changing ordinary empty JSON arrays.
-        if records_path == "/rows" and not rows and isinstance(raw, dict) and "columns" in raw:
-            declared = raw["columns"]
-            if not isinstance(declared, list) or len(declared) > 100:
-                raise DataOperationError("JSON-DataFrame benötigt eine Liste mit maximal 100 Spaltennamen.")
-            columns = [
-                _validate_column_name(name, source="JSON-DataFrame-Schema")
-                for name in declared
-            ]
-            if len(columns) != len(set(columns)):
-                raise DataOperationError("JSON-DataFrame-Schema benötigt eindeutige Spaltennamen.")
+        # Generated single and multi-table artifacts declare their schema
+        # beside /rows. Empty arrays cannot carry column names themselves;
+        # recover them from the parent of /rows or /tables/N/rows.
+        if not rows and isinstance(records_path, str) and records_path.endswith("/rows"):
+            parent_pointer = records_path.rsplit("/", 1)[0]
+            parent = cls._resolve_json_pointer(raw, parent_pointer)
+            if isinstance(parent, dict) and "columns" in parent:
+                declared = parent["columns"]
+                if not isinstance(declared, list) or len(declared) > 100:
+                    raise DataOperationError("JSON-DataFrame benötigt eine Liste mit maximal 100 Spaltennamen.")
+                columns = [
+                    _validate_column_name(name, source="JSON-DataFrame-Schema")
+                    for name in declared
+                ]
+                if len(columns) != len(set(columns)):
+                    raise DataOperationError("JSON-DataFrame-Schema benötigt eindeutige Spaltennamen.")
         return columns, rows
 
     @staticmethod
@@ -1111,33 +1131,37 @@ class DataOperations:
             for column, operator, expected in validated:
                 actual = row.get(column)
                 try:
-                    if operator == "eq" and not _typed_equal(actual, expected):
+                    comparable_actual, comparable_expected = (
+                        _filter_comparison_values(actual, expected)
+                        if operator not in {"in", "not_in"} else (actual, expected)
+                    )
+                    if operator == "eq" and not _typed_equal(comparable_actual, comparable_expected):
                         return False
-                    if operator == "ne" and _typed_equal(actual, expected):
+                    if operator == "ne" and _typed_equal(comparable_actual, comparable_expected):
                         return False
                     if operator == "lt" and not (
-                        actual is not None and actual < expected
+                        comparable_actual is not None and comparable_actual < comparable_expected
                     ):
                         return False
                     if operator == "lte" and not (
-                        actual is not None and actual <= expected
+                        comparable_actual is not None and comparable_actual <= comparable_expected
                     ):
                         return False
                     if operator == "gt" and not (
-                        actual is not None and actual > expected
+                        comparable_actual is not None and comparable_actual > comparable_expected
                     ):
                         return False
                     if operator == "gte" and not (
-                        actual is not None and actual >= expected
+                        comparable_actual is not None and comparable_actual >= comparable_expected
                     ):
                         return False
                     if operator == "in" and not any(
-                        _typed_equal(actual, candidate)
+                        _typed_equal(*_filter_comparison_values(actual, candidate))
                         for candidate in expected
                     ):
                         return False
                     if operator == "not_in" and any(
-                        _typed_equal(actual, candidate)
+                        _typed_equal(*_filter_comparison_values(actual, candidate))
                         for candidate in expected
                     ):
                         return False

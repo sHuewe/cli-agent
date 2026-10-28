@@ -172,6 +172,67 @@ async def test_existing_json_file_with_known_pointer_skips_wrap(configured):
         store.cleanup()
 
 
+@pytest.mark.asyncio
+async def test_decimal_filters_match_exact_json_values_across_artifact_chain(configured):
+    server, store, _ = configured
+    try:
+        wrapped = await server._tool_manager.call_tool("wrap_data", {
+            "content": '[{"value":0.1,"enabled":true},{"value":0.2,"enabled":false}]',
+        }, convert_result=True)
+        source = json.loads(store.metadata_result(wrapped, tool_result_text(wrapped)))
+        expected_counts = {
+            "eq": 1, "ne": 1, "lt": 0, "lte": 1,
+            "gt": 1, "gte": 2, "in": 1, "not_in": 1,
+        }
+        for op, count in expected_counts.items():
+            selected = await server._tool_manager.call_tool("select_data", {
+                "path": source["workspace_path"], "records_path": "/rows",
+                "filters": [{"column": "value", "op": op,
+                             "value": [0.1] if op in {"in", "not_in"} else 0.1}],
+            }, convert_result=True)
+            assert len(selected.structuredContent["rows"]) == count, op
+
+        aggregate = await server._tool_manager.call_tool("aggregate_data", {
+            "path": source["workspace_path"], "records_path": "/rows",
+            "aggregations": [{"column": "value", "function": "sum", "alias": "total"}],
+            "filters": [{"column": "value", "op": "eq", "value": 0.1}],
+        }, convert_result=True)
+        assert aggregate.structuredContent["rows"] == [
+            {"total": {DECIMAL_SCALAR_KEY: "0.1"}},
+        ]
+        boolean = await server._tool_manager.call_tool("select_data", {
+            "path": source["workspace_path"], "records_path": "/rows",
+            "filters": [{"column": "enabled", "op": "eq", "value": 1}],
+        }, convert_result=True)
+        assert boolean.structuredContent["rows"] == []
+    finally:
+        store.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_empty_multi_table_keeps_declared_schema_on_followup(configured):
+    server, store, _ = configured
+    try:
+        wrapped = await server._tool_manager.call_tool("wrap_data", {
+            "content": '{"first":{"columns":["a"],"rows":[]},"second":[{"b":2}]}',
+        }, convert_result=True)
+        info = json.loads(store.metadata_result(wrapped, tool_result_text(wrapped)))
+        assert info["record_sets"][0]["columns"] == ["a"]
+        selected = await server._tool_manager.call_tool("select_data", {
+            "path": info["workspace_path"], "records_path": "/tables/0/rows",
+            "columns": ["a"],
+        }, convert_result=True)
+        assert selected.structuredContent["columns"] == ["a"]
+        assert selected.structuredContent["rows"] == []
+        selected_info = json.loads(store.metadata_result(selected, tool_result_text(selected)))
+        again = await server._tool_manager.call_tool("inspect_schema", {
+            "path": selected_info["workspace_path"], "records_path": "/rows",
+        }, convert_result=True)
+        assert any(column["name"] == "a" for column in json.loads(again[0][0].text)["columns"])
+    finally:
+        store.cleanup()
+
+
 def test_legacy_inline_fields_are_rejected_even_with_path(configured):
     server, store, _ = configured
     try:

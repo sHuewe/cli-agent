@@ -349,6 +349,9 @@ Unterstützte Operatoren:
 
 Es werden bewusst keine Python-Ausdrücke, Pandas-Expressions, SQL-Fragmente,
 Regexe oder Lambdas ausgewertet.
+Numerische Filterargumente werden für Vergleiche mit exakten JSON-Decimal-
+Werten wertgleich normalisiert (auch bei `in`/`not_in` und Größenvergleichen).
+Booleans bleiben dagegen von den numerischen Werten 0 und 1 unterschieden.
 
 ### Aggregationen
 
