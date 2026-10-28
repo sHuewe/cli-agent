@@ -142,5 +142,5 @@ def test_data_mcp_instructions_remain_compact_and_reuse_known_pointers():
     assert len(instructions) <= 1_743  # Size of the instructions before D1/D4.
     assert "Always propagate both" in instructions
     assert "concat_data blocks" in instructions
-    assert "Avoid refetches" in instructions
+    assert "refetch only if insufficient" in instructions
     assert "inspect_json(path) can discover it" in instructions
