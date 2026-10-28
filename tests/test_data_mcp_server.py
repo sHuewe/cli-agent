@@ -201,6 +201,14 @@ def test_write_mode_reuses_read_mode_tools_and_metadata(monkeypatch) -> None:
     ]
 
 
+def test_time_series_instructions_distinguish_utc_outputs_and_source_offsets() -> None:
+    instructions = data_mcp_server._server_instructions("read")
+    assert "generated timezone-aware timestamps in UTC (Z)" in instructions
+    assert "source rows may retain their original offsets" in instructions
+    assert "naive times have\nno timezone" in instructions
+    assert "convert UTC to the requested\nlocal timezone (including DST)" in instructions
+
+
 @pytest.mark.asyncio
 async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artifacts(
     tmp_path: Path,
