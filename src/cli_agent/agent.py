@@ -9,6 +9,7 @@ import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from mcp import ClientSession
 
@@ -85,13 +86,15 @@ DUMP_PREFIX_HASH_HEX_CHARS = 16
 
 
 class CliAgent(McpLifecycleMixin, ConversationMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None, agent_timezone: str | None = None) -> None:
         self.workspace_directory = workspace_directory.resolve()
         self.model_client = model_client
         self.mcp_servers = mcp_servers
         self.max_tool_calls = max_tool_calls
         self.logging_config = logging_config or LoggingConfig()
         self.config_file = config_file
+        self.agent_timezone = agent_timezone
+        self._timezone = ZoneInfo(agent_timezone) if agent_timezone is not None else None
         self.dump_llm_context = dump_llm_context
         if dump_file_prefix is not None:
             if (
@@ -475,6 +478,11 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             if server_name in servers_with_active_tools
         )
 
+    def _format_current_time(self, now_utc: datetime.datetime) -> str:
+        local = now_utc.astimezone(self._timezone)
+        name = f" ({self.agent_timezone})" if self.agent_timezone else ""
+        return f"Aktuelle lokale Zeit: {local.isoformat()}{name}"
+
     def _build_system_prompt(
         self,
         *,
@@ -486,7 +494,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         ]
         parts = [
             BASE_SYSTEM_PROMPT,
-            f"Aktuelles Datum (isoformat): {datetime.datetime.now(datetime.UTC).isoformat()}",
+            self._format_current_time(datetime.datetime.now(datetime.UTC)),
         ]
 
         active_instructions = [

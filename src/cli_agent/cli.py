@@ -737,6 +737,7 @@ async def run(args: argparse.Namespace) -> None:
         model_client,
         config.mcp_servers,
         logging_config=config.logging,
+        agent_timezone=config.agent.timezone,
         config_file=args.config or default_config_file(),
         dump_llm_context=config.dump_llm_context,
         network=admin_config.network,

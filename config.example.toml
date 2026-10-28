@@ -6,6 +6,11 @@
 
 dump_llm_context = false
 
+# Optional IANA timezone for the current time in the system prompt.
+# Without it, the local system timezone is used.
+# [agent]
+# timezone = "Europe/Berlin"
+
 [logging]
 enabled = true
 level = "INFO"

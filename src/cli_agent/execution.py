@@ -552,6 +552,7 @@ async def _run_prompt_sequence(
         model_client,
         config.mcp_servers,
         logging_config=config.logging,
+        agent_timezone=config.agent.timezone,
         config_file=options.config_file or default_config_file(),
         dump_llm_context=config.dump_llm_context,
         dump_file_prefix=options.dump_file_prefix,

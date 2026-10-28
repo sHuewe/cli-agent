@@ -18,7 +18,7 @@ from cli_agent.cli import (
     build_approval_callback,
     build_parser,
 )
-from cli_agent.config import AppConfig, McpServerConfig, ModelConfig
+from cli_agent.config import AgentConfig, AppConfig, McpServerConfig, ModelConfig
 from cli_agent.mcp_contracts import tool_contract_fingerprint
 from cli_agent.network_policy import NetworkConfig
 from cli_agent.os_mcp_server import resolve_mcp_config
@@ -181,6 +181,7 @@ def test_validator_cli_option_is_no_longer_available() -> None:
 
 def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> None:
     config = AppConfig(
+        agent=AgentConfig(timezone="Europe/Berlin"),
         model=ModelConfig(
             provider="openai",
             model="internal-model",
@@ -213,6 +214,7 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
             captured["model_client"] = model_client
             captured["network"] = kwargs["network"]
             captured["mcp_policy"] = kwargs["mcp_policy"]
+            captured["agent_timezone"] = kwargs["agent_timezone"]
             captured["approval_callback"] = kwargs["approval_callback"]
             captured["prompts"] = []
 
@@ -245,6 +247,7 @@ def test_run_uses_admin_policy_for_network_and_mcp(tmp_path, monkeypatch) -> Non
 
     assert captured["model_client"].base_url == "https://llm.internal/v1"
     assert captured["network"] is admin_config.network
+    assert captured["agent_timezone"] == "Europe/Berlin"
     assert captured["mcp_policy"] is admin_config.mcp
     assert captured["prompts"] == [
         "add_web_context https://docs.internal/reference",

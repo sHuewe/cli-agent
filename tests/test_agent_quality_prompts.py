@@ -12,11 +12,37 @@ from cli_agent.ollama import OllamaClient
 FIXTURE = Path(__file__).parent / "fixtures" / "agent_quality_timeseries.json"
 
 
-def _agent(tmp_path: Path) -> CliAgent:
+def _agent(tmp_path: Path, *, agent_timezone: str | None = None) -> CliAgent:
     return CliAgent(
         tmp_path,
         OllamaClient(base_url="http://localhost:11434", model="test"),
         (),
+        agent_timezone=agent_timezone,
+    )
+
+
+def test_system_prompt_uses_system_local_time_by_default(tmp_path: Path) -> None:
+    agent = _agent(tmp_path)
+    instant = datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc)
+    assert agent._format_current_time(instant) == (
+        f"Aktuelle lokale Zeit: {instant.astimezone().isoformat()}"
+    )
+    assert "Aktuelle lokale Zeit:" in agent._build_system_prompt()
+
+
+def test_configured_timezone_distinguishes_dst_instants(tmp_path: Path) -> None:
+    agent = _agent(tmp_path, agent_timezone="Europe/Berlin")
+    summer = datetime(2026, 7, 1, 12, tzinfo=timezone.utc)
+    winter = datetime(2026, 12, 1, 12, tzinfo=timezone.utc)
+    assert "+02:00 (Europe/Berlin)" in agent._format_current_time(summer)
+    assert "+01:00 (Europe/Berlin)" in agent._format_current_time(winter)
+    first = datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc)
+    second = first + timedelta(hours=1)
+    assert agent._format_current_time(first) == (
+        "Aktuelle lokale Zeit: 2026-10-25T02:30:00+02:00 (Europe/Berlin)"
+    )
+    assert agent._format_current_time(second) == (
+        "Aktuelle lokale Zeit: 2026-10-25T02:30:00+01:00 (Europe/Berlin)"
     )
 
 

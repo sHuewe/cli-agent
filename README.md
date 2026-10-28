@@ -26,6 +26,17 @@ py -m pipx install --editable .
 
 Beim ersten Start wird die normale Benutzerkonfiguration unter `%LOCALAPPDATA%\cli-agent\config.toml` angelegt. Danach werden insbesondere Modell, MCP-Server und optionale Funktionen dort konfiguriert.
 
+Die aktuelle Uhrzeit im Systemprompt verwendet standardmäßig die Systemzeitzone
+des laufenden Prozesses. Optional lässt sich eine IANA-Zeitzone festlegen:
+
+```toml
+[agent]
+timezone = "Europe/Berlin"
+```
+
+Dies betrifft nur die Zeitangabe im Systemprompt und verändert weder MCP-Tool-
+Parameter noch Zeitstempel in Daten.
+
 Für die lokale Open-Source-Nutzung ist keine Admin-Datei zwingend erforderlich. Fehlt sie, verwendet `cli-agent` sichere Defaults: Modell- und HTTP-MCP-Zugriff nur auf localhost, kein Webzugriff, keine externen stdio-MCPs und keine administrativ automatisch freigegebenen externen Tools.
 
 ## Zwei getrennte Konfigurationsebenen

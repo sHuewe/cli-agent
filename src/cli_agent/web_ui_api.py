@@ -1176,6 +1176,7 @@ async def run_web_ui_via_api(
         agent = ContextFileCliAgent(
             workspace, client, config.mcp_servers,
             logging_config=config.logging,
+            agent_timezone=config.agent.timezone,
             config_file=config_file,
             dump_llm_context=False,
             network=admin_config.network,

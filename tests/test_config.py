@@ -15,6 +15,33 @@ from cli_agent.logging_setup import (
 )
 
 
+def test_agent_timezone_defaults_to_system_and_can_be_configured(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("", encoding="utf-8")
+    assert load_config(config_file).agent.timezone is None
+
+    config_file.write_text('[agent]\ntimezone = "Europe/Berlin"\n', encoding="utf-8")
+    assert load_config(config_file).agent.timezone == "Europe/Berlin"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        'agent = "Europe/Berlin"',
+        '[agent]\ntimezone = 2',
+        '[agent]\ntimezone = ""',
+        '[agent]\ntimezone = " Europe/Berlin"',
+        '[agent]\ntimezone = "Not/A_Timezone"',
+        '[agent]\nunknown = true',
+    ],
+)
+def test_agent_timezone_rejects_invalid_configuration(tmp_path: Path, content: str) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(config_file)
+
+
 def test_load_logging_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     state_dir = tmp_path / "state"
     monkeypatch.setattr(config_module, "application_directory", lambda: state_dir)
