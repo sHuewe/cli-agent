@@ -79,16 +79,16 @@ For new Markdown, JSON, CSV, TSV, JSONL or NDJSON text, call
 wrap_data(content) once. For existing files, pass their path directly.
 The first wrap_data result supplies verified workspace_path and records_path
 ('/rows' for one table, '/tables/N/rows' for multiple tables).
-Always propagate both to the next operation. Discover unknown JSON paths with
-inspect_json(path); for multi-table Markdown use table_index. Do not copy
+Always propagate both to the next operation. For unknown JSON records_path,
+inspect_json(path) can discover it; for multi-table Markdown use table_index. Do not copy
 or reserialize data between calls; await the input artifact before chaining.
 
 Tables contain all rows in structuredContent; the LLM sees bounded column
 statistics and full sample rows, never all rows in metadata. Results are
 session-scoped workspace_path artifacts, not durable user-named files.
 For long series, concat_data blocks, resample_data, then derive_columns or
-describe_data. Sort/filter via select_data, page via preview_data, group
-via aggregate_data.
+describe_data. Sort/filter with select_data, then page with preview_data;
+group via aggregate_data.
 Reuse artifacts even for narrower ranges; refetch only if insufficient.
 Skip inspect_json when records_path is known.
 Filters use objects with column, op, and value (except for null checks).
