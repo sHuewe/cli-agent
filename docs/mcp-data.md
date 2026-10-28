@@ -1,9 +1,9 @@
 # Workspace Data MCP Server
 
 Der eingebaute Data-MCP-Server führt deterministische Auswertungen auf
-strukturierten Daten aus. Als Quelle kann entweder ein direkt übergebener
-Text-Payload oder – bei entsprechend aktiviertem OS-Zugriff – eine Datendatei
-innerhalb des Projekt-Workspaces verwendet werden.
+strukturierten Daten aus. Einziger Einstieg für neue Text-Datensätze ist
+`wrap_data(content)`. Bereits vorhandene Workspace-Dateien werden direkt über
+`path` und bei JSON gegebenenfalls `records_path` verarbeitet.
 
 Für Dateizugriffe verwendet der Server dieselbe `Workspace`-Klasse und damit
 dieselben Pfad-, Secret-, Symlink/Junction-, Hardlink- und Protected-Path-
@@ -23,13 +23,13 @@ Der erlaubte Dateisystemzugriff wird ausschließlich über die bestehenden
 OS-Optionen bestimmt:
 
 ```powershell
-# Nur Inline-Daten; kein Workspace-Dateizugriff für Data
+# Nur calculate; kein Workspace-Dateizugriff für Data
 cli-agent --with-data
 
-# Inline-Daten + Workspace-Dateien lesen
+# wrap_data und tabellarische Analyse über Workspace-Dateien
 cli-agent --with-os-read --with-data
 
-# Inline-Daten + Workspace-Dateien lesen; OS-Tools dürfen zusätzlich schreiben
+# Dieselbe Data-Pipeline; OS-Tools dürfen zusätzlich schreiben
 cli-agent --with-os-write --with-data
 ```
 
@@ -39,13 +39,11 @@ Die Tools `join_data`, `derive_columns`, `resample_data`, `describe_data`,
 `--with-data --with-os-read` (auch mit `--with-os-write`). Sie benötigen keine allgemeine Codeausführung
 und akzeptieren keine frei formulierten Python-/Pandas-Ausdrücke.
 
-Ohne `--with-os-read` bzw. `--with-os-write` wird für den Data-MCP gar keine
-`Workspace`-Instanz erzeugt. Die Analyse-Tools bleiben trotzdem verfügbar,
-exponieren in diesem Modus aber bewusst keinen `path`-Parameter. Mit
-`--with-os-read` bzw. `--with-os-write` wird `path` zusätzlich im
-Tool-Schema angeboten. Der Data-MCP selbst registriert unabhängig vom Modus
-keine mutierenden Tools; der Agent darf zur Weiterverarbeitung automatisch
-temporäre Session-Dateien anlegen, sobald OS-Lesezugriff verfügbar ist.
+Ohne `--with-os-read` bzw. `--with-os-write` wird für den Data-MCP keine
+`Workspace`-Instanz erzeugt. In diesem Modus ist ausschließlich `calculate`
+verfügbar. Alle tabellarischen Tools benötigen OS-Lesezugriff, damit cli-agent
+ihre vollständigen Resultate als Session-Artefakte speichern und Folge-Tools
+sie lesen können. Der Data-MCP registriert keine mutierenden Datei-Tools.
 
 Der Data-MCP ist ein Built-in. Seine Launchparameter werden vom Agenten erzeugt;
 der OS-Zugriffsmodus wird außerhalb der Modellkontrolle aus den CLI-Rechten
@@ -54,18 +52,20 @@ abgeleitet.
 ## Unterstützte Datenformate
 
 Workspace-Dateien unterstützen `.csv`, `.tsv`, `.json`, `.jsonl`, `.ndjson`,
-`.md` und `.markdown`. Inline-Payloads unterstützen `csv`, `tsv`,
-`json`, `jsonl`, `ndjson` und `markdown`. Für Inline-Tabellen ist
-Markdown das bevorzugte Austauschformat.
+`.md` und `.markdown`. `wrap_data(content: str)` erkennt ohne Formatparameter
+Markdown-Pipe-Tabellen, JSON, CSV, TSV und JSONL/NDJSON automatisch. Bei
+JSON-ähnlichen, aber ungültigen Eingaben erfolgt ein Parsefehler statt eines
+stillen Fallbacks. Mehrdeutige/nicht-tabellarische Texte werden abgewiesen.
 
-Bei `json` muss der ausgewählte Datensatz ein Array flacher Objekte enthalten.
-Bei verschachtelten JSON-Antworten kann dieses Array mit dem optionalen
+Bei bestehenden JSON-Dateien kann ein Array flacher Objekte über
 **`records_path`** als JSON Pointer (z. B. `/measurements` oder `/rows`)
-ausgewählt werden. `inspect_json(path)` findet geeignete Arrays und gibt deren
-Pfade, Zeilenzahl und Spaltennamen zurück, ohne Zeilen zu übertragen. Das
-einfache JSON-Array an der Wurzel funktioniert weiterhin ohne `records_path`.
-`records_path` gilt auch für Inline-JSON und ist für andere Formate nicht
-zulässig. JSONL/NDJSON enthält pro nicht-leerer Zeile genau ein Objekt.
+ausgewählt werden. `inspect_json(path)` findet bei unbekannter Struktur
+geeignete Arrays, Pfade, Zeilenzahl und Spaltennamen ohne Datenwerte. Liegt
+das Array an der Wurzel, ist kein Pointer notwendig. Bereits bekannte Pointer
+werden ohne `wrap_data` direkt verwendet. Das neue `wrap_data` normalisiert
+alle eindeutig erkannten Datensätze: für eine Tabelle zu `/rows`, für mehrere
+zu `/tables/0/rows`, `/tables/1/rows` usw. mit `record_sets`-Metadaten.
+JSONL/NDJSON enthält pro nicht-leerer Zeile genau ein Objekt.
 Verschachtelte Werte **innerhalb** der ausgewählten Zeilen werden weiterhin
 bewusst abgewiesen. Heterogene JSON-/JSONL-Datensätze bleiben
 intern sparse: fehlende Felder werden nicht für jede Zeile als zusätzliche
@@ -74,14 +74,14 @@ Felder weiterhin wie `null`. CSV/TSV-Werte werden konservativ als `null`,
 Boolean, Integer, Float oder String interpretiert. Spaltennamen aus CSV/TSV und
 JSON/JSONL müssen nicht-leer sein und dürfen keine führenden oder
 nachgestellten Leerzeichen enthalten. Dasselbe gilt für explizite
-Aggregations-Aliase, damit erzeugte Spaltennamen beim Markdown-Chaining stabil
+Aggregations-Aliase, damit erzeugte Spaltennamen bei Folgeoperationen stabil
 bleiben.
 
 Eine Datendatei ist derzeit auf 100 MB und 1.000.000 Datensätze begrenzt.
-Inline-Payloads sind auf 2.000.000 Zeichen begrenzt. Für CSV/TSV wird das
+`wrap_data`-Inhalte sind auf 2.000.000 UTF-8-Bytes und Zeichen begrenzt. Für CSV/TSV wird das
 Python-Feldgrößenlimit bewusst bis zur bereits geltenden maximalen
-Dateigröße angehoben; Inline-Daten bleiben unabhängig davon durch ihr
-2.000.000-Zeichen-Limit begrenzt. Bei Markdown wird das Zeilenbudget für die
+Dateigröße angehoben; neue Text-Datensätze bleiben durch ihr eigenes
+2.000.000-Byte-Limit begrenzt. Bei Markdown wird das Zeilenbudget für die
 Summe aller zu materialisierenden Tabellenzeilen bereits vor der eigentlichen
 Markdown-Tokenisierung geprüft. Tool-Ergebnisse sind zusätzlich durch ein
 Größenbudget begrenzt. `select_data` und `aggregate_data` kürzen Zeilen
@@ -95,13 +95,13 @@ LLM-Kontext.
 | Tool | Funktion |
 | --- | --- |
 | `calculate(expression)` | Wertet einen begrenzten arithmetischen Ausdruck deterministisch mit Dezimalarithmetik aus. |
-| `extract_markdown_tables(markdown)` | Extrahiert und normalisiert alle Pipe-Tabellen aus einem vollständigen Markdown-Dokument und gibt sie wieder als Markdown zurück. |
+| `wrap_data(content)` | Einziger Einstieg für neue Text-Datensätze (Markdown, JSON, CSV, TSV, JSONL, NDJSON); erstellt strukturierte Artefakte. |
 | `inspect_json(path)` | Findet Record-Arrays in verschachtelten Workspace-JSON-Dateien ohne die einzelnen Messwerte auszugeben; nur bei Dateileserechten. |
 | `inspect_schema(...)` | Liefert Schema-/Profil-Metadaten ohne Datensätze: Zeilenzahl, Spaltennamen, Typinferenz, Null-/Unique-Zahlen und bei niedriger Kardinalität die vollständige Distinct-Wertedomäne. |
 | `preview_data(...)` | Liefert Schema-Metadaten plus eine bewusst begrenzte Vorschau vollständiger Zeilen. Für reine Schema-Erkundung ist `inspect_schema` vorzuziehen. |
-| `select_data(...)` | Filtert, projiziert und sortiert Datensätze und liefert alle Ergebniszeilen ohne `limit`-Parameter. |
-| `value_counts(...)` | Zählt unterschiedliche Werte einer Spalte. |
-| `aggregate_data(...)` | Gruppiert und aggregiert Daten deterministisch; liefert alle Gruppen ohne `limit`-Parameter. |
+| `select_data(path, ...)` | Filtert, projiziert und sortiert Datensätze ohne Zeilenlimit; strukturiertes Artefakt. |
+| `value_counts(column, path, ...)` | Zählt unterschiedliche Werte einer Spalte; begrenzte Ergebnistabelle als Artefakt. |
+| `aggregate_data(aggregations, path, ...)` | Gruppiert und aggregiert Daten deterministisch; strukturiertes Artefakt. |
 
 ### Zeitreihen und DataFrames (Pandas, `--with-os-read`)
 
@@ -112,11 +112,8 @@ MCP-Feld `_meta.io.github.shuewe.cli-agent/only_metadata_to_llm` wird
 stattdessen das bereits vorhandene Session-Artefakt-Verfahren genutzt. Das
 Modell erhält die durch Data-MCP definierten Metadaten (`operation`,
 `row_count`, `columns`, `records_path`) und den vom Agenten ergänzten
-`workspace_path`. Bei kleinen Ergebnissen (maximal 5 KB) werden zusätzlich
-alle Ergebniszeilen direkt in den Metadaten bereitgestellt.
-
-Bei größeren Ergebnissen erhält das Modell stattdessen eine **automatisch
-berechnete Kurz-Zusammenfassung**: bis zu fünf vollständige Beispielzeilen
+`workspace_path`. Unabhängig von der Ergebnisgröße erhält das Modell eine
+**automatisch berechnete Kurz-Zusammenfassung**: bis zu fünf vollständige Beispielzeilen
 (`sample_rows`), `null_count` je betrachteter Spalte, `min`/`max` und
 `mean` bei numerischen Spalten, Zeitbereiche bei ISO-Zeitstempelspalten
 und vollständige `value_counts` bei höchstens fünf unterschiedlichen kurzen
@@ -124,6 +121,17 @@ kategorischen Werten. Der Mittelwert wird näherungsweise als Gleitkommazahl
 ausgegeben. Statistiken beziehen sich stets auf **alle Ergebniszeilen**, nicht
 nur auf die Vorschau. Mehrdeutige oder gemischt typisierte Spalten erhalten
 keine irreführenden numerischen oder zeitlichen Statistiken.
+
+Sämtliche tabellenerzeugenden Tools (einschließlich `wrap_data`,
+`select_data`, `aggregate_data` und `value_counts`) liefern die vollständigen
+Daten in MCP-`structuredContent`. Das LLM bekommt **nie** ein separates
+vollständiges `rows`-Feld in den Metadaten. Bei 1–5 Zeilen kann die Vorschau
+zufällig alle Zeilen umfassen; dann ist `sample_rows_complete=true`.
+Booleans und große Integer bleiben typgetreu. Exakte `Decimal`-Werte werden
+reversibel als `{"__cli_agent_decimal__":"..."}` mit
+`scalar_encoding="cli-agent-decimal-v1"` kodiert und beim nächsten Data-Tool
+als numerische Werte rekonstruiert; unveränderte Float64-Werte behalten ihre
+Float64-Semantik.
 
 Für die ergänzten Metadaten gilt ein Budget von 5.000 UTF-8-Bytes inklusive
 Platz für den vom Agenten hinzugefügten `workspace_path`. Um es einzuhalten,
@@ -223,66 +231,29 @@ einem Prozessabsturz kann eine Bereinigung ausgeblieben sein.
 
 ### Markdown-Tabellen
 
-Markdown ist das bevorzugte Inline-Format für tabellarische Referenzinhalte und
-für die Weitergabe tabellarischer Ergebnisse zwischen Data-Tools. Wenn eine
-einfache Markdown-Schreibweise den Skalartyp nicht eindeutig erhalten könnte,
-verwendet der Data-MCP eine sichtbare, versionierte Typannotation als
-Inline-Code-Zelle. Der enthaltene Typ-/Wert-Payload wird URL-safe Base64
-kodiert (`cli-agent:data:v1:...`). Dadurch enthält die kanonische Kodierung
-keine Pipe-Delimiter, Backslashes, Backticks oder physischen Zeilenumbrüche.
-Leere bzw. numerisch aussehende Strings, Whitespace, Unicode, Pipes,
-Backslashes, Backticks, Zeilenumbrüche und weitere CommonMark-Inline-Syntax
-wie Hervorhebungen, Links, Autolinks und Entities bleiben damit beim
-unveränderten Weiterreichen erhalten. Dasselbe Verfahren wird für
-Markdown-Header mit syntaxrelevanten Zeichen verwendet. Normale unannotierte
-Zellen werden weiterhin heuristisch typisiert. Die zentrale Roundtrip-Invariante
-für vom Data-MCP erzeugte Tabellen lautet: ein unterstützter Skalarwert muss
-nach Rendern und erneutem Parsen exakt denselben Wert und Typ besitzen.
+Der bestehende Markdown-Pipe-Parser wird weiterhin intern von wrap_data
+verwendet, aber extract_markdown_tables ist kein öffentliches MCP-Tool mehr.
+wrap_data erhält das vollständige relevante Markdown-Dokument; das LLM
+muss Tabellen weder ausschneiden noch neu serialisieren. Mehrere erkannte
+Tabellen werden gemeinsam abgelegt und in record_sets einzeln über
+JSON-Pointer adressiert.
 
-`extract_markdown_tables(markdown)` nimmt ein vollständiges Markdown-Dokument
-entgegen und sucht darin selbstständig nach Pipe-Tabellen. Das LLM muss die
-Tabelle deshalb nicht vorher ausschneiden oder als JSON rekonstruieren. Das
-Ergebnis besteht wieder aus normalisierten Markdown-Tabellen in Quellreihenfolge.
-Unmittelbar vor einer Tabelle stehende Pipe-Zeilen werden nicht als
-beschreibender Kontext übernommen, damit Daten einer vorherigen Tabelle im
-normalisierten Ergebnis nicht versehentlich als zusätzliche Tabelle erscheinen.
+Der Parser erhält seine bisherigen Schutzregeln: eindeutige Namen für leere
+oder doppelte Header, eng begrenzte Reparaturen von Separator-/Zeilenbruch-
+Defekten und keine erfundenen Zellwerte. Die bisherige versionierte
+Markdown-Zellkodierung für exakte Skalar-Roundtrips bleibt für bestehende
+Markdown-Dateien lesbar. Neue tabellarische Ausgaben werden dagegen
+strukturiert als JSON-Artefakte transportiert und nicht erneut als Markdown
+gerendert und geparst.
 
-Bei der Normalisierung werden leere bzw. doppelte Header deterministisch in
-eindeutige Spaltennamen überführt. Außerdem werden eng begrenzte Syntaxdefekte
-repariert, die typische HTML-zu-Text-Extraktoren erzeugen können: insbesondere
-wörtlich kopierte `\n`-Zeilenumbrüche sowie eine zu kurze, ansonsten formal
-gültige Markdown-Separatorzeile. Datenzellen selbst werden dabei nicht
-heuristisch ergänzt oder umgedeutet. Die ausgegebene Separatorzeile besitzt
-immer exakt dieselbe Spaltenanzahl wie der Header.
+Beispielkette für einen neuen Textdatensatz:
 
-Beispiel:
+1. wrap_data(content="| group | value |\\n|---|---|\\n| A | 3 |")
+2. select_data(path=workspace_path, records_path="/rows", ...)
+3. aggregate_data(path=neuer_workspace_path, records_path="/rows", ...)
 
-```markdown
-## Table 0
-
-Context: Spielbericht
-
-| column_1 | Heim | Gast | Sätze | Spiele |
-|---|---|---|---|---|
-| D1-D1 | A / B | C / D | 3:1 | 1:0 |
-| 1-2 | A | D | 2:3 | 0:1 |
-```
-
-Alle tabellarischen Analyse-Tools akzeptieren diesen Output direkt mit
-`data_format="markdown"`. Enthält ein Markdown-Dokument mehrere Tabellen, wählt
-`table_index` die gewünschte Tabelle aus.
-
-Auch `select_data`, `value_counts` und `aggregate_data` liefern ihre
-tabellarischen Ergebnisse als normalisiertes Markdown. Dadurch kann ihr Output
-ohne JSON-Rekonstruktion an einen weiteren Data-Tool-Aufruf weitergegeben werden.
-
-Bei aktiviertem Workspace-Zugriff ist ein vorhandener Dateipfad vorzuziehen.
-Mit `--with-os-read` (oder `--with-os-write`) schreibt der Agent die Ergebnisse
-von `select_data` und `aggregate_data` automatisch in eine geschützte,
-temporäre Markdown-Datei. Die Antwort enthält `workspace_path`, der direkt
-als `path` des nächsten Data-Tools nutzbar ist. Kleine Ergebnisse enthalten
-zusätzlich das vollständige Markdown im Metadatenfeld `result`. Ohne
-Workspace-Zugriff wird das vollständige Markdown direkt zurückgegeben.
+Bei bereits vorhandenen Dateien entfällt Schritt 1. Unabhängig davon
+soll das LLM keine Rohdaten zwischen Toolaufrufen rekonstruieren.
 
 ### Schema-Erkundung und Datenvorschau
 
@@ -403,7 +374,7 @@ Präzisionsbereich werden abgewiesen, bevor ein Decimal-Kontext mit dieser
 Präzision angelegt wird. Vorhandene Float-Spalten behalten aus
 Kompatibilitätsgründen ihre bisherige Float-Semantik; nicht-endliche
 Aggregationsergebnisse werden jedoch abgewiesen. Präzise Dezimalwerte bleiben
-beim Markdown-Chaining erhalten.
+über die reversible Dezimal-Kodierung in JSON-Artefakten erhalten.
 
 Boolesche Werte besitzen bei Gleichheit, Membership, Gruppierung und
 Distinct-Zählungen eine eigene skalare Identität und werden daher nicht mit den
@@ -412,18 +383,25 @@ Nullwerte unabhängig von auf- oder absteigender Sortierrichtung am Ende.
 
 ## Automatische Session-Artefakte
 
-`select_data` und `aggregate_data` geben ihr Ergebnis vollständig an den
-Agenten zurück. Mit OS-Lesezugriff aktiviert der Agent den vereinbarten
-MCP-`_meta`-Mechanismus automatisch: Er speichert die Daten in einer von ihm
-gewählten `.md`-Datei innerhalb eines eindeutigen Session-Unterordners und
-übermittelt dem LLM nur `workspace_path`, Schema/Zeilenzahl und bei kleinen
-Ergebnissen das vollständige Markdown. Die drei Pandas-Tools verwenden
-dasselbe Verfahren für `.json`-Dateien mit `records_path="/rows"`.
+Alle tabellenerzeugenden Tools liefern vollständige strukturierte Datensätze
+über MCP-structuredContent und LLM-geeignete Metadaten über das
+cli-agent-spezifische _meta-Protokoll. cli-agent speichert die Daten unter
+einem selbst gewählten, verifizierten Session-Pfad als JSON; Data MCP schreibt
+keine selbst gewählten Dateien. Die Antwort an das LLM enthält nur
+workspace_path, records_path, Schema, Statistiken und begrenzte Vorschau.
+Das gilt ebenso für ein Ergebnis mit nur einer Zeile wie für große Tabellen.
 
-Der Data-MCP erhält dadurch kein Recht, beliebige Dateien zu schreiben.
-Insbesondere existieren `select_data_to_file` und `aggregate_data_to_file`
-nicht mehr. Beim regulären Beenden entfernt der Agent ausschließlich seine
-eigenen Session-Dateien; vorhandene Workspace-Daten werden nicht verändert.
+Die Folgeoperation liest diese Daten ausschließlich über path und den
+angegebenen records_path. Ein erneutes Kopieren, Parsen oder Rekonstruieren der
+Tabellen im LLM-Kontext entfällt. Andere MCP-Clients erhalten weiterhin das
+vollständige structuredContent. Ohne OS-Lesezugriff wird keines der
+tabellarischen Tools registriert.
+
+Beim regulären Beenden entfernt der Agent ausschließlich seine eigenen
+Session-Dateien; vorhandene Workspace-Daten bleiben unverändert. Ein
+Prozessabsturz kann die Bereinigung verhindern. Der separate Wunsch, diese
+Artefakte erst bei Beginn der nächsten Frage statt am Ende der Antwort zu
+entfernen, gehört zu A1 und wird in einem eigenen PR behandelt.
 
 ## Workspace-Sicherheit
 

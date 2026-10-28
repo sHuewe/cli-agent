@@ -44,8 +44,8 @@ def _operations(calls):
         calculate=lambda expression: (
             calls.append(("calculate", expression)) or "calculated"
         ),
-        extract_markdown_tables=lambda markdown: (
-            calls.append(("extract_markdown_tables", markdown)) or "tables"
+        wrap_data=lambda content: (
+            calls.append(("wrap_data", content)) or [(["x"], [{"x": 1}])]
         ),
         inspect_schema=lambda path=None, **kwargs: (
             calls.append(("schema", path, kwargs)) or "schema"
@@ -62,6 +62,9 @@ def _operations(calls):
         value_counts=lambda column, path=None, **kwargs: (
             calls.append(("counts", column, path, kwargs)) or "counted"
         ),
+        _value_counts_records=lambda column, path=None, **kwargs: (
+            calls.append(("counts_records", column, path, kwargs)) or ([{"value": 1, "count": 1}], 1)
+        ),
         aggregate_data=lambda aggregations, path=None, **kwargs: (
             calls.append(("aggregate", aggregations, path, kwargs))
             or "aggregated"
@@ -75,7 +78,7 @@ def _operations(calls):
 
 BASE_TOOLS = {
     "calculate",
-    "extract_markdown_tables",
+    "wrap_data",
     "inspect_schema",
     "preview_data",
     "select_data",
@@ -84,7 +87,7 @@ BASE_TOOLS = {
 }
 
 
-def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> None:
+def test_payload_only_mode_exposes_calculate_only(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
 
@@ -93,51 +96,26 @@ def test_payload_only_mode_hides_path_and_write_capabilities(monkeypatch) -> Non
         access="none",
     )
 
-    assert set(server.tools) == BASE_TOOLS
-    assert "path" not in inspect.signature(server.tools["inspect_schema"]).parameters
-    assert "path" not in inspect.signature(server.tools["preview_data"]).parameters
-    assert "path" not in inspect.signature(server.tools["select_data"]).parameters
-    assert "path" not in inspect.signature(server.tools["value_counts"]).parameters
-    assert "path" not in inspect.signature(server.tools["aggregate_data"]).parameters
-    assert "Markdown is preferred" in server.instructions
-    assert "Workspace file access is not available" in server.instructions
-    assert "use only\nnormalized tabular output returned by Data MCP tools" in server.instructions
-    assert "Use select_data whenever a subset" in server.instructions
-    assert "Dependent Data MCP calls must wait" in server.instructions
-    assert "Use inspect_schema to discover column names" in server.instructions
-    assert "Do not use preview_data as a substitute" in server.instructions
-
-    assert (
-        server.tools["select_data"](
-            "| a | b |\n|---|---|\n| 1 | 2 |",
-        )
-        == "selected"
-    )
-    assert calls == [
-        (
-            "select",
-            None,
-            {
-                "data": "| a | b |\n|---|---|\n| 1 | 2 |",
-                "data_format": "markdown",
-                "table_index": 0,
-                "columns": None,
-                "filters": None,
-                "sort_by": None,
-                "descending": False,
-            },
-        )
-    ]
+    assert set(server.tools) == {"calculate"}
+    assert "--with-os-read" in server.instructions
+    assert server.tools["calculate"]("1+2") == "calculated"
+    assert calls == [("calculate", "1+2")]
 
 
-def test_inline_mode_can_select_nested_json_record_array(monkeypatch) -> None:
+def test_wrap_is_single_text_ingress_and_json_inspection_is_path_only(monkeypatch) -> None:
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
     calls = []
-    server = data_mcp_server.create_server(_operations(calls), access="none")
-    assert server.tools["preview_data"](
-        data='{"records":[{"x":1}]}', data_format="json", records_path="/records",
-    ) == "inspected"
-    assert calls[0][2]["records_path"] == "/records"
+    server = data_mcp_server.create_server(_operations(calls), access="read")
+    assert set(inspect.signature(server.tools["wrap_data"]).parameters) == {"content"}
+    assert "extract_markdown_tables" not in server.tools
+    for name in ("inspect_schema", "preview_data", "select_data", "aggregate_data", "value_counts"):
+        parameters = inspect.signature(server.tools[name]).parameters
+        assert "path" in parameters and parameters["path"].default is inspect.Parameter.empty
+        assert "data" not in parameters and "data_format" not in parameters
+    assert set(inspect.signature(server.tools["inspect_json"]).parameters) == {"path"}
+    result = server.tools["wrap_data"]('| x |\n|---|\n| 1 |')
+    assert result.structuredContent["rows"] == [{"x": 1}]
+    assert calls == [("wrap_data", '| x |\n|---|\n| 1 |')]
 
 
 def test_read_mode_exposes_path_and_no_write_tools(monkeypatch) -> None:
@@ -154,7 +132,7 @@ def test_read_mode_exposes_path_and_no_write_tools(monkeypatch) -> None:
     assert "path" in inspect.signature(server.tools["preview_data"]).parameters
     assert "path" in inspect.signature(server.tools["select_data"]).parameters
     assert "input_path" not in inspect.signature(server.tools["select_data"]).parameters
-    assert "Workspace file access is available" in server.instructions
+    assert "workspace files" in server.instructions.lower()
 
     assert server.tools["inspect_schema"](
         path="data.csv",
@@ -169,20 +147,18 @@ def test_read_mode_exposes_path_and_no_write_tools(monkeypatch) -> None:
             "schema",
             "data.csv",
             {
-                "data": None,
-                "data_format": None,
                 "table_index": 0,
                 "distinct_values_limit": 7,
+                "records_path": None,
             },
         ),
         (
             "inspect",
             "data.csv",
             {
-                "data": None,
-                "data_format": None,
                 "table_index": 0,
                 "sample_rows": 3,
+                "records_path": None,
             },
         )
     ]
@@ -199,8 +175,8 @@ def test_write_mode_reuses_read_mode_tools_and_metadata(monkeypatch) -> None:
 
     assert set(server.tools) == BASE_TOOLS | {"inspect_json"}
     assert "path" in inspect.signature(server.tools["preview_data"]).parameters
-    assert "Prefer path-based datasets" in server.instructions
-    assert "without\nrow limits" in server.instructions
+    assert "wrap_data(content)" in server.instructions
+    assert "no normal tabular tool accepts inline data" in server.instructions
     assert "limit" not in inspect.signature(server.tools["select_data"]).parameters
     assert "limit" not in inspect.signature(server.tools["aggregate_data"]).parameters
 
@@ -212,13 +188,12 @@ def test_write_mode_reuses_read_mode_tools_and_metadata(monkeypatch) -> None:
             "select_records",
             "raw.csv",
             {
-                "data": None,
-                "data_format": None,
                 "table_index": 0,
                 "columns": ["x"],
                 "filters": None,
                 "sort_by": None,
                 "descending": False,
+                "records_path": None,
             },
         )
     ]
@@ -250,7 +225,7 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
             "select_data", {"path": "source.csv"}, convert_result=True,
         )
         assert selected.meta[ONLY_METADATA_TO_LLM_KEY] is True
-        assert "Rows: 1201/1201" in tool_result_text(selected)
+        assert len(selected.structuredContent["rows"]) == 1_201
         selected_preview = selected.meta[METADATA_FOR_LLM_KEY]
         assert "result" not in selected_preview
         assert selected_preview["sample_rows"][0] == {"group": "g0000", "value": 0}
@@ -261,20 +236,17 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
         path = result_metadata["workspace_path"]
         assert len(selected_metadata.encode("utf-8")) <= 5_000
         assert result_metadata["sample_rows"] == selected_preview["sample_rows"]
-        assert (tmp_path / path).suffix == ".md"
+        assert (tmp_path / path).suffix == ".json"
         assert (tmp_path / path).is_file()
 
         grouped = await server._tool_manager.call_tool(
             "aggregate_data",
             {"path": path, "aggregations": [{"column": "value", "function": "sum", "alias": "total"}],
-             "group_by": ["group"]},
+             "group_by": ["group"], "records_path": "/rows"},
             convert_result=True,
         )
         assert grouped.meta[ONLY_METADATA_TO_LLM_KEY] is True
-        assert "Rows: 1201/1201" in tool_result_text(grouped)
-        assert len(DataOperations(workspace)._read_records(
-            data=tool_result_text(grouped), data_format="markdown",
-        )[1]) == 1_201
+        assert len(grouped.structuredContent["rows"]) == 1_201
         grouped_metadata = store.metadata_result(grouped, tool_result_text(grouped))
         grouped_summary = json.loads(grouped_metadata)
         assert (tmp_path / grouped_summary["workspace_path"]).is_file()
@@ -342,16 +314,17 @@ async def test_new_dataframe_tools_expose_typed_mcp_schemas_and_chain_artifacts(
     assert sorted(path.name for path in tmp_path.iterdir()) == ["day1.json", "day2.json"]
 
 
-def test_extract_tool_description_and_result_are_markdown_oriented(monkeypatch) -> None:
+def test_wrap_tool_description_covers_all_formats(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
-    server = data_mcp_server.create_server(_operations(calls), access="none")
+    server = data_mcp_server.create_server(_operations(calls), access="read")
 
-    tool = server.tools["extract_markdown_tables"]
+    tool = server.tools["wrap_data"]
     assert "normalize" in (tool.__doc__ or "").lower()
-    assert tool("| a |\n|---|\n| 1 |") == "tables"
+    assert "NDJSON" in tool.__doc__
+    assert tool("| a |\n|---|\n| 1 |").structuredContent["rows"] == [{"x": 1}]
     assert calls == [
-        ("extract_markdown_tables", "| a |\n|---|\n| 1 |")
+        ("wrap_data", "| a |\n|---|\n| 1 |")
     ]
 
 
@@ -364,9 +337,9 @@ def test_inspection_tool_descriptions_separate_schema_from_rows(monkeypatch) -> 
     preview_doc = (server.tools["preview_data"].__doc__ or "").lower()
 
     assert "never returns dataset rows" in schema_doc
-    assert "distinct_values_complete" in schema_doc
+    assert "low-cardinality" in schema_doc
     assert "select_data" in schema_doc
-    assert "complete sample rows" in preview_doc
+    assert "complete records" in preview_doc
     assert "inspect_schema" in preview_doc
     assert "select_data" in preview_doc
 
@@ -374,7 +347,7 @@ def test_inspection_tool_descriptions_separate_schema_from_rows(monkeypatch) -> 
 def test_select_data_exposes_structured_filter_schema(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
-    server = data_mcp_server.create_server(_operations(calls), access="none")
+    server = data_mcp_server.create_server(_operations(calls), access="read")
 
     function = server.tools["select_data"]
     tool = Tool.from_function(function)
@@ -399,7 +372,7 @@ def test_select_data_exposes_structured_filter_schema(monkeypatch) -> None:
 
     validated = tool.fn_metadata.arg_model.model_validate(
         {
-            "data": "| a |\n|---|\n| 1 |",
+            "path": "sample.csv",
             "filters": [{"column": "a", "op": "eq", "value": 1}],
         }
     )
@@ -410,15 +383,15 @@ def test_select_data_exposes_structured_filter_schema(monkeypatch) -> None:
     with pytest.raises(ValueError):
         tool.fn_metadata.arg_model.model_validate(
             {
-                "data": "| a |\n|---|\n| 1 |",
+                "path": "sample.csv",
                 "filters": [{"column_1": {"==": "D1-D1"}}],
             }
         )
 
     assert function(
-        "| a |\n|---|\n| 1 |",
+        "sample.csv",
         filters=[data_mcp_server.DataFilter(column="a", op="eq", value=1)],
-    ) == "selected"
+    ).structuredContent["rows"] == [{"x": 1}]
     assert calls[-1][2]["filters"] == [
         {"column": "a", "op": "eq", "value": 1}
     ]

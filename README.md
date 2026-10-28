@@ -369,19 +369,18 @@ cli-agent --with-os-read --with-data
 cli-agent --with-os-write --with-data
 ```
 
-`--with-data` aktiviert immer die Data-Tools. Der OS-Modus bestimmt separat,
-welche Dateifunktionen überhaupt im MCP-Schema erscheinen: ohne OS-Flag werden
-keine `path`-Parameter exponiert; mit `--with-os-read` dürfen Analyse-Tools
-zusätzlich Workspace-Dateien lesen; mit `--with-os-write` kommen die
-dedizierten Data-Write-Tools hinzu. Bei vorhandenem Dateizugriff werden Pfade
-bevorzugt, insbesondere für mehrstufige Transformationen mit Schreibzugriff.
+`--with-data` allein aktiviert den deterministischen Calculator. Alle
+tabellarischen Data-Tools benötigen `--with-os-read` oder `--with-os-write`.
+Für neue Text-Datensätze ist `wrap_data(content)` der einzige Einstiegspunkt:
+Markdown, JSON, CSV, TSV und JSONL/NDJSON werden automatisch erkannt. Bereits
+vorhandene Datendateien lassen sich stattdessen direkt über `path` und bei
+JSON gegebenenfalls `records_path` verwenden. Nach dem ersten Schritt
+erfolgen weitere Operationen ausschließlich über Dateipfade.
 
-Ohne passenden Dateipfad ist Markdown das bevorzugte Austauschformat. Der
-Data-MCP kann Markdown-Pipe-Tabellen normalisieren und die tabellarischen
-Ergebnisse von Auswahl-, Count- und Aggregationsoperationen wieder als
-normalisiertes Markdown liefern. Dadurch können Ergebnisse stateless zwischen
-Tool-Aufrufen weitergereicht werden, ohne Tabellen als große JSON-Objekte
-rekonstruieren zu müssen.
+Tabellenerzeugende Data-Tools geben vollständige strukturierte JSON-Daten als
+temporäre Session-Artefakte zurück. Das LLM sieht nur Metadaten, Statistiken,
+eine begrenzte Vorschau und den geprüften `workspace_path`, auch wenn das
+Ergebnis sehr klein ist. Der Data-MCP registriert keine eigenen Datei-Write-Tools.
 
 Der Data-MCP bietet außerdem einen deterministischen Calculator sowie lokale
 Auswertungen von CSV/TSV/JSON/JSONL/NDJSON und Markdown. Große lokale
@@ -407,7 +406,7 @@ unterdrücken. Dazu liefert es in der MCP-`_meta` der **Toolantwort** beide Feld
 }
 ```
 
-Dies ist nur aktiv, wenn Workspace-Schreibzugriff (`--with-os-write`)
+Dies ist bei vorhandenem Workspace-Lesezugriff (`--with-os-read` oder `--with-os-write`)
 freigegeben wurde. Der Data-MCP ist dafür nicht erforderlich. Dann speichert
 `cli-agent` das normalerweise modell-sichtbare MCP-Toolergebnis in einer
 **selbst benannten, workspace-relativen Datei** (`.json` bei strukturierten
@@ -426,8 +425,9 @@ Die so erzeugten Dateien liegen in einem separaten, zufällig benannten Ordner
 automatisch entfernt. Andere Workspace-Dateien, auch eigenständig durch OS-/
 Data-Tools angelegte Dateien, sind davon ausdrücklich nicht betroffen. Bei
 abruptem Prozessabbruch ist eine Bereinigung nicht garantiert. JSON-Dateien
-können derzeit noch nicht direkt über die pfadbasierten Data-MCP-Operationen
-ausgewertet werden; dessen Unterstützung wird separat erweitert.
+mit bekannten Record-Arrays können direkt über Data-MCP-Pfadoperationen
+ausgewertet werden; der JSON Pointer wird bei Bedarf über `records_path`
+angegeben.
 
 ## Optionale lokale Web-UI
 
