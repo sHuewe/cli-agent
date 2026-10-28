@@ -286,6 +286,25 @@ def test_cleanup_keeps_user_files_and_other_sessions(tmp_path: Path) -> None:
     assert not second_path.exists()
 
 
+def test_reset_history_removes_artifacts_but_preserves_user_files(tmp_path: Path) -> None:
+    agent = _agent(tmp_path)
+    path = tmp_path / agent._result_artifacts.save("temporary", structured=False)
+    user_path = tmp_path / "saved.json"
+    user_path.write_text('{"keep": true}', encoding="utf-8")
+    agent.history.append({"role": "user", "content": "old question"})
+
+    agent.reset_history()
+
+    assert agent.history == []
+    assert not path.exists()
+    assert user_path.read_text(encoding="utf-8") == '{"keep": true}'
+    replacement = tmp_path / agent._result_artifacts.save("next", structured=False)
+    assert replacement.is_file()
+    assert replacement.parent != path.parent
+    asyncio.run(agent.close())
+    assert not replacement.exists()
+
+
 def test_cleanup_does_not_remove_replaced_artifact(tmp_path: Path) -> None:
     store = McpResultArtifacts(tmp_path, ())
     path = tmp_path / store.save("original", structured=False)

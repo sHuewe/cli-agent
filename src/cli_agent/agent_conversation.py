@@ -127,6 +127,9 @@ class ConversationMixin:
         self._last_working_messages = []
         self._last_working_tools = []
         self._dumped_history_json = dumped_history_json
+        artifacts = getattr(self, "_result_artifacts", None)
+        if artifacts is not None:
+            artifacts.cleanup()
 
         logger.info("conversation_history_reset")
 
@@ -151,6 +154,13 @@ class ConversationMixin:
             state = "aktiviert" if enabled else "deaktiviert"
             suffix = "" if changed else " (war bereits so)"
             return f"MCP-Server {server_name} {state}{suffix}."
+
+        # The previous run's MCP files remain inspectable after its answer.
+        # Only a new regular question starts a fresh artifact generation;
+        # configuration commands and frontend-tool resumes do not.
+        artifacts = getattr(self, "_result_artifacts", None)
+        if artifacts is not None:
+            artifacts.cleanup()
 
         if self.logging_config.log_prompts:
             logger.info("user_prompt=%s", prompt)

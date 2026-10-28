@@ -422,10 +422,16 @@ Dateischreiben erhält das Modell eine Fehlermeldung **ohne den Rohdatensatz**.
 Es gelten Größenlimits für Dateien und Metadaten.
 
 Die so erzeugten Dateien liegen in einem separaten, zufällig benannten Ordner
-`mcp-data-...` im Workspace und werden **bei regulärem Beenden der Agent-Session**
-automatisch entfernt. Andere Workspace-Dateien, auch eigenständig durch OS-/
-Data-Tools angelegte Dateien, sind davon ausdrücklich nicht betroffen. Bei
-abruptem Prozessabbruch ist eine Bereinigung nicht garantiert. JSON-Dateien
+`mcp-data-...` im Workspace. Sie bleiben **nach der Agentenantwort lesbar**
+und werden erst **beim Beginn der nächsten regulären Benutzeranfrage** oder
+spätestens beim Session-Ende entfernt. `enable`-/`disable`-Kommandos sowie
+Frontend-Tool-Fortsetzungen starten keine neue Artefaktgeneration. Ein
+`reset_history()` entfernt die temporären Artefakte ebenfalls. Pfade aus einer
+früheren Antwort sind daher ab der nächsten Anfrage nicht mehr gültig;
+dauerhaft benötigte Ergebnisse müssen separat gespeichert werden. Andere
+Workspace-Dateien, auch eigenständig durch OS-/Data-Tools angelegte Dateien,
+sind davon ausdrücklich nicht betroffen. Bei abruptem Prozessabbruch ist eine
+Bereinigung nicht garantiert. JSON-Dateien
 können derzeit noch nicht direkt über die pfadbasierten Data-MCP-Operationen
 ausgewertet werden; dessen Unterstützung wird separat erweitert.
 
