@@ -144,8 +144,9 @@ Fällen bleibt die vollständige Ergebnisdatei unter `workspace_path` lesbar.
 
 Beispiel-Workflow für L1/L3-Phasenmessungen:
 
-1. `inspect_json` auf eine zuvor im Workspace gespeicherte MCP-Antwort
-   aufrufen, um z. B. `records_path="/measurements"` zu finden.
+1. Die bereits mitgelieferten `workspace_path`-/`records_path`-Metadaten
+   verwenden. **Nur bei unbekannter JSON-Struktur** `inspect_json` aufrufen,
+   um z. B. `records_path="/measurements"` zu ermitteln.
 2. Mit `join_data` zwei Zeitreihen anhand exakt gleicher Zeitstempel
    zusammenführen. Beide Quellen benennen `path`, `alias`, `time_column`,
    `value_column` und bei Bedarf `records_path`:
@@ -178,6 +179,41 @@ Beispiel-Workflow für L1/L3-Phasenmessungen:
 4. Für übersichtliche Trends kann `resample_data` das Ergebnis z. B. in
    5-Minuten-Fenstern mit `mean` oder `max` zusammenfassen. Die Antwort
    enthält wieder `workspace_path` und `records_path="/rows"`.
+
+### Große Zeitreihen in Blöcken auswerten
+
+Für längere Historien (z. B. 13 Wochenblöcke) ist folgende **optionale**
+Strategie sinnvoll. Jeder Schritt verwendet die tatsächlich zurückgegebenen
+Metadaten; der Agent muss nicht alle Schritte ausführen, wenn die Frage schon
+beantwortet ist.
+
+1. Historien in den von der Datenquelle zugelassenen Blöcken mit Messpunkten
+   abrufen, z. B. `get_history(include_points=true)`. Bereits vom Agenten
+   abgelegte Antworten direkt über `workspace_path` nutzen. Nur wenn Daten
+   **ausschließlich als Text** vorliegen, einmalig `wrap_data(content)` nutzen.
+2. Die bekannten Datensatz-Pointer (`records_path`) von jeder Quelle
+   übernehmen. Für eine unbekannte externe JSON-Struktur bei Bedarf
+   `inspect_json(path)` verwenden, ansonsten darauf verzichten.
+3. Gleichartige Zeitreihen per `concat_data` zusammenführen. Da ein Aufruf
+   **2 bis 8 Quellen** erlaubt, lassen sich 13 Blöcke beispielsweise zuerst
+   als 8 + 5 und anschließend die zwei Ergebnisartefakte zusammenführen.
+   Dabei für jedes Zwischenergebnis `workspace_path` und `records_path="/rows"`
+   weitergeben; bei Bedarf chronologisch sortieren.
+4. Die zusammengeführte Reihe etwa mit `resample_data(frequency="10min")`
+   verdichten. Je nach Fragestellung mit `derive_columns` (z. B. `diff`)
+   oder `describe_data` auffällige Zeiträume identifizieren.
+5. Mit `select_data` nur interessante **Original-Zeitfenster** als neue
+   Artefakte herausfiltern; `preview_data` gezielt für konkrete Messwerte
+   verwenden. Erst falls erforderlich weitere Sensorreihen abrufen.
+
+Nach jedem tabellenerzeugenden Schritt lautet der nächste Input sinngemäß
+`path=<workspace_path aus Antwort>` zusammen mit
+`records_path=<records_path aus Antwort>`. Für normalisierte Einzeltabellen
+ist letzterer `/rows`, für mehrere Tabellen beispielsweise `/tables/1/rows`.
+Kein Tool braucht die vorherigen Rohzeilen erneut im LLM-Kontext. Ein
+erneuter Abruf derselben Tagesdaten ist unnötig, wenn sie bereits im
+vorhandenen Wochenartefakt enthalten sind. Dateigrößen-, Zeilen- und
+Session-Artefaktlimits gelten weiterhin.
 
 | Tool | Zweck / Grenzen |
 | --- | --- |
