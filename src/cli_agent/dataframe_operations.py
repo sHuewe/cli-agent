@@ -2,7 +2,8 @@
 
 The result is returned as MCP structured content. cli-agent's existing
 McpResultArtifacts mechanism persists it for the current session, forwards
-only the requested metadata and deletes it on session close.
+only the requested metadata and deletes it at the next regular request or
+session close.
 """
 
 from __future__ import annotations
@@ -90,6 +91,33 @@ class DataFrameOperations:
         return timestamps
 
     @staticmethod
+    def _source_timezone(frame: pd.DataFrame, column: str) -> str | None:
+        """Return an observed ISO-8601 UTC offset, never an inferred IANA zone."""
+        if column not in frame or frame.empty:
+            return None
+        observed: str | None = None
+        for value in frame[column]:
+            if not isinstance(value, str):
+                return None
+            try:
+                offset = datetime.fromisoformat(value.replace("Z", "+00:00")).utcoffset()
+            except (ValueError, OverflowError):
+                return None
+            if offset is None:
+                return None
+            seconds = offset.total_seconds()
+            if not seconds.is_integer():
+                return None
+            hours, remainder = divmod(abs(int(seconds)), 3600)
+            minutes, seconds_remainder = divmod(remainder, 60)
+            suffix = f":{seconds_remainder:02d}" if seconds_remainder else ""
+            current = f"{'-' if seconds < 0 else '+'}{hours:02d}:{minutes:02d}{suffix}"
+            if observed is not None and observed != current:
+                return None
+            observed = current
+        return observed
+
+    @staticmethod
     def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
         if column not in frame:
             raise DataOperationError(f"Numerische Spalte fehlt: {column!r}.")
@@ -129,6 +157,7 @@ class DataFrameOperations:
     def _result(
         frame: pd.DataFrame, *, operation: str,
         summary: dict[str, object] | None = None,
+        result_metadata: dict[str, object] | None = None,
     ) -> CallToolResult:
         if len(frame) > MAX_FRAME_ROWS or len(frame.columns) > MAX_FRAME_COLUMNS:
             raise DataOperationError("DataFrame-Ergebnis überschreitet das Zeilen-/Spaltenlimit.")
@@ -139,6 +168,16 @@ class DataFrameOperations:
             _validate_column_name(column, source="DataFrame-Ergebnis")
         if not frame.columns.is_unique:
             raise DataOperationError("DataFrame enthält doppelte Spaltennamen.")
+        time_metadata = dict(result_metadata or {})
+        if "timestamp" in frame and "timestamp_timezone" not in time_metadata:
+            column = frame["timestamp"]
+            if isinstance(column.dtype, pd.DatetimeTZDtype):
+                # Aware pandas timestamps are always serialized as UTC below.
+                time_metadata["timestamp_timezone"] = "UTC"
+            else:
+                offset = DataFrameOperations._source_timezone(frame, "timestamp")
+                if offset is not None:
+                    time_metadata["timestamp_timezone"] = "UTC" if offset == "+00:00" else offset
         # Reuse the same type-safe artifact and bounded metadata protocol as
         # the ordinary tabular operations, including for tiny result sets.
         try:
@@ -148,6 +187,7 @@ class DataFrameOperations:
             ]
             return structured_table_result(
                 list(frame.columns), rows, operation=operation, summary=summary,
+                result_metadata=time_metadata,
                 max_result_bytes=MAX_FRAME_RESULT_CHARS,
             )
         except (ValueError, TypeError, OverflowError) as exc:
@@ -415,8 +455,10 @@ class DataFrameOperations:
             raise DataOperationError("tolerance_seconds ist nur für tolerierte Joins gültig.")
 
         frames: list[pd.DataFrame] = []
+        source_offsets: list[str | None] = []
         for source in sources:
             raw = self._read_frame(source.path, source.records_path)
+            source_offsets.append(self._source_timezone(raw, source.time_column))
             times = self._timestamps(raw, source.time_column)
             if times.duplicated().any():
                 raise DataOperationError(f"Quelle {source.alias!r} enthält doppelte Zeitstempel.")
@@ -462,7 +504,17 @@ class DataFrameOperations:
                     raise DataOperationError("Join-Ergebnis überschreitet das Zeilenlimit.")
         except (ValueError, TypeError) as exc:
             raise DataOperationError(f"Zeitreihen konnten nicht verknüpft werden: {exc}") from exc
-        return self._result(joined, operation="join_data")
+        time_metadata: dict[str, object] = {}
+        if frames[0]["timestamp"].dt.tz is not None:
+            # _artifact_scalar serializes aware timestamps in UTC.
+            time_metadata["timestamp_timezone"] = "UTC"
+        if source_offsets[0] is not None and all(
+            offset == source_offsets[0] for offset in source_offsets
+        ):
+            time_metadata["source_timezone"] = source_offsets[0]
+        return self._result(
+            joined, operation="join_data", result_metadata=time_metadata,
+        )
 
     def derive_columns(
         self,
@@ -474,9 +526,16 @@ class DataFrameOperations:
         if not 1 <= len(operations) <= MAX_FRAME_TRANSFORMS:
             raise DataOperationError("derive_columns erwartet 1 bis 20 Transformationen.")
         frame = self._read_frame(path, records_path)
+        rate_units: dict[str, str] = {}
         for spec in operations:
             if not spec.name or spec.name in frame:
                 raise DataOperationError(f"Ergebnisspalte ist leer oder bereits vorhanden: {spec.name!r}.")
+            if spec.operation != "diff_per_time" and (
+                spec.max_gap_seconds is not None
+                or spec.time_column != "timestamp"
+                or spec.time_unit != "hours"
+            ):
+                raise DataOperationError("Zeitparameter sind nur für diff_per_time zulässig.")
             left = self._numeric(frame, spec.column)
             if spec.operation in {"add", "subtract", "multiply", "divide"}:
                 if (spec.other_column is None) == (spec.constant is None):
@@ -499,6 +558,41 @@ class DataFrameOperations:
                     result = left / right
             elif spec.operation == "diff":
                 result = left.diff()
+            elif spec.operation == "diff_per_time":
+                if spec.max_gap_seconds is None:
+                    raise DataOperationError("diff_per_time benötigt max_gap_seconds.")
+                if spec.other_column is not None or spec.constant is not None or spec.window is not None:
+                    raise DataOperationError("diff_per_time erlaubt keine Binär-/Fensterparameter.")
+                gap_limit = self._gap_limit(spec.max_gap_seconds)
+                units = {"seconds": 1, "minutes": 60, "hours": 3600}
+                if spec.time_unit not in units:
+                    raise DataOperationError("time_unit muss seconds, minutes oder hours sein.")
+                timestamps = self._timestamps(frame, spec.time_column)
+                rates = [float("nan")] * len(frame)
+                for index in range(1, len(frame)):
+                    seconds = self._elapsed_seconds(
+                        timestamps.iloc[index - 1], timestamps.iloc[index],
+                    )
+                    if seconds < 0:
+                        raise DataOperationError("diff_per_time benötigt aufsteigende Zeitstempel.")
+                    if seconds == 0 or seconds > gap_limit:
+                        continue
+                    previous, current = left.iloc[index - 1], left.iloc[index]
+                    if pd.isna(previous) or pd.isna(current):
+                        continue
+                    scale = units[spec.time_unit] / seconds
+                    difference = float(current) - float(previous)
+                    if math.isfinite(difference):
+                        rate = difference * scale
+                    else:
+                        # Opposite large finite values can overflow when
+                        # subtracted, even if the time-normalized rate fits.
+                        rate = float(current) * scale - float(previous) * scale
+                    if not math.isfinite(rate):
+                        raise DataOperationError("diff_per_time erzeugte einen nichtendlichen Wert.")
+                    rates[index] = rate
+                result = pd.Series(rates, index=frame.index, dtype="float64")
+                rate_units[spec.name] = spec.time_unit
             elif spec.operation == "cumsum":
                 result = left.cumsum()
             elif spec.operation == "rolling_mean":
@@ -510,7 +604,8 @@ class DataFrameOperations:
             if result.notna().any() and not result.dropna().map(math.isfinite).all():
                 raise DataOperationError("Berechnung erzeugte ein nichtendliches Ergebnis.")
             frame[spec.name] = result
-        return self._result(frame, operation="derive_columns")
+        summary = {"rate_time_units": rate_units} if rate_units else None
+        return self._result(frame, operation="derive_columns", summary=summary)
 
     def resample_data(
         self,
@@ -529,7 +624,13 @@ class DataFrameOperations:
         if any(not alias or alias == "timestamp" for alias in aliases) or len(set(aliases)) != len(aliases):
             raise DataOperationError("Aggregationsalias muss eindeutig und nicht 'timestamp' sein.")
         frame = self._read_frame(path, records_path)
+        source_offset = self._source_timezone(frame, time_column)
         frame[time_column] = self._timestamps(frame, time_column)
+        time_metadata: dict[str, object] = {}
+        if frame[time_column].dt.tz is not None:
+            time_metadata["timestamp_timezone"] = "UTC"
+        if source_offset is not None:
+            time_metadata["source_timezone"] = source_offset
         specs: dict[str, tuple[str, str]] = {}
         for spec in aggregations:
             if spec.column == time_column:
@@ -584,4 +685,6 @@ class DataFrameOperations:
             raise DataOperationError(f"Resampling fehlgeschlagen: {exc}") from exc
         if time_column != "timestamp":
             grouped = grouped.rename(columns={time_column: "timestamp"})
-        return self._result(grouped, operation="resample_data")
+        return self._result(
+            grouped, operation="resample_data", result_metadata=time_metadata,
+        )

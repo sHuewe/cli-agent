@@ -218,12 +218,61 @@ Session-Artefaktlimits gelten weiterhin.
 | Tool | Zweck / Grenzen |
 | --- | --- |
 | `join_data(sources, direction, how, tolerance_seconds)` | Exakter Join ist der Standard und interpoliert nichts; bei unterschiedlichen Abtastraten sind `nearest`, `backward` oder `forward` nur mit expliziter maximaler Toleranz und `how="left"` möglich. Doppelte Zeitstempel werden abgewiesen. |
-| `derive_columns(path, operations, records_path)` | Nur `add`, `subtract`, `multiply`, `divide`, `diff`, `cumsum`, `rolling_mean`. Binäre Operationen verwenden Spaltennamen oder einen konstanten Wert; `rolling_mean.window` zählt Zeilen. |
+| `derive_columns(path, operations, records_path)` | `add`, `subtract`, `multiply`, `divide`, `diff`, `diff_per_time`, `cumsum`, `rolling_mean`. Binäre Operationen verwenden Spaltennamen oder einen konstanten Wert; `rolling_mean.window` zählt Zeilen. `diff_per_time` verwendet reale Zeitabstände und ein explizites Lückenlimit. |
 | `resample_data(path, frequency, aggregations, time_column, records_path)` | Begrenztes Raster wie `30s`, `5min`, `1h`, `1d`. Aggregationen `mean`, `min`, `max`, `sum`, `count`, ohne Interpolation. Die Zeitstempel bezeichnen den Beginn der Intervalle. |
 | `describe_data(path, columns, time_column, records_path)` | Kompakte JSON-Statistiken (Anzahl, Nullwerte, Min/Max, Mittelwert, Median, Stichproben-Standardabweichung, Quartile, erster/letzter gültiger Wert). Mit `time_column` auch Zeitpunkte der Extremwerte. Ohne `columns` werden numerische Spalten gewählt. Direkte Ausgabe ans LLM, auf 5 KB begrenzt. |
 | `analyze_intervals(path, time_column, value_column, condition, threshold, max_gap_seconds, records_path)` | Findet zusammenhängende Zeiträume für `lt`, `lte`, `gt`, `gte`, `eq`, `ne`. Gibt Anzahl, Gesamtdauer und längstes Intervall direkt als Metadaten zurück; vollständige Zeitintervalle als Session-Artefakt. |
 | `integrate_data(path, time_column, value_column, max_gap_seconds, method, time_unit, records_path)` | Integriert unregelmäßige Messungen mit Trapezregel (`trapezoid`) oder konstantem Vorgängerwert (`previous`). Ergebnis als kompakte JSON-Zahl in *Werteinheit × Stunden* (Standard) oder *Werteinheit × Sekunden*. Watt × Stunden ergeben Wh, nicht kWh. |
 | `concat_data(sources, sort_by, unique_by, keep)` | Hängt zwei bis acht Datensätze mit denselben Spaltennamen untereinander. Die Spaltenreihenfolge darf unterschiedlich sein; Duplikate und Quellreihenfolge bleiben standardmäßig erhalten. Sortierung und Deduplizierung auf `unique_by` sind explizit wählbar. |
+
+### Zeitliche Änderungsraten (D2)
+
+`diff` bleibt die reine Differenz zur vorigen Zeile. Bei unregelmäßigen
+Sensorabständen liefert `diff_per_time` eine vergleichbare Rate:
+`(aktueller Wert − vorheriger Wert) / tatsächlich vergangene Zeit`.
+
+```json
+{
+  "operations": [{
+    "name": "temperature_rate",
+    "operation": "diff_per_time",
+    "column": "temperature",
+    "time_column": "timestamp",
+    "time_unit": "hours",
+    "max_gap_seconds": 3600
+  }]
+}
+```
+
+Das Beispiel erzeugt eine Temperaturänderung in °C pro Stunde (sofern die
+Eingabespalte °C enthält). `time_unit` kann `seconds`, `minutes` oder `hours`
+sein; Standard ist `hours`. `max_gap_seconds` ist für diese Operation
+**verpflichtend** (größer 0 und maximal 604.800 Sekunden). Die verwendete
+Zeiteinheit steht auch in `summary.rate_time_units` der Artefaktmetadaten.
+
+Die erste Rate ist `null`. Bei identischen Zeitstempeln, fehlenden
+Messwerten oder zu großen Zeitlücken wird ebenfalls `null` erzeugt – es
+findet keine Interpolation statt. Fehlende Zeitstempel und rückwärts
+sortierte Zeitreihen werden abgewiesen. Bei einem Wechsel von UTC-Offsets
+zählt der tatsächliche Zeitabstand, nicht der Abstand der lokalen Uhrzeit.
+Für 30-/60-/90-Minuten-Trends kann stattdessen zunächst mit `resample_data`
+verdichtet und danach `diff` berechnet werden; das sind Differenzen von
+aggregierten Intervallen und keine exakten gleitenden Fenster.
+
+### Zeitzonen-Metadaten (D3)
+
+`join_data` und `resample_data` serialisieren zeitzonenbehaftete
+Ergebniszeitstempel in UTC (`Z`) und geben dann
+`timestamp_timezone="UTC"` in den LLM-Metadaten aus. `source_timezone`
+enthält **nur dann** einen Offset wie `"+02:00"`, wenn alle unmittelbar
+verwendeten Quellen diesen Offset eindeutig als ISO-8601-Wert enthalten.
+Das ist **keine** Aussage über eine IANA-Zone wie `Europe/Berlin`.
+
+Bei verschiedenen Offsets, beispielsweise während einer Zeitumstellung,
+wird `source_timezone` weggelassen, während UTC im Ergebnis eindeutig bleibt.
+Bei naiven Zeitstempeln werden keine Zeitzoneninformationen erfunden.
+Für lokale Ereigniszeiten ist die tatsächliche Zielzeitzone separat
+anzuwenden und die konkrete Messreihe zu prüfen.
 
 Bei `analyze_intervals` gilt ein Messwert vom eigenen Zeitstempel bis zum
 nächsten Punkt (Sample-and-Hold); der letzte Wert wird nicht extrapoliert.

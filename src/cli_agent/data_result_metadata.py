@@ -222,6 +222,7 @@ def _artifact_value(value: object) -> object:
 def structured_table_result(
     columns: list[str], rows: Sequence[Mapping[str, object]], *, operation: str,
     summary: dict[str, object] | None = None,
+    result_metadata: Mapping[str, object] | None = None,
     total_rows: int | None = None,
     max_result_bytes: int = MAX_STRUCTURED_RESULT_BYTES,
 ) -> CallToolResult:
@@ -237,7 +238,8 @@ def structured_table_result(
     if summary is not None:
         payload["summary"] = summary
     return structured_tables_result(
-        [payload], operation=operation, summary=summary, total_rows=total_rows,
+        [payload], operation=operation, summary=summary,
+        result_metadata=result_metadata, total_rows=total_rows,
         raw_tables=[(columns, rows)], max_result_bytes=max_result_bytes,
     )
 
@@ -245,6 +247,7 @@ def structured_table_result(
 def structured_tables_result(
     tables: list[dict[str, object]], *, operation: str,
     summary: dict[str, object] | None = None,
+    result_metadata: Mapping[str, object] | None = None,
     total_rows: int | None = None,
     raw_tables: list[tuple[list[str], Sequence[Mapping[str, object]]]] | None = None,
     max_result_bytes: int = MAX_STRUCTURED_RESULT_BYTES,
@@ -268,6 +271,10 @@ def structured_tables_result(
     metadata: dict[str, object] = {"operation": operation, "format": "json"}
     if summary is not None:
         metadata["summary"] = summary
+    if result_metadata is not None:
+        if set(result_metadata) - {"timestamp_timezone", "source_timezone"}:
+            raise ValueError("Unbekannte zusätzliche Tabellenmetadaten.")
+        metadata.update(result_metadata)
     if len(tables) == 1:
         columns, rows = raw_tables[0]
         metadata.update({

@@ -331,11 +331,13 @@ def create_server(
             ) -> CallToolResult:
                 """Compute new DataFrame columns without running arbitrary code.
 
-                Allowed operations: add/subtract/multiply/divide with one
-                other_column or constant; diff; cumsum; rolling_mean with a
-                row-count window. For e.g. phase difference, subtract L3 from
-                L1 after an exact join. Pass the source records_path; chain the
-                result via workspace_path and records_path='/rows'.
+                Allowed: add/subtract/multiply/divide, diff, cumsum,
+                rolling_mean (row window), diff_per_time (time-normalized
+                adjacent difference). For diff_per_time set max_gap_seconds,
+                optional time_column (default timestamp) and time_unit
+                (seconds/minutes/hours; default hours). Unsorted times fail;
+                duplicates, null values and long gaps yield null rates.
+                Pass source records_path; chain via workspace_path and '/rows'.
                 """
                 return frames.derive_columns(
                     path, operations, records_path=records_path,
