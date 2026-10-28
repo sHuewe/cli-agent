@@ -147,6 +147,22 @@ def test_rate_supports_a_custom_time_column_and_rejects_nonfinite_results(tmp_pa
         _rate(_frames(tmp_path), max_gap_seconds=60)
 
 
+def test_rate_avoids_intermediate_overflow_for_finite_results(tmp_path):
+    _write(tmp_path, "series.json", [
+        "2026-07-28T18:00:00Z", "2026-07-28T19:00:00Z",
+    ], [0, 1e306])
+    result = _rate(_frames(tmp_path), max_gap_seconds=3600, time_unit="hours")
+    assert result.structuredContent["rows"][1]["rate"] == pytest.approx(1e306)
+
+    # The unscaled difference overflows float64, but its rate over two hours
+    # is finite and must still be representable.
+    _write(tmp_path, "series.json", [
+        "2026-07-28T18:00:00Z", "2026-07-28T20:00:00Z",
+    ], [-1e308, 1e308])
+    result = _rate(_frames(tmp_path), max_gap_seconds=7200, time_unit="hours")
+    assert result.structuredContent["rows"][1]["rate"] == pytest.approx(1e308)
+
+
 def test_rate_rejects_irrelevant_binary_arguments_and_unknown_units(tmp_path):
     _write(tmp_path, "series.json", [
         "2026-07-28T18:00:00Z", "2026-07-28T18:10:00Z",

@@ -580,7 +580,14 @@ class DataFrameOperations:
                     previous, current = left.iloc[index - 1], left.iloc[index]
                     if pd.isna(previous) or pd.isna(current):
                         continue
-                    rate = (float(current) - float(previous)) * units[spec.time_unit] / seconds
+                    scale = units[spec.time_unit] / seconds
+                    difference = float(current) - float(previous)
+                    if math.isfinite(difference):
+                        rate = difference * scale
+                    else:
+                        # Opposite large finite values can overflow when
+                        # subtracted, even if the time-normalized rate fits.
+                        rate = float(current) * scale - float(previous) * scale
                     if not math.isfinite(rate):
                         raise DataOperationError("diff_per_time erzeugte einen nichtendlichen Wert.")
                     rates[index] = rate
