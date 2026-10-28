@@ -130,9 +130,12 @@ def test_thirteen_history_blocks_concat_in_two_stages_then_resample(tmp_path):
         )
         preview = json.loads(operations.inspect_data(
             selected["workspace_path"], records_path=selected["records_path"],
-            sample_rows=2,
+            sample_rows=1, offset=1,
         ))
-        assert [row["value"] for row in preview["sample"]] == [7, 8]
+        assert [row["value"] for row in preview["sample"]] == [8]
+        assert preview["row_count"] == 2
+        assert preview["offset"] == 1
+        assert preview["next_offset"] is None
     finally:
         store.cleanup()
 
@@ -143,4 +146,5 @@ def test_data_mcp_instructions_remain_compact_and_reuse_known_pointers():
     assert "Always propagate both" in instructions
     assert "concat_data blocks" in instructions
     assert "refetch only if insufficient" in instructions
+    assert "Sort/filter with select_data, then page with preview_data" in instructions
     assert "inspect_json(path) can discover it" in instructions

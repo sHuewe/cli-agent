@@ -4,14 +4,15 @@ import argparse
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
+from pydantic import Field
 
 from .mcp_path_policy import read_path_policy
 from .config import McpServerConfig, default_config_file, load_config
-from .data_operations import DataOperationError, DataOperations
+from .data_operations import DataOperationError, DataOperations, MAX_DATA_ROWS, MAX_SAMPLE_ROWS
 from .dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
 from .logging_setup import configure_logging
 from .os_operations import Workspace, WorkspaceError
@@ -91,7 +92,8 @@ expect complete rows in metadata even for a small result. Results are
 session-scoped artifacts with a verified workspace_path, not durable files.
 The server does not write arbitrary user-named workspace files.
 For long series, concat_data blocks, resample_data, then derive_columns or
-describe_data. Narrow with select_data/preview_data; group via aggregate_data.
+describe_data. Sort/filter with select_data, then page with preview_data;
+group via aggregate_data.
 Reuse artifacts even for narrower ranges; refetch only if insufficient.
 Skip inspect_json when records_path is known.
 Filters use objects with column, op, and value (except for null checks).
@@ -200,17 +202,19 @@ def create_server(
     def preview_data(
         path: str,
         table_index: int = 0,
-        sample_rows: int = 5,
+        sample_rows: Annotated[int, Field(ge=1, le=MAX_SAMPLE_ROWS)] = 5,
+        offset: Annotated[int, Field(ge=0, le=MAX_DATA_ROWS)] = 0,
         records_path: str | None = None,
     ) -> str:
-        """Preview a small number of complete records from a workspace file.
+        """Preview up to 50 complete records from a workspace file.
 
-        Prefer inspect_schema for schema discovery and select_data for actual
-        filtering. Propagate records_path from an earlier tabular result.
+        Sort/filter with select_data first, then page its artifact using offset
+        (0-based) and next_offset from this result. Prefer inspect_schema for
+        schema discovery. Propagate the known records_path.
         """
         return operations.inspect_data(
             path, table_index=table_index,
-            sample_rows=sample_rows, records_path=records_path,
+            sample_rows=sample_rows, offset=offset, records_path=records_path,
         )
 
     @mcp.tool(structured_output=False)

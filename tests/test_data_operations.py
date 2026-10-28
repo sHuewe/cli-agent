@@ -75,6 +75,41 @@ def test_inspect_data_returns_schema_counts_and_bounded_sample(tmp_path: Path) -
     assert metadata["category"]["unique_count"] == 2
 
 
+def test_inspect_data_pages_fifty_rows_without_losing_order(tmp_path: Path) -> None:
+    (tmp_path / "values.csv").write_text(
+        "value\n" + "".join(f"{index}\n" for index in range(117)),
+        encoding="utf-8",
+    )
+    operations = _operations(tmp_path)
+
+    first = json.loads(operations.inspect_data("values.csv", sample_rows=50))
+    assert first["row_count"] == 117
+    assert first["offset"] == 0
+    assert [row["value"] for row in first["sample"]] == list(range(50))
+    assert first["next_offset"] == 50
+
+    second = json.loads(operations.inspect_data(
+        "values.csv", sample_rows=50, offset=first["next_offset"],
+    ))
+    assert second["offset"] == 50
+    assert [row["value"] for row in second["sample"]] == list(range(50, 100))
+    assert second["next_offset"] == 100
+
+    last = json.loads(operations.inspect_data(
+        "values.csv", sample_rows=50, offset=second["next_offset"],
+    ))
+    assert last["offset"] == 100
+    assert [row["value"] for row in last["sample"]] == list(range(100, 117))
+    assert last["next_offset"] is None
+
+    beyond_end = json.loads(operations.inspect_data(
+        "values.csv", sample_rows=50, offset=117,
+    ))
+    assert beyond_end["row_count"] == 117
+    assert beyond_end["sample"] == []
+    assert beyond_end["next_offset"] is None
+
+
 def test_inspect_schema_returns_metadata_and_complete_low_cardinality_domains(
     tmp_path: Path,
 ) -> None:
@@ -507,6 +542,11 @@ def test_limits_are_validated(tmp_path: Path) -> None:
 
     with pytest.raises(DataOperationError, match="sample_rows"):
         operations.inspect_data("sales.csv", sample_rows=0)
+    with pytest.raises(DataOperationError, match="sample_rows"):
+        operations.inspect_data("sales.csv", sample_rows=51)
+    for invalid_offset in (-1, True, 1.5, 1_000_001):
+        with pytest.raises(DataOperationError, match="offset"):
+            operations.inspect_data("sales.csv", offset=invalid_offset)
     assert "limit" not in operations.select_data.__code__.co_varnames
 
 

@@ -98,10 +98,16 @@ LLM-Kontext.
 | `wrap_data(content)` | Einziger Einstieg für neue Text-Datensätze (Markdown, JSON, CSV, TSV, JSONL, NDJSON); erstellt strukturierte Artefakte. |
 | `inspect_json(path)` | Findet Record-Arrays in verschachtelten Workspace-JSON-Dateien ohne die einzelnen Messwerte auszugeben; nur bei Dateileserechten. |
 | `inspect_schema(...)` | Liefert Schema-/Profil-Metadaten ohne Datensätze: Zeilenzahl, Spaltennamen, Typinferenz, Null-/Unique-Zahlen und bei niedriger Kardinalität die vollständige Distinct-Wertedomäne. |
-| `preview_data(...)` | Liefert Schema-Metadaten plus eine bewusst begrenzte Vorschau vollständiger Zeilen. Für reine Schema-Erkundung ist `inspect_schema` vorzuziehen. |
+| `preview_data(path, sample_rows=5, offset=0, records_path=...)` | Liefert Schema-Metadaten und bis zu **50** vollständige Zeilen ab dem nullbasierten `offset`. `next_offset` ist der Start der nächsten Seite oder `null` am Ende. Für reine Schema-Erkundung ist `inspect_schema` vorzuziehen. |
 | `select_data(path, ...)` | Filtert, projiziert und sortiert Datensätze ohne Zeilenlimit; strukturiertes Artefakt. |
 | `value_counts(column, path, ...)` | Zählt unterschiedliche Werte einer Spalte; begrenzte Ergebnistabelle als Artefakt. |
 | `aggregate_data(aggregations, path, ...)` | Gruppiert und aggregiert Daten deterministisch; strukturiertes Artefakt. |
+
+Für die längsten/größten Ereignisse zuerst mit `select_data(sort_by=[...],
+descending=true)` sortieren und dessen `workspace_path` plus `records_path`
+an `preview_data(sample_rows=50, offset=0)` übergeben. Weitere Seiten über
+`next_offset` lesen, bis dieser `null` ist. Das Vorschaulimit betrifft nur
+die an das LLM gelieferten Zeilen, nicht das vollständige Artefakt.
 
 ### Zeitreihen und DataFrames (Pandas, `--with-os-read`)
 
