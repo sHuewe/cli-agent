@@ -375,7 +375,9 @@ def test_exact_join_derived_difference_and_session_cleanup(frames, tmp_path):
         records_path=metadata["records_path"],
     )
     assert [row["D"] for row in derived.structuredContent["rows"]] == [5, 600, 700]
-    assert json.loads(store.metadata_result(derived, json.dumps(derived.structuredContent)))["rows"] == derived.structuredContent["rows"]
+    derived_metadata = json.loads(store.metadata_result(derived, json.dumps(derived.structuredContent)))
+    assert "rows" not in derived_metadata
+    assert derived_metadata["sample_rows"] == derived.structuredContent["rows"]
     store.cleanup()
     assert not (tmp_path / path).exists()
     assert not list(tmp_path.glob("mcp-data-*"))
@@ -773,7 +775,8 @@ def test_empty_join_artifact_preserves_schema_for_followup_tools(frames, tmp_pat
     joined = frames.join_data([
         _source("l1.json", "L1"), _source("nonmatching.json", "L2"),
     ])
-    assert joined.structuredContent == {"columns": ["timestamp", "L1", "L2"], "rows": []}
+    assert joined.structuredContent["columns"] == ["timestamp", "L1", "L2"]
+    assert joined.structuredContent["rows"] == []
 
     store = McpResultArtifacts(tmp_path, ())
     try:
@@ -859,15 +862,15 @@ def test_large_frame_metadata_omits_rows_while_retaining_full_artifact(frames, t
         store.cleanup()
 
 
-def test_dataframe_result_inline_boundary_is_five_kilobytes():
-    from cli_agent.dataframe_operations import INLINE_RESULT_BYTES, MAX_FRAME_RESULT_CHARS
+def test_dataframe_results_always_have_bounded_preview_metadata():
+    from cli_agent.dataframe_operations import MAX_FRAME_RESULT_CHARS
 
-    assert INLINE_RESULT_BYTES == 5_000
     assert MAX_FRAME_RESULT_CHARS == 16_000_000
     # Exercise the same serialization and metadata logic as the Pandas tools.
     small = DataFrameOperations._result(pd.DataFrame({"value": ["x" * 10]}), operation="join_data")
     large = DataFrameOperations._result(pd.DataFrame({"value": ["x" * 5_000]}), operation="join_data")
-    assert "rows" in small.meta[METADATA_FOR_LLM_KEY]
+    assert "rows" not in small.meta[METADATA_FOR_LLM_KEY]
+    assert small.meta[METADATA_FOR_LLM_KEY]["sample_rows_complete"] is True
     assert "rows" not in large.meta[METADATA_FOR_LLM_KEY]
 
 

@@ -15,12 +15,11 @@ from decimal import Decimal
 from typing import Literal
 
 import pandas as pd
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult
 
 from .data_operations import DataOperationError, DataOperations, _scalar_identity, _validate_column_name
 from .dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
-from .data_result_metadata import INLINE_RESULT_BYTES, add_large_result_summary
-from .mcp_result_artifacts import METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY
+from .data_result_metadata import structured_table_result
 
 MAX_FRAME_ROWS = 100_000
 MAX_FRAME_COLUMNS = 100
@@ -113,9 +112,8 @@ class DataFrameOperations:
             iso = stamp.isoformat(timespec="nanoseconds")
             return iso.replace("+00:00", "Z") if value.tzinfo is not None else iso
         if isinstance(value, Decimal):
-            # DataFrame operations use float64 arithmetic; keep the same type
-            # at the JSON boundary for any unmodified Decimal input columns.
-            value = float(value)
+            # Preserve untouched exact numeric values in the artifact codec.
+            return value
         elif not isinstance(value, (str, bool, int, float)) and hasattr(value, "item"):
             value = value.item()
         if isinstance(value, float):
@@ -141,46 +139,19 @@ class DataFrameOperations:
             _validate_column_name(column, source="DataFrame-Ergebnis")
         if not frame.columns.is_unique:
             raise DataOperationError("DataFrame enthält doppelte Spaltennamen.")
-        # Python's JSON encoder preserves every finite float64 value via its
-        # shortest round-trip representation. pandas.to_json(double_precision)
-        # instead rounds to decimal *places*, corrupting tiny measurements.
+        # Reuse the same type-safe artifact and bounded metadata protocol as
+        # the ordinary tabular operations, including for tiny result sets.
         try:
             rows = [
                 {column: DataFrameOperations._artifact_scalar(value) for column, value in row.items()}
                 for row in frame.to_dict(orient="records")
             ]
-            payload = {"columns": list(frame.columns), "rows": rows}
-            if summary is not None:
-                payload["summary"] = summary
-            encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
-        except (ValueError, TypeError, OverflowError) as exc:
-            raise DataOperationError("DataFrame kann nicht als JSON serialisiert werden.") from exc
-        if len(encoded) > MAX_FRAME_RESULT_CHARS or len(encoded.encode("utf-8")) > MAX_FRAME_RESULT_CHARS:
-            raise DataOperationError(
-                "DataFrame-Ergebnis ist für einen einzelnen MCP-Aufruf zu groß. "
-                "Wähle einen kürzeren Zeitraum oder aggregiere die Daten."
+            return structured_table_result(
+                list(frame.columns), rows, operation=operation, summary=summary,
+                max_result_bytes=MAX_FRAME_RESULT_CHARS,
             )
-        metadata = {
-            "operation": operation,
-            "row_count": len(frame),
-            "columns": list(frame.columns),
-            "records_path": "/rows",
-            "format": "json",
-        }
-        if summary is not None:
-            metadata["summary"] = summary
-        if len(encoded.encode("utf-8")) <= INLINE_RESULT_BYTES:
-            metadata["rows"] = rows
-        else:
-            add_large_result_summary(metadata, list(frame.columns), rows)
-        return CallToolResult(
-            content=[TextContent(type="text", text="DataFrame-Ergebnis für Session-Datei vorbereitet.")],
-            structuredContent=payload,
-            **{"_meta": {
-                ONLY_METADATA_TO_LLM_KEY: True,
-                METADATA_FOR_LLM_KEY: metadata,
-            }},
-        )
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise DataOperationError("DataFrame kann nicht als JSON serialisiert werden: " + str(exc)) from exc
 
     def _ordered_series(
         self, path: str, records_path: str | None,

@@ -191,34 +191,35 @@ def test_text_tool_result_is_saved_without_structured_content(tmp_path: Path) ->
     assert not path.exists()
 
 
-def test_markdown_artifact_is_readable_and_removed_on_close(tmp_path: Path) -> None:
-    from cli_agent.data_result_metadata import markdown_result
+def test_structured_table_artifact_is_readable_and_removed_on_close(tmp_path: Path) -> None:
+    from cli_agent.data_result_metadata import structured_table_result
     from cli_agent.data_operations import DataOperations
 
     agent = _agent(tmp_path, access="read")
-    markdown = "Rows: 1/1\n\n| x |\n|---|\n| 42 |"
-    result = markdown_result(markdown, ["x"], 1, operation="select_data")
+    result = structured_table_result(["x"], [{"x": 42}], operation="select_data")
     try:
         model_result = json.loads(asyncio.run(_execute(agent, result)))
-        assert model_result["result"] == markdown
+        assert model_result["row_count"] == 1
+        assert "rows" not in model_result and "result" not in model_result
         artifact = tmp_path / model_result["workspace_path"]
-        assert artifact.suffix == ".md"
+        assert artifact.suffix == ".json"
         assert DataOperations(agent._result_artifacts.workspace).select_data(
-            model_result["workspace_path"]
+            model_result["workspace_path"], records_path="/rows",
         ).startswith("Rows: 1/1")
     finally:
         asyncio.run(agent.close())
     assert not artifact.exists()
 
 
-def test_markdown_inline_budget_is_five_thousand_utf8_bytes() -> None:
-    from cli_agent.data_result_metadata import INLINE_RESULT_BYTES, markdown_result
+def test_structured_metadata_budget_is_five_thousand_utf8_bytes() -> None:
+    from cli_agent.data_result_metadata import MAX_SUMMARY_METADATA_BYTES, structured_table_result
 
-    assert INLINE_RESULT_BYTES == 5_000
-    at_limit = markdown_result("ä" * 2_500, ["value"], 1, operation="select_data")
-    over_limit = markdown_result("ä" * 2_501, ["value"], 1, operation="select_data")
-    assert "result" in at_limit.meta[METADATA_FOR_LLM_KEY]
-    assert "result" not in over_limit.meta[METADATA_FOR_LLM_KEY]
+    assert MAX_SUMMARY_METADATA_BYTES == 5_000
+    small = structured_table_result(["value"], [{"value": "ä" * 100}], operation="select_data")
+    large = structured_table_result(["value"], [{"value": "ä" * 2_501}], operation="select_data")
+    assert small.meta[METADATA_FOR_LLM_KEY]["sample_rows_complete"] is True
+    assert large.meta[METADATA_FOR_LLM_KEY]["sample_rows"] == []
+    assert "rows" not in small.meta[METADATA_FOR_LLM_KEY]
 
 
 def test_artifact_metadata_allows_results_above_generic_mcp_limit(tmp_path: Path, monkeypatch) -> None:

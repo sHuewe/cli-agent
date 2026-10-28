@@ -6,7 +6,7 @@ from decimal import Decimal
 from cli_agent.data_result_metadata import (
     MAX_SUMMARY_METADATA_BYTES,
     add_large_result_summary,
-    markdown_result,
+    structured_table_result,
 )
 from cli_agent.mcp_result_artifacts import METADATA_FOR_LLM_KEY
 
@@ -142,15 +142,17 @@ def test_decimal_values_stay_explicitly_typed_in_metadata():
     assert _size(metadata) < MAX_SUMMARY_METADATA_BYTES
 
 
-def test_markdown_result_includes_summary_only_when_over_inline_limit():
+def test_structured_results_always_include_bounded_summary_for_small_and_large_tables():
     rows = [{"value": 1}, {"value": 3}]
-    small = markdown_result("short", ["value"], 2, operation="aggregate_data", rows=rows)
-    assert "column_stats" not in small.meta[METADATA_FOR_LLM_KEY]
-    assert small.meta[METADATA_FOR_LLM_KEY]["result"] == "short"
-
-    large = markdown_result("x" * 5_001, ["value"], 2, operation="aggregate_data", rows=rows)
-    metadata = large.meta[METADATA_FOR_LLM_KEY]
+    small = structured_table_result(["value"], rows, operation="aggregate_data")
+    metadata = small.meta[METADATA_FOR_LLM_KEY]
+    assert "rows" not in metadata
     assert "result" not in metadata
+    assert small.structuredContent["rows"] == rows
     assert metadata["column_stats"][0]["mean"] == 2
     assert metadata["sample_rows"] == rows
     assert metadata["sample_rows_complete"] is True
+
+    large = structured_table_result(["value"], rows * 500, operation="aggregate_data")
+    assert large.meta[METADATA_FOR_LLM_KEY]["sample_rows_complete"] is False
+    assert "rows" not in large.meta[METADATA_FOR_LLM_KEY]

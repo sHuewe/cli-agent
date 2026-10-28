@@ -156,8 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Enable the built-in Data MCP server. Its workspace file access "
-            "follows --with-os-read/--with-os-write; without OS access it "
-            "accepts only inline data payloads."
+            "follows --with-os-read/--with-os-write; without OS access only "
+            "calculate is available."
         ),
     )
     parser.add_argument(
