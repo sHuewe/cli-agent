@@ -14,12 +14,13 @@ from mcp.types import CallToolResult, TextContent
 from .mcp_result_artifacts import METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY
 
 
-# Small complete results remain directly visible, while every result also
-# receives a session path so subsequent file-based tools can reuse it.
-INLINE_RESULT_BYTES = 5_000
+# This is a metadata/preview budget, not a switch for inline table results.
 # Reserve space for the verified workspace_path added by the agent. The data
 # server does not know that session-specific path when creating its metadata.
 MAX_SUMMARY_METADATA_BYTES = 5_000
+MAX_STRUCTURED_RESULT_BYTES = 16_000_000
+DECIMAL_SCALAR_KEY = "__cli_agent_decimal__"
+SCALAR_ENCODING = "cli-agent-decimal-v1"
 _ARTIFACT_PATH_RESERVE_BYTES = 256
 _MAX_SUMMARY_COLUMNS = 24
 _MAX_PREVIEW_ROWS = 5
@@ -204,22 +205,101 @@ def add_large_result_summary(
     metadata["stats_columns_complete"] = len(metadata["column_stats"]) == len(columns)
 
 
-def markdown_result(
-    text: str, columns: list[str], row_count: int, *, operation: str,
-    rows: Sequence[Mapping[str, object]] | None = None,
+def _artifact_value(value: object) -> object:
+    """Tag exact decimals instead of turning them into floats or strings.
+
+    JSON libraries may serialize Decimal as a string (or round it to a
+    binary float). Generated artifacts declare the encoding so the tabular
+    reader can restore the original numeric scalar unambiguously.
+    """
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("Nichtendlicher Dezimalwert im Ergebnis.")
+        return {DECIMAL_SCALAR_KEY: str(value)}
+    return value
+
+
+def structured_table_result(
+    columns: list[str], rows: Sequence[Mapping[str, object]], *, operation: str,
+    summary: dict[str, object] | None = None,
+    total_rows: int | None = None,
+    max_result_bytes: int = MAX_STRUCTURED_RESULT_BYTES,
 ) -> CallToolResult:
-    metadata: dict[str, object] = {
-        "operation": operation,
-        "row_count": row_count,
-        "columns": columns,
-        "format": "markdown",
+    """Return the full dataset in structuredContent and only bounded metadata."""
+    payload: dict[str, object] = {
+        "columns": list(columns),
+        "rows": [
+            {column: _artifact_value(row.get(column)) for column in columns}
+            for row in rows
+        ],
+        "scalar_encoding": SCALAR_ENCODING,
     }
-    if len(text.encode("utf-8")) <= INLINE_RESULT_BYTES:
-        metadata["result"] = text
-    elif rows is not None:
+    if summary is not None:
+        payload["summary"] = summary
+    return structured_tables_result(
+        [payload], operation=operation, summary=summary, total_rows=total_rows,
+        raw_tables=[(columns, rows)], max_result_bytes=max_result_bytes,
+    )
+
+
+def structured_tables_result(
+    tables: list[dict[str, object]], *, operation: str,
+    summary: dict[str, object] | None = None,
+    total_rows: int | None = None,
+    raw_tables: list[tuple[list[str], Sequence[Mapping[str, object]]]] | None = None,
+    max_result_bytes: int = MAX_STRUCTURED_RESULT_BYTES,
+) -> CallToolResult:
+    """Build one or several reusable record sets with a shared metadata budget."""
+    if not tables:
+        raise ValueError("Kein tabellarischer Datensatz erkannt.")
+    if raw_tables is None:
+        raise ValueError("Für Tabellenmetadaten werden die ursprünglichen Werte benötigt.")
+    if len(raw_tables) != len(tables):
+        raise ValueError("Tabellen und Metadaten stimmen nicht überein.")
+    payload: dict[str, object]
+    if len(tables) == 1:
+        payload = tables[0]
+    else:
+        payload = {"tables": tables, "scalar_encoding": SCALAR_ENCODING}
+    serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    if len(serialized.encode("utf-8")) > max_result_bytes:
+        raise ValueError("Vollständiges Datenergebnis ist zu groß für einen MCP-Aufruf.")
+
+    metadata: dict[str, object] = {"operation": operation, "format": "json"}
+    if summary is not None:
+        metadata["summary"] = summary
+    if len(tables) == 1:
+        columns, rows = raw_tables[0]
+        metadata.update({
+            "row_count": len(rows), "columns": list(columns),
+            "records_path": "/rows",
+        })
+        if total_rows is not None:
+            metadata["total_rows"] = total_rows
+            metadata["truncated"] = total_rows > len(rows)
         add_large_result_summary(metadata, columns, rows)
+    else:
+        record_sets: list[dict[str, object]] = []
+        metadata["record_sets"] = record_sets
+        for index, (columns, rows) in enumerate(raw_tables):
+            item: dict[str, object] = {
+                "records_path": f"/tables/{index}/rows",
+                "row_count": len(rows),
+                "columns": list(columns),
+            }
+            # Shrink optional previews/stats to fit the *combined* metadata
+            # budget. Never omit the pointer for an included record set.
+            add_large_result_summary(item, columns, rows)
+            record_sets.append(item)
+            for optional in ("sample_rows", "column_stats"):
+                while not _metadata_fits(metadata) and item[optional]:
+                    item[optional].pop()
+                    item["sample_rows_complete" if optional == "sample_rows" else "stats_columns_complete"] = False
+            if not _metadata_fits(metadata):
+                raise ValueError("Zu viele oder zu breite Tabellen für das Metadatenbudget.")
     return CallToolResult(
-        content=[TextContent(type="text", text=text)],
+        content=[TextContent(type="text", text="Tabellendaten als Session-Artefakt vorbereitet.")],
+        structuredContent=payload,
         **{
             "_meta": {
                 ONLY_METADATA_TO_LLM_KEY: True,

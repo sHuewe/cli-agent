@@ -600,11 +600,9 @@ def test_inline_json_rejects_nested_values() -> None:
         ("json", '[{"value":NaN}]'),
         ("json", '[{"value":Infinity}]'),
         ("json", '[{"value":-Infinity}]'),
-        ("json", '[{"value":1e400}]'),
         ("jsonl", '{"value":NaN}\n'),
         ("jsonl", '{"value":Infinity}\n'),
         ("jsonl", '{"value":-Infinity}\n'),
-        ("jsonl", '{"value":1e400}\n'),
     ],
 )
 def test_inline_json_rejects_non_finite_numbers(
@@ -618,13 +616,22 @@ def test_inline_json_rejects_non_finite_numbers(
         )
 
 
+@pytest.mark.parametrize("data_format,data", [
+    ("json", '[{"value":1e400}]'),
+    ("jsonl", '{"value":1e400}\n'),
+])
+def test_large_finite_json_decimals_are_not_rounded_to_infinity(data_format, data):
+    columns, rows = DataOperations(None)._read_records(data=data, data_format=data_format)
+    assert columns == ["value"]
+    assert rows[0]["value"] == Decimal("1e400")
+
+
 @pytest.mark.parametrize(
     "content",
     [
         '{"value":NaN}\n',
         '{"value":Infinity}\n',
         '{"value":-Infinity}\n',
-        '{"value":1e400}\n',
     ],
 )
 def test_jsonl_file_rejects_non_finite_numbers(

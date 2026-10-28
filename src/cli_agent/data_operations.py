@@ -19,6 +19,7 @@ from .data_markdown import (
     extract_markdown_tables,
     render_markdown_table,
 )
+from .data_result_metadata import DECIMAL_SCALAR_KEY, SCALAR_ENCODING
 from .os_operations import Workspace, WorkspaceError
 
 DATA_SUFFIXES = frozenset({".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".md", ".markdown"})
@@ -134,6 +135,15 @@ def _infer_csv_scalar(value: str | None) -> Scalar:
         number = float(stripped)
     except ValueError:
         return value
+    # Keep the familiar float inference for ordinary CSV values, but do not
+    # irreversibly round unusually precise decimal cells at the boundary.
+    digits = [character for character in stripped if character.isdigit()]
+    if len(digits) > 17 or not math.isfinite(number):
+        try:
+            precise = Decimal(stripped)
+        except DecimalException:
+            return value
+        return precise if precise.is_finite() else value
     return number if math.isfinite(number) else value
 
 
@@ -176,6 +186,23 @@ def _scalar_identity(value: Scalar) -> tuple[str, Scalar]:
 
 def _typed_equal(left: Scalar, right: Scalar) -> bool:
     return _scalar_identity(left) == _scalar_identity(right)
+
+
+def _filter_comparison_values(left: Scalar, right: Scalar) -> tuple[Scalar, Scalar]:
+    """Compare numeric filter operands by their decimal *values*.
+
+    JSON readers can preserve exact fractional values as Decimal, while MCP
+    filter arguments arrive as floats. Decimal('0.1') != float(0.1) and even
+    their ordering differs, so normalize both operands before comparison.
+    Keep bool separate from numeric types (True is not the number 1).
+    """
+    numeric = (int, float, Decimal)
+    if (
+        isinstance(left, numeric) and not isinstance(left, bool)
+        and isinstance(right, numeric) and not isinstance(right, bool)
+    ):
+        return _decimal_value(left), _decimal_value(right)
+    return left, right
 
 
 def _require_finite_float_result(
@@ -456,7 +483,10 @@ class DataOperations:
                 f"Markdown enthält keine Tabelle mit Index {table_index}; "
                 f"gefunden: {len(tables)}."
             )
-        table = tables[table_index]
+        return cls._read_markdown_table(tables[table_index])
+
+    @classmethod
+    def _read_markdown_table(cls, table: dict[str, Any]) -> tuple[list[str], list[Record]]:
         columns, rows = cls._read_table(table)
         preserved_strings = {
             tuple(cell)
@@ -474,6 +504,105 @@ class DataOperations:
             }
             for row_index, row in enumerate(rows)
         ]
+
+    @classmethod
+    def wrap_data(cls, content: str) -> list[tuple[list[str], list[Record]]]:
+        """Identify and normalize all unambiguous text datasets once.
+
+        This is the only raw-text ingress of the MCP API. Existing workspace
+        files may be passed directly to downstream path-based tools instead.
+        """
+        if not isinstance(content, str):
+            raise DataOperationError("content muss ein String sein.")
+        if len(content) > MAX_DATA_PAYLOAD_CHARS or len(content.encode("utf-8")) > MAX_DATA_PAYLOAD_CHARS:
+            raise DataOperationError("Inline-Daten überschreiten das Größenlimit.")
+        normalized = content.lstrip("\ufeff")
+        stripped = normalized.lstrip(" \t\r\n")
+        if not stripped:
+            raise DataOperationError("Kein Datensatz im Text erkannt.")
+
+        if stripped[0] in "{[":
+            try:
+                parsed = json.loads(stripped, parse_float=Decimal, parse_constant=_reject_json_constant)
+            except json.JSONDecodeError as exc:
+                # JSONL and NDJSON have the same syntax: one JSON object per
+                # non-empty line. A malformed JSON-looking document must not
+                # silently fall back to Markdown or CSV.
+                lines = [line for line in stripped.splitlines() if line.strip()]
+                if len(lines) > 1:
+                    try:
+                        objects = [json.loads(line, parse_float=Decimal, parse_constant=_reject_json_constant) for line in lines]
+                    except json.JSONDecodeError:
+                        pass
+                    else:
+                        if all(isinstance(value, dict) for value in objects):
+                            return [cls._normalize_json_records(objects)]
+                raise DataOperationError(f"Ungültiges JSON/JSONL: {exc.msg}") from exc
+            return cls._discover_inline_json(parsed)
+
+        try:
+            tables = extract_markdown_tables(content, max_rows=MAX_DATA_ROWS)
+        except MarkdownTableError as exc:
+            raise DataOperationError(str(exc)) from exc
+        if tables:
+            return [cls._read_markdown_table(table) for table in tables]
+
+        # Delimited text needs a header and at least a line break. Refuse
+        # arbitrary comma-containing prose rather than guessing a table.
+        first_line = stripped.splitlines()[0]
+        if "\n" in stripped or "\r" in stripped:
+            if "\t" in first_line:
+                return [cls._read_delimited_text(stripped, delimiter="\t")]
+            if "," in first_line:
+                return [cls._read_delimited_text(stripped, delimiter=",")]
+        raise DataOperationError("Kein unterstütztes Markdown-, JSON-, CSV- oder TSV-Datenformat erkannt.")
+
+    @classmethod
+    def _discover_inline_json(cls, raw: Any) -> list[tuple[list[str], list[Record]]]:
+        """Collect all eligible JSON record arrays, never just the first."""
+        found: list[tuple[list[str], list[Record]]] = []
+        visited = 0
+
+        def visit(value: Any, depth: int, declared_columns: Any = None) -> None:
+            nonlocal visited
+            visited += 1
+            if visited > 10_000 or depth > 16:
+                raise DataOperationError("JSON-Struktur ist für die Tabellenerkennung zu komplex.")
+            if isinstance(value, list):
+                if value and all(isinstance(row, dict) for row in value):
+                    try:
+                        result = cls._normalize_json_records(value)
+                    except DataOperationError:
+                        pass
+                    else:
+                        found.append(result)
+                        return
+                if not value and isinstance(declared_columns, list) and declared_columns:
+                    columns, rows = cls._read_table({"columns": declared_columns, "rows": []})
+                    found.append((columns, rows))
+                    return
+                for item in value:
+                    visit(item, depth + 1)
+            elif isinstance(value, dict):
+                for key, child in value.items():
+                    if isinstance(child, (list, dict)):
+                        visit(child, depth + 1, value.get("columns") if key == "rows" else None)
+
+        visit(raw, 0)
+        # A single flat object is also an unambiguous one-record JSONL/NDJSON
+        # document. This matters for short captures with just one line.
+        if not found and isinstance(raw, dict):
+            try:
+                columns, rows = cls._normalize_json_records([raw])
+            except DataOperationError:
+                pass
+            else:
+                found.append((columns, rows))
+        if not found:
+            raise DataOperationError("JSON enthält keine eindeutigen tabellarischen Objekt-Arrays.")
+        if len(found) > 20:
+            raise DataOperationError("JSON enthält zu viele Tabellen (maximal 20).")
+        return found
 
     def _read_records(
         self,
@@ -725,27 +854,55 @@ class DataOperations:
         cls, data: str, *, records_path: str | None = None
     ) -> tuple[list[str], list[Record]]:
         try:
-            raw = json.loads(data, parse_constant=_reject_json_constant)
+            raw = json.loads(data, parse_float=Decimal, parse_constant=_reject_json_constant)
         except json.JSONDecodeError as exc:
             raise DataOperationError(
                 f"Ungültiges JSON: {exc.msg}"
             ) from exc
+        if isinstance(raw, dict) and raw.get("scalar_encoding") == SCALAR_ENCODING:
+            # Generated artifacts encode genuine Decimal values explicitly;
+            # their untagged JSON numbers originate from binary float64 and
+            # must round-trip as floats, including subnormal values.
+            raw = json.loads(data, parse_constant=_reject_json_constant)
         selected = cls._resolve_json_pointer(raw, records_path)
+        if isinstance(raw, dict) and raw.get("scalar_encoding") == SCALAR_ENCODING and isinstance(selected, list):
+            restored = []
+            for row in selected:
+                if not isinstance(row, dict):
+                    restored.append(row)
+                    continue
+                restored.append({key: cls._restore_artifact_value(value) for key, value in row.items()})
+            selected = restored
         columns, rows = cls._normalize_json_records(selected)
-        # DataFrame artifacts contain a declared schema alongside /rows. An
-        # empty array cannot carry field names, so preserve that schema for
-        # follow-up operations without changing ordinary empty JSON arrays.
-        if records_path == "/rows" and not rows and isinstance(raw, dict) and "columns" in raw:
-            declared = raw["columns"]
-            if not isinstance(declared, list) or len(declared) > 100:
-                raise DataOperationError("JSON-DataFrame benötigt eine Liste mit maximal 100 Spaltennamen.")
-            columns = [
-                _validate_column_name(name, source="JSON-DataFrame-Schema")
-                for name in declared
-            ]
-            if len(columns) != len(set(columns)):
-                raise DataOperationError("JSON-DataFrame-Schema benötigt eindeutige Spaltennamen.")
+        # Generated single and multi-table artifacts declare their schema
+        # beside /rows. Empty arrays cannot carry column names themselves;
+        # recover them from the parent of /rows or /tables/N/rows.
+        if not rows and isinstance(records_path, str) and records_path.endswith("/rows"):
+            parent_pointer = records_path.rsplit("/", 1)[0]
+            parent = cls._resolve_json_pointer(raw, parent_pointer)
+            if isinstance(parent, dict) and "columns" in parent:
+                declared = parent["columns"]
+                if not isinstance(declared, list) or len(declared) > 100:
+                    raise DataOperationError("JSON-DataFrame benötigt eine Liste mit maximal 100 Spaltennamen.")
+                columns = [
+                    _validate_column_name(name, source="JSON-DataFrame-Schema")
+                    for name in declared
+                ]
+                if len(columns) != len(set(columns)):
+                    raise DataOperationError("JSON-DataFrame-Schema benötigt eindeutige Spaltennamen.")
         return columns, rows
+
+    @staticmethod
+    def _restore_artifact_value(value: Any) -> Any:
+        if isinstance(value, dict) and set(value) == {DECIMAL_SCALAR_KEY}:
+            encoded = value[DECIMAL_SCALAR_KEY]
+            if not isinstance(encoded, str):
+                raise DataOperationError("Ungültige Dezimalwert-Kodierung.")
+            try:
+                return _json_scalar(Decimal(encoded))
+            except (DecimalException, ValueError) as exc:
+                raise DataOperationError("Ungültige Dezimalwert-Kodierung.") from exc
+        return value
 
     @staticmethod
     def _resolve_json_pointer(raw: Any, pointer: str | None) -> Any:
@@ -833,7 +990,7 @@ class DataOperations:
                     f"{MAX_DATA_ROWS}."
                 )
             try:
-                raw_rows.append(json.loads(line, parse_constant=_reject_json_constant))
+                raw_rows.append(json.loads(line, parse_float=Decimal, parse_constant=_reject_json_constant))
             except json.JSONDecodeError as exc:
                 raise DataOperationError(
                     f"Ungültiges JSON in Zeile {line_number}: {exc.msg}"
@@ -856,7 +1013,7 @@ class DataOperations:
                             f"{MAX_DATA_ROWS}."
                         )
                     try:
-                        raw = json.loads(line, parse_constant=_reject_json_constant)
+                        raw = json.loads(line, parse_float=Decimal, parse_constant=_reject_json_constant)
                     except json.JSONDecodeError as exc:
                         raise DataOperationError(
                             f"Ungültiges JSON in Zeile {line_number}: {exc.msg}"
@@ -974,33 +1131,37 @@ class DataOperations:
             for column, operator, expected in validated:
                 actual = row.get(column)
                 try:
-                    if operator == "eq" and not _typed_equal(actual, expected):
+                    comparable_actual, comparable_expected = (
+                        _filter_comparison_values(actual, expected)
+                        if operator not in {"in", "not_in"} else (actual, expected)
+                    )
+                    if operator == "eq" and not _typed_equal(comparable_actual, comparable_expected):
                         return False
-                    if operator == "ne" and _typed_equal(actual, expected):
+                    if operator == "ne" and _typed_equal(comparable_actual, comparable_expected):
                         return False
                     if operator == "lt" and not (
-                        actual is not None and actual < expected
+                        comparable_actual is not None and comparable_actual < comparable_expected
                     ):
                         return False
                     if operator == "lte" and not (
-                        actual is not None and actual <= expected
+                        comparable_actual is not None and comparable_actual <= comparable_expected
                     ):
                         return False
                     if operator == "gt" and not (
-                        actual is not None and actual > expected
+                        comparable_actual is not None and comparable_actual > comparable_expected
                     ):
                         return False
                     if operator == "gte" and not (
-                        actual is not None and actual >= expected
+                        comparable_actual is not None and comparable_actual >= comparable_expected
                     ):
                         return False
                     if operator == "in" and not any(
-                        _typed_equal(actual, candidate)
+                        _typed_equal(*_filter_comparison_values(actual, candidate))
                         for candidate in expected
                     ):
                         return False
                     if operator == "not_in" and any(
-                        _typed_equal(actual, candidate)
+                        _typed_equal(*_filter_comparison_values(actual, candidate))
                         for candidate in expected
                     ):
                         return False
@@ -1692,6 +1853,28 @@ class DataOperations:
         limit: int = 50,
         records_path: str | None = None,
     ) -> str:
+        result_rows, total = self._value_counts_records(
+            column, path, data=data, data_format=data_format,
+            table_index=table_index, filters=filters, limit=limit,
+            records_path=records_path,
+        )
+        return self._result(
+            ["value", "count"], result_rows,
+            total_rows=total, limit=len(result_rows),
+        )
+
+    def _value_counts_records(
+        self,
+        column: str,
+        path: str | None = None,
+        *,
+        data: str | None = None,
+        data_format: str | None = None,
+        table_index: int = 0,
+        filters: list[dict[str, Any]] | None = None,
+        limit: int = 50,
+        records_path: str | None = None,
+    ) -> tuple[list[Record], int]:
         limit = self._validate_limit(
             limit,
             maximum=MAX_VALUE_COUNT_ROWS,
@@ -1729,9 +1912,4 @@ class DataOperations:
                 reverse=True,
             )
         ]
-        return self._result(
-            ["value", "count"],
-            result_rows,
-            total_rows=len(result_rows),
-            limit=limit,
-        )
+        return result_rows[:limit], len(result_rows)
