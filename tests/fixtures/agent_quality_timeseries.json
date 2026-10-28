@@ -1,0 +1,10 @@
+{
+  "rows": [
+    {"timestamp": "2026-07-28T18:00:00Z", "temperature": 26.0},
+    {"timestamp": "2026-07-28T18:10:00Z", "temperature": 24.0},
+    {"timestamp": "2026-07-29T18:00:00Z", "temperature": 25.5},
+    {"timestamp": "2026-07-29T18:10:00Z", "temperature": 23.0},
+    {"timestamp": "2026-10-25T00:30:00Z", "temperature": 19.0},
+    {"timestamp": "2026-10-25T01:30:00Z", "temperature": 19.0}
+  ]
+}
