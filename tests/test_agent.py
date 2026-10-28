@@ -1532,6 +1532,7 @@ def test_history_reset_restores_persisted_and_in_memory_state_if_cleanup_fails(
     agent._last_working_messages = [{"role": "user", "content": "old"}]
     agent._last_working_tools = [{"type": "function"}]
     agent._dumped_history_json = "old"
+    artifact = tmp_path / agent._result_artifacts.save("previous", structured=False)
 
     diagnostic_files = (
         "history.json",
@@ -1565,6 +1566,7 @@ def test_history_reset_restores_persisted_and_in_memory_state_if_cleanup_fails(
     assert agent._last_working_messages == [{"role": "user", "content": "old"}]
     assert agent._last_working_tools == [{"type": "function"}]
     assert agent._dumped_history_json == "old"
+    assert artifact.read_text(encoding="utf-8") == "previous"
     assert {
         filename: agent._safe_dump_path(filename).read_bytes()
         for filename in diagnostic_files

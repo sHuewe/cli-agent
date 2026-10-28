@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import cli_agent.agent_conversation as agent_conversation_module
+from cli_agent.ag_ui_frontend_tools import FrontendToolHandoff
 from cli_agent.agent_conversation import ConversationMixin
+from cli_agent.mcp_result_artifacts import McpResultArtifacts
 
 
 class ConversationHarness(ConversationMixin):
@@ -30,6 +33,7 @@ class ConversationHarness(ConversationMixin):
         self.dumped = []
         self.enabled_calls = []
         self.loop_calls = []
+        self._result_artifacts = SimpleNamespace(cleanup=lambda: None)
 
     async def set_server_enabled(self, name, *, enabled):
         self.enabled_calls.append((name, enabled))
@@ -84,6 +88,118 @@ def test_ask_runs_main_flow_and_stores_clean_history() -> None:
     assert call["phase"] == "main"
     assert call["enabled_server_names"] == {"server"}
     assert call["messages"][-1] == {"role": "user", "content": "new question"}
+
+
+def test_artifacts_survive_answer_and_commands_until_next_regular_question(
+    tmp_path: Path,
+) -> None:
+    agent = ConversationHarness()
+    store = McpResultArtifacts(tmp_path, ())
+    agent._result_artifacts = store
+    old_path = tmp_path / store.save("old", structured=False)
+    created: list[Path] = []
+
+    async def run_model_loop(**kwargs):
+        del kwargs
+        created.append(tmp_path / store.save("new", structured=False))
+        return "answer"
+
+    agent._run_model_loop = run_model_loop
+
+    assert asyncio.run(agent.ask("disable server")) == "MCP-Server server deaktiviert."
+    assert old_path.is_file()
+
+    assert asyncio.run(agent.ask("first question")) == "answer"
+    first_path = created[-1]
+    assert not old_path.exists()
+    assert first_path.read_text(encoding="utf-8") == "new"
+    assert store._bytes_written == len("new")
+
+    assert asyncio.run(agent.ask("second question")) == "answer"
+    second_path = created[-1]
+    assert not first_path.exists()
+    assert not first_path.parent.exists()
+    assert second_path.is_file()
+    assert second_path.parent != first_path.parent
+    assert store._bytes_written == len("new")
+
+    store.cleanup()
+    assert not second_path.exists()
+
+
+def test_previous_artifacts_are_removed_before_knowledge_collection(tmp_path: Path) -> None:
+    agent = ConversationHarness()
+    store = McpResultArtifacts(tmp_path, ())
+    agent._result_artifacts = store
+    previous = tmp_path / store.save("previous", structured=False)
+
+    async def collect_knowledge(prompt: str):
+        assert prompt == "question"
+        assert not previous.exists()
+        return None
+
+    agent._collect_knowledge = collect_knowledge
+    assert asyncio.run(agent.ask("question")) == "answer"
+
+
+def test_failed_run_keeps_artifacts_until_next_question(tmp_path: Path) -> None:
+    agent = ConversationHarness()
+    store = McpResultArtifacts(tmp_path, ())
+    agent._result_artifacts = store
+    created: list[Path] = []
+
+    async def fail(**kwargs):
+        del kwargs
+        created.append(tmp_path / store.save("debug", structured=False))
+        raise RuntimeError("model failed")
+
+    agent._run_model_loop = fail
+    with pytest.raises(RuntimeError, match="model failed"):
+        asyncio.run(agent.ask("first question"))
+    assert created[-1].read_text(encoding="utf-8") == "debug"
+
+    async def succeed(**kwargs):
+        del kwargs
+        return "recovered"
+
+    agent._run_model_loop = succeed
+    assert asyncio.run(agent.ask("second question")) == "recovered"
+    assert not created[-1].exists()
+
+
+def test_frontend_tool_resume_does_not_cleanup_artifacts(tmp_path: Path) -> None:
+    agent = ConversationHarness()
+    store = McpResultArtifacts(tmp_path, ())
+    agent._result_artifacts = store
+    created: list[Path] = []
+
+    async def handoff(**kwargs):
+        del kwargs
+        created.append(tmp_path / store.save("pending", structured=False))
+        raise FrontendToolHandoff([], {"role": "assistant", "content": ""})
+
+    agent._run_model_loop = handoff
+    with pytest.raises(FrontendToolHandoff):
+        asyncio.run(agent.ask("first question"))
+    assert created[-1].is_file()
+
+    async def resume(**kwargs):
+        del kwargs
+        assert created[-1].read_text(encoding="utf-8") == "pending"
+        return "resumed answer"
+
+    agent._run_model_loop = resume
+    assert asyncio.run(agent.continue_after_frontend_tools([])) == "resumed answer"
+    assert created[-1].is_file()
+
+    async def next_run(**kwargs):
+        del kwargs
+        assert not created[-1].exists()
+        return "next answer"
+
+    agent._run_model_loop = next_run
+    assert asyncio.run(agent.ask("next question")) == "next answer"
+    assert not created[-1].exists()
 
 
 def test_reference_context_is_transient_and_precedes_exact_user_message() -> None:

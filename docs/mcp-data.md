@@ -224,7 +224,11 @@ Das Summieren einer Momentanleistung ist **keine** Berechnung der Energie:
 hierzu muss die Zeitbasis beachtet werden.
 
 Die temporären Artefakte gehören zur laufenden cli-agent-Session und werden
-beim regulären Session-Ende inklusive ihres Session-Unterordners gelöscht.
+nach einer Antwort für die Inspektion aufbewahrt. Beim Beginn der nächsten
+regulären Benutzeranfrage werden sie samt Session-Unterordner bereinigt;
+`enable`/`disable` und Frontend-Tool-Fortsetzungen lösen das nicht aus.
+Auch `reset_history()` und das reguläre Session-Ende bereinigen die Dateien.
+Der in einer früheren Antwort angegebene `workspace_path` ist danach ungültig.
 Andere Workspace-Dateien – insbesondere solche, die der Nutzer oder
 andere OS-Tools explizit anlegen – werden dadurch nicht gelöscht. Nach
 einem Prozessabsturz kann eine Bereinigung ausgeblieben sein.
@@ -402,9 +406,9 @@ tabellarischen Tools registriert.
 
 Beim regulären Beenden entfernt der Agent ausschließlich seine eigenen
 Session-Dateien; vorhandene Workspace-Daten bleiben unverändert. Ein
-Prozessabsturz kann die Bereinigung verhindern. Der separate Wunsch, diese
-Artefakte erst bei Beginn der nächsten Frage statt am Ende der Antwort zu
-entfernen, gehört zu A1 und wird in einem eigenen PR behandelt.
+Prozessabsturz kann die Bereinigung verhindern. Nach abgeschlossenen
+Antworten bleiben die eigenen Artefakte zur Inspektion erhalten und werden
+erst bei einer neuen regulären Anfrage oder einem History-Reset bereinigt.
 
 ## Workspace-Sicherheit
 
