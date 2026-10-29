@@ -647,3 +647,17 @@ def test_main_converts_workspace_initialization_error_to_system_exit(
 
     with pytest.raises(SystemExit, match="blocked"):
         data_mcp_server.main()
+
+
+def test_derived_schema_documents_diff_and_resample_inference(tmp_path):
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="data", built_in=True),
+    )
+    server = data_mcp_server.create_server(DataOperations(workspace), access="read")
+    schema = server._tool_manager.get_tool("derive_columns").parameters
+    fields = schema["$defs"]["DerivedColumn"]["properties"]
+    assert "row-to-row" in fields["operation"]["description"]
+    assert "diff_per_time" in fields["time_column"]["description"]
+    assert "diff_per_time" in fields["max_gap_seconds"]["description"]
+    schema = server._tool_manager.get_tool("resample_data").parameters
+    assert schema["properties"]["time_column"]["default"] is None

@@ -336,9 +336,9 @@ def create_server(
 
                 Allowed: add/subtract/multiply/divide, diff, cumsum,
                 rolling_mean (row window), diff_per_time (time-normalized
-                adjacent difference). For diff_per_time set max_gap_seconds,
-                optional time_column (default timestamp) and time_unit
-                (seconds/minutes/hours; default hours). Unsorted times fail;
+                adjacent difference). diff ignores time_column and uses row
+                order. Only diff_per_time uses time_column (default timestamp),
+                time_unit and required max_gap_seconds. Unsorted times fail;
                 duplicates, null values and long gaps yield null rates.
                 Pass source records_path; chain via workspace_path and '/rows'.
                 """
@@ -351,13 +351,15 @@ def create_server(
                 path: str,
                 frequency: str,
                 aggregations: list[ResampleAggregation],
-                time_column: str = "timestamp",
+                time_column: str | None = None,
                 records_path: str | None = None,
             ) -> CallToolResult:
                 """Aggregate a time series into fixed buckets to reduce data volume.
 
                 Specify a frequency like '5min', '30s', '1h' or '1d'. Supported
-                aggregation methods: mean, min, max, sum, count. Each resulting
+                aggregation methods: mean, min, max, sum, count. Omit
+                time_column to infer the unique ISO datetime column; specify
+                it explicitly if more than one candidate exists. Each resulting
                 timestamp labels the start of its [start, end) bucket. No
                 interpolation; empty buckets may have null aggregates. Beware:
                 summing power samples is not the same as integrating energy.

@@ -69,6 +69,7 @@ class OllamaClient:
         self.timeout = timeout
         self.context_length = context_length
         self.last_usage: TokenUsage | None = None
+        self.last_finish_reason: str | None = None
         self.usage_history: list[TokenUsage | None] = []
         self._context_limit_reached = False
 
@@ -116,6 +117,7 @@ class OllamaClient:
             "options": {"num_ctx": ctx_large},
         }
         self.last_usage = None
+        self.last_finish_reason = None
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout,
@@ -156,6 +158,8 @@ class OllamaClient:
                 retryable=False,
             )
         self.last_usage = self._token_usage(data)
+        reason = data.get("done_reason")
+        self.last_finish_reason = reason if isinstance(reason, str) else None
         self.usage_history.append(self.last_usage)
         self._check_context_limit()
 

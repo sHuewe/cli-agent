@@ -890,3 +890,59 @@ async def test_fastmcp_schema_and_result_meta_roundtrip(frames):
     }, convert_result=True)
     assert result.meta[ONLY_METADATA_TO_LLM_KEY] is True
     assert result.structuredContent["rows"][1]["L3"] == -1000
+
+
+def test_resample_auto_detects_time_column(frames, tmp_path):
+    _write_json(tmp_path, "signal_time.json", [
+        {"time": "2026-06-24T07:00:00+01:00", "power": 10},
+        {"time": "2026-06-24T07:01:00+01:00", "power": 30},
+    ])
+    result = frames.resample_data(
+        "signal_time.json", "2min",
+        [ResampleAggregation("power", "mean", "avg")],
+        records_path="/measurements",
+    )
+    assert result.structuredContent["rows"][0]["avg"] == 20
+    assert result.structuredContent["columns"][0] == "timestamp"
+    assert result.meta[METADATA_FOR_LLM_KEY]["source_timezone"] == "+01:00"
+
+
+def test_resample_requires_explicit_column_when_ambiguous(frames, tmp_path):
+    _write_json(tmp_path, "ambiguous.json", [
+        {"time": "2026-06-24T07:00:00Z", "timestamp": "2026-06-24T07:00:00Z", "power": 1},
+        {"time": "2026-06-24T07:01:00Z", "timestamp": "2026-06-24T07:01:00Z", "power": 2},
+    ])
+    aggs = [ResampleAggregation("power", "mean", "avg")]
+    with pytest.raises(DataOperationError, match="Mehrere mögliche Zeitspalten"):
+        frames.resample_data("ambiguous.json", "1min", aggs, records_path="/measurements")
+    result = frames.resample_data(
+        "ambiguous.json", "1min", aggs,
+        time_column="time", records_path="/measurements",
+    )
+    assert len(result.structuredContent["rows"]) == 2
+
+
+def test_resample_rejects_numeric_data_without_time_column(frames, tmp_path):
+    _write_json(tmp_path, "numeric.json", [
+        {"power": 12, "sample_id": 1},
+        {"power": 14, "sample_id": 2},
+    ])
+    with pytest.raises(DataOperationError, match="time_column"):
+        frames.resample_data(
+            "numeric.json", "1min",
+            [ResampleAggregation("power", "mean", "avg")],
+            records_path="/measurements",
+        )
+
+
+def test_diff_accepts_unused_time_column_and_remains_row_based(frames, tmp_path):
+    _write_json(tmp_path, "unordered_time.json", [
+        {"time": "2026-06-24T07:01:00Z", "power": 20},
+        {"time": "2026-06-24T07:00:00Z", "power": 50},
+    ])
+    result = frames.derive_columns(
+        "unordered_time.json",
+        [DerivedColumn("change", "diff", "power", time_column="time")],
+        records_path="/measurements",
+    )
+    assert [row["change"] for row in result.structuredContent["rows"]] == [None, 30]

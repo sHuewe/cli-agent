@@ -179,6 +179,7 @@ class OpenAIClient:
         self.headers = dict(headers or {})
         self.context_length = context_length
         self.last_usage: TokenUsage | None = None
+        self.last_finish_reason: str | None = None
         self.usage_history: list[TokenUsage | None] = []
         self._context_limit_reached = False
 
@@ -242,6 +243,7 @@ class OpenAIClient:
             )
 
         self.last_usage = None
+        self.last_finish_reason = None
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout,
@@ -302,11 +304,14 @@ class OpenAIClient:
         self._check_context_limit()
 
         try:
-            message = data["choices"][0]["message"]
+            choice = data["choices"][0]
+            message = choice["message"]
         except (KeyError, IndexError, TypeError) as exc:
             raise OpenAIError(
                 f"Unerwartete Modellantwort: {data}",
                 retryable=False,
             ) from exc
 
+        reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+        self.last_finish_reason = reason if isinstance(reason, str) else None
         return self._normalize_message(message)
