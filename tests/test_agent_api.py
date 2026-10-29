@@ -569,3 +569,93 @@ async def test_browser_download_requires_valid_tab_lease():
         })).status_code in {401, 403}
         assert (await client.delete(endpoint, headers=browser_headers)).status_code in {401, 403}
     await service.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_id", [
+    "report#1", "report/1", "report?1", ".", "..",
+    "report/artifacts/other", "äö雪", "report%2F1",
+])
+async def test_artifact_download_thread_ids_with_url_delimiters(thread_id):
+    from cli_agent.agent_api import AgentRun, _artifact_thread_token
+
+    service, _ = make_test_service()
+    session = await service.resolve_agui_thread(thread_id)
+    session.agent._result_artifacts = SimpleNamespace(
+        read_registered=lambda path: b"report" if path == "report.csv" else b"unexpected"
+    )
+    session._run = AgentRun(id="run", thread_id=thread_id, prompt="export",
+                            agui=True, status="running")
+    artifact_id = "d" * 32
+    await session.on_agent_event("artifact_published", {
+        "call_id": "call", "id": artifact_id, "path": "report.csv",
+        "filename": "report.csv", "mime_type": "text/csv",
+    })
+    await session.on_agent_event("tool_finished", {
+        "call_id": "call", "status": "success",
+    })
+    result = session._run.events[-1][1]
+    url = result["content"][1]["source"]["value"]
+    assert url == f"/threads/{_artifact_thread_token(thread_id)}/artifacts/{artifact_id}"
+    assert all(char not in url for char in "#?%")
+    try:
+        async with await client_for(service) as client:
+            assert (await client.get(url)).status_code == 401
+            response = await client.get(url, headers=headers(service))
+            assert response.status_code == 200
+            assert response.content == b"report"
+            assert (await client.get(
+                f"/threads/{_artifact_thread_token(thread_id)}/artifacts/{'e' * 32}",
+                headers=headers(service),
+            )).status_code == 404
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_browser_artifact_download_uses_decoded_thread_id_for_lease():
+    from cli_agent.agent_api import _artifact_thread_token
+
+    service, _ = make_test_service()
+    session = await service.create()
+    artifact_id = "f" * 32
+    session.agent._result_artifacts = SimpleNamespace(
+        read_registered=lambda path: b"browser-document"
+    )
+    session.published_artifacts[artifact_id] = {
+        "path": "report.md", "filename": "report.md", "mime_type": "text/markdown",
+    }
+    ui = {
+        "token": "browser-secret",
+        "origin": "http://127.0.0.1:8765",
+        "registry": SimpleNamespace(is_owner=lambda sid, lease: (
+            sid == session.id and lease == "valid-lease"
+        )),
+    }
+    endpoint = f"/threads/{_artifact_thread_token(session.id)}/artifacts/{artifact_id}"
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+            base_url="http://127.0.0.1:8765",
+        ) as client:
+            browser_headers = {
+                "Authorization": "Bearer browser-secret",
+                "X-Cli-Agent-Browser": "1",
+                "X-Cli-Agent-Lease": "valid-lease",
+            }
+            response = await client.get(endpoint, headers=browser_headers)
+            assert response.status_code == 200
+            assert response.content == b"browser-document"
+            assert (await client.get(endpoint, headers={
+                **browser_headers, "X-Cli-Agent-Lease": "invalid",
+            })).status_code == 403
+            assert (await client.get(
+                f"/threads/{_artifact_thread_token('other')}/artifacts/{artifact_id}",
+                headers=browser_headers,
+            )).status_code == 403
+            assert (await client.get(
+                f"/threads/{session.id}/artifacts/{artifact_id}",
+                headers=browser_headers,
+            )).status_code == 403
+    finally:
+        await service.shutdown()
