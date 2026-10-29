@@ -1613,7 +1613,7 @@ def test_evidence_working_memory_guidance_is_in_system_prompt_only_with_tools(
     tmp_path: Path,
 ) -> None:
     agent = make_agent(tmp_path)
-    assert "Arbeitsgedächtnis für belastbare" not in agent._build_system_prompt()
+    assert "strukturiertes Arbeitsgedächtnis mit" not in agent._build_system_prompt()
 
     agent._server_tools = {
         "sensor": [{"type": "function", "function": {
@@ -1625,7 +1625,7 @@ def test_evidence_working_memory_guidance_is_in_system_prompt_only_with_tools(
     prompt = agent._build_system_prompt()
 
     assert "agent__update_evidence" in prompt
-    assert "Arbeitsgedächtnis für belastbare" in prompt
+    assert "strukturiertes Arbeitsgedächtnis mit" in prompt
     assert "BEVOR du mit dem nächsten Untersuchungsschritt" in prompt
     assert "exakten call_id-Werte" in prompt
     assert "widerlegte oder überholte Evidences" in prompt
