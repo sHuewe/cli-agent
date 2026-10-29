@@ -616,8 +616,14 @@ class DataFrameOperations:
                     candidates.append(column)
                 continue
             valid = True
+            found_datetime = False
             for value in sample:
                 if isinstance(value, (datetime, pd.Timestamp)):
+                    found_datetime = True
+                    continue
+                if isinstance(value, str) and value.strip().casefold() in {"", "nat"}:
+                    # Missing values must still be rejected by _timestamps;
+                    # do not let them hide an otherwise identifiable column.
                     continue
                 if not isinstance(value, str) or "-" not in value:
                     valid = False
@@ -627,7 +633,11 @@ class DataFrameOperations:
                 except ValueError:
                     valid = False
                     break
-            if valid:
+                found_datetime = True
+            if valid and (
+                found_datetime
+                or str(column).casefold() in {"timestamp", "time", "datetime", "date"}
+            ):
                 candidates.append(column)
         if len(candidates) == 1:
             return candidates[0]
