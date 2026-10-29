@@ -1607,3 +1607,26 @@ def test_windows_dump_budget_accounts_for_checkout_directory(tmp_path: Path) -> 
         240 - len(str(tmp_path / ".cli-agent").encode("utf-16-le")) // 2 - 1,
     )
     assert agent._dump_filename_budget(windows=True) == expected
+
+
+def test_evidence_working_memory_guidance_is_in_system_prompt_only_with_tools(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    assert "Arbeitsgedächtnis für belastbare" not in agent._build_system_prompt()
+
+    agent._server_tools = {
+        "sensor": [{"type": "function", "function": {
+            "name": "sensor__get_history",
+            "parameters": {"type": "object", "properties": {}},
+        }}]
+    }
+    agent._active_servers = {"sensor"}
+    prompt = agent._build_system_prompt()
+
+    assert "agent__update_evidence" in prompt
+    assert "Arbeitsgedächtnis für belastbare" in prompt
+    assert "BEVOR du mit dem nächsten Untersuchungsschritt" in prompt
+    assert "exakten call_id-Werte" in prompt
+    assert "widerlegte oder überholte Evidences" in prompt
+    assert "kein Evidence-Update nötig" in prompt
