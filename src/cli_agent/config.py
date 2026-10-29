@@ -94,6 +94,7 @@ class ModelConfig:
 @dataclass(frozen=True)
 class AgentConfig:
     timezone: str | None = None
+    evidence_state: bool = False
 
 
 @dataclass(frozen=True)
@@ -174,18 +175,19 @@ def _bool_value(values: dict[str, Any], key: str, default: bool, *, section: str
 def _agent_config(values: Any) -> AgentConfig:
     if not isinstance(values, dict):
         raise ValueError("[agent] muss eine Tabelle sein.")
-    if set(values) - {"timezone"}:
+    if set(values) - {"timezone", "evidence_state"}:
         raise ValueError("[agent] enthält unbekannte Optionen.")
+    enabled = _bool_value(values, "evidence_state", False, section="agent")
     timezone = values.get("timezone")
     if timezone is None:
-        return AgentConfig()
+        return AgentConfig(evidence_state=enabled)
     if not isinstance(timezone, str) or not timezone or timezone != timezone.strip():
         raise ValueError("agent.timezone muss eine gültige IANA-Zeitzone sein.")
     try:
         ZoneInfo(timezone)
     except (ValueError, ZoneInfoNotFoundError) as exc:
         raise ValueError(f"Ungültige IANA-Zeitzone in agent.timezone: {timezone!r}") from exc
-    return AgentConfig(timezone=timezone)
+    return AgentConfig(timezone=timezone, evidence_state=enabled)
 
 
 def _logging_file(values: dict[str, Any], defaults: LoggingConfig) -> Path:
