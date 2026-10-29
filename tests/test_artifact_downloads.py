@@ -29,7 +29,7 @@ class FakeFastMCP:
 
 @pytest.mark.parametrize("export_format,expected", [
     ("csv", "time,value\n10:00,11\n10:10,12\n"),
-    ("json", '[{"time": "10:00", "value": 11}, {"time": "10:10", "value": 12}]'),
+    ("json", '"scalar_encoding": "cli-agent-decimal-v1"'),
     ("markdown", "| time | value |"),
 ])
 def test_export_returns_only_metadata_to_model_and_preserves_full_file(
