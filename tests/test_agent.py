@@ -1636,3 +1636,7 @@ def test_evidence_working_memory_guidance_is_in_system_prompt_only_with_tools(
     assert "preview_data" in prompt
     assert "Aggregationen, Joins" in prompt
     assert "Erzwinge keine" in prompt
+    assert "erster Arbeitsschritt" in prompt
+    assert "BEVOR du die eigentliche Untersuchung beginnst" in prompt
+    assert "plan_step_id" in prompt
+    assert "Einfache Aufgaben benötigen keinen Plan" in prompt
