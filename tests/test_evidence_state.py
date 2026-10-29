@@ -200,3 +200,82 @@ def test_evidence_is_available_by_default_with_tools(tmp_path):
     agent._active_servers = {"sensor"}
     names = {tool["function"]["name"] for tool in agent._model_tools()}
     assert names == {"sensor__get_value", EVIDENCE_TOOL_NAME}
+
+
+
+def test_idless_ollama_tool_calls_support_evidence_compaction():
+    import asyncio
+    from types import SimpleNamespace
+    from cli_agent.agent_loop import run_model_loop
+    from cli_agent.config import LoggingConfig
+    from cli_agent.evidence_state import EVIDENCE_TOOL
+
+    class Model:
+        def __init__(self):
+            self.step = 0
+            self.saw_ids = []
+
+        async def chat(self, *, messages, tools):
+            self.step += 1
+            if self.step == 1:
+                return {"role": "assistant", "content": "", "tool_calls": [
+                    {"function": {"name": "sensor__read", "arguments": {}}}
+                ]}
+            first = next(m for m in messages if m.get("role") == "assistant"
+                         and m.get("tool_calls"))
+            if self.step == 2:
+                call_id = first["tool_calls"][0]["id"]
+                self.saw_ids.append(call_id)
+                assert next(m for m in messages if m.get("role") == "tool")[
+                    "tool_call_id"] == call_id
+                return {"role": "assistant", "content": "", "tool_calls": [
+                    {"function": {"name": EVIDENCE_TOOL_NAME, "arguments": {
+                        "evidences": [{
+                            "id": "reading", "type": "observation",
+                            "statement": "Sensor measured 100W.",
+                            "tool_calls": [{"call_id": call_id, "description": "Sensor"}],
+                        }]
+                    }}}
+                ]}
+            assert all(m.get("role") != "tool" for m in messages)
+            assert "reading" in str(messages)
+            return {"role": "assistant", "content": "100 W"}
+
+    class Sensor:
+        async def call_tool(self, name, args):
+            assert name == "read"
+            return SimpleNamespace(
+                content=[SimpleNamespace(text="100 W")],
+                meta=None, isError=False,
+            )
+
+    model = Model()
+    state = EvidenceState()
+    agent = SimpleNamespace(
+        _evidence_state=state,
+        model_client=model,
+        logging_config=LoggingConfig(),
+        _agui_frontend_tools={},
+        _result_artifacts=None,
+        workspace_access="none",
+        _dump_context=lambda *a, **k: None,
+        _dump_value=lambda *a, **k: None,
+        _tool_is_enabled=lambda name: True,
+        _tool_input_schema=lambda name, phase: {"type": "object"},
+        _requires_approval=lambda *a, **kw: False,
+    )
+    server = SimpleNamespace(name="sensor", compress_result=False)
+    messages = [{"role": "system", "content": "rules"}]
+    result = asyncio.run(run_model_loop(
+        agent, messages=messages,
+        tools=[{"type": "function", "function": {
+            "name": "sensor__read", "parameters": {"type": "object"},
+        }}, EVIDENCE_TOOL],
+        routes={"sensor__read": (Sensor(), "read", server)},
+        enabled_server_names=None,
+        max_tool_calls=5, phase="main",
+    ))
+    assert result == "100 W"
+    assert len(state.tool_results) == 1
+    assert state.snapshot()["compacted_tool_call_ids"] == model.saw_ids
+    assert messages[1]["tool_calls"][0]["id"] == model.saw_ids[0]
