@@ -16,6 +16,7 @@ from .agent_knowledge import (
 from .agent_loop import ModelLoopRunState, run_model_loop
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
+from .model import log_model_call_diagnostics
 from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
 logger = logging.getLogger("cli_agent.agent_conversation")
@@ -711,6 +712,7 @@ class ConversationMixin:
             compression_messages,
             [],
         )
+        log_model_call_diagnostics(self.model_client, phase="compression")
 
         compressed = str(message.get("content") or "").strip()
 

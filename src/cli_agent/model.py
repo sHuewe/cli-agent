@@ -82,6 +82,11 @@ class RetryingModelClient:
         self._policy = policy
         self.model = client.model
         self.base_url = client.base_url
+        self.context_length = getattr(client, "context_length", None)
+
+    @property
+    def last_finish_reason(self) -> str | None:
+        return getattr(self._client, "last_finish_reason", None)
 
     @property
     def last_usage(self) -> TokenUsage | None:
@@ -138,6 +143,35 @@ class TokenUsage:
     input_tokens: int
     output_tokens: int
     total_tokens: int
+
+
+def log_model_call_diagnostics(client: Any, *, phase: str) -> None:
+    """Log reported provider usage; missing values stay explicitly unknown."""
+    usage = getattr(client, "last_usage", None)
+    context_length = getattr(client, "context_length", None)
+    if not isinstance(context_length, int) or context_length <= 0:
+        context_length = None
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    total_tokens = getattr(usage, "total_tokens", None)
+    utilization = (
+        round(100 * input_tokens / context_length, 2)
+        if isinstance(input_tokens, int) and context_length else None
+    )
+    history = getattr(client, "usage_history", None)
+    logger.info(
+        "model_call phase=%s model=%s call_index=%s input_tokens=%s "
+        "output_tokens=%s total_tokens=%s context_length=%s "
+        "context_utilization_percent=%s finish_reason=%s",
+        phase, getattr(client, "model", "unknown"),
+        len(history) if isinstance(history, list) else "unknown",
+        input_tokens if input_tokens is not None else "unknown",
+        output_tokens if output_tokens is not None else "unknown",
+        total_tokens if total_tokens is not None else "unknown",
+        context_length if context_length is not None else "unknown",
+        utilization if utilization is not None else "unknown",
+        getattr(client, "last_finish_reason", None) or "unknown",
+    )
 
 
 class ModelClient(Protocol):

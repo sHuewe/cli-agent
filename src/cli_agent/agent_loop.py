@@ -15,6 +15,7 @@ from .agent_knowledge import (
 from .agent_tool_calls import process_tool_calls
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
+from .model import log_model_call_diagnostics
 
 logger = logging.getLogger("cli_agent.agent_loop")
 
@@ -60,6 +61,7 @@ async def run_model_loop(
                     else tools
                 ),
             )
+            log_model_call_diagnostics(agent.model_client, phase=phase)
             messages.append(message)
         finally:
             for assistant_message, tool_call, tool_message in transient_rejections:
