@@ -116,3 +116,67 @@ def test_no_evidence_has_no_added_context():
     visible = state.project(history)
     assert len(visible) == len(history) - 1
     assert visible[2]["tool_calls"][-1]["id"] == "call-2"
+
+
+def test_internal_evidence_tool_call_is_transient_in_main_loop():
+    import asyncio
+    from types import SimpleNamespace
+    from cli_agent.agent_loop import run_model_loop
+    from cli_agent.config import LoggingConfig
+    from cli_agent.evidence_state import EVIDENCE_TOOL
+
+    class Model:
+        def __init__(self):
+            self.responses = [
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "internal-1", "type": "function",
+                     "function": {"name": EVIDENCE_TOOL_NAME, "arguments": {
+                         "evidences": [{
+                             "id": "fact-1", "type": "observation",
+                             "statement": "Sensor value was 100 W.",
+                             "tool_calls": [{"call_id": "old-1", "description": "Measurement"}]
+                         }]
+                     }}}
+                ]},
+                {"role": "assistant", "content": "Final answer"}
+            ]
+            self.seen = []
+
+        async def chat(self, *, messages, tools):
+            self.seen.append(copy.deepcopy(messages))
+            return self.responses.pop(0)
+
+    state = EvidenceState()
+    state.register_result("old-1", tool_name="sensor")
+    model = Model()
+    agent = SimpleNamespace(
+        _evidence_state=state,
+        model_client=model,
+        logging_config=LoggingConfig(),
+        _agui_frontend_tools={},
+        _dump_context=lambda *a, **k: None,
+        _dump_value=lambda *a, **k: None,
+    )
+    messages = [
+        {"role": "system", "content": "Rules"},
+        {"role": "user", "content": "Question"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "old-1", "type": "function",
+             "function": {"name": "sensor", "arguments": "{}"}}
+        ]},
+        {"role": "tool", "tool_call_id": "old-1", "content": "100 W"},
+    ]
+    answer = asyncio.run(run_model_loop(
+        agent, messages=messages, tools=[EVIDENCE_TOOL],
+        routes={}, enabled_server_names=None, max_tool_calls=5,
+        phase="main",
+    ))
+    assert answer == "Final answer"
+    assert len(model.seen) == 2
+    assert all(m.get("role") != "tool" for m in model.seen[1])
+    assert "fact-1" in str(model.seen[1])
+    assert not any(
+        c.get("function", {}).get("name") == EVIDENCE_TOOL_NAME
+        for m in messages for c in m.get("tool_calls", [])
+    )
+    assert state.snapshot()["compacted_tool_call_ids"] == ["old-1"]
