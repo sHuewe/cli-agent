@@ -998,3 +998,86 @@ async def test_repair_budget_is_not_reset_by_repeated_frontend_handoffs():
         ])
     assert agent.calls == 5
     assert agent.history == []
+
+
+
+@pytest.mark.asyncio
+async def test_frontend_evidence_source_registered_on_resume():
+    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.evidence_state import EvidenceState
+
+    class Agent(ConversationMixin):
+        def __init__(self):
+            self._evidence_state = EvidenceState()
+            self.history = []
+            self._agui_pending_original_prompt = "inspect"
+            self._agui_pending_working_messages = [
+                {"role": "system", "content": "rules"},
+                {"role": "user", "content": "inspect"},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "front-1", "type": "function", "function": {
+                        "name": "show_view", "arguments": "{}"
+                    }}
+                ]},
+            ]
+            self._tool_routes = {}
+            self._active_servers = set()
+            self.max_tool_calls = 10
+            self._agui_frontend_tools = normalize_frontend_tools(
+                [definition()], server_names=set()
+            )
+
+        def _model_tools(self):
+            return []
+
+        def _dump_context(self, *_args, **_kwargs):
+            pass
+
+        async def _run_model_loop(self, **kwargs):
+            self._evidence_state.update({
+                "evidences": [{
+                    "id": "view_open",
+                    "type": "observation",
+                    "statement": "Frontend reports that the view was opened.",
+                    "tool_calls": [{
+                        "call_id": "front-1",
+                        "description": "Validated frontend response"
+                    }]
+                }]
+            })
+            self.projection = self._evidence_state.project(kwargs["messages"])
+            return "done"
+
+    agent = Agent()
+    answer = await agent.continue_after_frontend_tools([
+        {"role": "tool", "tool_call_id": "front-1", "content": "view opened"}
+    ])
+    assert answer == "done"
+    assert agent._evidence_state.tool_results["front-1"]["tool_name"] == "show_view"
+    assert agent._evidence_state.compacted == {"front-1"}
+    assert not any(m.get("tool_call_id") == "front-1" for m in agent.projection)
+    assert "view_open" in str(agent.projection)
+
+
+@pytest.mark.asyncio
+async def test_frontend_tool_cannot_shadow_internal_evidence_name():
+    from cli_agent.evidence_state import EVIDENCE_TOOL_NAME
+
+    service = AgentApiService(lambda session: FrontendFakeAgent(session))
+    headers = {"Authorization": "Bearer " + service.token, "Accept": "text/event-stream"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            request = {
+                "threadId": "collision", "runId": "run-1",
+                "protocolVersion": "1.0",
+                "messages": [{"id": "u", "role": "user", "content": "test"}],
+                "tools": [definition(EVIDENCE_TOOL_NAME)],
+            }
+            response = await client.post("/ag-ui", json=request, headers=headers)
+            assert response.status_code == 400
+            assert EVIDENCE_TOOL_NAME in response.json()["error"]
+    finally:
+        await service.shutdown()
