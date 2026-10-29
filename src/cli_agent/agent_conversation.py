@@ -17,6 +17,7 @@ from .agent_loop import ModelLoopRunState, run_model_loop
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
 from .evidence_state import EvidenceState
+from .ag_ui_frontend_tools import FRONTEND_FAILURE_META_KEY
 from .model import log_model_call_diagnostics
 from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
@@ -76,6 +77,7 @@ class ConversationMixin:
                 "main_working_messages.json",
                 "main_full_working_messages.json",
                 "main_evidence_state.json",
+                "main_evidence_update_debug.json",
                 "main_system_prompt.json",
                 "knowledge_working_messages.json",
                 "knowledge_system_prompt.json",
@@ -332,6 +334,7 @@ class ConversationMixin:
                 if (
                     not isinstance(name, str)
                     or call_id in evidence.tool_results
+                    or result.get("_meta", {}).get(FRONTEND_FAILURE_META_KEY) is True
                 ):
                     continue
                 evidence.register_result(call_id, tool_name=name)
