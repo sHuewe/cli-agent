@@ -981,10 +981,11 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             history_for_model,
         )
         from .evidence_state import EVIDENCE_TOOL_NAME
-        # The internal agent tool is not a routed MCP tool and is deliberately
+        from .artifact_publication import PUBLISH_TOOL_NAME
+        # Internal agent tools are not routed MCP tools and are deliberately
         # omitted from tool_states_snapshot(). Frontend clients must never
-        # shadow it, even before any external tool has been enabled.
-        reserved_names = {EVIDENCE_TOOL_NAME}
+        # shadow them, even before any external tool has been enabled.
+        reserved_names = {EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME}
         reserved_names.update(getattr(session.agent, "_tool_routes", {}))
         if hasattr(session.agent, "tool_states_snapshot"):
             reserved_names.update(
