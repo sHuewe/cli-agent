@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +20,48 @@ from .evidence_state import EVIDENCE_TOOL_NAME, EvidenceError
 from .model import log_model_call_diagnostics
 
 logger = logging.getLogger("cli_agent.agent_loop")
+
+
+def _assign_tool_call_ids(
+    message: dict[str, Any],
+    previous_messages: list[dict[str, Any]],
+) -> None:
+    """Give id-less provider calls stable per-run IDs before execution.
+
+    Source IDs must identify a single assistant call, even when a provider
+    omits IDs or accidentally reuses one from a previous response.
+    """
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return
+    used_ids = {
+        call["id"]
+        for prior in previous_messages
+        if prior.get("role") == "assistant"
+        for call in prior.get("tool_calls", [])
+        if isinstance(call, dict)
+        and isinstance(call.get("id"), str)
+        and call["id"]
+    }
+    used_ids.update(
+        prior["tool_call_id"]
+        for prior in previous_messages
+        if prior.get("role") == "tool"
+        and isinstance(prior.get("tool_call_id"), str)
+    )
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        call_id = call.get("id")
+        if not isinstance(call_id, str) or not call_id.strip() or call_id in used_ids:
+            call_id = f"call_{uuid.uuid4().hex}"
+            while call_id in used_ids:
+                call_id = f"call_{uuid.uuid4().hex}"
+            call["id"] = call_id
+        used_ids.add(call_id)
+        # The internal model history uses the OpenAI function-call envelope,
+        # even if the provider's native format omits the type.
+        call.setdefault("type", "function")
 
 
 @dataclass
@@ -67,6 +110,7 @@ async def run_model_loop(
                 ),
             )
             log_model_call_diagnostics(agent.model_client, phase=phase)
+            _assign_tool_call_ids(message, messages)
             messages.append(message)
             if phase == "main" and getattr(agent, "_evidence_state", None) is not None:
                 agent._evidence_state.pending_error = None
