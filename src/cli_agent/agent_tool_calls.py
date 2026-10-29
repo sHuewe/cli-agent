@@ -485,6 +485,16 @@ async def process_tool_calls(
             tool_message["tool_name"] = exposed_name
 
         messages.append(tool_message)
+        evidence = getattr(agent, "_evidence_state", None) if phase == "main" else None
+        if evidence is not None and not is_error:
+            metadata = None
+            if artifactized:
+                try:
+                    metadata = json.loads(model_result_text)
+                except (TypeError, ValueError):
+                    metadata = None
+            evidence.register_result(tool_call_id, tool_name=str(exposed_name),
+                                     artifact_metadata=metadata)
         if user_message is not None:
             notice = {
                 "role": MCP_USER_MESSAGE_ROLE,

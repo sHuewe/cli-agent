@@ -15,6 +15,7 @@ from .agent_knowledge import (
 from .agent_tool_calls import process_tool_calls
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
+from .evidence_state import EVIDENCE_TOOL_NAME, EvidenceError
 from .model import log_model_call_diagnostics
 
 logger = logging.getLogger("cli_agent.agent_loop")
@@ -54,7 +55,11 @@ async def run_model_loop(
         agent._dump_context(messages, phase=phase)
         try:
             message = await agent.model_client.chat(
-                messages=messages_for_model(messages),
+                messages=(
+                    agent._evidence_state.project(messages)
+                    if phase == "main" and getattr(agent, "_evidence_state", None) is not None
+                    else messages_for_model(messages)
+                ),
                 tools=(
                     []
                     if phase == "knowledge" and knowledge_selection_only_mode
@@ -63,6 +68,8 @@ async def run_model_loop(
             )
             log_model_call_diagnostics(agent.model_client, phase=phase)
             messages.append(message)
+            if phase == "main" and getattr(agent, "_evidence_state", None) is not None:
+                agent._evidence_state.pending_error = None
         finally:
             for assistant_message, tool_call, tool_message in transient_rejections:
                 agent._discard_rejected_tool_call(
@@ -344,9 +351,15 @@ async def run_model_loop(
              not in getattr(agent, "_agui_frontend_tools", {})]
             if frontend_calls else tool_calls
         )
+        evidence = getattr(agent, "_evidence_state", None) if phase == "main" else None
+        evidence_calls = [
+            call for call in backend_calls
+            if (call.get("function") or {}).get("name") == EVIDENCE_TOOL_NAME
+        ] if evidence is not None else []
+        backend_calls = [call for call in backend_calls if call not in evidence_calls]
         # Reserve the full batch BEFORE executing any backend side effects.
         # Frontend calls are just as much part of max_tool_calls as MCP calls.
-        if calls + len(frontend_calls) + len(backend_calls) > max_tool_calls:
+        if calls + len(frontend_calls) + len(backend_calls) + len(evidence_calls) > max_tool_calls:
             raise RuntimeError(
                 f"Abbruch in Phase {phase!r} nach {max_tool_calls} Tool-Aufrufen."
             )
@@ -368,6 +381,18 @@ async def run_model_loop(
             transient_rejections=transient_rejections,
         )
         state.tool_calls = calls
+        for internal_call in evidence_calls:
+            calls += 1
+            state.tool_calls = calls
+            try:
+                raw_args = (internal_call.get("function") or {}).get("arguments") or {}
+                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                evidence.update(args)
+                logger.info("evidence_state_updated entries=%d hidden=%d",
+                            len(evidence.evidences), len(evidence.compacted))
+            except (EvidenceError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                evidence.pending_error = str(exc)[:1000]
+                logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
         if frontend_calls:
             from .ag_ui_frontend_tools import FrontendToolHandoff
             # All backend calls from the same model response have been handled
