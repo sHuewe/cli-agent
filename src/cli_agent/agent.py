@@ -88,10 +88,11 @@ DUMP_PREFIX_HASH_HEX_CHARS = 16
 
 
 class CliAgent(McpLifecycleMixin, ConversationMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None, agent_timezone: str | None = None, evidence_state: bool = False) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None, agent_timezone: str | None = None) -> None:
         self.workspace_directory = workspace_directory.resolve()
-        self.evidence_enabled = bool(evidence_state)
-        self._evidence_state = EvidenceState() if self.evidence_enabled else None
+        # Evidence is an agent capability, not a per-entry-point configuration.
+        # No model request uses it unless relevant tools are available.
+        self._evidence_state = EvidenceState()
         self.model_client = model_client
         self.mcp_servers = mcp_servers
         self.max_tool_calls = max_tool_calls
@@ -638,7 +639,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 str(tool.get("function", {}).get("name") or "")
             )
         ]
-        if self.evidence_enabled:
+        if tools or getattr(self, "_agui_frontend_tools", None):
             tools.append(copy.deepcopy(EVIDENCE_TOOL))
         return tools
 

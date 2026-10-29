@@ -180,3 +180,23 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
         for m in messages for c in m.get("tool_calls", [])
     )
     assert state.snapshot()["compacted_tool_call_ids"] == ["old-1"]
+
+
+
+def test_evidence_is_available_by_default_with_tools(tmp_path):
+    from cli_agent.agent import CliAgent
+
+    agent = CliAgent(tmp_path, object(), ())
+    assert isinstance(agent._evidence_state, EvidenceState)
+    assert agent._model_tools() == []  # No tool results to summarize.
+    agent._server_tools = {
+        "sensor": [
+            {"type": "function", "function": {
+                "name": "sensor__get_value",
+                "parameters": {"type": "object", "properties": {}},
+            }}
+        ]
+    }
+    agent._active_servers = {"sensor"}
+    names = {tool["function"]["name"] for tool in agent._model_tools()}
+    assert names == {"sensor__get_value", EVIDENCE_TOOL_NAME}

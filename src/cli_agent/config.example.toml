@@ -10,7 +10,7 @@ dump_llm_context = false
 # Without it, the local system timezone is used.
 # [agent]
 # timezone = "Europe/Berlin"
-# evidence_state = true  # Optional per-request structured evidence and compaction
+# Evidence State is always available when the agent has tools.
 
 [logging]
 enabled = true

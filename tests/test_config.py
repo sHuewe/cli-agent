@@ -359,12 +359,11 @@ def test_internal_knowledge_reentry_mcp_name_reserved(tmp_path: Path, name: str)
         load_config(config_file)
 
 
-def test_evidence_state_is_opt_in_and_validated(tmp_path: Path) -> None:
+def test_evidence_state_does_not_require_a_config_option(tmp_path: Path) -> None:
     path = tmp_path / "agent.toml"
     path.write_text("", encoding="utf-8")
-    assert load_config(path).agent.evidence_state is False
+    assert load_config(path).agent.timezone is None
+    # Evidence is always on where tools exist; stale opt-in configs are rejected.
     path.write_text("[agent]\nevidence_state = true\n", encoding="utf-8")
-    assert load_config(path).agent.evidence_state is True
-    path.write_text('[agent]\nevidence_state = "yes"\n', encoding="utf-8")
-    with pytest.raises(ValueError, match="evidence_state"):
+    with pytest.raises(ValueError, match="unbekannte Optionen"):
         load_config(path)
