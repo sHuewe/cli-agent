@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import stat
+import stat as stat_module
 import uuid
 from pathlib import Path
 from typing import Any
@@ -175,7 +175,7 @@ class McpResultArtifacts:
             raise ArtifactError("Datei ist kein registriertes Session-Artefakt.")
         with path.open("rb") as handle:
             stat = os.fstat(handle.fileno())
-            if (stat.st_dev, stat.st_ino) != identity or not stat.S_ISREG(stat.st_mode):
+            if (stat.st_dev, stat.st_ino) != identity or not stat_module.S_ISREG(stat.st_mode):
                 raise ArtifactError("Session-Artefakt wurde verändert.")
             payload = handle.read(MAX_ARTIFACT_BYTES + 1)
         if len(payload) > MAX_ARTIFACT_BYTES:
