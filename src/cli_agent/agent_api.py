@@ -103,6 +103,7 @@ class AgentSession:
         self.agui_context: list[dict[str, Any]] = []
         self._pending_interrupt: dict[str, Any] | None = None
         self._pending_frontend: tuple[Any, ...] | None = None
+        self.published_artifacts: dict[str, dict[str, str]] = {}
         self._pending_frontend_thread_id: str | None = None
         self._pending_tool_id: str | None = None
         self._interrupt_tool_ids: set[str] = set()
@@ -161,6 +162,9 @@ class AgentSession:
                                 run.frontend_results
                             )
                         else:
+                            # Each new question expires downloads from the prior
+                            # question, matching MCP artifact cleanup semantics.
+                            self.published_artifacts.clear()
                             self._remember("user", run.prompt)
                             answer = await agent.ask(run.prompt)
                         if not isinstance(answer, str):
@@ -401,6 +405,19 @@ class AgentSession:
                 # the approval broker (which sanitizes them) if approval is
                 # required, or closed on finish for non-approval calls.
                 return
+        elif kind == "artifact_published":
+            # An AG-UI CUSTOM event offers only an ID and presentation metadata.
+            # Do not expose local paths or the API credential to browser clients.
+            artifact_id = payload["id"]
+            self.published_artifacts[artifact_id] = {
+                "path": payload["path"], "filename": payload["filename"],
+                "mime_type": payload["mime_type"],
+            }
+            if run.agui:
+                run.emit({"type": "CUSTOM", "name": "artifact_published", "value": {
+                    "id": artifact_id, "filename": payload["filename"],
+                    "mimeType": payload["mime_type"],
+                }})
         elif kind == "tool_finished":
             if run.agui:
                 self._interrupt_tool_ids.discard(tool_id)
@@ -804,6 +821,33 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         if not await service.remove_agui_thread(thread_id):
             return error(404, "AG-UI-Thread nicht gefunden.")
         return Response(status_code=204)
+
+    async def download_artifact(request: Request) -> Response:
+        """Authenticated localhost-only artifact access (outside AG-UI transport)."""
+        thread_id = request.path_params["thread_id"]
+        artifact_id = request.path_params["artifact_id"]
+        session_id = service._agui_threads.get(thread_id)
+        session = service.sessions.get(session_id) if session_id else None
+        if session is None or session.agent is None:
+            return error(404, "Download nicht gefunden.")
+        descriptor = session.published_artifacts.get(artifact_id)
+        if descriptor is None:
+            return error(404, "Download nicht gefunden.")
+        try:
+            payload = session.agent._result_artifacts.read_registered(descriptor["path"])
+        except (ValueError, RuntimeError, OSError):
+            return error(404, "Download nicht mehr verfügbar.")
+        from urllib.parse import quote
+        filename = descriptor["filename"]
+        return Response(
+            payload,
+            media_type=descriptor["mime_type"],
+            headers={
+                "Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename),
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     async def ag_ui_capabilities(_request: Request) -> Response:
         """Optional application-specific discovery using AG-UI's standard shape.
@@ -1417,6 +1461,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/health", health, methods=["GET"]),
             Route("/ag-ui", ag_ui_run, methods=["POST"]),
             Route("/ag-ui/capabilities", ag_ui_capabilities, methods=["GET"]),
+            Route("/threads/{thread_id}/artifacts/{artifact_id}", download_artifact, methods=["GET"]),
             Route("/threads/{thread_id:path}", delete_agui_thread, methods=["DELETE"]),
             Route("/sessions", create_session, methods=["POST"]),
             Route("/sessions/{session_id}", delete_session, methods=["DELETE"]),
