@@ -500,7 +500,7 @@ async def run_model_loop(
                 # The API session owns the public ID mapping, not the LLM.
                 if event_callback is not None:
                     await event_callback("artifact_published", {
-                        "id": artifact_id, "path": published.path,
+                        "call_id": event_id, "id": artifact_id, "path": published.path,
                         "filename": published.filename, "mime_type": published.mime_type,
                     })
                 result_text = "Download bereitgestellt: " + published.filename
