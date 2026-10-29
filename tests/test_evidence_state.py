@@ -513,3 +513,58 @@ def test_plan_is_bounded_and_does_not_force_trivial_tasks_to_plan():
     assert "plan" not in state.snapshot()
     with pytest.raises(EvidenceError, match="ohne Plan"):
         state.update({"evidences": [{**_entry(), "plan_step_id": "identify"}]})
+
+
+def test_partial_plan_status_update_and_atomic_failures():
+    state = EvidenceState()
+    state.update({"plan": _plan()})
+    state.update({"plan_step_updates": [{"id": "identify", "status": "completed"}]})
+    assert state.plan["steps"][0]["status"] == "completed"
+    assert state.plan["steps"][1]["status"] == "pending"
+    before = state.snapshot()
+    with pytest.raises(EvidenceError, match="Unbekannte Planschritt-ID"):
+        state.update({"plan_step_updates": [{"id": "missing", "status": "skipped"}]})
+    assert state.snapshot() == before
+    with pytest.raises(EvidenceError, match="nicht gleichzeitig"):
+        state.update({"plan": _plan(), "plan_step_updates": [
+            {"id": "identify", "status": "completed"}
+        ]})
+    assert state.snapshot() == before
+
+
+def test_tool_definition_enumerates_only_completed_sources():
+    state = EvidenceState()
+    assert "enum" not in state.tool_definition()["function"]["parameters"][
+        "properties"]["evidences"]["items"]["properties"]["tool_calls"][
+        "items"]["properties"]["call_id"]
+    for i in range(4):
+        state.register_result(f"call-{i}", tool_name="sensor")
+    schema = state.tool_definition()["function"]["parameters"]
+    source = schema["properties"]["evidences"]["items"]["properties"][
+        "tool_calls"]["items"]["properties"]["call_id"]
+    assert source["enum"] == [f"call-{i}" for i in range(4)]
+    assert "enum" not in EVIDENCE_TOOL["function"]["parameters"][
+        "properties"]["evidences"]["items"]["properties"]["tool_calls"][
+        "items"]["properties"]["call_id"]
+    state.update({"evidences": [_entry("call-0")]})
+    for i in range(4, 110):
+        state.register_result(f"call-{i}", tool_name="sensor")
+    offered = state.tool_definition()["function"]["parameters"]["properties"][
+        "evidences"]["items"]["properties"]["tool_calls"]["items"][
+        "properties"]["call_id"]["enum"]
+    assert "call-0" in offered
+    assert "call-109" in offered
+    assert "call-1" not in offered
+    assert len(offered) <= 97
+
+
+def test_bounded_diagnostic_arguments_are_not_part_of_state_projection():
+    state = EvidenceState()
+    state.record_debug_update(
+        call_id="ev-1", arguments={"plan": _plan()},
+        status="error", error="Invalid update",
+    )
+    assert state.debug_updates[0]["call_id"] == "ev-1"
+    assert "identify" in state.debug_updates[0]["arguments"]
+    assert "debug_updates" not in state.snapshot()
+    assert "Invalid update" not in str(state.project(_history()))
