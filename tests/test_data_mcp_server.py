@@ -41,6 +41,7 @@ class FakeFastMCP:
 
 def _operations(calls):
     return SimpleNamespace(
+        _read_records=lambda path=None, **kwargs: (["x"], [{"x": 1}, {"x": 2}]),
         calculate=lambda expression: (
             calls.append(("calculate", expression)) or "calculated"
         ),
@@ -79,6 +80,7 @@ def _operations(calls):
 BASE_TOOLS = {
     "calculate",
     "wrap_data",
+    "export_data",
     "inspect_schema",
     "preview_data",
     "select_data",

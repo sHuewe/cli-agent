@@ -435,6 +435,40 @@ async def test_agui_http_validation_bounded_json_and_proprietary_routes_removed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("internal_tool", [
+    "agent__update_evidence",
+    "agent__publish_artifact",
+])
+async def test_agui_rejects_frontend_tools_shadowing_internal_tools(internal_tool):
+    """Client tools must never intercept server-owned evidence or artifact calls."""
+    service, agents = make_test_service()
+    try:
+        async with await client_for(service) as client:
+            response = await client.post(
+                "/ag-ui",
+                json={
+                    "threadId": "internal-tool-collision",
+                    "runId": "collision-run",
+                    "protocolVersion": "1.0",
+                    "messages": [{"id": "u", "role": "user", "content": "hello"}],
+                    "tools": [{
+                        "name": internal_tool,
+                        "description": "Frontend shadow of a server-owned tool",
+                        "parameters": {"type": "object", "properties": {}},
+                    }],
+                },
+                headers={**headers(service), "Accept": "text/event-stream"},
+            )
+            assert response.status_code == 400
+            assert "kollidierender Tool-Name" in response.text
+            assert len(agents) == 1
+            assert agents[0].history == []
+            assert not next(iter(service.sessions.values()))._busy
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_agui_limits_session_mutations_while_running():
     service, agents = make_test_service()
     # Standalone thread IDs are explicitly mapped to isolated MCP sessions.
@@ -505,5 +539,159 @@ async def test_configured_standalone_session_keeps_tool_policy_in_agui_run():
             assert (await client.get(
                 f"/sessions/{sid}/context", headers=auth
             )).json()["tools"][0]["enabled"] is False
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_published_artifact_download_is_session_bound_and_authenticated():
+    service, _ = make_test_service()
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        session = service.sessions[sid]
+        session.agent._result_artifacts = SimpleNamespace(
+            read_registered=lambda path: b"export-data" if path == "registered.csv" else b"wrong"
+        )
+        artifact_id = "a" * 32
+        session.published_artifacts[artifact_id] = {
+            "path": "registered.csv", "filename": "report.csv", "mime_type": "text/csv",
+        }
+        from cli_agent.agent_api import _artifact_thread_token
+        url = f"/threads/{_artifact_thread_token(sid)}/artifacts/{artifact_id}"
+        assert (await client.get(url)).status_code == 401
+        assert (await client.get(url, headers=headers(service))).content == b"export-data"
+        assert (await client.get(url, headers=headers(service))).headers["cache-control"] == "no-store"
+        assert (await client.get(url, headers=headers(service))).headers["content-disposition"].startswith("attachment;")
+        assert (await client.get(
+            f"/threads/{sid}/artifacts/{'b' * 32}", headers=headers(service)
+        )).status_code == 404
+        session.published_artifacts.clear()
+        assert (await client.get(url, headers=headers(service))).status_code == 404
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_browser_download_requires_valid_tab_lease():
+    service, _ = make_test_service()
+    session = await service.create()
+    session.agent._result_artifacts = SimpleNamespace(
+        read_registered=lambda path: b"document"
+    )
+    artifact_id = "c" * 32
+    session.published_artifacts[artifact_id] = {
+        "path": "registered.md", "filename": "report.md", "mime_type": "text/markdown",
+    }
+    ui = {
+        "token": "browser-secret",
+        "origin": "http://127.0.0.1:8765",
+        "registry": SimpleNamespace(is_owner=lambda sid, lease: (
+            sid == session.id and lease == "valid-lease"
+        )),
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        from cli_agent.agent_api import _artifact_thread_token
+        endpoint = f"/threads/{_artifact_thread_token(session.id)}/artifacts/{artifact_id}"
+        browser_headers = {
+            "Authorization": "Bearer browser-secret",
+            "X-Cli-Agent-Browser": "1",
+            "X-Cli-Agent-Lease": "valid-lease",
+        }
+        assert (await client.get(endpoint, headers=browser_headers)).content == b"document"
+        assert (await client.get(endpoint, headers={
+            **browser_headers, "X-Cli-Agent-Lease": "invalid",
+        })).status_code in {401, 403}
+        assert (await client.delete(endpoint, headers=browser_headers)).status_code in {401, 403}
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_id", [
+    "report#1", "report/1", "report?1", ".", "..",
+    "report/artifacts/other", "äö雪", "report%2F1",
+])
+async def test_artifact_download_thread_ids_with_url_delimiters(thread_id):
+    from cli_agent.agent_api import AgentRun, _artifact_thread_token
+
+    service, _ = make_test_service()
+    session = await service.resolve_agui_thread(thread_id)
+    session.agent._result_artifacts = SimpleNamespace(
+        read_registered=lambda path: b"report" if path == "report.csv" else b"unexpected"
+    )
+    session._run = AgentRun(id="run", thread_id=thread_id, prompt="export",
+                            agui=True, status="running")
+    artifact_id = "d" * 32
+    await session.on_agent_event("artifact_published", {
+        "call_id": "call", "id": artifact_id, "path": "report.csv",
+        "filename": "report.csv", "mime_type": "text/csv",
+    })
+    await session.on_agent_event("tool_finished", {
+        "call_id": "call", "status": "success",
+    })
+    result = session._run.events[-1][1]
+    url = result["content"][1]["source"]["value"]
+    assert url == f"/threads/{_artifact_thread_token(thread_id)}/artifacts/{artifact_id}"
+    assert all(char not in url for char in "#?%")
+    try:
+        async with await client_for(service) as client:
+            assert (await client.get(url)).status_code == 401
+            response = await client.get(url, headers=headers(service))
+            assert response.status_code == 200
+            assert response.content == b"report"
+            assert (await client.get(
+                f"/threads/{_artifact_thread_token(thread_id)}/artifacts/{'e' * 32}",
+                headers=headers(service),
+            )).status_code == 404
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_browser_artifact_download_uses_decoded_thread_id_for_lease():
+    from cli_agent.agent_api import _artifact_thread_token
+
+    service, _ = make_test_service()
+    session = await service.create()
+    artifact_id = "f" * 32
+    session.agent._result_artifacts = SimpleNamespace(
+        read_registered=lambda path: b"browser-document"
+    )
+    session.published_artifacts[artifact_id] = {
+        "path": "report.md", "filename": "report.md", "mime_type": "text/markdown",
+    }
+    ui = {
+        "token": "browser-secret",
+        "origin": "http://127.0.0.1:8765",
+        "registry": SimpleNamespace(is_owner=lambda sid, lease: (
+            sid == session.id and lease == "valid-lease"
+        )),
+    }
+    endpoint = f"/threads/{_artifact_thread_token(session.id)}/artifacts/{artifact_id}"
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+            base_url="http://127.0.0.1:8765",
+        ) as client:
+            browser_headers = {
+                "Authorization": "Bearer browser-secret",
+                "X-Cli-Agent-Browser": "1",
+                "X-Cli-Agent-Lease": "valid-lease",
+            }
+            response = await client.get(endpoint, headers=browser_headers)
+            assert response.status_code == 200
+            assert response.content == b"browser-document"
+            assert (await client.get(endpoint, headers={
+                **browser_headers, "X-Cli-Agent-Lease": "invalid",
+            })).status_code == 403
+            assert (await client.get(
+                f"/threads/{_artifact_thread_token('other')}/artifacts/{artifact_id}",
+                headers=browser_headers,
+            )).status_code == 403
+            assert (await client.get(
+                f"/threads/{session.id}/artifacts/{artifact_id}",
+                headers=browser_headers,
+            )).status_code == 403
     finally:
         await service.shutdown()

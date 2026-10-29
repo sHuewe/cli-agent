@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,7 +77,7 @@ def _server_instructions(access: str) -> str:
         )
     return """\
 Use calculate for arithmetic. Tabular tools use workspace files;
-no normal tabular tool accepts inline data.
+no normal tabular tool accepts inline data.\nUse export_data(path, format) for file-only exports (no rows in LLM metadata).
 For new Markdown, JSON, CSV, TSV, JSONL or NDJSON text, call
 wrap_data(content) once. For existing files, pass their path directly.
 The first wrap_data result supplies verified workspace_path and records_path
@@ -168,6 +171,55 @@ def create_server(
             )
         except (ValueError, TypeError, OverflowError) as exc:
             raise DataOperationError(str(exc)) from exc
+
+    @mcp.tool(structured_output=False)
+    def export_data(
+        path: str,
+        format: Literal["csv", "json", "markdown"],
+        records_path: str | None = None,
+        table_index: int = 0,
+    ) -> CallToolResult:
+        """Export a workspace dataset without exposing any raw rows to the LLM.
+
+        The complete export is saved as a session artifact; the model only
+        receives path, row count, column names and format.
+        """
+        columns, rows = operations._read_records(
+            path=path, records_path=records_path, table_index=table_index,
+        )
+        if format == "csv":
+            output = io.StringIO(newline="")
+            writer = csv.DictWriter(output, fieldnames=columns, lineterminator="\n")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({column: row.get(column) for column in columns})
+            content = output.getvalue()
+        elif format == "json":
+            content = json.dumps({
+                "columns": columns,
+                "rows": [
+                    {column: _artifact_value(row.get(column)) for column in columns}
+                    for row in rows
+                ],
+                "scalar_encoding": SCALAR_ENCODING,
+            }, ensure_ascii=False, allow_nan=False)
+        else:
+            from .data_markdown import render_markdown_table
+            content = render_markdown_table(columns, rows)
+        from mcp.types import TextContent
+        from .mcp_result_artifacts import ONLY_METADATA_TO_LLM_KEY, METADATA_FOR_LLM_KEY
+        return CallToolResult(
+            content=[TextContent(type="text", text="Exportdatei als Session-Artefakt vorbereitet.")],
+            structuredContent={"export_content": content},
+            **{"_meta": {
+                ONLY_METADATA_TO_LLM_KEY: True,
+                METADATA_FOR_LLM_KEY: {
+                    "operation": "export_data", "export_format": format,
+                    "row_count": len(rows), "columns": columns[:24],
+                    "columns_complete": len(columns) <= 24,
+                },
+            }},
+        )
 
     @mcp.tool()
     def inspect_json(path: str) -> str:

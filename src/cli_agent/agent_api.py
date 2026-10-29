@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import secrets
 import uuid
@@ -35,6 +36,31 @@ MAX_JSON_BYTES = 1024 * 1024
 # A UI run must not execute before its SSE consumer is attached.
 # A bounded wait prevents abandoned/browser-blocked requests from hanging a session.
 BROWSER_SSE_CONNECT_TIMEOUT = 15.0
+
+
+def _artifact_thread_token(thread_id: str) -> str:
+    """Opaque URL-safe segment for any accepted AG-UI threadId.
+
+    Percent encoding is insufficient: browsers normalize dot segments and
+    servers may decode %2F before routing. Base64url avoids both problems.
+    """
+    return "~" + base64.urlsafe_b64encode(thread_id.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _artifact_thread_from_token(token: str) -> str | None:
+    """Decode only canonical tokens for valid AG-UI thread IDs."""
+    if not token.startswith("~") or len(token) > 1024:
+        return None
+    encoded = token[1:]
+    try:
+        thread_id = base64.urlsafe_b64decode(
+            encoded + "=" * (-len(encoded) % 4)
+        ).decode("utf-8")
+    except (ValueError, UnicodeError):
+        return None
+    if not 0 < len(thread_id) <= 128 or _artifact_thread_token(thread_id) != token:
+        return None
+    return thread_id
 
 
 @dataclass
@@ -103,6 +129,8 @@ class AgentSession:
         self.agui_context: list[dict[str, Any]] = []
         self._pending_interrupt: dict[str, Any] | None = None
         self._pending_frontend: tuple[Any, ...] | None = None
+        self.published_artifacts: dict[str, dict[str, str]] = {}
+        self._published_tool_calls: dict[str, str] = {}
         self._pending_frontend_thread_id: str | None = None
         self._pending_tool_id: str | None = None
         self._interrupt_tool_ids: set[str] = set()
@@ -161,6 +189,10 @@ class AgentSession:
                                 run.frontend_results
                             )
                         else:
+                            # Each new question expires downloads from the prior
+                            # question, matching MCP artifact cleanup semantics.
+                            self.published_artifacts.clear()
+                            self._published_tool_calls.clear()
                             self._remember("user", run.prompt)
                             answer = await agent.ask(run.prompt)
                         if not isinstance(answer, str):
@@ -401,6 +433,15 @@ class AgentSession:
                 # the approval broker (which sanitizes them) if approval is
                 # required, or closed on finish for non-approval calls.
                 return
+        elif kind == "artifact_published":
+            # An AG-UI CUSTOM event offers only an ID and presentation metadata.
+            # Do not expose local paths or the API credential to browser clients.
+            artifact_id = payload["id"]
+            self._published_tool_calls[tool_id] = artifact_id
+            self.published_artifacts[artifact_id] = {
+                "path": payload["path"], "filename": payload["filename"],
+                "mime_type": payload["mime_type"],
+            }
         elif kind == "tool_finished":
             if run.agui:
                 self._interrupt_tool_ids.discard(tool_id)
@@ -410,9 +451,26 @@ class AgentSession:
                 if self._pending_tool_id == tool_id:
                     self._pending_tool_id = None
                 # Only publish safe status, never arbitrary MCP payload data.
-                run.emit({"type": "TOOL_CALL_RESULT",
-                          "toolCallId": tool_id, "messageId": uuid.uuid4().hex,
-                          "content": str(payload.get("status") or "finished")})
+                published_id = self._published_tool_calls.pop(tool_id, None)
+                if published_id is not None and payload.get("status") == "success":
+                    document = self.published_artifacts[published_id]
+                    run.emit({"type": "TOOL_CALL_RESULT",
+                              "toolCallId": tool_id, "messageId": uuid.uuid4().hex,
+                              "content": [
+                                  {"type": "text", "text": "Datei zum Download bereit."},
+                                  {"type": "document", "source": {
+                                      "type": "url",
+                                      "value": "/threads/" + _artifact_thread_token(run.thread_id) + "/artifacts/" + published_id,
+                                      "mimeType": document["mime_type"],
+                                  }, "metadata": {
+                                      "filename": document["filename"],
+                                      "artifactId": published_id,
+                                  }},
+                              ]})
+                else:
+                    run.emit({"type": "TOOL_CALL_RESULT",
+                              "toolCallId": tool_id, "messageId": uuid.uuid4().hex,
+                              "content": str(payload.get("status") or "finished")})
             else:
                 run.emit({"type": "TOOL_CALL_END", "toolCallId": tool_id})
                 run.emit({"type": "CUSTOM", "name": "tool_status", "value": {
@@ -805,6 +863,44 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             return error(404, "AG-UI-Thread nicht gefunden.")
         return Response(status_code=204)
 
+    async def download_artifact(request: Request) -> Response:
+        """Authenticated localhost-only artifact access (outside AG-UI transport)."""
+        thread_id = _artifact_thread_from_token(request.path_params["thread_id"])
+        if thread_id is None:
+            return error(404, "Download nicht gefunden.")
+        artifact_id = request.path_params["artifact_id"]
+        browser = ui is not None and request.headers.get("x-cli-agent-browser") == "1"
+        if browser:
+            assert ui is not None
+            if not ui["registry"].is_owner(
+                thread_id, request.headers.get("x-cli-agent-lease")
+            ):
+                return error(403, "Keine gültige Browser-Bindung.")
+            session = service.sessions.get(thread_id)
+        else:
+            session_id = service._agui_threads.get(thread_id)
+            session = service.sessions.get(session_id) if session_id else None
+        if session is None or session.agent is None:
+            return error(404, "Download nicht gefunden.")
+        descriptor = session.published_artifacts.get(artifact_id)
+        if descriptor is None:
+            return error(404, "Download nicht gefunden.")
+        try:
+            payload = session.agent._result_artifacts.read_registered(descriptor["path"])
+        except (ValueError, RuntimeError, OSError):
+            return error(404, "Download nicht mehr verfügbar.")
+        from urllib.parse import quote
+        filename = descriptor["filename"]
+        return Response(
+            payload,
+            media_type=descriptor["mime_type"],
+            headers={
+                "Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename),
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     async def ag_ui_capabilities(_request: Request) -> Response:
         """Optional application-specific discovery using AG-UI's standard shape.
 
@@ -885,10 +981,11 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             history_for_model,
         )
         from .evidence_state import EVIDENCE_TOOL_NAME
-        # The internal agent tool is not a routed MCP tool and is deliberately
+        from .artifact_publication import PUBLISH_TOOL_NAME
+        # Internal agent tools are not routed MCP tools and are deliberately
         # omitted from tool_states_snapshot(). Frontend clients must never
-        # shadow it, even before any external tool has been enabled.
-        reserved_names = {EVIDENCE_TOOL_NAME}
+        # shadow them, even before any external tool has been enabled.
+        reserved_names = {EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME}
         reserved_names.update(getattr(session.agent, "_tool_routes", {}))
         if hasattr(session.agent, "tool_states_snapshot"):
             reserved_names.update(
@@ -1380,7 +1477,9 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         host = request.headers.get("host", "").split(":")[0].lower()
         if host != API_HOST or request.headers.get("x-forwarded-host") or request.headers.get("forwarded"):
             return error(403, "Unzulässiger Host.")
-        path = request.url.path
+        # Use the ASGI-decoded path; request.url.path may treat decoded # or
+        # ? characters as URL delimiters and truncate the real path.
+        path = request.scope["path"]
         origin = request.headers.get("origin")
         if ui is not None and path in {"/", "/assets/app.css", "/assets/app.js"}:
             if request.method != "GET" or origin is not None:
@@ -1396,9 +1495,18 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             and ((origin is None or origin == ui["origin"])
                  if request.method in {"GET", "HEAD"}
                  else origin == ui["origin"])
-            and (path.startswith("/ui/") or path.startswith("/sessions/") or path.startswith("/ag-ui"))
+            and (path.startswith("/ui/") or path.startswith("/sessions/")
+                 or path.startswith("/ag-ui") or path.startswith("/threads/"))
         )
         if browser:
+            if path.startswith("/threads/"):
+                parts = path.split("/")
+                thread_id = _artifact_thread_from_token(parts[2]) if len(parts) == 5 else None
+                if (request.method != "GET" or thread_id is None
+                        or parts[3] != "artifacts" or not parts[4]
+                        or not ui["registry"].is_owner(
+                            thread_id, request.headers.get("x-cli-agent-lease"))):
+                    return error(403, "Keine gültige Tab-Bindung für den Download.")
             if path.startswith("/sessions/"):
                 parts = path.split("/")
                 if (len(parts) < 4 or request.method == "DELETE"
@@ -1417,6 +1525,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/health", health, methods=["GET"]),
             Route("/ag-ui", ag_ui_run, methods=["POST"]),
             Route("/ag-ui/capabilities", ag_ui_capabilities, methods=["GET"]),
+            Route("/threads/{thread_id}/artifacts/{artifact_id}", download_artifact, methods=["GET"]),
             Route("/threads/{thread_id:path}", delete_agui_thread, methods=["DELETE"]),
             Route("/sessions", create_session, methods=["POST"]),
             Route("/sessions/{session_id}", delete_session, methods=["DELETE"]),

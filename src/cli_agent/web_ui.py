@@ -692,6 +692,8 @@ h1 { margin: 0 0 4px; font-size: 1.35rem; }
 .tool-call-row + .tool-call-row { border-top: 1px solid color-mix(in srgb, CanvasText 10%, transparent); }
 .tool-call-name { overflow-wrap: anywhere; min-width: 0; }
 .tool-call-status { flex-shrink: 0; opacity: .8; }
+.tool-call-row { flex-wrap: wrap; align-items: center; }
+.artifact-download { max-width: 100%; overflow-wrap: anywhere; text-align: left; padding: 6px 10px; font-size: .82rem; }
 .tool-call-status[data-state="success"] { color: light-dark(#176d38, #77d89a); opacity: 1; }
 .tool-call-status[data-state="error"], .tool-call-status[data-state="denied"] { color: light-dark(#b42318, #ff9088); opacity: 1; }
 .commands { display: flex; flex-wrap: wrap; gap: 8px; }

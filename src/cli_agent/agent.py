@@ -33,6 +33,7 @@ from .mcp_contracts import tool_contract_fingerprint
 from .mcp_result_artifacts import McpResultArtifacts
 from .message_visibility import messages_for_model
 from .evidence_state import EvidenceState, EVIDENCE_TOOL
+from .artifact_publication import PUBLISH_TOOL
 from .model import ModelClient
 from .network_policy import NetworkConfig
 from .workspace_access import normalize_workspace_access
@@ -709,6 +710,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         ]
         if tools or getattr(self, "_agui_frontend_tools", None):
             tools.append(self._evidence_state.tool_definition())
+            tools.append(PUBLISH_TOOL)
         return tools
 
     def _tool_input_schema(self, exposed_name: str, *, phase: str) -> dict[str, Any] | None:

@@ -206,7 +206,7 @@ def test_evidence_is_available_by_default_with_tools(tmp_path):
     }
     agent._active_servers = {"sensor"}
     names = {tool["function"]["name"] for tool in agent._model_tools()}
-    assert names == {"sensor__get_value", EVIDENCE_TOOL_NAME}
+    assert names == {"sensor__get_value", EVIDENCE_TOOL_NAME, "agent__publish_artifact"}
 
 
 
