@@ -710,7 +710,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         ]
         if tools or getattr(self, "_agui_frontend_tools", None):
             tools.append(self._evidence_state.tool_definition())
-        tools.append(PUBLISH_TOOL)
+            tools.append(PUBLISH_TOOL)
         return tools
 
     def _tool_input_schema(self, exposed_name: str, *, phase: str) -> dict[str, Any] | None:
