@@ -1460,11 +1460,13 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
         "demo__read",
         "demo__write",
         "agent__update_evidence",
+        "agent__publish_artifact",
     ]
     assert agent.set_tool_enabled("demo__write", enabled=False) is True
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
         "demo__read",
         "agent__update_evidence",
+        "agent__publish_artifact",
     ]
 
     states = {item["name"]: item for item in agent.tool_states_snapshot()}
@@ -1477,6 +1479,7 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
         "demo__read",
         "demo__write",
         "agent__update_evidence",
+        "agent__publish_artifact",
     ]
 
 
