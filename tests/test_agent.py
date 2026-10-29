@@ -1459,10 +1459,12 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
         "demo__read",
         "demo__write",
+        "agent__update_evidence",
     ]
     assert agent.set_tool_enabled("demo__write", enabled=False) is True
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
-        "demo__read"
+        "demo__read",
+        "agent__update_evidence",
     ]
 
     states = {item["name"]: item for item in agent.tool_states_snapshot()}
@@ -1471,7 +1473,11 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
     assert states["demo__write"]["description"] == "Write demo data"
 
     assert agent.set_tool_enabled("demo__write", enabled=True) is True
-    assert len(agent._model_tools()) == 2
+    assert [tool["function"]["name"] for tool in agent._model_tools()] == [
+        "demo__read",
+        "demo__write",
+        "agent__update_evidence",
+    ]
 
 
 def test_unknown_tool_cannot_be_toggled(tmp_path: Path) -> None:
@@ -1502,6 +1508,8 @@ def test_history_reset_rewrites_and_removes_dump_diagnostics(tmp_path: Path) -> 
     dump_directory = tmp_path / ".cli-agent"
     diagnostic_files = (
         "main_working_messages.json",
+        "main_evidence_state.json",
+        "main_evidence_update_debug.json",
         "main_system_prompt.json",
         "knowledge_working_messages.json",
         "knowledge_system_prompt.json",
@@ -1537,10 +1545,12 @@ def test_history_reset_restores_persisted_and_in_memory_state_if_cleanup_fails(
     diagnostic_files = (
         "history.json",
         "main_working_messages.json",
+        "main_evidence_update_debug.json",
         "main_system_prompt.json",
     )
     agent._write_dump_json("history.json", agent.history)
     agent._write_dump_json("main_working_messages.json", {"old": "messages"})
+    agent._write_dump_json("main_evidence_update_debug.json", {"old": "sensitive arguments"})
     agent._write_dump_json("main_system_prompt.json", {"old": "system"})
     before = {
         filename: agent._safe_dump_path(filename).read_bytes()
@@ -1601,3 +1611,36 @@ def test_windows_dump_budget_accounts_for_checkout_directory(tmp_path: Path) -> 
         240 - len(str(tmp_path / ".cli-agent").encode("utf-16-le")) // 2 - 1,
     )
     assert agent._dump_filename_budget(windows=True) == expected
+
+
+def test_evidence_working_memory_guidance_is_in_system_prompt_only_with_tools(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path)
+    assert "strukturiertes Arbeitsgedächtnis mit" not in agent._build_system_prompt()
+
+    agent._server_tools = {
+        "sensor": [{"type": "function", "function": {
+            "name": "sensor__get_history",
+            "parameters": {"type": "object", "properties": {}},
+        }}]
+    }
+    agent._active_servers = {"sensor"}
+    prompt = agent._build_system_prompt()
+
+    assert "agent__update_evidence" in prompt
+    assert "strukturiertes Arbeitsgedächtnis mit" in prompt
+    assert "BEVOR du mit dem nächsten Untersuchungsschritt" in prompt
+    assert "exakten call_id-Werte" in prompt
+    assert "widerlegte oder überholte Evidences" in prompt
+    assert "kein Evidence-Update nötig" in prompt
+    assert "Kühlzeitfenster" not in prompt
+    assert "abgeschlossenen Teilanalyse" in prompt
+    assert "KEINE Kopie" in prompt
+    assert "preview_data" in prompt
+    assert "Aggregationen, Joins" in prompt
+    assert "Erzwinge keine" in prompt
+    assert "der erste Arbeitsschritt" in prompt
+    assert "BEVOR du die eigentliche Untersuchung beginnst" in prompt
+    assert "plan_step_id" in prompt
+    assert "Einfache Aufgaben benötigen keinen Plan" in prompt

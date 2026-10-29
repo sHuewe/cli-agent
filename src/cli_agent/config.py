@@ -96,6 +96,7 @@ class AgentConfig:
     timezone: str | None = None
 
 
+
 @dataclass(frozen=True)
 class LoggingConfig:
     enabled: bool = True

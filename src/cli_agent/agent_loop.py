@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,9 +16,52 @@ from .agent_knowledge import (
 from .agent_tool_calls import process_tool_calls
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
+from .evidence_state import EVIDENCE_TOOL_NAME, EvidenceError
 from .model import log_model_call_diagnostics
 
 logger = logging.getLogger("cli_agent.agent_loop")
+
+
+def _assign_tool_call_ids(
+    message: dict[str, Any],
+    previous_messages: list[dict[str, Any]],
+) -> None:
+    """Give id-less provider calls stable per-run IDs before execution.
+
+    Source IDs must identify a single assistant call, even when a provider
+    omits IDs or accidentally reuses one from a previous response.
+    """
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return
+    used_ids = {
+        call["id"]
+        for prior in previous_messages
+        if prior.get("role") == "assistant"
+        for call in prior.get("tool_calls", [])
+        if isinstance(call, dict)
+        and isinstance(call.get("id"), str)
+        and call["id"]
+    }
+    used_ids.update(
+        prior["tool_call_id"]
+        for prior in previous_messages
+        if prior.get("role") == "tool"
+        and isinstance(prior.get("tool_call_id"), str)
+    )
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        call_id = call.get("id")
+        if not isinstance(call_id, str) or not call_id.strip() or call_id in used_ids:
+            call_id = f"call_{uuid.uuid4().hex}"
+            while call_id in used_ids:
+                call_id = f"call_{uuid.uuid4().hex}"
+            call["id"] = call_id
+        used_ids.add(call_id)
+        # The internal model history uses the OpenAI function-call envelope,
+        # even if the provider's native format omits the type.
+        call.setdefault("type", "function")
 
 
 @dataclass
@@ -54,7 +98,11 @@ async def run_model_loop(
         agent._dump_context(messages, phase=phase)
         try:
             message = await agent.model_client.chat(
-                messages=messages_for_model(messages),
+                messages=(
+                    agent._evidence_state.project(messages)
+                    if phase == "main" and getattr(agent, "_evidence_state", None) is not None
+                    else messages_for_model(messages)
+                ),
                 tools=(
                     []
                     if phase == "knowledge" and knowledge_selection_only_mode
@@ -62,7 +110,10 @@ async def run_model_loop(
                 ),
             )
             log_model_call_diagnostics(agent.model_client, phase=phase)
+            _assign_tool_call_ids(message, messages)
             messages.append(message)
+            if phase == "main" and getattr(agent, "_evidence_state", None) is not None:
+                agent._evidence_state.pending_error = None
         finally:
             for assistant_message, tool_call, tool_message in transient_rejections:
                 agent._discard_rejected_tool_call(
@@ -344,9 +395,15 @@ async def run_model_loop(
              not in getattr(agent, "_agui_frontend_tools", {})]
             if frontend_calls else tool_calls
         )
+        evidence = getattr(agent, "_evidence_state", None) if phase == "main" else None
+        evidence_calls = [
+            call for call in backend_calls
+            if (call.get("function") or {}).get("name") == EVIDENCE_TOOL_NAME
+        ] if evidence is not None else []
+        backend_calls = [call for call in backend_calls if call not in evidence_calls]
         # Reserve the full batch BEFORE executing any backend side effects.
         # Frontend calls are just as much part of max_tool_calls as MCP calls.
-        if calls + len(frontend_calls) + len(backend_calls) > max_tool_calls:
+        if calls + len(frontend_calls) + len(backend_calls) + len(evidence_calls) > max_tool_calls:
             raise RuntimeError(
                 f"Abbruch in Phase {phase!r} nach {max_tool_calls} Tool-Aufrufen."
             )
@@ -368,6 +425,56 @@ async def run_model_loop(
             transient_rejections=transient_rejections,
         )
         state.tool_calls = calls
+        for internal_call in evidence_calls:
+            calls += 1
+            state.tool_calls = calls
+            event_callback = getattr(agent, "event_callback", None)
+            event_id = internal_call["id"]
+            if event_callback is not None:
+                await event_callback(
+                    "tool_started",
+                    {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME},
+                )
+            status = "success"
+            previous_count = len(evidence.evidences)
+            previous_compacted = len(evidence.compacted)
+            try:
+                raw_args = (internal_call.get("function") or {}).get("arguments") or {}
+                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                evidence.update(args, call_id=event_id)
+                result_text = (
+                    "Evidence-State erfolgreich aktualisiert. "
+                    f"Einträge: {len(evidence.evidences)} "
+                    f"(vorher {previous_count}); "
+                    f"ausgeblendete Toolaufrufe: {len(evidence.compacted)} "
+                    f"(vorher {previous_compacted}). "
+                    "Nicht erneut speichern, sofern keine Korrektur nötig ist."
+                )
+                logger.info("evidence_state_updated entries=%d hidden=%d",
+                            len(evidence.evidences), len(evidence.compacted))
+            except (EvidenceError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                status = "error"
+                result_text = (
+                    "Evidence-Update NICHT übernommen: " + str(exc)[:1800]
+                    + " Korrigiere die konkret genannten Argumente und versuche es erneut."
+                )
+                logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
+            finally:
+                # Keep a protocol-complete, short confirmation in the model
+                # history, but never repeat the potentially huge evidence
+                # payload in the assistant tool call's arguments.
+                internal_call["function"]["arguments"] = {}
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": event_id,
+                    "content": result_text,
+                })
+                if event_callback is not None:
+                    await event_callback(
+                        "tool_finished",
+                        {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME,
+                         "status": status},
+                    )
         if frontend_calls:
             from .ag_ui_frontend_tools import FrontendToolHandoff
             # All backend calls from the same model response have been handled

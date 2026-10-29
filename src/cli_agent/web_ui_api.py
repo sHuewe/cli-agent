@@ -535,28 +535,36 @@ API_APP_JS = """
   const jsonEncoder = new TextEncoder();
 
   function compactAguiHistory(input) {
-    const messages = input.messages.slice();
-    const size = () => jsonEncoder.encode(
-      JSON.stringify({...input, messages})
-    ).length;
+    const messages = input.messages;
+    const utf8Bytes = value => jsonEncoder.encode(JSON.stringify(value)).length;
+    // Compute the serialized request size once. Each removed array item
+    // contributes its serialized UTF-8 bytes plus exactly one comma, as the
+    // latest conversation turn is always retained. Avoid repeatedly encoding
+    // the complete history (quadratic cost on slower Windows runners).
+    let bytes = utf8Bytes(input);
+    let start = 0;
+    const lastUser = messages.findLastIndex(item => item.role === "user");
     // Remove *whole* prior conversation turns. Never discard the newest
     // user turn or an in-progress tool/approval exchange to make room.
-    while ((messages.length > MAX_SYNCED_MESSAGES ||
-            size() > MAX_SYNCED_REQUEST_BYTES) && messages.length > 1) {
-      const lastUser = messages.findLastIndex(item => item.role === "user");
-      if (lastUser <= 0) break;
-      let next = 1;
+    while ((messages.length - start > MAX_SYNCED_MESSAGES ||
+            bytes > MAX_SYNCED_REQUEST_BYTES) &&
+           messages.length - start > 1) {
+      if (lastUser <= start) break;
+      let next = start + 1;
       while (next < lastUser && messages[next].role !== "user") next += 1;
-      messages.splice(0, next);
+      for (let index = start; index < next; index += 1) {
+        bytes -= utf8Bytes(messages[index]) + 1;
+      }
+      start = next;
     }
-    if (messages.length > MAX_SYNCED_MESSAGES ||
-        size() > MAX_SYNCED_REQUEST_BYTES) {
+    if (messages.length - start > MAX_SYNCED_MESSAGES ||
+        bytes > MAX_SYNCED_REQUEST_BYTES) {
       throw new Error(
         "Die aktuelle Nachricht oder Tool-Fortsetzung ist zu groß. " +
         "Bitte den Inhalt verkürzen."
       );
     }
-    return messages;
+    return messages.slice(start);
   }
 
   // Keep the wire transcript below the server limits of 512 messages

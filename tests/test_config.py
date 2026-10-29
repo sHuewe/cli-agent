@@ -357,3 +357,13 @@ def test_internal_knowledge_reentry_mcp_name_reserved(tmp_path: Path, name: str)
     )
     with pytest.raises(ValueError, match="knowledge_reentry"):
         load_config(config_file)
+
+
+def test_evidence_state_does_not_require_a_config_option(tmp_path: Path) -> None:
+    path = tmp_path / "agent.toml"
+    path.write_text("", encoding="utf-8")
+    assert load_config(path).agent.timezone is None
+    # Evidence is always on where tools exist; stale opt-in configs are rejected.
+    path.write_text("[agent]\nevidence_state = true\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unbekannte Optionen"):
+        load_config(path)

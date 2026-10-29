@@ -16,6 +16,8 @@ from .agent_knowledge import (
 from .agent_loop import ModelLoopRunState, run_model_loop
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
+from .evidence_state import EvidenceState
+from .ag_ui_frontend_tools import FRONTEND_FAILURE_META_KEY
 from .model import log_model_call_diagnostics
 from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
@@ -73,6 +75,9 @@ class ConversationMixin:
             diagnostic_files = (
                 "history.json",
                 "main_working_messages.json",
+                "main_full_working_messages.json",
+                "main_evidence_state.json",
+                "main_evidence_update_debug.json",
                 "main_system_prompt.json",
                 "knowledge_working_messages.json",
                 "knowledge_system_prompt.json",
@@ -127,6 +132,8 @@ class ConversationMixin:
         self.history.clear()
         self._last_working_messages = []
         self._last_working_tools = []
+        if getattr(self, "_evidence_state", None) is not None:
+            self._evidence_state = EvidenceState()
         self._dumped_history_json = dumped_history_json
         artifacts = getattr(self, "_result_artifacts", None)
         if artifacts is not None:
@@ -168,6 +175,8 @@ class ConversationMixin:
 
         self._knowledge_reentry_calls = 0
         self._knowledge_reentry_seen = set()
+        if getattr(self, "_evidence_state", None) is not None:
+            self._evidence_state = EvidenceState()
         knowledge = await self._collect_knowledge(prompt)
         reference_context = self._build_reference_context_message(knowledge=knowledge)
         working_messages = [
@@ -305,6 +314,30 @@ class ConversationMixin:
         run_state = getattr(self, "_agui_pending_run_state", None)
         if run_state is None:
             run_state = ModelLoopRunState()
+        # AG-UI responses have already been validated against the pending
+        # frontend batch by checked_frontend_results. Only register results
+        # corresponding to calls in the trusted server-owned checkpoint.
+        evidence = getattr(self, "_evidence_state", None)
+        if evidence is not None:
+            pending_calls = {
+                call.get("id"): (call.get("function") or {}).get("name")
+                for message in messages
+                if message.get("role") == "assistant"
+                for call in message.get("tool_calls", [])
+                if isinstance(call, dict)
+            }
+            for result in results:
+                if not isinstance(result, dict) or result.get("role") != "tool":
+                    continue
+                call_id = result.get("tool_call_id")
+                name = pending_calls.get(call_id) if isinstance(call_id, str) else None
+                if (
+                    not isinstance(name, str)
+                    or call_id in evidence.tool_results
+                    or result.get("_meta", {}).get(FRONTEND_FAILURE_META_KEY) is True
+                ):
+                    continue
+                evidence.register_result(call_id, tool_name=name)
         messages.extend(results)
         tools = self._model_tools()
         if getattr(self, "_agui_frontend_tools", None):
@@ -343,9 +376,9 @@ class ConversationMixin:
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
         """Return the exact model-visible view of the current/last main loop."""
 
-        return messages_for_model(
-            getattr(self, "_last_working_messages", [])
-        )
+        messages = getattr(self, "_last_working_messages", [])
+        evidence = getattr(self, "_evidence_state", None)
+        return evidence.project(messages) if evidence is not None else messages_for_model(messages)
 
     def working_tools_snapshot(self) -> list[dict[str, Any]]:
         """Return the exact tool definitions used by the latest/current main loop."""

@@ -13,6 +13,7 @@ from typing import Any
 MAX_FRONTEND_TOOLS = 32
 MAX_TOOL_DEFINITION_BYTES = 64 * 1024
 MAX_FRONTEND_RESULTS_BYTES = 256 * 1024
+FRONTEND_FAILURE_META_KEY = "io.github.shuewe.cli-agent/frontend_tool_failed"
 
 
 @dataclass(frozen=True)
@@ -130,7 +131,10 @@ def checked_frontend_results(
                 if not isinstance(error, str):
                     raise ValueError("Frontend-Tool-Fehler muss Text sein.")
                 content = "FEHLER: " + error[:4096] + "\n" + content
-            results[call_id] = {"role": "tool", "tool_call_id": call_id, "content": content}
+            results[call_id] = {
+                "role": "tool", "tool_call_id": call_id, "content": content,
+                **({"_meta": {FRONTEND_FAILURE_META_KEY: True}} if error is not None else {}),
+            }
     if not assistant_found:
         raise ValueError("Assistenten-Nachricht mit den ausstehenden Tool-Aufrufen fehlt.")
     if set(results) != required:
