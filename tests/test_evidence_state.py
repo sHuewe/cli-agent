@@ -175,9 +175,16 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
     assert len(model.seen) == 2
     assert all(m.get("role") != "tool" for m in model.seen[1])
     assert "fact-1" in str(model.seen[1])
-    assert not any(
-        c.get("function", {}).get("name") == EVIDENCE_TOOL_NAME
-        for m in messages for c in m.get("tool_calls", [])
+    internal = [
+        c for m in messages for c in m.get("tool_calls", [])
+        if c.get("function", {}).get("name") == EVIDENCE_TOOL_NAME
+    ]
+    assert len(internal) == 1
+    assert internal[0]["function"]["arguments"] == {}
+    assert any(
+        m.get("tool_call_id") == internal[0]["id"]
+        and "erfolgreich aktualisiert" in m.get("content", "")
+        for m in messages
     )
     assert state.snapshot()["compacted_tool_call_ids"] == ["old-1"]
 
@@ -345,9 +352,16 @@ def test_evidence_updates_use_regular_tool_activity_events():
         ("tool_finished", {"call_id": "evidence-error", "tool": EVIDENCE_TOOL_NAME,
                            "status": "error"}),
     ]
-    assert not any(
-        call.get("function", {}).get("name") == EVIDENCE_TOOL_NAME
-        for msg in messages for call in msg.get("tool_calls", [])
+    internal = [
+        call for msg in messages for call in msg.get("tool_calls", [])
+        if call.get("function", {}).get("name") == EVIDENCE_TOOL_NAME
+    ]
+    assert len(internal) == 2
+    assert all(call["function"]["arguments"] == {} for call in internal)
+    assert any(
+        m.get("tool_call_id") == "evidence-error"
+        and "NICHT übernommen" in m.get("content", "")
+        for m in messages
     )
 
 
@@ -378,3 +392,24 @@ def test_evidence_requires_at_least_one_verified_source():
     # Removing evidence or explicitly discarding calls requires no new evidence.
     state.update({"remove_evidence_ids": ["e0"]})
     assert state.snapshot()["evidences"] == []
+
+
+
+def test_evidence_projection_keeps_sanitized_tool_completion():
+    state = EvidenceState()
+    state.register_result("source", tool_name="sensor")
+    state.update({"evidences": [_entry("source")]})
+    history = [
+        {"role": "system", "content": "rules"},
+        {"role": "assistant", "content": "Saving findings", "tool_calls": [
+            {"id": "ev-1", "type": "function", "function": {
+                "name": EVIDENCE_TOOL_NAME, "arguments": {}
+            }}
+        ]},
+        {"role": "tool", "tool_call_id": "ev-1",
+         "content": "Evidence-State erfolgreich aktualisiert."},
+    ]
+    visible = state.project(history)
+    assert visible[-2]["tool_calls"][0]["function"]["arguments"] == {}
+    assert visible[-1]["tool_call_id"] == "ev-1"
+    assert "erfolgreich" in visible[-1]["content"]
