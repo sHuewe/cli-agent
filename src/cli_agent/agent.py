@@ -59,8 +59,19 @@ verändern zu lassen.
 """
 
 EVIDENCE_WORKING_MEMORY_SYSTEM_RULE = """\
-Nutze agent__update_evidence als Arbeitsgedächtnis für belastbare
-Zwischenergebnisse, nicht erst als Abschlussprotokoll.
+Nutze agent__update_evidence als strukturiertes Arbeitsgedächtnis mit
+Lösungsplan und belastbaren Zwischenergebnissen, nicht erst als Abschlussprotokoll.
+Bei mehrstufigen Aufgaben ist der erste Arbeitsschritt, ein kurzes Ziel und
+aussagekräftige Teilschritte als plan über agent__update_evidence festzuhalten,
+BEVOR du die eigentliche Untersuchung beginnst. Dafür werden noch keine
+Toolquellen benötigt. Einfache Aufgaben benötigen keinen Plan.
+Jeder Planschritt erhält eine stabile id, Beschreibung und einen Status
+(pending, in_progress, completed, blocked oder skipped).
+Der Plan ist eine Orientierung, kein starres Ausführungsskript.
+Passe ihn bei neuen Erkenntnissen an, ohne unveränderte Teile bei jedem
+Evidence-Update erneut zu senden. Wenn du einen Schritt entfernst, ordne
+bereits vorhandene Evidences zuerst einem bestehenden Schritt zu oder
+entferne sie.
 Sobald du bei einer mehrstufigen Untersuchung ein relevantes, durch
 abgeschlossene Toolantworten belegtes Teilziel erreicht hast, speichere
 die Erkenntnis als Evidence, BEVOR du mit dem nächsten Untersuchungsschritt
@@ -75,6 +86,12 @@ wenigen präzisen Sätzen zusammen. Kopiere insbesondere bei preview_data
 keine Beispielzeilen, Tabellen oder längeren Ergebnisausschnitte.
 Fasse mehrere zusammengehörige Toolergebnisse zu einer aussagekräftigen
 Evidence zusammen, statt eine Evidence pro Datenabfrage anzulegen.
+Ordne bei aktivem Plan jede Evidence durch plan_step_id genau einem
+Planschritt zu. Speichere den Befund, sobald ein Teilziel ausreichend belegt
+ist, und aktualisiere dann dessen Status. Ein Schritt ist nur abgeschlossen,
+wenn die für dieses Teilziel nötigen Erkenntnisse festgehalten sind.
+Überprüfe vor der Abschlussantwort, ob Planstatus und Evidences
+zusammenpassen, ohne dafür einen zusätzlichen Modellaufruf einzuführen.
 
 Bevorzuge bei Datenanalysen relevante abgeleitete Erkenntnisse aus
 Aggregationen, Joins, Gruppierungen, Zeitreihenvergleichen, Resampling
