@@ -112,6 +112,9 @@ def test_frontend_results_error_and_content_part_reduction():
     messages[-1]["error"] = "permission denied"
     result = checked_frontend_results(messages, pending)[0]
     assert result["content"] == "FEHLER: permission denied\nopened\nsuccess"
+    assert result["_meta"]["io.github.shuewe.cli-agent/frontend_tool_failed"] is True
+    from cli_agent.message_visibility import messages_for_model
+    assert "_meta" not in messages_for_model([result])[0]
     messages[-1]["error"] = 14
     with pytest.raises(ValueError, match="Fehler"):
         checked_frontend_results(messages, pending)
@@ -1060,6 +1063,62 @@ async def test_frontend_evidence_source_registered_on_resume():
     assert agent._evidence_state.compacted == {"front-1"}
     assert not any(m.get("tool_call_id") == "front-1" for m in agent.projection)
     assert "view_open" in str(agent.projection)
+
+
+
+@pytest.mark.asyncio
+async def test_failed_frontend_result_cannot_be_used_as_evidence():
+    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.evidence_state import EvidenceState, EvidenceError
+    from cli_agent.message_visibility import messages_for_model
+
+    class Agent(ConversationMixin):
+        def __init__(self):
+            self._evidence_state = EvidenceState()
+            self.history = []
+            self._agui_pending_original_prompt = "inspect"
+            self._agui_pending_working_messages = [
+                {"role": "system", "content": "rules"},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "front-fail", "type": "function", "function": {
+                        "name": "show_view", "arguments": "{}"
+                    }}
+                ]},
+            ]
+            self._tool_routes = {}
+            self._active_servers = set()
+            self.max_tool_calls = 10
+            self._agui_frontend_tools = {}
+
+        def _model_tools(self):
+            return []
+
+        def _dump_context(self, *_args, **_kwargs):
+            pass
+
+        async def _run_model_loop(self, **kwargs):
+            assert "front-fail" not in self._evidence_state.tool_results
+            assert "FEHLER: denied" in kwargs["messages"][-1]["content"]
+            assert "_meta" not in messages_for_model(kwargs["messages"])[-1]
+            with pytest.raises(EvidenceError, match="Unbekannte"):
+                self._evidence_state.update({
+                    "evidences": [{
+                        "id": "invalid", "type": "observation", "statement": "Succeeded",
+                        "tool_calls": [{"call_id": "front-fail", "description": "not valid"}],
+                    }]
+                })
+            return "done"
+
+    pending = (FrontendToolCall("front-fail", "show_view", "{}"),)
+    frontend_messages = [
+        {"role": "assistant", "toolCalls": [{
+            "id": "front-fail", "function": {"name": "show_view", "arguments": "{}"}
+        }]},
+        {"role": "tool", "toolCallId": "front-fail", "error": "denied", "content": ""},
+    ]
+    results = checked_frontend_results(frontend_messages, pending)
+    agent = Agent()
+    assert await agent.continue_after_frontend_tools(results) == "done"
 
 
 @pytest.mark.asyncio
