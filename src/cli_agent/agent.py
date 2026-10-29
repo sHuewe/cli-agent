@@ -158,6 +158,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         self.agent_timezone = agent_timezone
         self._timezone = ZoneInfo(agent_timezone) if agent_timezone is not None else None
         self.dump_llm_context = dump_llm_context
+        self._evidence_state.debug_enabled = bool(dump_llm_context)
         if dump_file_prefix is not None:
             if (
                 not dump_file_prefix
@@ -446,6 +447,11 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         if phase == "main" and self._evidence_state is not None:
             self._write_dump_json("main_full_working_messages.json", messages_for_model(working_messages))
             self._write_dump_json("main_evidence_state.json", self._evidence_state.snapshot())
+            if self._evidence_state.debug_updates:
+                self._write_dump_json(
+                    "main_evidence_update_debug.json",
+                    self._evidence_state.debug_updates,
+                )
         if model_messages:
             self._write_dump_json(
                 f"{phase}_system_prompt.json",
