@@ -21,6 +21,11 @@ _PLAN_STATUSES = frozenset({"pending", "in_progress", "completed", "blocked", "s
 MAX_SOURCES_PER_EVIDENCE = 16
 MAX_EVIDENCE_STATE_BYTES = 32_000
 MAX_SOURCE_CALLS = 1000
+# Bound token overhead in tool schemas while offering the recently completed
+# sources and already cited sources for revisions.
+MAX_SOURCE_ENUM_IDS = 96
+MAX_EVIDENCE_DEBUG_EVENTS = 200
+MAX_EVIDENCE_DEBUG_ARGUMENT_BYTES = 128_000
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}\Z")
 
 EVIDENCE_TOOL = {
@@ -33,8 +38,9 @@ EVIDENCE_TOOL = {
             "using plan={goal, steps} before starting investigation; a plan "
             "requires no tool sources. Each step has a stable id, description "
             "and status: pending, in_progress, completed, blocked or skipped. "
-            "Replace the plan only when objectives or progress change; do not "
-            "resend it with every evidence update. Link each evidence to the "
+            "Use plan_step_updates=[{id, status}] to change statuses without "
+            "resending the full plan. Supply a complete plan only for initial "
+            "planning or structural changes. Link each evidence to the "
             "relevant step via plan_step_id when a plan exists. Mark steps "
             "completed after relevant supporting evidence has been recorded. "
             "Adapt the plan when new information changes the investigation. "
@@ -85,6 +91,20 @@ EVIDENCE_TOOL = {
                                                "enum": sorted(_PLAN_STATUSES)},
                                 },
                             },
+                        },
+                    },
+                },
+                "plan_step_updates": {
+                    "type": "array", "maxItems": MAX_PLAN_STEPS,
+                    "description": "Update statuses of existing plan steps without "
+                                   "sending the complete plan.",
+                    "items": {
+                        "type": "object", "additionalProperties": False,
+                        "required": ["id", "status"],
+                        "properties": {
+                            "id": {"type": "string", "maxLength": 80},
+                            "status": {"type": "string",
+                                       "enum": sorted(_PLAN_STATUSES)},
                         },
                     },
                 },
@@ -140,6 +160,9 @@ class EvidenceState:
         self.tool_results: dict[str, dict[str, Any]] = {}
         self.compacted: set[str] = set()
         self.pending_error: str | None = None
+        # Not part of snapshot(), and never included in model-facing messages.
+        # Populated only when dump_llm_context is explicitly enabled.
+        self.debug_updates: list[dict[str, Any]] = []
 
     def register_result(
         self,
@@ -166,6 +189,65 @@ class EvidenceState:
             if isinstance(record_sets, list) and "workspace_path" in source:
                 source["record_sets"] = copy.deepcopy(record_sets)
         self.tool_results[call_id] = source
+
+    def tool_definition(self) -> dict[str, Any]:
+        """Expose completed call IDs to the model as bounded schema enums.
+
+        The full trusted registry remains authoritative for validation.
+        Earlier sources already linked to an Evidence remain selectable when
+        the recent-completions window advances.
+        """
+        schema = copy.deepcopy(EVIDENCE_TOOL)
+        all_ids = list(self.tool_results)
+        recent_ids = all_ids[-MAX_SOURCE_ENUM_IDS:]
+        cited_ids = {
+            source["call_id"]
+            for entry in self.evidences.values()
+            for source in entry["tool_calls"]
+        }
+        offered = list(dict.fromkeys([
+            *[item for item in all_ids if item in cited_ids],
+            *recent_ids,
+        ]))
+        source_schema = (
+            schema["function"]["parameters"]["properties"]["evidences"]
+            ["items"]["properties"]["tool_calls"]["items"]
+            ["properties"]["call_id"]
+        )
+        if offered:
+            source_schema["enum"] = offered
+            schema["function"]["description"] += (
+                " Valid source call IDs are enumerated in the call_id schema. "
+                "Choose matching IDs from the available list, never approximate."
+            )
+        return schema
+
+    def record_debug_update(
+        self, *, call_id: str, arguments: Any, status: str, error: str | None,
+    ) -> None:
+        """Store only bounded diagnostic call inputs, outside model history."""
+        if isinstance(arguments, str):
+            raw = arguments
+        else:
+            try:
+                raw = json.dumps(arguments, ensure_ascii=False, default=repr)
+            except (TypeError, ValueError):
+                raw = repr(arguments)
+        encoded = raw.encode("utf-8", errors="replace")
+        entry = {
+            "call_id": call_id, "status": status,
+            "arguments": (
+                raw if len(encoded) <= MAX_EVIDENCE_DEBUG_ARGUMENT_BYTES
+                else encoded[:MAX_EVIDENCE_DEBUG_ARGUMENT_BYTES].decode(
+                    "utf-8", errors="ignore"
+                ) + " [TRUNCATED]"
+            ),
+            "argument_bytes": len(encoded),
+            "error": error,
+        }
+        self.debug_updates.append(entry)
+        if len(self.debug_updates) > MAX_EVIDENCE_DEBUG_EVENTS:
+            del self.debug_updates[:-MAX_EVIDENCE_DEBUG_EVENTS]
 
     @staticmethod
     def _ids(value: Any, field: str) -> list[str]:
@@ -211,7 +293,7 @@ class EvidenceState:
         if not isinstance(arguments, dict):
             raise EvidenceError("Evidence-Argumente müssen ein JSON-Objekt sein.")
         allowed = {
-            "plan", "evidences", "remove_evidence_ids",
+            "plan", "plan_step_updates", "evidences", "remove_evidence_ids",
             "discard_tool_call_ids", "restore_tool_call_ids",
         }
         if set(arguments) - allowed or not (set(arguments) & allowed):
@@ -221,6 +303,37 @@ class EvidenceState:
             self._validate_plan(arguments["plan"])
             if "plan" in arguments else copy.deepcopy(self.plan)
         )
+        status_updates = arguments.get("plan_step_updates", [])
+        if (not isinstance(status_updates, list)
+                or len(status_updates) > MAX_PLAN_STEPS):
+            raise EvidenceError("plan_step_updates muss eine begrenzte Liste sein.")
+        if status_updates and candidate_plan is None:
+            raise EvidenceError("plan_step_updates erfordert einen bestehenden Plan.")
+        if status_updates and "plan" in arguments:
+            raise EvidenceError(
+                "plan und plan_step_updates nicht gleichzeitig verwenden. "
+                "Statusänderungen einzeln oder vollständigen Plan übergeben."
+            )
+        updates_by_id: dict[str, str] = {}
+        for update in status_updates:
+            if not isinstance(update, dict) or set(update) != {"id", "status"}:
+                raise EvidenceError(
+                    "plan_step_updates benötigt exakt id und status."
+                )
+            step_id, status = update["id"], update["status"]
+            if not isinstance(step_id, str) or not _ID.fullmatch(step_id):
+                raise EvidenceError("Ungültige Planschritt-ID im Status-Update.")
+            if step_id in updates_by_id:
+                raise EvidenceError("Doppelte Planschritt-ID im Status-Update.")
+            if not isinstance(status, str) or status not in _PLAN_STATUSES:
+                raise EvidenceError("Ungültiger Planschritt-Status.")
+            updates_by_id[step_id] = status
+        if candidate_plan is not None and status_updates:
+            by_id = {step["id"]: step for step in candidate_plan["steps"]}
+            for step_id, status in updates_by_id.items():
+                if step_id not in by_id:
+                    raise EvidenceError(f"Unbekannte Planschritt-ID: {step_id!r}.")
+                by_id[step_id]["status"] = status
         plan_step_ids = (
             {step["id"] for step in candidate_plan["steps"]}
             if candidate_plan is not None else set()
