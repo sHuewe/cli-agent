@@ -393,6 +393,20 @@ async def run_model_loop(
             except (EvidenceError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 evidence.pending_error = str(exc)[:1000]
                 logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
+        if evidence_calls:
+            # Evidence updates are internal state transitions, not conversation
+            # tool calls. Remove them from the canonical working transcript too.
+            # Keep other calls in the same assistant message untouched.
+            remaining = [
+                call for call in message.get("tool_calls", [])
+                if call not in evidence_calls
+            ]
+            if remaining:
+                message["tool_calls"] = remaining
+            else:
+                message.pop("tool_calls", None)
+                if not message.get("content"):
+                    messages[:] = [item for item in messages if item is not message]
         if frontend_calls:
             from .ag_ui_frontend_tools import FrontendToolHandoff
             # All backend calls from the same model response have been handled
