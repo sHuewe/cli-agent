@@ -28,7 +28,12 @@ EVIDENCE_TOOL = {
             "well-supported findings. State exactly what the data shows; do not "
             "persist unsupported causal claims or guesses as facts. Distinguish "
             "observations, calculations and explicitly uncertain hypotheses. "
-            "Include the precise source tool call IDs and explain each source's "
+            "Each evidence MUST reference at least one successful, completed "
+            "tool call from this request (never an empty tool_calls list). "
+            "Copy the exact call IDs from the tool calls already completed; "
+            "do not invent IDs or replace source references with artifact paths "
+            "inside the statement. If a source ID is rejected, correct the "
+            "reference instead of dropping it. Explain each source's "
             "contribution. cli-agent adds verified artifact paths automatically. "
             "Referenced completed tool calls are automatically hidden from later "
             "LLM prompts. discard_tool_call_ids hides other completed calls, "
@@ -51,7 +56,8 @@ EVIDENCE_TOOL = {
                             ]},
                             "statement": {"type": "string", "maxLength": 1200},
                             "tool_calls": {
-                                "type": "array", "maxItems": MAX_SOURCES_PER_EVIDENCE,
+                                "type": "array", "minItems": 1,
+                                "maxItems": MAX_SOURCES_PER_EVIDENCE,
                                 "items": {
                                     "type": "object", "additionalProperties": False,
                                     "required": ["call_id", "description"],
@@ -168,8 +174,12 @@ class EvidenceState:
             if not isinstance(statement, str) or not statement.strip() or len(statement) > 1200:
                 raise EvidenceError("Evidence-Statement fehlt oder ist zu lang.")
             sources = entry["tool_calls"]
-            if not isinstance(sources, list) or len(sources) > MAX_SOURCES_PER_EVIDENCE:
-                raise EvidenceError("tool_calls muss eine begrenzte Liste sein.")
+            if (not isinstance(sources, list) or not sources
+                    or len(sources) > MAX_SOURCES_PER_EVIDENCE):
+                raise EvidenceError(
+                    "Jede Evidence benötigt mindestens eine abgeschlossene "
+                    "Toolquelle in tool_calls; leere Listen sind unzulässig."
+                )
             stored_sources: list[dict[str, Any]] = []
             source_ids: set[str] = set()
             for source in sources:
@@ -178,7 +188,17 @@ class EvidenceState:
                 call_id = source["call_id"]
                 description = source["description"]
                 if not isinstance(call_id, str) or call_id not in self.tool_results:
-                    raise EvidenceError(f"Unbekannte oder nicht abgeschlossene Quelle: {call_id!r}.")
+                    available = [
+                        f"{source_id} ({meta['tool_name']})"
+                        for source_id, meta in list(self.tool_results.items())[-12:]
+                    ]
+                    raise EvidenceError(
+                        f"Unbekannte oder nicht abgeschlossene Quelle: {call_id!r}. "
+                        "Nimm eine tatsächliche Call-ID aus einer abgeschlossenen "
+                        "Toolantwort, statt tool_calls leer zu lassen. "
+                        "Zuletzt registrierte Quellen: "
+                        + (", ".join(available) if available else "(keine)")
+                    )
                 if call_id in source_ids:
                     raise EvidenceError("Doppelte Quelle in einer Evidence.")
                 if not isinstance(description, str) or not description.strip() or len(description) > 300:
