@@ -221,9 +221,9 @@ def test_idless_ollama_tool_calls_support_evidence_compaction():
                 return {"role": "assistant", "content": "", "tool_calls": [
                     {"function": {"name": "sensor__read", "arguments": {}}}
                 ]}
-            first = next(m for m in messages if m.get("role") == "assistant"
-                         and m.get("tool_calls"))
             if self.step == 2:
+                first = next(m for m in messages if m.get("role") == "assistant"
+                             and m.get("tool_calls"))
                 call_id = first["tool_calls"][0]["id"]
                 self.saw_ids.append(call_id)
                 assert next(m for m in messages if m.get("role") == "tool")[
