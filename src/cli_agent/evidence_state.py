@@ -303,7 +303,7 @@ class EvidenceState:
                 raise EvidenceError("Ungültiger Planschritt-Status.")
         return copy.deepcopy(value)
 
-    def update(self, arguments: dict[str, Any]) -> None:
+    def update(self, arguments: dict[str, Any], *, call_id: str = "") -> None:
         if not self.debug_enabled:
             self._apply_update(arguments)
             return
@@ -311,13 +311,13 @@ class EvidenceState:
             self._apply_update(arguments)
         except (EvidenceError, TypeError, ValueError) as exc:
             self.record_debug_update(
-                call_id="", arguments=arguments, status="error",
+                call_id=call_id, arguments=arguments, status="error",
                 error=f"{type(exc).__name__}: {exc}",
             )
             raise
         else:
             self.record_debug_update(
-                call_id="", arguments=arguments, status="success", error=None,
+                call_id=call_id, arguments=arguments, status="success", error=None,
             )
 
     def _apply_update(self, arguments: dict[str, Any]) -> None:
