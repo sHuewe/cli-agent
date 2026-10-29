@@ -331,7 +331,6 @@ class ConversationMixin:
                 name = pending_calls.get(call_id) if isinstance(call_id, str) else None
                 if (
                     not isinstance(name, str)
-                    or name not in getattr(self, "_agui_frontend_tools", {})
                     or call_id in evidence.tool_results
                 ):
                     continue
