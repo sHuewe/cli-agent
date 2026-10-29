@@ -40,7 +40,12 @@ EVIDENCE_TOOL = {
             "restore_tool_call_ids makes hidden calls visible again. This internal "
             "tool produces a short success or error result; its arguments are "
             "redacted from subsequent model calls. Do not retry after success. "
-            "Use only for meaningful findings, not every minor step."
+            "Use only for meaningful findings, not every minor step. "
+            "Synthesize a short conclusion with key figures, scope and "
+            "uncertainty; do not copy preview rows, raw tables or entire tool "
+            "outputs into evidence statements. Prefer relevant analyses from "
+            "aggregations, joins, time-series comparisons or calculations "
+            "when they add insight, never force unnecessary operations."
         ),
         "parameters": {
             "type": "object",
