@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import secrets
 import uuid
@@ -35,6 +36,31 @@ MAX_JSON_BYTES = 1024 * 1024
 # A UI run must not execute before its SSE consumer is attached.
 # A bounded wait prevents abandoned/browser-blocked requests from hanging a session.
 BROWSER_SSE_CONNECT_TIMEOUT = 15.0
+
+
+def _artifact_thread_token(thread_id: str) -> str:
+    """Opaque URL-safe segment for any accepted AG-UI threadId.
+
+    Percent encoding is insufficient: browsers normalize dot segments and
+    servers may decode %2F before routing. Base64url avoids both problems.
+    """
+    return "~" + base64.urlsafe_b64encode(thread_id.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _artifact_thread_from_token(token: str) -> str | None:
+    """Decode only canonical tokens for valid AG-UI thread IDs."""
+    if not token.startswith("~") or len(token) > 1024:
+        return None
+    encoded = token[1:]
+    try:
+        thread_id = base64.urlsafe_b64decode(
+            encoded + "=" * (-len(encoded) % 4)
+        ).decode("utf-8")
+    except (ValueError, UnicodeError):
+        return None
+    if not 0 < len(thread_id) <= 128 or _artifact_thread_token(thread_id) != token:
+        return None
+    return thread_id
 
 
 @dataclass
@@ -434,7 +460,7 @@ class AgentSession:
                                   {"type": "text", "text": "Datei zum Download bereit."},
                                   {"type": "document", "source": {
                                       "type": "url",
-                                      "value": "/threads/" + run.thread_id + "/artifacts/" + published_id,
+                                      "value": "/threads/" + _artifact_thread_token(run.thread_id) + "/artifacts/" + published_id,
                                       "mimeType": document["mime_type"],
                                   }, "metadata": {
                                       "filename": document["filename"],
@@ -839,7 +865,9 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
 
     async def download_artifact(request: Request) -> Response:
         """Authenticated localhost-only artifact access (outside AG-UI transport)."""
-        thread_id = request.path_params["thread_id"]
+        thread_id = _artifact_thread_from_token(request.path_params["thread_id"])
+        if thread_id is None:
+            return error(404, "Download nicht gefunden.")
         artifact_id = request.path_params["artifact_id"]
         browser = ui is not None and request.headers.get("x-cli-agent-browser") == "1"
         if browser:
@@ -1448,7 +1476,9 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         host = request.headers.get("host", "").split(":")[0].lower()
         if host != API_HOST or request.headers.get("x-forwarded-host") or request.headers.get("forwarded"):
             return error(403, "Unzulässiger Host.")
-        path = request.url.path
+        # Use the ASGI-decoded path; request.url.path may treat decoded # or
+        # ? characters as URL delimiters and truncate the real path.
+        path = request.scope["path"]
         origin = request.headers.get("origin")
         if ui is not None and path in {"/", "/assets/app.css", "/assets/app.js"}:
             if request.method != "GET" or origin is not None:
@@ -1470,10 +1500,11 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         if browser:
             if path.startswith("/threads/"):
                 parts = path.split("/")
-                if (request.method != "GET" or len(parts) != 5
-                        or parts[3] != "artifacts"
+                thread_id = _artifact_thread_from_token(parts[2]) if len(parts) == 5 else None
+                if (request.method != "GET" or thread_id is None
+                        or parts[3] != "artifacts" or not parts[4]
                         or not ui["registry"].is_owner(
-                            parts[2], request.headers.get("x-cli-agent-lease"))):
+                            thread_id, request.headers.get("x-cli-agent-lease"))):
                     return error(403, "Keine gültige Tab-Bindung für den Download.")
             if path.startswith("/sessions/"):
                 parts = path.split("/")
