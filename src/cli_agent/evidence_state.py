@@ -14,6 +14,10 @@ from .message_visibility import messages_for_model
 
 EVIDENCE_TOOL_NAME = "agent__update_evidence"
 MAX_EVIDENCES = 64
+MAX_PLAN_STEPS = 16
+MAX_PLAN_GOAL_LENGTH = 300
+MAX_PLAN_DESCRIPTION_LENGTH = 320
+_PLAN_STATUSES = frozenset({"pending", "in_progress", "completed", "blocked", "skipped"})
 MAX_SOURCES_PER_EVIDENCE = 16
 MAX_EVIDENCE_STATE_BYTES = 32_000
 MAX_SOURCE_CALLS = 1000
@@ -24,7 +28,18 @@ EVIDENCE_TOOL = {
     "function": {
         "name": EVIDENCE_TOOL_NAME,
         "description": (
-            "Maintain the evidence state for this one user request. Store only "
+            "Maintain the structured working state (plan plus evidence) for "
+            "one user request. For multi-step tasks, FIRST create a concise plan "
+            "using plan={goal, steps} before starting investigation; a plan "
+            "requires no tool sources. Each step has a stable id, description "
+            "and status: pending, in_progress, completed, blocked or skipped. "
+            "Replace the plan only when objectives or progress change; do not "
+            "resend it with every evidence update. Link each evidence to the "
+            "relevant step via plan_step_id when a plan exists. Mark steps "
+            "completed after relevant supporting evidence has been recorded. "
+            "Adapt the plan when new information changes the investigation. "
+            "For trivial requests with no meaningful steps, skip the plan. "
+            "Store only "
             "well-supported findings. State exactly what the data shows; do not "
             "persist unsupported causal claims or guesses as facts. Distinguish "
             "observations, calculations and explicitly uncertain hypotheses. "
@@ -50,6 +65,29 @@ EVIDENCE_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
+                "plan": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["goal", "steps"],
+                    "properties": {
+                        "goal": {"type": "string", "maxLength": MAX_PLAN_GOAL_LENGTH},
+                        "steps": {
+                            "type": "array", "minItems": 1, "maxItems": MAX_PLAN_STEPS,
+                            "items": {
+                                "type": "object", "additionalProperties": False,
+                                "required": ["id", "description", "status"],
+                                "properties": {
+                                    "id": {"type": "string", "maxLength": 80},
+                                    "description": {
+                                        "type": "string",
+                                        "maxLength": MAX_PLAN_DESCRIPTION_LENGTH,
+                                    },
+                                    "status": {"type": "string",
+                                               "enum": sorted(_PLAN_STATUSES)},
+                                },
+                            },
+                        },
+                    },
+                },
                 "evidences": {
                     "type": "array", "maxItems": MAX_EVIDENCES,
                     "items": {
@@ -57,6 +95,11 @@ EVIDENCE_TOOL = {
                         "required": ["id", "type", "statement", "tool_calls"],
                         "properties": {
                             "id": {"type": "string", "maxLength": 80},
+                            "plan_step_id": {
+                                "type": "string", "maxLength": 80,
+                                "description": "ID of the plan step supported by this finding; "
+                                               "required whenever a plan exists.",
+                            },
                             "type": {"type": "string", "enum": [
                                 "observation", "calculation", "hypothesis"
                             ]},
@@ -93,6 +136,7 @@ class EvidenceError(ValueError):
 class EvidenceState:
     def __init__(self) -> None:
         self.evidences: dict[str, dict[str, Any]] = {}
+        self.plan: dict[str, Any] | None = None
         self.tool_results: dict[str, dict[str, Any]] = {}
         self.compacted: set[str] = set()
         self.pending_error: str | None = None
@@ -133,16 +177,54 @@ class EvidenceState:
             raise EvidenceError(f"{field} enthält doppelte IDs.")
         return value
 
+    @staticmethod
+    def _validate_plan(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict) or set(value) != {"goal", "steps"}:
+            raise EvidenceError("Plan benötigt exakt goal und steps.")
+        goal, steps = value["goal"], value["steps"]
+        if not isinstance(goal, str) or not goal.strip() or len(goal) > MAX_PLAN_GOAL_LENGTH:
+            raise EvidenceError("Plan-Ziel fehlt oder ist zu lang.")
+        if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_PLAN_STEPS:
+            raise EvidenceError("Plan benötigt zwischen 1 und 16 Schritte.")
+        seen: set[str] = set()
+        for step in steps:
+            if not isinstance(step, dict) or set(step) != {
+                "id", "description", "status",
+            }:
+                raise EvidenceError("Planschritt benötigt exakt id, description und status.")
+            step_id, description, status = (
+                step["id"], step["description"], step["status"],
+            )
+            if not isinstance(step_id, str) or not _ID.fullmatch(step_id):
+                raise EvidenceError("Ungültige Planschritt-ID.")
+            if step_id in seen:
+                raise EvidenceError("Doppelte Planschritt-ID.")
+            seen.add(step_id)
+            if (not isinstance(description, str) or not description.strip()
+                    or len(description) > MAX_PLAN_DESCRIPTION_LENGTH):
+                raise EvidenceError("Beschreibung des Planschritts fehlt oder ist zu lang.")
+            if not isinstance(status, str) or status not in _PLAN_STATUSES:
+                raise EvidenceError("Ungültiger Planschritt-Status.")
+        return copy.deepcopy(value)
+
     def update(self, arguments: dict[str, Any]) -> None:
         if not isinstance(arguments, dict):
             raise EvidenceError("Evidence-Argumente müssen ein JSON-Objekt sein.")
         allowed = {
-            "evidences", "remove_evidence_ids",
+            "plan", "evidences", "remove_evidence_ids",
             "discard_tool_call_ids", "restore_tool_call_ids",
         }
         if set(arguments) - allowed or not (set(arguments) & allowed):
             raise EvidenceError("Unbekannte oder fehlende Evidence-Felder.")
         candidates = copy.deepcopy(self.evidences)
+        candidate_plan = (
+            self._validate_plan(arguments["plan"])
+            if "plan" in arguments else copy.deepcopy(self.plan)
+        )
+        plan_step_ids = (
+            {step["id"] for step in candidate_plan["steps"]}
+            if candidate_plan is not None else set()
+        )
         compacted = set(self.compacted)
 
         remove = self._ids(arguments.get("remove_evidence_ids", []), "remove_evidence_ids")
@@ -164,10 +246,23 @@ class EvidenceState:
         seen_ids: set[str] = set()
         referenced: set[str] = set()
         for entry in incoming:
-            if not isinstance(entry, dict) or set(entry) != {
+            if not isinstance(entry, dict) or not {
                 "id", "type", "statement", "tool_calls"
+            }.issubset(entry) or set(entry) - {
+                "id", "type", "statement", "tool_calls", "plan_step_id"
             }:
-                raise EvidenceError("Evidence benötigt exakt id, type, statement und tool_calls.")
+                raise EvidenceError(
+                    "Evidence benötigt id, type, statement, tool_calls "
+                    "und bei aktivem Plan plan_step_id."
+                )
+            step_id = entry.get("plan_step_id")
+            if candidate_plan is not None:
+                if not isinstance(step_id, str) or step_id not in plan_step_ids:
+                    raise EvidenceError(
+                        "Evidence benötigt eine gültige plan_step_id aus dem aktuellen Plan."
+                    )
+            elif "plan_step_id" in entry:
+                raise EvidenceError("plan_step_id ist ohne Plan nicht zulässig.")
             evidence_id = entry["id"]
             if not isinstance(evidence_id, str) or not _ID.fullmatch(evidence_id):
                 raise EvidenceError("Ungültige Evidence-ID.")
@@ -219,26 +314,43 @@ class EvidenceState:
             candidates[evidence_id] = {
                 "id": evidence_id, "type": entry["type"],
                 "statement": statement, "tool_calls": stored_sources,
+                **({"plan_step_id": step_id} if candidate_plan is not None else {}),
             }
 
         if len(candidates) > MAX_EVIDENCES:
             raise EvidenceError("Evidence-Limit überschritten.")
+        if candidate_plan is not None:
+            for evidence_id, entry in candidates.items():
+                if entry.get("plan_step_id") not in plan_step_ids:
+                    raise EvidenceError(
+                        f"Evidence {evidence_id!r} ist keinem gültigen Planschritt "
+                        "zugeordnet. Aktualisiere oder entferne die Evidence "
+                        "bevor du den Planschritt entfernst."
+                    )
         compacted.update(referenced)
         compacted.update(discard)
         compacted.difference_update(restore)
-        state = {"evidences": list(candidates.values()), "compacted_tool_call_ids": sorted(compacted)}
+        state = {
+            "plan": candidate_plan,
+            "evidences": list(candidates.values()),
+            "compacted_tool_call_ids": sorted(compacted),
+        }
         if len(json.dumps(state, ensure_ascii=False).encode("utf-8")) > MAX_EVIDENCE_STATE_BYTES:
             raise EvidenceError("Evidence-State überschreitet das Größenlimit.")
         # Commit the entire change atomically.
         self.evidences = candidates
+        self.plan = candidate_plan
         self.compacted = compacted
         self.pending_error = None
 
     def snapshot(self) -> dict[str, Any]:
-        return {
+        snapshot: dict[str, Any] = {
             "evidences": copy.deepcopy(list(self.evidences.values())),
             "compacted_tool_call_ids": sorted(self.compacted),
         }
+        if self.plan is not None:
+            snapshot["plan"] = copy.deepcopy(self.plan)
+        return snapshot
 
     def project(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Build an OpenAI-protocol-valid model projection without mutating log."""
@@ -261,7 +373,7 @@ class EvidenceState:
                         continue
             projected.append(message)
 
-        if self.evidences or self.compacted:
+        if self.plan is not None or self.evidences or self.compacted:
             note = {
                 "role": "user",
                 "content": (
