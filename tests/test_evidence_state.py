@@ -568,3 +568,17 @@ def test_bounded_diagnostic_arguments_are_not_part_of_state_projection():
     assert "identify" in state.debug_updates[0]["arguments"]
     assert "debug_updates" not in state.snapshot()
     assert "Invalid update" not in str(state.project(_history()))
+
+
+def test_evidence_update_reports_unknown_fields_and_empty_arguments():
+    state = EvidenceState()
+    with pytest.raises(EvidenceError, match="Unbekannte Evidence-Felder") as error:
+        state.update({"plan_steps": [], "evidences": []})
+    assert "plan_steps" in str(error.value)
+    assert "plan_step_updates" in str(error.value)
+
+    with pytest.raises(EvidenceError, match="leeres JSON-Objekt") as error:
+        state.update({})
+    assert '"plan"' in str(error.value)
+    assert '"goal"' in str(error.value)
+    assert state.snapshot()["evidences"] == []
