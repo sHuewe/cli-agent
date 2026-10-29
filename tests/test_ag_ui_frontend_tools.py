@@ -1081,6 +1081,6 @@ async def test_frontend_tool_cannot_shadow_internal_evidence_name():
             }
             response = await client.post("/ag-ui", json=request, headers=headers)
             assert response.status_code == 400
-            assert EVIDENCE_TOOL_NAME in response.json()["error"]
+            assert "kollidierender Tool-Name" in response.json()["error"]
     finally:
         await service.shutdown()
