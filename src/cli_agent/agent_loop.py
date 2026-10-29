@@ -428,6 +428,14 @@ async def run_model_loop(
         for internal_call in evidence_calls:
             calls += 1
             state.tool_calls = calls
+            event_callback = getattr(agent, "event_callback", None)
+            event_id = internal_call["id"]
+            if event_callback is not None:
+                await event_callback(
+                    "tool_started",
+                    {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME},
+                )
+            status = "success"
             try:
                 raw_args = (internal_call.get("function") or {}).get("arguments") or {}
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
@@ -435,8 +443,16 @@ async def run_model_loop(
                 logger.info("evidence_state_updated entries=%d hidden=%d",
                             len(evidence.evidences), len(evidence.compacted))
             except (EvidenceError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                status = "error"
                 evidence.pending_error = str(exc)[:1000]
                 logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
+            finally:
+                if event_callback is not None:
+                    await event_callback(
+                        "tool_finished",
+                        {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME,
+                         "status": status},
+                    )
         if evidence_calls:
             # Evidence updates are internal state transitions, not conversation
             # tool calls. Remove them from the canonical working transcript too.
