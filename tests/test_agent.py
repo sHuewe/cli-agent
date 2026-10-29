@@ -1459,10 +1459,12 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
         "demo__read",
         "demo__write",
+        "agent__update_evidence",
     ]
     assert agent.set_tool_enabled("demo__write", enabled=False) is True
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
-        "demo__read"
+        "demo__read",
+        "agent__update_evidence",
     ]
 
     states = {item["name"]: item for item in agent.tool_states_snapshot()}
@@ -1471,7 +1473,11 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
     assert states["demo__write"]["description"] == "Write demo data"
 
     assert agent.set_tool_enabled("demo__write", enabled=True) is True
-    assert len(agent._model_tools()) == 2
+    assert [tool["function"]["name"] for tool in agent._model_tools()] == [
+        "demo__read",
+        "demo__write",
+        "agent__update_evidence",
+    ]
 
 
 def test_unknown_tool_cannot_be_toggled(tmp_path: Path) -> None:
