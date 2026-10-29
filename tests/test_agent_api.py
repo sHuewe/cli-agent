@@ -522,7 +522,8 @@ async def test_published_artifact_download_is_session_bound_and_authenticated():
         session.published_artifacts[artifact_id] = {
             "path": "registered.csv", "filename": "report.csv", "mime_type": "text/csv",
         }
-        url = f"/threads/{sid}/artifacts/{artifact_id}"
+        from cli_agent.agent_api import _artifact_thread_token
+        url = f"/threads/{_artifact_thread_token(sid)}/artifacts/{artifact_id}"
         assert (await client.get(url)).status_code == 401
         assert (await client.get(url, headers=headers(service))).content == b"export-data"
         assert (await client.get(url, headers=headers(service))).headers["cache-control"] == "no-store"
@@ -557,7 +558,8 @@ async def test_browser_download_requires_valid_tab_lease():
         transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
         base_url="http://127.0.0.1:8765",
     ) as client:
-        endpoint = f"/threads/{session.id}/artifacts/{artifact_id}"
+        from cli_agent.agent_api import _artifact_thread_token
+        endpoint = f"/threads/{_artifact_thread_token(session.id)}/artifacts/{artifact_id}"
         browser_headers = {
             "Authorization": "Bearer browser-secret",
             "X-Cli-Agent-Browser": "1",
