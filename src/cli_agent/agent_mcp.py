@@ -17,6 +17,7 @@ from .mcp_path_policy import write_path_policy
 from .agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS
 from .agent_types import ServerConfig, ToolRoute, _RuntimeMcpServerConfig
 from .config import McpServerConfig
+from .evidence_state import EVIDENCE_TOOL_NAME
 from .mcp_limits import (
     MCP_INITIALIZE_TIMEOUT_SECONDS,
     MCP_LIST_TOOLS_TIMEOUT_SECONDS,
@@ -182,6 +183,14 @@ class McpLifecycleMixin:
                     raise RuntimeError(f"MCP-Server {server_config.name!r} bietet Tool {tool.name!r} mehrfach an.")
                 native_names.add(tool.name)
                 exposed_name = f"{server_config.name}__{tool.name}"
+                # This name is handled inside the main model loop, not by
+                # MCP routing. Reject any MCP spelling that would shadow it
+                # before committing routes, tool definitions or identity state.
+                if exposed_name == EVIDENCE_TOOL_NAME:
+                    raise RuntimeError(
+                        f"MCP-Toolname {exposed_name!r} ist für ein "
+                        "internes Agent-Tool reserviert."
+                    )
                 identity = (server_config.name, tool.name)
                 known_identity = self._tool_identities.get(exposed_name)
                 if known_identity is not None and known_identity != identity:
