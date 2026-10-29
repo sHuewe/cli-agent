@@ -327,8 +327,22 @@ class EvidenceState:
             "plan", "plan_step_updates", "evidences", "remove_evidence_ids",
             "discard_tool_call_ids", "restore_tool_call_ids",
         }
-        if set(arguments) - allowed or not (set(arguments) & allowed):
-            raise EvidenceError("Unbekannte oder fehlende Evidence-Felder.")
+        unknown = sorted(set(arguments) - allowed)
+        if unknown:
+            raise EvidenceError(
+                f"Unbekannte Evidence-Felder: {unknown}. "
+                f"Zulässige Felder: {sorted(allowed)}. "
+                "Entferne die unbekannten Felder oder korrigiere ihre Namen."
+            )
+        if not arguments:
+            raise EvidenceError(
+                "Evidence-Update enthält keine Felder (leeres JSON-Objekt {}). "
+                "Übergib mindestens eines der Felder: "
+                + ", ".join(sorted(allowed))
+                + ". Für einen initialen Plan: "
+                '{"plan": {"goal": "...", "steps": '
+                '[{"id": "...", "description": "...", "status": "pending"}]}}.'
+            )
         candidates = copy.deepcopy(self.evidences)
         candidate_plan = (
             self._validate_plan(arguments["plan"])
