@@ -656,6 +656,123 @@ function assert(condition, message) {
     assert result.stdout.strip() == "ok"
 
 
+def test_browser_published_document_uses_authenticated_download_and_rejects_unsafe_urls():
+    """Exercise document ContentParts and the download button in actual Node.js."""
+    import shutil
+    import subprocess
+    from cli_agent.web_ui_api import API_APP_JS
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    view = API_APP_JS.split("  function toolGroup() {", 1)[1].split(
+        "  function setBusy(value) {", 1
+    )[0]
+    watcher = API_APP_JS.split("  async function watchRun(activeRun, response = null) {", 1)[1].split(
+        "  // The server accepts at most", 1
+    )[0]
+    script = r'''
+class Element {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this.dataset = {};
+    this.textContent = "";
+    this.parentElement = null;
+    this.listeners = {};
+  }
+  append(...children) {
+    for (const child of children) {
+      this.children.push(child);
+      child.parentElement = this;
+    }
+  }
+  appendChild(child) { this.append(child); }
+  addEventListener(type, cb) { this.listeners[type] = cb; }
+  click() { this.clicked = true; }
+  remove() {}
+  scrollIntoView() {}
+}
+const document = {createElement: tag => new Element(tag), body: new Element("body")};
+const chat = new Element("chat");
+let activeToolGroup = null;
+let runId = "run-1";
+const aguiMessages = [];
+const emitted = [];
+const emit = event => emitted.push(event);
+const renderAnswer = async () => null;
+const dismissApproval = () => {};
+const crypto = {randomUUID: () => "new-message"};
+let requested = [];
+const api = async url => {
+  requested.push(url);
+  return {blob: async () => new Blob(["example"])};
+};
+let revoked = [];
+const URL = {createObjectURL: () => "blob:local", revokeObjectURL: u => revoked.push(u)};
+const setTimeout = cb => { cb(); };
+function assert(condition, message) { if (!condition) throw Error(message); }
+''' + '  function toolGroup() {' + view + (
+        '  async function watchRun(activeRun, response = null) {' + watcher
+    ) + r'''
+function stream(events) {
+  const bytes = new TextEncoder().encode(
+    events.map(event => "data: " + JSON.stringify(event) + "\n\n").join("")
+  );
+  let delivered = false;
+  return {body: {getReader: () => ({
+    read: async () => delivered ? {done: true} : (delivered = true, {done: false, value: bytes}),
+    releaseLock: () => {}
+  })}};
+}
+(async () => {
+  const url = "/threads/~dGhyZWFk/artifacts/" + "a".repeat(32);
+  const documentPart = {
+    type: "document", source: {type: "url", value: url, mimeType: "text/csv"},
+    metadata: {filename: "report.csv"}
+  };
+  const events = [
+    {type: "TOOL_CALL_START", toolCallId: "publish", toolCallName: "agent__publish_artifact"},
+    {type: "TOOL_CALL_RESULT", toolCallId: "publish", content: [
+      {type: "text", text: "Datei zum Download bereit."}, documentPart
+    ]},
+    {type: "TOOL_CALL_RESULT", toolCallId: "publish", content: [documentPart]},
+    {type: "RUN_FINISHED"}
+  ];
+  await watchRun("run-1", stream(events));
+  const row = activeToolGroup.list.children[0];
+  assert(row.children.length === 3, "missing or duplicate download button");
+  const button = row.children[2];
+  assert(button.textContent === "Herunterladen: report.csv", "wrong filename");
+  assert(activeToolGroup.calls.get("publish").dataset.state === "success", "wrong status");
+  await button.listeners.click();
+  assert(requested.length === 1 && requested[0] === url, "download bypassed API");
+  assert(document.body.children[0].download === "report.csv", "filename lost");
+  assert(revoked[0] === "blob:local", "object URL not revoked");
+
+  activeToolGroup = null;
+  await watchRun("run-2", stream([
+    {type: "TOOL_CALL_START", toolCallId: "unsafe", toolCallName: "agent__publish_artifact"},
+    {type: "TOOL_CALL_RESULT", toolCallId: "unsafe", content: [
+      {type: "document", source: {type: "url", value: "https://evil.invalid/file"},
+       metadata: {filename: "report.csv"}},
+      {type: "document", source: {type: "url", value: url},
+       metadata: {filename: "../secret"}}
+    ]},
+    {type: "RUN_FINISHED"}
+  ]));
+  assert(activeToolGroup.list.children[0].children.length === 2, "unsafe download exposed");
+  assert(activeToolGroup.calls.get("unsafe").dataset.state === "finished", "unsafe result status");
+  console.log("ok");
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+    result = subprocess.run(
+        [node, "-e", script], text=True, capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_cancelled_session_close_does_not_issue_delete_request():
     """Exercise the browser's real confirmation handler in Node.js."""
     import shutil
