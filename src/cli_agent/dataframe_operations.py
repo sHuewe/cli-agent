@@ -531,11 +531,9 @@ class DataFrameOperations:
             if not spec.name or spec.name in frame:
                 raise DataOperationError(f"Ergebnisspalte ist leer oder bereits vorhanden: {spec.name!r}.")
             if spec.operation != "diff_per_time" and (
-                spec.max_gap_seconds is not None
-                or spec.time_column != "timestamp"
-                or spec.time_unit != "hours"
+                spec.max_gap_seconds is not None or spec.time_unit != "hours"
             ):
-                raise DataOperationError("Zeitparameter sind nur für diff_per_time zulässig.")
+                raise DataOperationError("Rate-Parameter sind nur für diff_per_time zulässig.")
             left = self._numeric(frame, spec.column)
             if spec.operation in {"add", "subtract", "multiply", "divide"}:
                 if (spec.other_column is None) == (spec.constant is None):
@@ -607,13 +605,46 @@ class DataFrameOperations:
         summary = {"rate_time_units": rate_units} if rate_units else None
         return self._result(frame, operation="derive_columns", summary=summary)
 
+    @staticmethod
+    def _infer_time_column(frame: pd.DataFrame) -> str:
+        """Infer a unique ISO datetime column without guessing numeric epochs."""
+        candidates = []
+        for column in frame.columns:
+            sample = frame[column].dropna().head(3)
+            if sample.empty:
+                if str(column).lower() in {"timestamp", "time", "datetime", "date"}:
+                    candidates.append(column)
+                continue
+            valid = True
+            for value in sample:
+                if isinstance(value, (datetime, pd.Timestamp)):
+                    continue
+                if not isinstance(value, str) or "-" not in value:
+                    valid = False
+                    break
+                try:
+                    datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    valid = False
+                    break
+            if valid:
+                candidates.append(column)
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            raise DataOperationError("Keine Zeitspalte erkannt; time_column explizit angeben.")
+        raise DataOperationError(
+            "Mehrere mögliche Zeitspalten: " + ", ".join(map(repr, candidates))
+            + "; time_column explizit angeben."
+        )
+
     def resample_data(
         self,
         path: str,
         frequency: str,
         aggregations: list[ResampleAggregation],
         *,
-        time_column: str = "timestamp",
+        time_column: str | None = None,
         records_path: str | None = None,
     ) -> CallToolResult:
         if not isinstance(frequency, str) or not _FREQUENCY.fullmatch(frequency):
@@ -624,6 +655,8 @@ class DataFrameOperations:
         if any(not alias or alias == "timestamp" for alias in aliases) or len(set(aliases)) != len(aliases):
             raise DataOperationError("Aggregationsalias muss eindeutig und nicht 'timestamp' sein.")
         frame = self._read_frame(path, records_path)
+        if time_column is None:
+            time_column = self._infer_time_column(frame)
         source_offset = self._source_timezone(frame, time_column)
         frame[time_column] = self._timestamps(frame, time_column)
         time_metadata: dict[str, object] = {}
