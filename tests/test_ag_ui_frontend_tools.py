@@ -1049,6 +1049,9 @@ async def test_frontend_evidence_source_registered_on_resume():
             return "done"
 
     agent = Agent()
+    # After an AG-UI resume, the client may omit frontend declarations.
+    # Only the server-owned checkpoint and validated result are authoritative.
+    agent._agui_frontend_tools = {}
     answer = await agent.continue_after_frontend_tools([
         {"role": "tool", "tool_call_id": "front-1", "content": "view opened"}
     ])
