@@ -17,6 +17,7 @@ from .agent_tool_calls import process_tool_calls
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
 from .evidence_state import EVIDENCE_TOOL_NAME, EvidenceError
+from .artifact_publication import PUBLISH_TOOL_NAME, register_artifact
 from .model import log_model_call_diagnostics
 
 logger = logging.getLogger("cli_agent.agent_loop")
@@ -401,9 +402,14 @@ async def run_model_loop(
             if (call.get("function") or {}).get("name") == EVIDENCE_TOOL_NAME
         ] if evidence is not None else []
         backend_calls = [call for call in backend_calls if call not in evidence_calls]
+        publish_calls = [
+            call for call in backend_calls
+            if (call.get("function") or {}).get("name") == PUBLISH_TOOL_NAME
+        ] if phase == "main" else []
+        backend_calls = [call for call in backend_calls if call not in publish_calls]
         # Reserve the full batch BEFORE executing any backend side effects.
         # Frontend calls are just as much part of max_tool_calls as MCP calls.
-        if calls + len(frontend_calls) + len(backend_calls) + len(evidence_calls) > max_tool_calls:
+        if calls + len(frontend_calls) + len(backend_calls) + len(evidence_calls) + len(publish_calls) > max_tool_calls:
             raise RuntimeError(
                 f"Abbruch in Phase {phase!r} nach {max_tool_calls} Tool-Aufrufen."
             )
@@ -475,6 +481,37 @@ async def run_model_loop(
                         {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME,
                          "status": status},
                     )
+        for publish_call in publish_calls:
+            calls += 1
+            state.tool_calls = calls
+            event_id = publish_call["id"]
+            event_callback = getattr(agent, "event_callback", None)
+            if event_callback is not None:
+                await event_callback("tool_started", {"call_id": event_id, "tool": PUBLISH_TOOL_NAME})
+            status = "success"
+            try:
+                raw_args = (publish_call.get("function") or {}).get("arguments") or {}
+                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                if not isinstance(args, dict) or set(args) != {"path", "filename"}:
+                    raise ValueError("path und filename sind erforderlich.")
+                artifact_id, published = register_artifact(
+                    agent._result_artifacts, args["path"], args["filename"],
+                )
+                # The API session owns the public ID mapping, not the LLM.
+                if event_callback is not None:
+                    await event_callback("artifact_published", {
+                        "id": artifact_id, "path": published.path,
+                        "filename": published.filename, "mime_type": published.mime_type,
+                    })
+                result_text = "Download bereitgestellt: " + published.filename
+            except (ValueError, RuntimeError, OSError) as exc:
+                status = "error"
+                result_text = "Download konnte nicht veröffentlicht werden: " + str(exc)[:500]
+            messages.append({"role": "tool", "tool_call_id": event_id, "content": result_text})
+            if event_callback is not None:
+                await event_callback("tool_finished", {
+                    "call_id": event_id, "tool": PUBLISH_TOOL_NAME, "status": status,
+                })
         if frontend_calls:
             from .ag_ui_frontend_tools import FrontendToolHandoff
             # All backend calls from the same model response have been handled
