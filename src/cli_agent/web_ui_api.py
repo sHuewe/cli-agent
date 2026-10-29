@@ -141,6 +141,61 @@ API_APP_JS = """
     status.textContent = labels[normalized];
   }
 
+  function renderPublishedDocuments(event) {
+    // A publication result is an AG-UI ContentPart array, not a status
+    // string. Render only same-origin, server-issued artifact endpoints.
+    if (!Array.isArray(event.content)) return false;
+    const status = activeToolGroup?.calls.get(String(event.toolCallId || ""));
+    const row = status?.parentElement;
+    if (!row) return false;
+    let published = false;
+    for (const part of event.content) {
+      if (part?.type !== "document" || part.source?.type !== "url") continue;
+      const url = part.source.value;
+      const filename = part.metadata?.filename;
+      if (typeof url !== "string" ||
+          !/^\\/threads\\/~[A-Za-z0-9_-]+\\/artifacts\\/[a-f0-9]{32}$/.test(url) ||
+          typeof filename !== "string" ||
+          !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(filename)) continue;
+      published = true;
+      // Reconnected event streams can replay the result: show one button.
+      if (status.dataset.downloadUrl === url) continue;
+      status.dataset.downloadUrl = url;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary artifact-download";
+      button.textContent = "Herunterladen: " + filename;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          // The normal API helper supplies the browser bearer token and the
+          // current tab lease; direct links cannot access this endpoint.
+          const response = await api(url);
+          const blob = await response.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          try {
+            const link = document.createElement("a");
+            link.href = objectUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+          } finally {
+            // Revoking immediately can cancel a browser's pending download.
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+          }
+        } catch (error) {
+          addMessage("error", "Download fehlgeschlagen: " + String(error?.message || error));
+        } finally {
+          button.disabled = false;
+        }
+      });
+      row.appendChild(button);
+    }
+    if (published) setToolStatus(event.toolCallId, "success");
+    return published;
+  }
+
   function finishPendingTools(state) {
     if (!activeToolGroup) return;
     for (const [id, status] of activeToolGroup.calls) {
@@ -478,8 +533,13 @@ API_APP_JS = """
           if (event.type === "TEXT_MESSAGE_CONTENT") answer += String(event.delta || "");
           else if (event.type === "TOOL_CALL_START") toolStarted(event);
           else if (event.type === "TOOL_CALL_RESULT") {
-            // The server sends only a safe status, never raw MCP tool output.
-            setToolStatus(event.toolCallId, String(event.content || "").toLowerCase());
+            // Document ContentParts need a separate authenticated download UI;
+            // raw MCP results are never displayed as text.
+            if (Array.isArray(event.content)) {
+              if (!renderPublishedDocuments(event)) setToolStatus(event.toolCallId, "finished");
+            } else {
+              setToolStatus(event.toolCallId, String(event.content || "").toLowerCase());
+            }
           } else if (event.type === "CUSTOM") {
             if (event.name === "approval_required") emit({type: "approval_required", ...event.value});
             if (event.name === "mcp_user_message") emit({type: "mcp_user_message", ...event.value});
