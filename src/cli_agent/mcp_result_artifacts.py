@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat
 import uuid
 from pathlib import Path
 from typing import Any
@@ -127,14 +128,42 @@ class McpResultArtifacts:
         if len(metadata_text) > MAX_MODEL_METADATA_CHARS:
             raise ArtifactError("MCP-Metadaten für das LLM sind zu groß.")
 
-        path = self.save(
-            raw_result_text,
-            structured=getattr(result, "structuredContent", None) is not None,
-            text_format="markdown" if metadata.get("format") == "markdown" else None,
-        )
+        structured_payload = getattr(result, "structuredContent", None)
+        export_format = metadata.get("export_format")
+        if export_format in {"csv", "json", "markdown"}:
+            if not isinstance(structured_payload, dict) or set(structured_payload) != {"export_content"}:
+                raise ArtifactError("Export-Artefakt enthält kein gültiges Exportformat.")
+            raw_export = structured_payload["export_content"]
+            if not isinstance(raw_export, str):
+                raise ArtifactError("Export-Artefakt muss Text enthalten.")
+            path = self.save_export(raw_export, export_format)
+        else:
+            path = self.save(
+                raw_result_text,
+                structured=structured_payload is not None,
+                text_format="markdown" if metadata.get("format") == "markdown" else None,
+            )
         # workspace_path is reserved for the agent's verified, relative path.
         model_metadata = {**metadata, "workspace_path": path}
         return json.dumps(model_metadata, ensure_ascii=False, allow_nan=False)
+
+    def save_export(self, content: str, suffix: str) -> str:
+        """Store generated export bytes, without exposing them in the model response."""
+        if suffix not in {"csv", "json", "markdown"}:
+            raise ArtifactError("Nicht unterstütztes Exportformat.")
+        raw = content.encode("utf-8")
+        if len(raw) > MAX_ARTIFACT_BYTES or self._bytes_written + len(raw) > MAX_SESSION_ARTIFACT_BYTES:
+            raise ArtifactError("Export überschreitet das Artefaktlimit.")
+        directory = self._ensure_directory()
+        extension = "md" if suffix == "markdown" else suffix
+        relative = (directory / f"export-{uuid.uuid4().hex[:16]}.{extension}").relative_to(self.workspace.directory).as_posix()
+        path = self.workspace.resolve_writable_file(relative)
+        with path.open("xb") as handle:
+            identity = os.fstat(handle.fileno())
+            self._files[path] = (identity.st_dev, identity.st_ino)
+            handle.write(raw)
+        self._bytes_written += len(raw)
+        return relative
 
     def read_registered(self, relative: str) -> bytes:
         """Read an unchanged artifact owned by this session; reject arbitrary paths."""
@@ -146,7 +175,7 @@ class McpResultArtifacts:
             raise ArtifactError("Datei ist kein registriertes Session-Artefakt.")
         with path.open("rb") as handle:
             stat = os.fstat(handle.fileno())
-            if (stat.st_dev, stat.st_ino) != identity or not stat.st_mode:
+            if (stat.st_dev, stat.st_ino) != identity or not stat.S_ISREG(stat.st_mode):
                 raise ArtifactError("Session-Artefakt wurde verändert.")
             payload = handle.read(MAX_ARTIFACT_BYTES + 1)
         if len(payload) > MAX_ARTIFACT_BYTES:
