@@ -441,7 +441,7 @@ async def run_model_loop(
             try:
                 raw_args = (internal_call.get("function") or {}).get("arguments") or {}
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                evidence.update(args)
+                evidence.update(args, call_id=event_id)
                 result_text = (
                     "Evidence-State erfolgreich aktualisiert. "
                     f"Einträge: {len(evidence.evidences)} "
