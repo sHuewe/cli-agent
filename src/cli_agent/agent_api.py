@@ -841,8 +841,17 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         """Authenticated localhost-only artifact access (outside AG-UI transport)."""
         thread_id = request.path_params["thread_id"]
         artifact_id = request.path_params["artifact_id"]
-        session_id = service._agui_threads.get(thread_id)
-        session = service.sessions.get(session_id) if session_id else None
+        browser = ui is not None and request.headers.get("x-cli-agent-browser") == "1"
+        if browser:
+            assert ui is not None
+            if not ui["registry"].is_owner(
+                thread_id, request.headers.get("x-cli-agent-lease")
+            ):
+                return error(403, "Keine gültige Browser-Bindung.")
+            session = service.sessions.get(thread_id)
+        else:
+            session_id = service._agui_threads.get(thread_id)
+            session = service.sessions.get(session_id) if session_id else None
         if session is None or session.agent is None:
             return error(404, "Download nicht gefunden.")
         descriptor = session.published_artifacts.get(artifact_id)
@@ -1455,9 +1464,17 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             and ((origin is None or origin == ui["origin"])
                  if request.method in {"GET", "HEAD"}
                  else origin == ui["origin"])
-            and (path.startswith("/ui/") or path.startswith("/sessions/") or path.startswith("/ag-ui"))
+            and (path.startswith("/ui/") or path.startswith("/sessions/")
+                 or path.startswith("/ag-ui") or path.startswith("/threads/"))
         )
         if browser:
+            if path.startswith("/threads/"):
+                parts = path.split("/")
+                if (request.method != "GET" or len(parts) != 5
+                        or parts[3] != "artifacts"
+                        or not ui["registry"].is_owner(
+                            parts[2], request.headers.get("x-cli-agent-lease"))):
+                    return error(403, "Keine gültige Tab-Bindung für den Download.")
             if path.startswith("/sessions/"):
                 parts = path.split("/")
                 if (len(parts) < 4 or request.method == "DELETE"
