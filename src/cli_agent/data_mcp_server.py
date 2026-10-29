@@ -77,7 +77,7 @@ def _server_instructions(access: str) -> str:
         )
     return """\
 Use calculate for arithmetic. Tabular tools use workspace files;
-no normal tabular tool accepts inline data.\nUse export_data(path, format) to create a downloadable CSV, JSON or Markdown file.\nIts metadata never contains rows; publish the resulting workspace_path explicitly.
+no normal tabular tool accepts inline data.\nUse export_data(path, format) for file-only exports (no rows in LLM metadata).
 For new Markdown, JSON, CSV, TSV, JSONL or NDJSON text, call
 wrap_data(content) once. For existing files, pass their path directly.
 The first wrap_data result supplies verified workspace_path and records_path
