@@ -136,6 +136,23 @@ class McpResultArtifacts:
         model_metadata = {**metadata, "workspace_path": path}
         return json.dumps(model_metadata, ensure_ascii=False, allow_nan=False)
 
+    def read_registered(self, relative: str) -> bytes:
+        """Read an unchanged artifact owned by this session; reject arbitrary paths."""
+        if not isinstance(relative, str):
+            raise ArtifactError("Ungültiger Artefaktpfad.")
+        path = self.workspace.resolve_direct_path(relative)
+        identity = self._files.get(path)
+        if identity is None:
+            raise ArtifactError("Datei ist kein registriertes Session-Artefakt.")
+        with path.open("rb") as handle:
+            stat = os.fstat(handle.fileno())
+            if (stat.st_dev, stat.st_ino) != identity or not stat.st_mode:
+                raise ArtifactError("Session-Artefakt wurde verändert.")
+            payload = handle.read(MAX_ARTIFACT_BYTES + 1)
+        if len(payload) > MAX_ARTIFACT_BYTES:
+            raise ArtifactError("Artefakt überschreitet das Downloadlimit.")
+        return payload
+
     def cleanup(self) -> None:
         """Remove only unchanged files created by this session (no recursive delete)."""
         for path, identity in tuple(self._files.items()):
