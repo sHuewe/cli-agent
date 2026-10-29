@@ -1630,3 +1630,9 @@ def test_evidence_working_memory_guidance_is_in_system_prompt_only_with_tools(
     assert "exakten call_id-Werte" in prompt
     assert "widerlegte oder überholte Evidences" in prompt
     assert "kein Evidence-Update nötig" in prompt
+    assert "Kühlzeitfenster" not in prompt
+    assert "abgeschlossenen Teilanalyse" in prompt
+    assert "KEINE Kopie" in prompt
+    assert "preview_data" in prompt
+    assert "Aggregationen, Joins" in prompt
+    assert "Erzwinge keine" in prompt
