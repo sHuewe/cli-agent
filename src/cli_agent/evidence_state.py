@@ -38,8 +38,9 @@ EVIDENCE_TOOL = {
             "Referenced completed tool calls are automatically hidden from later "
             "LLM prompts. discard_tool_call_ids hides other completed calls, "
             "restore_tool_call_ids makes hidden calls visible again. This internal "
-            "tool is transient: no update call or result remains in the model "
-            "history. Use only for meaningful findings, not every minor step."
+            "tool produces a short success or error result; its arguments are "
+            "redacted from subsequent model calls. Do not retry after success. "
+            "Use only for meaningful findings, not every minor step."
         ),
         "parameters": {
             "type": "object",
@@ -247,8 +248,7 @@ class EvidenceState:
                 original_calls = message["tool_calls"]
                 message["tool_calls"] = [
                     call for call in original_calls
-                    if (call.get("function") or {}).get("name") != EVIDENCE_TOOL_NAME
-                    and call.get("id") not in self.compacted
+                    if call.get("id") not in self.compacted
                 ]
                 if not message["tool_calls"]:
                     message.pop("tool_calls")
