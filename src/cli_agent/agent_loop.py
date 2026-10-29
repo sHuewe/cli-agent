@@ -456,7 +456,7 @@ async def run_model_loop(
                 status = "error"
                 result_text = (
                     "Evidence-Update NICHT übernommen: " + str(exc)[:1800]
-                    + " Korrigiere den Aufruf anhand registrierter Tool-IDs."
+                    + " Korrigiere die konkret genannten Argumente und versuche es erneut."
                 )
                 logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
             finally:
