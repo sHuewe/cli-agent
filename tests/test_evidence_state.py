@@ -48,7 +48,7 @@ def test_source_artifacts_are_attached_and_reference_is_auto_compacted():
     projection = state.project(original)
     assert original == saved
     calls = [m for m in projection if m["role"] == "assistant"][0]["tool_calls"]
-    assert [c["id"] for c in calls] == ["call-2"]
+    assert [c["id"] for c in calls] == ["call-2", "evidence-call"]
     assert [m["tool_call_id"] for m in projection if m["role"] == "tool"] == ["call-2"]
     assert sum("evidence state" in str(m.get("content")) for m in projection) == 1
 
@@ -115,7 +115,7 @@ def test_no_evidence_has_no_added_context():
     history = _history()
     visible = state.project(history)
     assert len(visible) == len(history)
-    assert [c["id"] for c in visible[2]["tool_calls"]] == ["call-1", "call-2"]
+    assert [c["id"] for c in visible[2]["tool_calls"]] == ["call-1", "call-2", "evidence-call"]
 
 
 def test_internal_evidence_tool_call_is_transient_in_main_loop():
@@ -173,7 +173,7 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
     ))
     assert answer == "Final answer"
     assert len(model.seen) == 2
-    assert all(m.get("role") != "tool" for m in model.seen[1])
+    assert [m.get("tool_call_id") for m in model.seen[1] if m.get("role") == "tool"] == ["internal-1"]
     assert "fact-1" in str(model.seen[1])
     internal = [
         c for m in messages for c in m.get("tool_calls", [])
@@ -244,7 +244,11 @@ def test_idless_ollama_tool_calls_support_evidence_compaction():
                         }]
                     }}}
                 ]}
-            assert all(m.get("role") != "tool" for m in messages)
+            assert [m.get("tool_call_id") for m in messages if m.get("role") == "tool"] == [
+                next(c["id"] for m in messages if m.get("role") == "assistant"
+                     for c in m.get("tool_calls", [])
+                     if c["function"]["name"] == EVIDENCE_TOOL_NAME)
+            ]
             assert "reading" in str(messages)
             return {"role": "assistant", "content": "100 W"}
 
