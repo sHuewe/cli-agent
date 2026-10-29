@@ -31,6 +31,7 @@ from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_
 from .mcp_contracts import tool_contract_fingerprint
 from .mcp_result_artifacts import McpResultArtifacts
 from .message_visibility import messages_for_model
+from .evidence_state import EvidenceState, EVIDENCE_TOOL
 from .model import ModelClient
 from .network_policy import NetworkConfig
 from .workspace_access import normalize_workspace_access
@@ -86,8 +87,10 @@ DUMP_PREFIX_HASH_HEX_CHARS = 16
 
 
 class CliAgent(McpLifecycleMixin, ConversationMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None, agent_timezone: str | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None, agent_timezone: str | None = None, evidence_state: bool = False) -> None:
         self.workspace_directory = workspace_directory.resolve()
+        self.evidence_enabled = bool(evidence_state)
+        self._evidence_state = EvidenceState() if self.evidence_enabled else None
         self.model_client = model_client
         self.mcp_servers = mcp_servers
         self.max_tool_calls = max_tool_calls
@@ -375,8 +378,15 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         if history_json != self._dumped_history_json:
             self._write_dump_json("history.json", model_history)
             self._dumped_history_json = history_json
-        model_messages = messages_for_model(working_messages)
+        model_messages = (
+            self._evidence_state.project(working_messages)
+            if phase == "main" and self._evidence_state is not None
+            else messages_for_model(working_messages)
+        )
         self._write_dump_json(f"{phase}_working_messages.json", model_messages)
+        if phase == "main" and self._evidence_state is not None:
+            self._write_dump_json("main_full_working_messages.json", messages_for_model(working_messages))
+            self._write_dump_json("main_evidence_state.json", self._evidence_state.snapshot())
         if model_messages:
             self._write_dump_json(
                 f"{phase}_system_prompt.json",
@@ -618,15 +628,18 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         return was_enabled != enabled
 
     def _model_tools(self) -> list[dict[str, Any]]:
-        return [
+        tools = [
             tool
-            for server_name, tools in self._server_tools.items()
+            for server_name, server_tools in self._server_tools.items()
             if server_name in self._active_servers
-            for tool in tools
+            for tool in server_tools
             if self._tool_is_enabled(
                 str(tool.get("function", {}).get("name") or "")
             )
         ]
+        if self.evidence_enabled:
+            tools.append(copy.deepcopy(EVIDENCE_TOOL))
+        return tools
 
     def _tool_input_schema(self, exposed_name: str, *, phase: str) -> dict[str, Any] | None:
         tools = self._knowledge_tools if phase == "knowledge" else self._model_tools()
