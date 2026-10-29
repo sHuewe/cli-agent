@@ -189,7 +189,7 @@ def create_server(
         )
         if format == "csv":
             output = io.StringIO(newline="")
-            writer = csv.DictWriter(output, fieldnames=columns, lineterminator="\\n")
+            writer = csv.DictWriter(output, fieldnames=columns, lineterminator="\n")
             writer.writeheader()
             for row in rows:
                 writer.writerow({column: row.get(column) for column in columns})
