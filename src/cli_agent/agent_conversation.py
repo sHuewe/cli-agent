@@ -312,6 +312,30 @@ class ConversationMixin:
         run_state = getattr(self, "_agui_pending_run_state", None)
         if run_state is None:
             run_state = ModelLoopRunState()
+        # AG-UI responses have already been validated against the pending
+        # frontend batch by checked_frontend_results. Only register results
+        # corresponding to calls in the trusted server-owned checkpoint.
+        evidence = getattr(self, "_evidence_state", None)
+        if evidence is not None:
+            pending_calls = {
+                call.get("id"): (call.get("function") or {}).get("name")
+                for message in messages
+                if message.get("role") == "assistant"
+                for call in message.get("tool_calls", [])
+                if isinstance(call, dict)
+            }
+            for result in results:
+                if not isinstance(result, dict) or result.get("role") != "tool":
+                    continue
+                call_id = result.get("tool_call_id")
+                name = pending_calls.get(call_id) if isinstance(call_id, str) else None
+                if (
+                    not isinstance(name, str)
+                    or name not in getattr(self, "_agui_frontend_tools", {})
+                    or call_id in evidence.tool_results
+                ):
+                    continue
+                evidence.register_result(call_id, tool_name=name)
         messages.extend(results)
         tools = self._model_tools()
         if getattr(self, "_agui_frontend_tools", None):
