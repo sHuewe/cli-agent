@@ -1508,6 +1508,8 @@ def test_history_reset_rewrites_and_removes_dump_diagnostics(tmp_path: Path) -> 
     dump_directory = tmp_path / ".cli-agent"
     diagnostic_files = (
         "main_working_messages.json",
+        "main_evidence_state.json",
+        "main_evidence_update_debug.json",
         "main_system_prompt.json",
         "knowledge_working_messages.json",
         "knowledge_system_prompt.json",
@@ -1543,10 +1545,12 @@ def test_history_reset_restores_persisted_and_in_memory_state_if_cleanup_fails(
     diagnostic_files = (
         "history.json",
         "main_working_messages.json",
+        "main_evidence_update_debug.json",
         "main_system_prompt.json",
     )
     agent._write_dump_json("history.json", agent.history)
     agent._write_dump_json("main_working_messages.json", {"old": "messages"})
+    agent._write_dump_json("main_evidence_update_debug.json", {"old": "sensitive arguments"})
     agent._write_dump_json("main_system_prompt.json", {"old": "system"})
     before = {
         filename: agent._safe_dump_path(filename).read_bytes()
