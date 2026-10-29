@@ -104,6 +104,7 @@ class AgentSession:
         self._pending_interrupt: dict[str, Any] | None = None
         self._pending_frontend: tuple[Any, ...] | None = None
         self.published_artifacts: dict[str, dict[str, str]] = {}
+        self._published_tool_calls: dict[str, str] = {}
         self._pending_frontend_thread_id: str | None = None
         self._pending_tool_id: str | None = None
         self._interrupt_tool_ids: set[str] = set()
@@ -165,6 +166,7 @@ class AgentSession:
                             # Each new question expires downloads from the prior
                             # question, matching MCP artifact cleanup semantics.
                             self.published_artifacts.clear()
+                            self._published_tool_calls.clear()
                             self._remember("user", run.prompt)
                             answer = await agent.ask(run.prompt)
                         if not isinstance(answer, str):
@@ -409,15 +411,11 @@ class AgentSession:
             # An AG-UI CUSTOM event offers only an ID and presentation metadata.
             # Do not expose local paths or the API credential to browser clients.
             artifact_id = payload["id"]
+            self._published_tool_calls[tool_id] = artifact_id
             self.published_artifacts[artifact_id] = {
                 "path": payload["path"], "filename": payload["filename"],
                 "mime_type": payload["mime_type"],
             }
-            if run.agui:
-                run.emit({"type": "CUSTOM", "name": "artifact_published", "value": {
-                    "id": artifact_id, "filename": payload["filename"],
-                    "mimeType": payload["mime_type"],
-                }})
         elif kind == "tool_finished":
             if run.agui:
                 self._interrupt_tool_ids.discard(tool_id)
@@ -427,9 +425,26 @@ class AgentSession:
                 if self._pending_tool_id == tool_id:
                     self._pending_tool_id = None
                 # Only publish safe status, never arbitrary MCP payload data.
-                run.emit({"type": "TOOL_CALL_RESULT",
-                          "toolCallId": tool_id, "messageId": uuid.uuid4().hex,
-                          "content": str(payload.get("status") or "finished")})
+                published_id = self._published_tool_calls.pop(tool_id, None)
+                if published_id is not None and payload.get("status") == "success":
+                    document = self.published_artifacts[published_id]
+                    run.emit({"type": "TOOL_CALL_RESULT",
+                              "toolCallId": tool_id, "messageId": uuid.uuid4().hex,
+                              "content": [
+                                  {"type": "text", "text": "Datei zum Download bereit."},
+                                  {"type": "document", "source": {
+                                      "type": "url",
+                                      "value": "/threads/" + run.thread_id + "/artifacts/" + published_id,
+                                      "mimeType": document["mime_type"],
+                                  }, "metadata": {
+                                      "filename": document["filename"],
+                                      "artifactId": published_id,
+                                  }},
+                              ]})
+                else:
+                    run.emit({"type": "TOOL_CALL_RESULT",
+                              "toolCallId": tool_id, "messageId": uuid.uuid4().hex,
+                              "content": str(payload.get("status") or "finished")})
             else:
                 run.emit({"type": "TOOL_CALL_END", "toolCallId": tool_id})
                 run.emit({"type": "CUSTOM", "name": "tool_status", "value": {
