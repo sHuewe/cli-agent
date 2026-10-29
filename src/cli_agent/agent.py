@@ -68,8 +68,9 @@ Toolquellen benötigt. Einfache Aufgaben benötigen keinen Plan.
 Jeder Planschritt erhält eine stabile id, Beschreibung und einen Status
 (pending, in_progress, completed, blocked oder skipped).
 Der Plan ist eine Orientierung, kein starres Ausführungsskript.
-Passe ihn bei neuen Erkenntnissen an, ohne unveränderte Teile bei jedem
-Evidence-Update erneut zu senden. Wenn du einen Schritt entfernst, ordne
+Passe ihn bei neuen Erkenntnissen an. Aktualisiere lediglich den Status
+einzelner Schritte über plan_step_updates mit id und status; übermittle den
+vollständigen plan nur bei der initialen Planung oder strukturellen Änderungen. Wenn du einen Schritt entfernst, ordne
 bereits vorhandene Evidences zuerst einem bestehenden Schritt zu oder
 entferne sie.
 Sobald du bei einer mehrstufigen Untersuchung ein relevantes, durch
