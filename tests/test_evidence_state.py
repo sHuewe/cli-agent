@@ -279,3 +279,70 @@ def test_idless_ollama_tool_calls_support_evidence_compaction():
     assert len(state.tool_results) == 1
     assert state.snapshot()["compacted_tool_call_ids"] == model.saw_ids
     assert messages[1]["tool_calls"][0]["id"] == model.saw_ids[0]
+
+
+
+def test_evidence_updates_use_regular_tool_activity_events():
+    import asyncio
+    from types import SimpleNamespace
+    from cli_agent.agent_loop import run_model_loop
+    from cli_agent.config import LoggingConfig
+    from cli_agent.evidence_state import EVIDENCE_TOOL
+
+    events = []
+
+    async def event_callback(kind, payload):
+        events.append((kind, dict(payload)))
+
+    class Model:
+        def __init__(self):
+            self.step = 0
+
+        async def chat(self, *, messages, tools):
+            self.step += 1
+            if self.step == 1:
+                return {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "evidence-success", "type": "function",
+                     "function": {"name": EVIDENCE_TOOL_NAME, "arguments": {
+                         "evidences": [{
+                             "id": "a", "type": "observation",
+                             "statement": "Observed value.",
+                             "tool_calls": []
+                         }]
+                     }}}
+                ]}
+            if self.step == 2:
+                return {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "evidence-error", "type": "function",
+                     "function": {"name": EVIDENCE_TOOL_NAME,
+                                  "arguments": {"remove_evidence_ids": ["missing"]}}}
+                ]}
+            return {"role": "assistant", "content": "done"}
+
+    agent = SimpleNamespace(
+        model_client=Model(),
+        _evidence_state=EvidenceState(),
+        _agui_frontend_tools={},
+        logging_config=LoggingConfig(),
+        event_callback=event_callback,
+        _dump_context=lambda *a, **k: None,
+        _dump_value=lambda *a, **k: None,
+    )
+    messages = [{"role": "system", "content": "rules"}]
+    result = asyncio.run(run_model_loop(
+        agent, messages=messages, tools=[EVIDENCE_TOOL], routes={},
+        enabled_server_names=None, max_tool_calls=5, phase="main",
+    ))
+    assert result == "done"
+    assert events == [
+        ("tool_started", {"call_id": "evidence-success", "tool": EVIDENCE_TOOL_NAME}),
+        ("tool_finished", {"call_id": "evidence-success", "tool": EVIDENCE_TOOL_NAME,
+                           "status": "success"}),
+        ("tool_started", {"call_id": "evidence-error", "tool": EVIDENCE_TOOL_NAME}),
+        ("tool_finished", {"call_id": "evidence-error", "tool": EVIDENCE_TOOL_NAME,
+                           "status": "error"}),
+    ]
+    assert not any(
+        call.get("function", {}).get("name") == EVIDENCE_TOOL_NAME
+        for msg in messages for call in msg.get("tool_calls", [])
+    )
