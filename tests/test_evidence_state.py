@@ -417,3 +417,99 @@ def test_evidence_projection_keeps_sanitized_tool_completion():
     assert visible[-2]["tool_calls"][0]["function"]["arguments"] == {}
     assert visible[-1]["tool_call_id"] == "ev-1"
     assert "erfolgreich" in visible[-1]["content"]
+
+
+
+def _plan():
+    return {
+        "goal": "Determine the device and electrical phase",
+        "steps": [
+            {"id": "identify", "description": "Identify active day",
+             "status": "in_progress"},
+            {"id": "measure", "description": "Compare phase signals",
+             "status": "pending"},
+        ],
+    }
+
+
+def test_plan_can_be_created_without_tools_and_is_projected():
+    state = EvidenceState()
+    state.update({"plan": _plan()})
+    assert state.snapshot()["plan"] == _plan()
+    assert state.snapshot()["evidences"] == []
+    assert "Identify active day" in str(state.project(_history()))
+    assert state.compacted == set()
+    # Plan only, no completed tool sources required.
+    assert state.tool_results == {}
+
+
+def test_evidence_links_to_plan_and_status_can_progress():
+    state = EvidenceState()
+    state.update({"plan": _plan()})
+    state.register_result("call-1", tool_name="sensor__read")
+    linked = {**_entry(), "plan_step_id": "identify"}
+    state.update({"evidences": [linked]})
+    assert state.snapshot()["evidences"][0]["plan_step_id"] == "identify"
+    revised = _plan()
+    revised["steps"][0]["status"] = "completed"
+    revised["steps"][1]["status"] = "in_progress"
+    state.update({"plan": revised})
+    assert state.snapshot()["plan"] == revised
+    assert len(state.snapshot()["evidences"]) == 1
+    assert state.snapshot()["compacted_tool_call_ids"] == ["call-1"]
+
+
+def test_invalid_plan_or_unlinked_evidence_rejected_atomically():
+    state = EvidenceState()
+    with pytest.raises(EvidenceError, match="Doppelte Planschritt-ID"):
+        invalid = _plan()
+        invalid["steps"][1]["id"] = "identify"
+        state.update({"plan": invalid})
+    assert "plan" not in state.snapshot()
+    with pytest.raises(EvidenceError, match="Status"):
+        invalid = _plan()
+        invalid["steps"][0]["status"] = "unknown"
+        state.update({"plan": invalid})
+    state.register_result("call-1", tool_name="sensor")
+    state.update({"plan": _plan()})
+    before = state.snapshot()
+    with pytest.raises(EvidenceError, match="plan_step_id"):
+        state.update({"evidences": [_entry()]})
+    with pytest.raises(EvidenceError, match="plan_step_id"):
+        state.update({"evidences": [{**_entry(), "plan_step_id": "unknown"}]})
+    assert state.snapshot() == before
+
+
+def test_plan_cannot_orphan_existing_evidence():
+    state = EvidenceState()
+    state.register_result("call-1", tool_name="sensor")
+    state.update({"plan": _plan(), "evidences": [
+        {**_entry(), "plan_step_id": "identify"}
+    ]})
+    before = state.snapshot()
+    new_plan = {
+        "goal": "Focus on other analysis",
+        "steps": [{"id": "measure", "description": "Measure phase",
+                   "status": "in_progress"}],
+    }
+    with pytest.raises(EvidenceError, match="keinem gültigen Planschritt"):
+        state.update({"plan": new_plan})
+    assert state.snapshot() == before
+    state.update({"plan": new_plan, "remove_evidence_ids": ["e0"]})
+    assert state.snapshot()["plan"] == new_plan
+    assert state.snapshot()["evidences"] == []
+
+
+def test_plan_is_bounded_and_does_not_force_trivial_tasks_to_plan():
+    state = EvidenceState()
+    state.register_result("call-1", tool_name="sensor")
+    state.update({"evidences": [_entry()]})
+    assert "plan" not in state.snapshot()
+    with pytest.raises(EvidenceError, match="zwischen 1 und 16"):
+        state.update({"plan": {"goal": "many", "steps": [
+            {"id": f"s{i}", "description": "Analyse", "status": "pending"}
+            for i in range(17)
+        ]}})
+    assert "plan" not in state.snapshot()
+    with pytest.raises(EvidenceError, match="ohne Plan"):
+        state.update({"evidences": [{**_entry(), "plan_step_id": "identify"}]})
