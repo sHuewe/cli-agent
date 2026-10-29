@@ -582,3 +582,42 @@ def test_evidence_update_reports_unknown_fields_and_empty_arguments():
     assert '"plan"' in str(error.value)
     assert '"goal"' in str(error.value)
     assert state.snapshot()["evidences"] == []
+
+
+def test_compaction_ids_are_excluded_from_model_projection_but_in_debug_snapshot():
+    import json
+
+    state = EvidenceState()
+    state.register_result("call-1", tool_name="sensor")
+    state.register_result("call-2", tool_name="sensor")
+    state.update({"evidences": [_entry()], "discard_tool_call_ids": ["call-2"]})
+
+    model_state = state.model_snapshot()
+    assert set(model_state) == {"evidences"}
+    assert "compacted_tool_call_ids" not in model_state
+    assert state.snapshot()["compacted_tool_call_ids"] == ["call-1", "call-2"]
+
+    projection = state.project(_history())
+    note = next(m["content"] for m in projection
+                if "[cli-agent evidence state:" in str(m.get("content")))
+    payload = json.loads(note.split("\n", 1)[1])
+    assert payload == model_state
+    assert "compacted_tool_call_ids" not in note
+    assert all(m["role"] != "tool" for m in projection)
+    assert state.snapshot()["compacted_tool_call_ids"] == ["call-1", "call-2"]
+
+    state.update({"restore_tool_call_ids": ["call-2"]})
+    assert [m["tool_call_id"] for m in state.project(_history())
+            if m["role"] == "tool"] == ["call-2"]
+
+
+def test_discard_only_keeps_no_management_note_in_model_context():
+    state = EvidenceState()
+    state.register_result("call-1", tool_name="sensor")
+    state.update({"discard_tool_call_ids": ["call-1"]})
+    assert state.model_snapshot() == {"evidences": []}
+    assert state.snapshot()["compacted_tool_call_ids"] == ["call-1"]
+    projected = state.project(_history())
+    assert not any("[cli-agent evidence state:" in str(m.get("content"))
+                   for m in projected)
+    assert all(m.get("tool_call_id") != "call-1" for m in projected)
