@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import pytest
 
-from cli_agent.evidence_state import EvidenceError, EvidenceState, EVIDENCE_TOOL_NAME
+from cli_agent.evidence_state import EvidenceError, EvidenceState, EVIDENCE_TOOL, EVIDENCE_TOOL_NAME
 
 
 def _entry(call_id="call-1", evidence_id="e0"):
