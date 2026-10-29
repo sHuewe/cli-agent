@@ -114,8 +114,8 @@ def test_no_evidence_has_no_added_context():
     state = EvidenceState()
     history = _history()
     visible = state.project(history)
-    assert len(visible) == len(history) - 1
-    assert visible[2]["tool_calls"][-1]["id"] == "call-2"
+    assert len(visible) == len(history)
+    assert [c["id"] for c in visible[2]["tool_calls"]] == ["call-1", "call-2"]
 
 
 def test_internal_evidence_tool_call_is_transient_in_main_loop():
