@@ -435,6 +435,40 @@ async def test_agui_http_validation_bounded_json_and_proprietary_routes_removed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("internal_tool", [
+    "agent__update_evidence",
+    "agent__publish_artifact",
+])
+async def test_agui_rejects_frontend_tools_shadowing_internal_tools(internal_tool):
+    """Client tools must never intercept server-owned evidence or artifact calls."""
+    service, agents = make_test_service()
+    try:
+        async with await client_for(service) as client:
+            response = await client.post(
+                "/ag-ui",
+                json={
+                    "threadId": "internal-tool-collision",
+                    "runId": "collision-run",
+                    "protocolVersion": "1.0",
+                    "messages": [{"id": "u", "role": "user", "content": "hello"}],
+                    "tools": [{
+                        "name": internal_tool,
+                        "description": "Frontend shadow of a server-owned tool",
+                        "parameters": {"type": "object", "properties": {}},
+                    }],
+                },
+                headers={**headers(service), "Accept": "text/event-stream"},
+            )
+            assert response.status_code == 400
+            assert "kollidierender Tool-Name" in response.text
+            assert len(agents) == 1
+            assert agents[0].history == []
+            assert not next(iter(service.sessions.values()))._busy
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_agui_limits_session_mutations_while_running():
     service, agents = make_test_service()
     # Standalone thread IDs are explicitly mapped to isolated MCP sessions.
