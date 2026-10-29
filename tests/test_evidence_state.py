@@ -307,7 +307,8 @@ def test_evidence_updates_use_regular_tool_activity_events():
                          "evidences": [{
                              "id": "a", "type": "observation",
                              "statement": "Observed value.",
-                             "tool_calls": []
+                             "tool_calls": [{"call_id": "source-1",
+                                             "description": "Measured sensor value"}]
                          }]
                      }}}
                 ]}
@@ -319,9 +320,11 @@ def test_evidence_updates_use_regular_tool_activity_events():
                 ]}
             return {"role": "assistant", "content": "done"}
 
+    evidence = EvidenceState()
+    evidence.register_result("source-1", tool_name="sensor")
     agent = SimpleNamespace(
         model_client=Model(),
-        _evidence_state=EvidenceState(),
+        _evidence_state=evidence,
         _agui_frontend_tools={},
         logging_config=LoggingConfig(),
         event_callback=event_callback,
@@ -346,3 +349,32 @@ def test_evidence_updates_use_regular_tool_activity_events():
         call.get("function", {}).get("name") == EVIDENCE_TOOL_NAME
         for msg in messages for call in msg.get("tool_calls", [])
     )
+
+
+
+def test_evidence_requires_at_least_one_verified_source():
+    state = EvidenceState()
+    state.register_result("known-1", tool_name="measure")
+    entry = _entry("known-1")
+    entry["tool_calls"] = []
+    with pytest.raises(EvidenceError, match="mindestens eine"):
+        state.update({"evidences": [entry]})
+    assert not state.evidences
+    assert EVIDENCE_TOOL_NAME == "agent__update_evidence"
+
+    schema = __import__(
+        "cli_agent.evidence_state", fromlist=["EVIDENCE_TOOL"]
+    ).EVIDENCE_TOOL["function"]["parameters"]
+    assert schema["properties"]["evidences"]["items"]["properties"][
+        "tool_calls"]["minItems"] == 1
+
+    bad = _entry("unknown-1")
+    with pytest.raises(EvidenceError, match="known-1"):
+        state.update({"evidences": [bad]})
+    assert not state.evidences
+
+    state.update({"evidences": [_entry("known-1")]})
+    assert state.snapshot()["compacted_tool_call_ids"] == ["known-1"]
+    # Removing evidence or explicitly discarding calls requires no new evidence.
+    state.update({"remove_evidence_ids": ["e0"]})
+    assert state.snapshot()["evidences"] == []
