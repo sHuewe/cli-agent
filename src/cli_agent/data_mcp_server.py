@@ -195,10 +195,14 @@ def create_server(
                 writer.writerow({column: row.get(column) for column in columns})
             content = output.getvalue()
         elif format == "json":
-            content = json.dumps(
-                [{column: _artifact_value(row.get(column)) for column in columns}
-                 for row in rows], ensure_ascii=False, allow_nan=False,
-            )
+            content = json.dumps({
+                "columns": columns,
+                "rows": [
+                    {column: _artifact_value(row.get(column)) for column in columns}
+                    for row in rows
+                ],
+                "scalar_encoding": SCALAR_ENCODING,
+            }, ensure_ascii=False, allow_nan=False)
         else:
             from .data_markdown import render_markdown_table
             content = render_markdown_table(columns, rows)
