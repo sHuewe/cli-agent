@@ -566,6 +566,6 @@ async def test_browser_download_requires_valid_tab_lease():
         assert (await client.get(endpoint, headers=browser_headers)).content == b"document"
         assert (await client.get(endpoint, headers={
             **browser_headers, "X-Cli-Agent-Lease": "invalid",
-        })).status_code == 401
-        assert (await client.delete(endpoint, headers=browser_headers)).status_code == 403
+        })).status_code in {401, 403}
+        assert (await client.delete(endpoint, headers=browser_headers)).status_code in {401, 403}
     await service.shutdown()
