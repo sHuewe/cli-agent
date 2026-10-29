@@ -163,6 +163,8 @@ class EvidenceState:
         # Not part of snapshot(), and never included in model-facing messages.
         # Populated only when dump_llm_context is explicitly enabled.
         self.debug_updates: list[dict[str, Any]] = []
+        self.debug_enabled = False
+        self._live_tool_definition: dict[str, Any] | None = None
 
     def register_result(
         self,
@@ -189,6 +191,7 @@ class EvidenceState:
             if isinstance(record_sets, list) and "workspace_path" in source:
                 source["record_sets"] = copy.deepcopy(record_sets)
         self.tool_results[call_id] = source
+        self._refresh_live_tool_definition()
 
     def tool_definition(self) -> dict[str, Any]:
         """Expose completed call IDs to the model as bounded schema enums.
@@ -197,6 +200,15 @@ class EvidenceState:
         Earlier sources already linked to an Evidence remain selectable when
         the recent-completions window advances.
         """
+        if self._live_tool_definition is None:
+            self._live_tool_definition = copy.deepcopy(EVIDENCE_TOOL)
+            self._refresh_live_tool_definition()
+        return self._live_tool_definition
+
+    def _refresh_live_tool_definition(self) -> None:
+        # Mutate the same object already passed in the main loop's tools list.
+        # Thus newly completed tool results become selectable at the next LLM
+        # call without another model loop or loss of reference identity.
         schema = copy.deepcopy(EVIDENCE_TOOL)
         all_ids = list(self.tool_results)
         recent_ids = all_ids[-MAX_SOURCE_ENUM_IDS:]
@@ -220,7 +232,9 @@ class EvidenceState:
                 " Valid source call IDs are enumerated in the call_id schema. "
                 "Choose matching IDs from the available list, never approximate."
             )
-        return schema
+        if self._live_tool_definition is not None:
+            self._live_tool_definition.clear()
+            self._live_tool_definition.update(schema)
 
     def record_debug_update(
         self, *, call_id: str, arguments: Any, status: str, error: str | None,
@@ -290,6 +304,23 @@ class EvidenceState:
         return copy.deepcopy(value)
 
     def update(self, arguments: dict[str, Any]) -> None:
+        if not self.debug_enabled:
+            self._apply_update(arguments)
+            return
+        try:
+            self._apply_update(arguments)
+        except (EvidenceError, TypeError, ValueError) as exc:
+            self.record_debug_update(
+                call_id="", arguments=arguments, status="error",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        else:
+            self.record_debug_update(
+                call_id="", arguments=arguments, status="success", error=None,
+            )
+
+    def _apply_update(self, arguments: dict[str, Any]) -> None:
         if not isinstance(arguments, dict):
             raise EvidenceError("Evidence-Argumente müssen ein JSON-Objekt sein.")
         allowed = {
@@ -455,6 +486,7 @@ class EvidenceState:
         self.plan = candidate_plan
         self.compacted = compacted
         self.pending_error = None
+        self._refresh_live_tool_definition()
 
     def snapshot(self) -> dict[str, Any]:
         snapshot: dict[str, Any] = {
