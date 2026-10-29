@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path, PureWindowsPath
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 _FORBIDDEN_ROUTING_HEADERS = frozenset(
@@ -91,6 +92,11 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class AgentConfig:
+    timezone: str | None = None
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     enabled: bool = True
     level: str = "INFO"
@@ -149,6 +155,7 @@ class McpServerConfig:
 @dataclass(frozen=True)
 class AppConfig:
     dump_llm_context: bool = False
+    agent: AgentConfig = AgentConfig()
     model: ModelConfig = ModelConfig()
     logging: LoggingConfig = LoggingConfig()
     mcp_servers: tuple[McpServerConfig, ...] = ()
@@ -162,6 +169,23 @@ def _bool_value(values: dict[str, Any], key: str, default: bool, *, section: str
     if not isinstance(value, bool):
         raise ValueError(f"{section}.{key} muss true oder false sein.")
     return value
+
+
+def _agent_config(values: Any) -> AgentConfig:
+    if not isinstance(values, dict):
+        raise ValueError("[agent] muss eine Tabelle sein.")
+    if set(values) - {"timezone"}:
+        raise ValueError("[agent] enthält unbekannte Optionen.")
+    timezone = values.get("timezone")
+    if timezone is None:
+        return AgentConfig()
+    if not isinstance(timezone, str) or not timezone or timezone != timezone.strip():
+        raise ValueError("agent.timezone muss eine gültige IANA-Zeitzone sein.")
+    try:
+        ZoneInfo(timezone)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise ValueError(f"Ungültige IANA-Zeitzone in agent.timezone: {timezone!r}") from exc
+    return AgentConfig(timezone=timezone)
 
 
 def _logging_file(values: dict[str, Any], defaults: LoggingConfig) -> Path:
@@ -407,6 +431,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     return AppConfig(
         knowledge_vector=knowledge_vector,
         dump_llm_context=_bool_value(values, "dump_llm_context", False, section="Root-Konfiguration"),
+        agent=_agent_config(values.get("agent", {})),
         model=_model_config(model_values),
         logging=_logging_config(logging_values),
         mcp_servers=mcp_servers,

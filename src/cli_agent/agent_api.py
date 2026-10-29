@@ -1512,6 +1512,7 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
         agent = ContextFileCliAgent(
             workspace, model_client, config.mcp_servers,
             logging_config=config.logging,
+            agent_timezone=config.agent.timezone,
             config_file=config_file,
             # API sessions never write LLM context dumps, even when enabled
             # in config.toml for CLI or flow execution.

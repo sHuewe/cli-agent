@@ -145,6 +145,7 @@ async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, mo
     class FakeConfig:
         model: FakeModel
         logging: object
+        agent: object = config.AgentConfig()
         mcp_servers: tuple = ()
         dump_llm_context: bool = False
         okf: object = None

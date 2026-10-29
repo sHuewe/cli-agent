@@ -496,6 +496,7 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
     )
     cfg = SimpleNamespace(
         logging=object(),
+        agent=SimpleNamespace(timezone="Europe/Berlin"),
         model=SimpleNamespace(model="fake-model"),
         mcp_servers=(SimpleNamespace(name="os"),),
         okf=None, knowledge_vector=None,
@@ -514,6 +515,7 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
     assert created[0].args[1] is fake_model
     assert created[0].kwargs["workspace_access"] == os_access
     assert created[0].kwargs["response_format"] == "json"
+    assert created[0].kwargs["agent_timezone"] == "Europe/Berlin"
     assert created[0].event_callback == preapprovals[0][1].__self__.on_agent_event
     assert preapprovals[0][0] == ("safe__read",)
     assert model_calls
