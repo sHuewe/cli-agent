@@ -436,37 +436,45 @@ async def run_model_loop(
                     {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME},
                 )
             status = "success"
+            previous_count = len(evidence.evidences)
+            previous_compacted = len(evidence.compacted)
             try:
                 raw_args = (internal_call.get("function") or {}).get("arguments") or {}
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 evidence.update(args)
+                result_text = (
+                    "Evidence-State erfolgreich aktualisiert. "
+                    f"Einträge: {len(evidence.evidences)} "
+                    f"(vorher {previous_count}); "
+                    f"ausgeblendete Toolaufrufe: {len(evidence.compacted)} "
+                    f"(vorher {previous_compacted}). "
+                    "Nicht erneut speichern, sofern keine Korrektur nötig ist."
+                )
                 logger.info("evidence_state_updated entries=%d hidden=%d",
                             len(evidence.evidences), len(evidence.compacted))
             except (EvidenceError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 status = "error"
-                evidence.pending_error = str(exc)[:1000]
+                result_text = (
+                    "Evidence-Update NICHT übernommen: " + str(exc)[:1800]
+                    + " Korrigiere den Aufruf anhand registrierter Tool-IDs."
+                )
                 logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
             finally:
+                # Keep a protocol-complete, short confirmation in the model
+                # history, but never repeat the potentially huge evidence
+                # payload in the assistant tool call's arguments.
+                internal_call["function"]["arguments"] = {}
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": event_id,
+                    "content": result_text,
+                })
                 if event_callback is not None:
                     await event_callback(
                         "tool_finished",
                         {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME,
                          "status": status},
                     )
-        if evidence_calls:
-            # Evidence updates are internal state transitions, not conversation
-            # tool calls. Remove them from the canonical working transcript too.
-            # Keep other calls in the same assistant message untouched.
-            remaining = [
-                call for call in message.get("tool_calls", [])
-                if call not in evidence_calls
-            ]
-            if remaining:
-                message["tool_calls"] = remaining
-            else:
-                message.pop("tool_calls", None)
-                if not message.get("content"):
-                    messages[:] = [item for item in messages if item is not message]
         if frontend_calls:
             from .ag_ui_frontend_tools import FrontendToolHandoff
             # All backend calls from the same model response have been handled
