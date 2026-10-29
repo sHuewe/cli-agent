@@ -507,3 +507,65 @@ async def test_configured_standalone_session_keeps_tool_policy_in_agui_run():
             )).json()["tools"][0]["enabled"] is False
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_published_artifact_download_is_session_bound_and_authenticated():
+    service, _ = make_test_service()
+    async with await client_for(service) as client:
+        sid = (await client.post("/sessions", headers=headers(service))).json()["session_id"]
+        session = service.sessions[sid]
+        session.agent._result_artifacts = SimpleNamespace(
+            read_registered=lambda path: b"export-data" if path == "registered.csv" else b"wrong"
+        )
+        artifact_id = "a" * 32
+        session.published_artifacts[artifact_id] = {
+            "path": "registered.csv", "filename": "report.csv", "mime_type": "text/csv",
+        }
+        url = f"/threads/{sid}/artifacts/{artifact_id}"
+        assert (await client.get(url)).status_code == 401
+        assert (await client.get(url, headers=headers(service))).content == b"export-data"
+        assert (await client.get(url, headers=headers(service))).headers["cache-control"] == "no-store"
+        assert (await client.get(url, headers=headers(service))).headers["content-disposition"].startswith("attachment;")
+        assert (await client.get(
+            f"/threads/{sid}/artifacts/{'b' * 32}", headers=headers(service)
+        )).status_code == 404
+        session.published_artifacts.clear()
+        assert (await client.get(url, headers=headers(service))).status_code == 404
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_browser_download_requires_valid_tab_lease():
+    service, _ = make_test_service()
+    session = await service.create()
+    session.agent._result_artifacts = SimpleNamespace(
+        read_registered=lambda path: b"document"
+    )
+    artifact_id = "c" * 32
+    session.published_artifacts[artifact_id] = {
+        "path": "registered.md", "filename": "report.md", "mime_type": "text/markdown",
+    }
+    ui = {
+        "token": "browser-secret",
+        "origin": "http://127.0.0.1:8765",
+        "registry": SimpleNamespace(is_owner=lambda sid, lease: (
+            sid == session.id and lease == "valid-lease"
+        )),
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        endpoint = f"/threads/{session.id}/artifacts/{artifact_id}"
+        browser_headers = {
+            "Authorization": "Bearer browser-secret",
+            "X-Cli-Agent-Browser": "1",
+            "X-Cli-Agent-Lease": "valid-lease",
+        }
+        assert (await client.get(endpoint, headers=browser_headers)).content == b"document"
+        assert (await client.get(endpoint, headers={
+            **browser_headers, "X-Cli-Agent-Lease": "invalid",
+        })).status_code == 403
+        assert (await client.delete(endpoint, headers=browser_headers)).status_code == 403
+    await service.shutdown()
