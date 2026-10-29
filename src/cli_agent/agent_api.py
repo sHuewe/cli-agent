@@ -884,7 +884,12 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             normalize_frontend_tools, checked_frontend_results,
             history_for_model,
         )
-        reserved_names = set(getattr(session.agent, "_tool_routes", {}))
+        from .evidence_state import EVIDENCE_TOOL_NAME
+        # The internal agent tool is not a routed MCP tool and is deliberately
+        # omitted from tool_states_snapshot(). Frontend clients must never
+        # shadow it, even before any external tool has been enabled.
+        reserved_names = {EVIDENCE_TOOL_NAME}
+        reserved_names.update(getattr(session.agent, "_tool_routes", {}))
         if hasattr(session.agent, "tool_states_snapshot"):
             reserved_names.update(
                 item["name"] for item in session.agent.tool_states_snapshot()
