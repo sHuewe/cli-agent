@@ -431,6 +431,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         )
 
     def _dump_context(self, working_messages: list[dict[str, Any]], *, phase: str) -> None:
+        self._evidence_state.debug_enabled = bool(self.dump_llm_context)
         if not self.dump_llm_context:
             return
         model_history = messages_for_model(self.history)
