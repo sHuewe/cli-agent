@@ -22,6 +22,22 @@ class EvidenceInputError(ValueError):
     pass
 
 
+def annotate_source_result(content: str, *, source_ref: str, tool_name: str) -> str:
+    """Label a verified result without breaking JSON object consumers.
+
+    The caller must register the successful result in the trusted registry first.
+    The source reference is always server generated, never read from tool text.
+    """
+    try:
+        decoded = json.loads(content)
+    except (TypeError, ValueError):
+        decoded = None
+    if isinstance(decoded, dict):
+        decoded["source_ref"] = source_ref
+        return json.dumps(decoded, ensure_ascii=False)
+    return f"[Quelle {source_ref}: {tool_name}]\\n".replace("\\\\n", "\\n") + content
+
+
 def _tool(name: str, description: str, fields: dict, required: list[str]) -> dict:
     return {"type": "function", "function": {
         "name": name, "description": description,
