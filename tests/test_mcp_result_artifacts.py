@@ -17,6 +17,7 @@ from cli_agent.mcp_result_artifacts import (
     McpResultArtifacts,
 )
 from cli_agent.ollama import OllamaClient
+from cli_agent.os_operations import WorkspaceError
 
 
 class Session:
@@ -337,6 +338,6 @@ def test_session_artifact_store_rejects_forbidden_directories(tmp_path: Path) ->
         literal_args=("--protected-path", str(tmp_path)),
     )
     store = McpResultArtifacts(tmp_path, (os_config,))
-    with pytest.raises((RuntimeError, ArtifactError, Exception)):
+    with pytest.raises((RuntimeError, ArtifactError, WorkspaceError)):
         store.save("cannot write", structured=False)
     assert not list(tmp_path.iterdir())
