@@ -588,10 +588,7 @@ class EvidenceState(EvidenceOperationsMixin):
                     + json.dumps(self.model_snapshot(), ensure_ascii=False)
                 ),
             }
-            if projected and projected[0].get("role") == "system":
-                projected.insert(1, note)
-            else:
-                projected.insert(0, note)
+            projected.append(note)
         if self.pending_error is not None:
             projected.append({
                 "role": "user",
