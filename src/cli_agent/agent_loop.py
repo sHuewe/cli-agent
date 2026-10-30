@@ -464,28 +464,36 @@ async def run_model_loop(
                 raw_args = (internal_call.get("function") or {}).get("arguments") or {}
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 if tool_name == PLAN_TOOL_NAME:
-                    evidence.update_plan(args)
+                    plan_result = evidence.update_plan(args)
+                    result_text = json.dumps(plan_result, ensure_ascii=False)
                 elif tool_name == ADD_EVIDENCE_TOOL_NAME:
                     evidence.add_evidence(args)
                 else:
                     evidence.update_evidence(args)
-                result_text = (
-                    "Evidence-State erfolgreich aktualisiert. "
-                    f"Einträge: {len(evidence.evidences)} "
-                    f"(vorher {previous_count}); "
-                    f"ausgeblendete Toolaufrufe: {len(evidence.compacted)} "
-                    f"(vorher {previous_compacted}). "
-                    "Nicht erneut speichern, sofern keine Korrektur nötig ist."
-                )
+                if tool_name != PLAN_TOOL_NAME:
+                    result_text = (
+                        "Evidence-State erfolgreich aktualisiert. "
+                        f"Einträge: {len(evidence.evidences)} "
+                        f"(vorher {previous_count}); "
+                        f"ausgeblendete Toolaufrufe: {len(evidence.compacted)} "
+                        f"(vorher {previous_compacted}). "
+                        "Nicht erneut speichern, sofern keine Korrektur nötig ist."
+                    )
                 logger.info("evidence_state_updated entries=%d hidden=%d",
                             len(evidence.evidences), len(evidence.compacted))
             except (EvidenceError, EvidenceInputError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 status = "error"
                 debug_error = f"{type(exc).__name__}: {exc}"
-                result_text = (
-                    "Evidence-Update NICHT übernommen: " + str(exc)[:1800]
-                    + " Korrigiere die konkret genannten Argumente und versuche es erneut."
-                )
+                if tool_name == PLAN_TOOL_NAME:
+                    result_text = json.dumps({
+                        "status": "error", "error": str(exc)[:1800],
+                        "plan": evidence.compact_plan(evidence.plan),
+                    }, ensure_ascii=False)
+                else:
+                    result_text = (
+                        "Evidence-Update NICHT übernommen: " + str(exc)[:1800]
+                        + " Korrigiere die konkret genannten Argumente und versuche es erneut."
+                    )
                 logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
             finally:
                 if evidence.debug_enabled:
