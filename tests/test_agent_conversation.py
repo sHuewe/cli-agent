@@ -118,7 +118,7 @@ def test_artifacts_survive_answer_and_commands_until_next_regular_question(
     assert asyncio.run(agent.ask("second question")) == "answer"
     second_path = created[-1]
     assert not first_path.exists()
-    assert not first_path.parent.exists()
+    assert first_path.parent.is_dir()  # Same session-specific directory is reused.
     assert second_path.is_file()
     assert second_path.parent == first_path.parent
     assert store._bytes_written == len("new")
