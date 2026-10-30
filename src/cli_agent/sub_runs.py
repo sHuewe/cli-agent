@@ -144,9 +144,26 @@ async def execute_sub_run(agent: Any, args: dict[str, Any]) -> dict[str, Any]:
         )
         result = validate_sub_result(answer, set(local.evidences) - inherited)
         if result["status"] in {"completed", "partial"}:
-            additions = {i: copy.deepcopy(local.evidences[i]) for i in result["evidence_ids"]}
-            if set(additions) & set(parent.evidences):
-                raise ValueError("Sub-Run Evidence-ID bereits im Hauptlauf vergeben.")
+            # Child IDs are local to the delegated context. Remap collisions
+            # deterministically and return the promoted IDs to the coordinator.
+            additions = {}
+            promoted_ids = []
+            for child_id in result["evidence_ids"]:
+                entry = copy.deepcopy(local.evidences[child_id])
+                promoted_id = child_id
+                if promoted_id in parent.evidences or promoted_id in additions:
+                    suffix = 1
+                    prefix = run_id + "-" + child_id
+                    promoted_id = prefix[:80]
+                    while promoted_id in parent.evidences or promoted_id in additions:
+                        suffix += 1
+                        promoted_id = (prefix[:76] + "-" + str(suffix))[:80]
+                entry["id"] = promoted_id
+                if step is not None:
+                    entry["plan_step_id"] = step
+                additions[promoted_id] = entry
+                promoted_ids.append(promoted_id)
+            result["evidence_ids"] = promoted_ids
             candidate = {**parent.evidences, **additions}
             parent._check_budget(candidate)
             parent.evidences = candidate
