@@ -277,11 +277,19 @@ class _TraversalBudgetReached(RuntimeError):
 
 
 @dataclass(frozen=True)
+class AllowedPath:
+    """A narrowly scoped exception to a protected workspace subtree."""
+    path: Path
+    access: str = "read"
+
+
+@dataclass(frozen=True)
 class Workspace:
     directory: Path
     config: McpServerConfig
     protected_paths: frozenset[Path] = frozenset()
     mutation_protected_paths: frozenset[Path] = frozenset()
+    allowed_paths: tuple[AllowedPath, ...] = ()
 
     @classmethod
     def from_directory(
@@ -291,6 +299,7 @@ class Workspace:
         *,
         protected_paths: tuple[Path, ...] = (),
         mutation_protected_paths: tuple[Path, ...] = (),
+        allowed_paths: tuple[AllowedPath, ...] = (),
     ) -> Workspace:
         resolved = directory.resolve()
         if not resolved.is_dir():
@@ -309,6 +318,29 @@ class Workspace:
                 collected.add(protected_path)
             return frozenset(collected)
 
+        checked_allowed: list[AllowedPath] = []
+        for item in allowed_paths:
+            if not isinstance(item, AllowedPath) or item.access not in {"read", "write"}:
+                raise WorkspaceError("allowed_paths benötigt AllowedPath mit access='read' oder 'write'.")
+            raw = item.path.expanduser()
+            if ".." in raw.parts or ".." in PureWindowsPath(str(raw)).parts:
+                raise WorkspaceError("allowed_paths darf '..' nicht enthalten.")
+            candidate = raw if raw.is_absolute() else resolved / raw
+            lexical = candidate.absolute()
+            try:
+                relative = lexical.relative_to(resolved)
+            except ValueError as exc:
+                raise WorkspaceError("allowed_paths muss innerhalb des Workspace liegen.") from exc
+            if not relative.parts:
+                raise WorkspaceError("Der gesamte Workspace darf nicht freigegeben werden.")
+            try:
+                canonical = candidate.resolve(strict=False)
+            except (OSError, RuntimeError) as exc:
+                raise WorkspaceError("allowed_paths konnte nicht sicher aufgelöst werden.") from exc
+            if os.path.normcase(str(lexical)) != os.path.normcase(str(canonical)):
+                raise WorkspaceError("Symlinks oder Junctions in allowed_paths sind nicht erlaubt.")
+            checked_allowed.append(AllowedPath(canonical, item.access))
+
         return cls(
             directory=resolved,
             config=config,
@@ -316,6 +348,7 @@ class Workspace:
             mutation_protected_paths=collect_workspace_paths(
                 mutation_protected_paths
             ),
+            allowed_paths=tuple(checked_allowed),
         )
 
     def resolve_path(self, path: str, *, must_exist: bool = True) -> Path:
@@ -399,24 +432,45 @@ class Workspace:
             or name.endswith(".log")
         )
 
+    def _matching_allowed_path(self, resolved: Path) -> AllowedPath | None:
+        matches = (
+            item for item in self.allowed_paths
+            if resolved == item.path or item.path in resolved.parents
+        )
+        # Prefer the narrowest exception, and read-only on an equal path.
+        return next(iter(sorted(
+            matches, key=lambda item: (-len(item.path.parts), item.access != "read")
+        )), None)
+
     def _is_protected_path(self, path: Path) -> bool:
-        if self._is_sensitive_file(path, workspace=self.directory):
-            return True
         try:
-            # Detect filesystem indirection explicitly instead of relying on
-            # Path.resolve(strict=False) to raise for cyclic symlinks. Python
-            # 3.13 changed that pathlib behaviour, while lstat/reparse-point
-            # detection remains the security property we actually need here.
+            # Reject indirection even for paths below a permitted exception.
             if path_entry_is_symlink_or_reparse(path):
                 return True
             resolved = path.resolve(strict=False)
+            if os.path.normcase(str(path.absolute())) != os.path.normcase(str(resolved)):
+                return True
         except (OSError, RuntimeError):
-            # Metadata/resolve failures cannot be classified safely. Keep the
-            # historical fail-closed behaviour and hide/reject the entry.
             return True
-        return any(
-            resolved == protected or protected in resolved.parents
-            for protected in self.protected_paths
+
+        allowed = self._matching_allowed_path(resolved)
+        if allowed is not None:
+            # Only the protected ancestor is overridden. A nested .ssh, .env,
+            # credentials file or an explicitly protected child is still denied.
+            if self._is_sensitive_file(resolved, workspace=allowed.path):
+                return True
+            return any(
+                (resolved == protected or protected in resolved.parents)
+                and allowed.path in protected.parents
+                for protected in self.protected_paths
+            )
+
+        return (
+            self._is_sensitive_file(resolved, workspace=self.directory)
+            or any(
+                resolved == protected or protected in resolved.parents
+                for protected in self.protected_paths
+            )
         )
 
     def _reject_protected_read(self, path: Path) -> None:
@@ -428,6 +482,9 @@ class Workspace:
 
     def _is_mutation_protected_path(self, path: Path) -> bool:
         if self._is_protected_path(path):
+            return True
+        allowed = self._matching_allowed_path(path.resolve(strict=False))
+        if allowed is not None and allowed.access != "write":
             return True
         try:
             if path_entry_is_symlink_or_reparse(path):
