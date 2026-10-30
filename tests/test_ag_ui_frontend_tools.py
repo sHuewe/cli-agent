@@ -10,7 +10,7 @@ import pytest
 
 from cli_agent.ag_ui_frontend_tools import (
     FrontendToolCall, FrontendToolHandoff, checked_frontend_results,
-    history_for_model, normalize_frontend_tools,
+    history_for_model, normalize_frontend_tools, FRONTEND_FAILURE_META_KEY,
 )
 from cli_agent.agent_api import AgentApiService, create_app
 from cli_agent.agent_loop import run_model_loop
