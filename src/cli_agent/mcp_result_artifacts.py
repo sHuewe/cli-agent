@@ -93,7 +93,13 @@ class McpResultArtifacts:
         try:
             path.mkdir(mode=0o700)
         except FileExistsError as exc:
-            raise ArtifactError("Session-Artefaktordner existiert bereits.") from exc
+            # Cleanup may deliberately preserve a replaced/user-owned file.
+            # A directory that was previously ours can be reused only when
+            # its original filesystem identity still matches.
+            stat = path.stat(follow_symlinks=False)
+            if (not path.is_dir() or self._directory_identity is None
+                    or (stat.st_dev, stat.st_ino) != self._directory_identity):
+                raise ArtifactError("Session-Artefaktordner wurde ersetzt.") from exc
         stat = path.stat(follow_symlinks=False)
         self._directory = path
         self._directory_identity = (stat.st_dev, stat.st_ino)
@@ -227,5 +233,6 @@ class McpResultArtifacts:
             except (OSError, RuntimeError, ValueError):
                 logger.warning("mcp_result_artifact_directory_not_empty_or_unavailable")
             finally:
+                # Retain identity for safe reuse after incomplete cleanup.
+                # Replaced directories are still rejected on the next write.
                 self._directory = None
-                self._directory_identity = None
