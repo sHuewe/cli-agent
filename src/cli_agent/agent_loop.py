@@ -27,6 +27,8 @@ logger = logging.getLogger("cli_agent.agent_loop")
 def _assign_tool_call_ids(
     message: dict[str, Any],
     previous_messages: list[dict[str, Any]],
+    *,
+    reserved_ids: set[str] | None = None,
 ) -> None:
     """Give id-less provider calls stable per-run IDs before execution.
 
@@ -51,6 +53,7 @@ def _assign_tool_call_ids(
         if prior.get("role") == "tool"
         and isinstance(prior.get("tool_call_id"), str)
     )
+    used_ids.update(reserved_ids or ())
     for call in tool_calls:
         if not isinstance(call, dict):
             continue
@@ -112,7 +115,11 @@ async def run_model_loop(
                 ),
             )
             log_model_call_diagnostics(agent.model_client, phase=phase)
-            _assign_tool_call_ids(message, messages)
+            _assign_tool_call_ids(
+                message, messages,
+                reserved_ids=set(getattr(getattr(agent, "_evidence_state", None), "tool_results", {}))
+                if phase == "main" else None,
+            )
             messages.append(message)
             if phase == "main" and getattr(agent, "_evidence_state", None) is not None:
                 agent._evidence_state.pending_error = None
