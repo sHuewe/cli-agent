@@ -493,8 +493,15 @@ async def process_tool_calls(
                     metadata = json.loads(model_result_text)
                 except (TypeError, ValueError):
                     metadata = None
-            evidence.register_result(tool_call_id, tool_name=str(exposed_name),
-                                     artifact_metadata=metadata)
+            source_ref = evidence.register_result(
+                tool_call_id, tool_name=str(exposed_name), artifact_metadata=metadata,
+            )
+            if source_ref is not None:
+                # Model sees an easy-to-copy short reference instead of a
+                # provider-specific opaque tool-call ID.
+                tool_message["content"] = (
+                    f"[Quelle {source_ref}: {exposed_name}]\n" + tool_message["content"]
+                )
         if user_message is not None:
             notice = {
                 "role": MCP_USER_MESSAGE_ROLE,
