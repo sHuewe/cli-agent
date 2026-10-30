@@ -381,9 +381,19 @@ class ConversationMixin:
         return answer
 
     def sub_run_snapshots(self) -> list[dict[str, Any]]:
-        return [{"id": run["id"], "task": run["task"], "status": run["status"],
-                 "messages": copy.deepcopy(run["messages"]), "tools": copy.deepcopy(run["tools"])}
-                for run in getattr(self, "_sub_runs", [])]
+        snapshots = []
+        for run in getattr(self, "_sub_runs", []):
+            evidence = run.get("evidence_state")
+            messages = (
+                evidence.project(run["messages"])
+                if evidence is not None
+                else messages_for_model(run["messages"])
+            )
+            snapshots.append({
+                "id": run["id"], "task": run["task"], "status": run["status"],
+                "messages": messages, "tools": copy.deepcopy(run["tools"]),
+            })
+        return snapshots
 
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
         """Return the exact model-visible view of the current/last main loop."""
