@@ -123,19 +123,17 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
     from types import SimpleNamespace
     from cli_agent.agent_loop import run_model_loop
     from cli_agent.config import LoggingConfig
-    from cli_agent.evidence_state import EVIDENCE_TOOL
+    from cli_agent.evidence_tools import ADD_EVIDENCE_TOOL_NAME
 
     class Model:
         def __init__(self):
             self.responses = [
                 {"role": "assistant", "content": "", "tool_calls": [
                     {"id": "internal-1", "type": "function",
-                     "function": {"name": EVIDENCE_TOOL_NAME, "arguments": {
-                         "evidences": [{
-                             "id": "fact-1", "type": "observation",
-                             "statement": "Sensor value was 100 W.",
-                             "tool_calls": [{"call_id": "old-1", "description": "Measurement"}]
-                         }]
+                     "function": {"name": ADD_EVIDENCE_TOOL_NAME, "arguments": {
+                         "id": "fact-1", "type": "observation",
+                         "statement": "Sensor value was 100 W.",
+                         "source_refs": ["S1"],
                      }}}
                 ]},
                 {"role": "assistant", "content": "Final answer"}
@@ -147,7 +145,7 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
             return self.responses.pop(0)
 
     state = EvidenceState()
-    state.register_result("old-1", tool_name="sensor")
+    assert state.register_result("old-1", tool_name="sensor") == "S1"
     model = Model()
     agent = SimpleNamespace(
         _evidence_state=state,
@@ -167,7 +165,7 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
         {"role": "tool", "tool_call_id": "old-1", "content": "100 W"},
     ]
     answer = asyncio.run(run_model_loop(
-        agent, messages=messages, tools=[EVIDENCE_TOOL],
+        agent, messages=messages, tools=state.tool_definitions(),
         routes={}, enabled_server_names=None, max_tool_calls=5,
         phase="main",
     ))
@@ -175,9 +173,10 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
     assert len(model.seen) == 2
     assert [m.get("tool_call_id") for m in model.seen[1] if m.get("role") == "tool"] == ["internal-1"]
     assert "fact-1" in str(model.seen[1])
+    assert "S1" in str(model.seen[1])
     internal = [
         c for m in messages for c in m.get("tool_calls", [])
-        if c.get("function", {}).get("name") == EVIDENCE_TOOL_NAME
+        if c.get("function", {}).get("name") == ADD_EVIDENCE_TOOL_NAME
     ]
     assert len(internal) == 1
     assert internal[0]["function"]["arguments"] == {}
@@ -187,7 +186,6 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
         for m in messages
     )
     assert state.snapshot()["compacted_tool_call_ids"] == ["old-1"]
-
 
 
 def test_evidence_is_available_by_default_with_tools(tmp_path):
@@ -215,7 +213,7 @@ def test_idless_ollama_tool_calls_support_evidence_compaction():
     from types import SimpleNamespace
     from cli_agent.agent_loop import run_model_loop
     from cli_agent.config import LoggingConfig
-    from cli_agent.evidence_state import EVIDENCE_TOOL
+    from cli_agent.evidence_tools import ADD_EVIDENCE_TOOL_NAME
 
     class Model:
         def __init__(self):
@@ -235,19 +233,18 @@ def test_idless_ollama_tool_calls_support_evidence_compaction():
                 self.saw_ids.append(call_id)
                 assert next(m for m in messages if m.get("role") == "tool")[
                     "tool_call_id"] == call_id
+                assert state.tool_results[call_id]["source_ref"] == "S1"
                 return {"role": "assistant", "content": "", "tool_calls": [
-                    {"function": {"name": EVIDENCE_TOOL_NAME, "arguments": {
-                        "evidences": [{
-                            "id": "reading", "type": "observation",
-                            "statement": "Sensor measured 100W.",
-                            "tool_calls": [{"call_id": call_id, "description": "Sensor"}],
-                        }]
+                    {"function": {"name": ADD_EVIDENCE_TOOL_NAME, "arguments": {
+                        "id": "reading", "type": "observation",
+                        "statement": "Sensor measured 100W.",
+                        "source_refs": ["S1"],
                     }}}
                 ]}
             assert [m.get("tool_call_id") for m in messages if m.get("role") == "tool"] == [
                 next(c["id"] for m in messages if m.get("role") == "assistant"
                      for c in m.get("tool_calls", [])
-                     if c["function"]["name"] == EVIDENCE_TOOL_NAME)
+                     if c["function"]["name"] == ADD_EVIDENCE_TOOL_NAME)
             ]
             assert "reading" in str(messages)
             return {"role": "assistant", "content": "100 W"}
@@ -281,7 +278,7 @@ def test_idless_ollama_tool_calls_support_evidence_compaction():
         agent, messages=messages,
         tools=[{"type": "function", "function": {
             "name": "sensor__read", "parameters": {"type": "object"},
-        }}, EVIDENCE_TOOL],
+        }}, *state.tool_definitions()],
         routes={"sensor__read": (Sensor(), "read", server)},
         enabled_server_names=None,
         max_tool_calls=5, phase="main",
@@ -292,13 +289,12 @@ def test_idless_ollama_tool_calls_support_evidence_compaction():
     assert messages[1]["tool_calls"][0]["id"] == model.saw_ids[0]
 
 
-
 def test_evidence_updates_use_regular_tool_activity_events():
     import asyncio
     from types import SimpleNamespace
     from cli_agent.agent_loop import run_model_loop
     from cli_agent.config import LoggingConfig
-    from cli_agent.evidence_state import EVIDENCE_TOOL
+    from cli_agent.evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
 
     events = []
 
@@ -314,20 +310,17 @@ def test_evidence_updates_use_regular_tool_activity_events():
             if self.step == 1:
                 return {"role": "assistant", "content": "", "tool_calls": [
                     {"id": "evidence-success", "type": "function",
-                     "function": {"name": EVIDENCE_TOOL_NAME, "arguments": {
-                         "evidences": [{
-                             "id": "a", "type": "observation",
-                             "statement": "Observed value.",
-                             "tool_calls": [{"call_id": "source-1",
-                                             "description": "Measured sensor value"}]
-                         }]
+                     "function": {"name": ADD_EVIDENCE_TOOL_NAME, "arguments": {
+                         "id": "a", "type": "observation",
+                         "statement": "Observed value.",
+                         "source_refs": ["S1"],
                      }}}
                 ]}
             if self.step == 2:
                 return {"role": "assistant", "content": "", "tool_calls": [
                     {"id": "evidence-error", "type": "function",
-                     "function": {"name": EVIDENCE_TOOL_NAME,
-                                  "arguments": {"remove_evidence_ids": ["missing"]}}}
+                     "function": {"name": UPDATE_EVIDENCE_TOOL_NAME,
+                                  "arguments": {"id": "missing", "remove": True}}}
                 ]}
             return {"role": "assistant", "content": "done"}
 
@@ -344,30 +337,32 @@ def test_evidence_updates_use_regular_tool_activity_events():
     )
     messages = [{"role": "system", "content": "rules"}]
     result = asyncio.run(run_model_loop(
-        agent, messages=messages, tools=[EVIDENCE_TOOL], routes={},
+        agent, messages=messages, tools=evidence.tool_definitions(), routes={},
         enabled_server_names=None, max_tool_calls=5, phase="main",
     ))
     assert result == "done"
     assert events == [
-        ("tool_started", {"call_id": "evidence-success", "tool": EVIDENCE_TOOL_NAME}),
-        ("tool_finished", {"call_id": "evidence-success", "tool": EVIDENCE_TOOL_NAME,
+        ("tool_started", {"call_id": "evidence-success", "tool": ADD_EVIDENCE_TOOL_NAME}),
+        ("tool_finished", {"call_id": "evidence-success", "tool": ADD_EVIDENCE_TOOL_NAME,
                            "status": "success"}),
-        ("tool_started", {"call_id": "evidence-error", "tool": EVIDENCE_TOOL_NAME}),
-        ("tool_finished", {"call_id": "evidence-error", "tool": EVIDENCE_TOOL_NAME,
+        ("tool_started", {"call_id": "evidence-error", "tool": UPDATE_EVIDENCE_TOOL_NAME}),
+        ("tool_finished", {"call_id": "evidence-error", "tool": UPDATE_EVIDENCE_TOOL_NAME,
                            "status": "error"}),
     ]
     internal = [
         call for msg in messages for call in msg.get("tool_calls", [])
-        if call.get("function", {}).get("name") == EVIDENCE_TOOL_NAME
+        if call.get("function", {}).get("name") in {
+            ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME,
+        }
     ]
     assert len(internal) == 2
     assert all(call["function"]["arguments"] == {} for call in internal)
+    assert evidence.evidences["a"]["statement"] == "Observed value."
     assert any(
         m.get("tool_call_id") == "evidence-error"
         and "NICHT übernommen" in m.get("content", "")
         for m in messages
     )
-
 
 
 def test_evidence_requires_at_least_one_verified_source():
