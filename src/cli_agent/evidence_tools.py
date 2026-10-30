@@ -112,14 +112,25 @@ class EvidenceOperationsMixin:
         tools = getattr(self, "_model_evidence_tools", None)
         if tools is None:
             return
-        refs = [item["source_ref"] for item in self.tool_results.values()
+        # Keep every source cited by a persisted finding selectable even
+        # after more than 96 new completions. The registry itself stays
+        # authoritative for validation (and can evict only uncited sources).
+        cited_ids = {
+            source["call_id"]
+            for evidence in self.evidences.values()
+            for source in evidence["tool_calls"]
+        }
+        refs = [item["source_ref"] for call_id, item in self.tool_results.items()
                 if "source_ref" in item]
+        cited_refs = [item["source_ref"] for call_id, item in self.tool_results.items()
+                      if call_id in cited_ids and "source_ref" in item]
+        offered = list(dict.fromkeys([*cited_refs, *refs[-96:]]))
         for tool, template in zip(tools, MODEL_TOOLS):
             tool.clear()
             tool.update(copy.deepcopy(template))
             if tool["function"]["name"] != PLAN_TOOL_NAME and refs:
                 source_items = tool["function"]["parameters"]["properties"]["source_refs"]["items"]
-                source_items["enum"] = refs[-96:]
+                source_items["enum"] = offered
 
     def begin_task(self) -> None:
         """Retain session findings, drop task plan and expired file references."""
