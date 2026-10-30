@@ -18,7 +18,7 @@ from cli_agent.mcp_result_artifacts import (
     ONLY_METADATA_TO_LLM_KEY,
     McpResultArtifacts,
 )
-from cli_agent.os_operations import Workspace
+from cli_agent.os_operations import AllowedPath, Workspace
 
 
 class FakeFastMCP:
@@ -237,6 +237,9 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
     assert preview_schema["offset"]["maximum"] == 1_000_000
 
     store = McpResultArtifacts(tmp_path, ())
+    workspace = Workspace.from_directory(tmp_path, McpServerConfig(name="data", built_in=True),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+    server = data_mcp_server.create_server(DataOperations(workspace), access="read")
     try:
         selected = await server._tool_manager.call_tool(
             "select_data", {"path": "source.csv"}, convert_result=True,
@@ -284,7 +287,7 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
         assert {stat["column"]: stat for stat in grouped_summary["column_stats"]}["total"]["max"] == 1200
     finally:
         store.cleanup()
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["source.csv"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".cli-agent", "source.csv"]
 
 
 @pytest.mark.asyncio
@@ -321,6 +324,9 @@ async def test_new_dataframe_tools_expose_typed_mcp_schemas_and_chain_artifacts(
     )
     assert concatenated.meta[ONLY_METADATA_TO_LLM_KEY] is True
     store = McpResultArtifacts(tmp_path, ())
+    workspace = Workspace.from_directory(tmp_path, McpServerConfig(name="data", built_in=True),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+    server = data_mcp_server.create_server(DataOperations(workspace), access="read")
     try:
         stored = json.loads(store.metadata_result(concatenated, tool_result_text(concatenated)))
         assert stored["row_count"] == 4
@@ -341,7 +347,7 @@ async def test_new_dataframe_tools_expose_typed_mcp_schemas_and_chain_artifacts(
         assert intervals.meta[METADATA_FOR_LLM_KEY]["summary"]["total_seconds"] == 7200
     finally:
         store.cleanup()
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["day1.json", "day2.json"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".cli-agent", "day1.json", "day2.json"]
 
 
 def test_wrap_tool_description_covers_all_formats(monkeypatch) -> None:
@@ -523,6 +529,7 @@ def test_main_uses_shared_workspace_and_runs_stdio(
             *,
             protected_paths=(),
             mutation_protected_paths=(),
+            allowed_paths=(),
         ):
             captured["workspace"] = (
                 directory,

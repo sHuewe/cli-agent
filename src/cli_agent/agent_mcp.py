@@ -375,7 +375,7 @@ class McpLifecycleMixin:
                 # Keep checkpoint lists off the Windows process command line.
                 # The manifest lives in a private temporary directory outside
                 # the workspace and is removed when the MCP session closes.
-                paths = {"protected_paths": [], "mutation_protected_paths": []}
+                paths = {"protected_paths": [], "mutation_protected_paths": [], "allowed_paths": []}
                 filtered_args = []
                 index = 0
                 while index < len(literal_args):
@@ -393,6 +393,11 @@ class McpLifecycleMixin:
                         filtered_args.append(argument)
                         index += 1
                 literal_args = filtered_args
+                if server_config.name == "data" and hasattr(self, "_result_artifacts"):
+                    paths["allowed_paths"].append({
+                        "path": str(self._result_artifacts.session_directory),
+                        "access": "write" if self.workspace_access == "write" else "read",
+                    })
                 if any(paths.values()):
                     temp_directory = stack.enter_context(
                         tempfile.TemporaryDirectory(prefix="cli-agent-mcp-policy-")

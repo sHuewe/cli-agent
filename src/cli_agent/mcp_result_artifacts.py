@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from .config import McpServerConfig
-from .os_operations import Workspace, WorkspaceError
+from .os_operations import AllowedPath, Workspace, WorkspaceError
+from .filesystem_security import path_entry_is_symlink_or_reparse
 
 logger = logging.getLogger("cli_agent.mcp_result_artifacts")
 
@@ -50,11 +51,18 @@ def _protected_paths(servers: tuple[McpServerConfig, ...]) -> tuple[tuple[Path, 
 class McpResultArtifacts:
     def __init__(self, workspace_directory: Path, servers: tuple[McpServerConfig, ...]) -> None:
         protected, mutation_protected = _protected_paths(servers)
+        self.session_directory = workspace_directory.resolve() / ".cli-agent" / f"mcp-data-{uuid.uuid4().hex[:16]}"
         self.workspace = Workspace.from_directory(
             workspace_directory,
             McpServerConfig(name="artifact", command="unused", built_in=True),
             protected_paths=protected,
             mutation_protected_paths=mutation_protected,
+            # Reject a hostile symlinked .cli-agent parent on first use,
+            # without blocking agent construction for unrelated operations.
+            allowed_paths=(
+                () if path_entry_is_symlink_or_reparse(workspace_directory.resolve() / ".cli-agent")
+                else (AllowedPath(self.session_directory, "write"),)
+            ),
         )
         self._directory: Path | None = None
         self._directory_identity: tuple[int, int] | None = None
@@ -69,20 +77,33 @@ class McpResultArtifacts:
             if (stat.st_dev, stat.st_ino) != self._directory_identity:
                 raise ArtifactError("Ablageordner wurde während der Session ersetzt.")
             return self._directory
-        # No pre-existing workspace directory is created into or removed.
-        for _ in range(3):
-            relative = f"mcp-data-{uuid.uuid4().hex[:16]}"
-            path = self.workspace.resolve_direct_path(relative, must_exist=False)
-            self.workspace._reject_protected_mutation(path)
-            try:
-                path.mkdir(mode=0o700)
-            except FileExistsError:
-                continue
+        relative = self.session_directory.relative_to(self.workspace.directory).as_posix()
+        self.workspace._reject_protected_mutation(self.session_directory)
+        parent = self.workspace.directory / ".cli-agent"
+        if parent.exists():
+            # Refuse symlinks/junctions or an ordinary file at the parent.
+            self.workspace.resolve_direct_path(".cli-agent")
+            if not parent.is_dir():
+                raise ArtifactError(".cli-agent ist kein Verzeichnis.")
+        else:
+            self.workspace.resolve_direct_path(".cli-agent", must_exist=False)
+            parent.mkdir(mode=0o700)
+        path = self.workspace.resolve_direct_path(relative, must_exist=False)
+        self.workspace._reject_protected_mutation(path)
+        try:
+            path.mkdir(mode=0o700)
+        except FileExistsError as exc:
+            # Cleanup may deliberately preserve a replaced/user-owned file.
+            # A directory that was previously ours can be reused only when
+            # its original filesystem identity still matches.
             stat = path.stat(follow_symlinks=False)
-            self._directory = path
-            self._directory_identity = (stat.st_dev, stat.st_ino)
-            return path
-        raise ArtifactError("Kein eindeutiger Ablageordner für MCP-Daten verfügbar.")
+            if (not path.is_dir() or self._directory_identity is None
+                    or (stat.st_dev, stat.st_ino) != self._directory_identity):
+                raise ArtifactError("Session-Artefaktordner wurde ersetzt.") from exc
+        stat = path.stat(follow_symlinks=False)
+        self._directory = path
+        self._directory_identity = (stat.st_dev, stat.st_ino)
+        return path
 
     def save(self, raw_result_text: str, *, structured: bool, text_format: str | None = None) -> str:
         try:
@@ -212,5 +233,6 @@ class McpResultArtifacts:
             except (OSError, RuntimeError, ValueError):
                 logger.warning("mcp_result_artifact_directory_not_empty_or_unavailable")
             finally:
+                # Retain identity for safe reuse after incomplete cleanup.
+                # Replaced directories are still rejected on the next write.
                 self._directory = None
-                self._directory_identity = None

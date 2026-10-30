@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from .mcp_path_policy import read_path_policy
 from .config import McpServerConfig, default_config_file, load_config
 from .logging_setup import configure_logging
-from .os_operations import Workspace, WorkspaceError
+from .os_operations import AllowedPath, Workspace, WorkspaceError
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +330,10 @@ def main() -> None:
                 *getattr(args, "mutation_protected_path", ()),
                 *policy_paths["mutation_protected_paths"],
             ),
+            **({"allowed_paths": tuple(
+                    AllowedPath(Path(entry["path"]), entry["access"])
+                    for entry in policy_paths["allowed_paths"]
+                )} if policy_paths["allowed_paths"] else {}),
         )
     except WorkspaceError as exc:
         logger.exception("MCP server initialization failed")

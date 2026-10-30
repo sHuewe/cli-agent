@@ -18,7 +18,7 @@ from .config import McpServerConfig, default_config_file, load_config
 from .data_operations import DataOperationError, DataOperations, MAX_DATA_ROWS, MAX_SAMPLE_ROWS
 from .dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
 from .logging_setup import configure_logging
-from .os_operations import Workspace, WorkspaceError
+from .os_operations import AllowedPath, Workspace, WorkspaceError
 
 logger = logging.getLogger(__name__)
 
@@ -617,6 +617,10 @@ def main() -> None:
                     *getattr(args, "mutation_protected_path", ()),
                     *policy_paths["mutation_protected_paths"],
                 ),
+                **({"allowed_paths": tuple(
+                    AllowedPath(Path(entry["path"]), entry["access"])
+                    for entry in policy_paths["allowed_paths"]
+                )} if policy_paths["allowed_paths"] else {}),
             )
         operations = DataOperations(workspace)
     except (WorkspaceError, DataOperationError) as exc:
