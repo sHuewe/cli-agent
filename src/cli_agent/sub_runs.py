@@ -72,7 +72,8 @@ def _delegated_evidence_context(parent: EvidenceState, ids: list[str]) -> dict[s
     """
     selected = set(ids)
     findings = [
-        copy.deepcopy(item)
+        {key: copy.deepcopy(value) for key, value in item.items()
+         if key != "plan_step_id"}
         for item in parent.model_snapshot()["evidences"]
         if item["id"] in selected
     ]
@@ -98,6 +99,9 @@ def _delegated_evidence_context(parent: EvidenceState, ids: list[str]) -> dict[s
 SUB_RUN_RULES = """
 You are a delegated step agent, not the coordinator. Solve only the assigned task.
 Do not create or modify the coordinator plan or delegate further sub-runs.
+Sub-runs have NO local plan. Never include plan_step_id in agent__add_evidence
+or agent__update_evidence calls; the coordinator attaches its plan step to your
+new findings automatically after they are returned.
 Selected coordinator findings are provided as existing_evidences. The optional
 source_artifacts mapping resolves their source_refs into trusted workspace_path
 and records_path pointers when still available. Reuse these artifacts where
@@ -197,9 +201,14 @@ async def execute_sub_run(
         )
     run_id = "sub-" + uuid.uuid4().hex[:12]
     local = EvidenceState()
+    # The child has no plan. Its evidence tool schemas must not advertise
+    # coordinator plan-step metadata, even after dynamic tool refreshes.
+    local._sub_run_no_plan = True
     local.tool_results = copy.deepcopy(parent.tool_results)
     local._next_source_number = parent._next_source_number
     local.evidences = {i: copy.deepcopy(parent.evidences[i]) for i in ids}
+    for entry in local.evidences.values():
+        entry.pop("plan_step_id", None)
     # A sub-run may read selected evidence, but cannot edit it.
     inherited = set(local.evidences)
     local.refresh_model_tools()
@@ -258,7 +267,7 @@ async def execute_sub_run(
     messages.append({
         "role": "user",
         "content": json.dumps({
-            "task": task, "plan_step_id": step,
+            "task": task, "coordinator_plan_step_id": step,
             **_delegated_evidence_context(parent, ids),
         }, ensure_ascii=False),
     })
