@@ -18,6 +18,7 @@ from .agent_knowledge import (
     tool_result_text,
 )
 from .agent_types import ToolRoute
+from .evidence_tools import annotate_source_result
 from .mcp_limits import (
     MCP_TOOL_CALL_TIMEOUT_SECONDS,
     await_mcp_operation,
@@ -497,19 +498,10 @@ async def process_tool_calls(
                 tool_call_id, tool_name=str(exposed_name), artifact_metadata=metadata,
             )
             if source_ref is not None:
-                # Preserve machine-readable JSON responses. Expose a source
-                # ref as additional JSON metadata, not as a text prefix.
-                try:
-                    parsed = json.loads(tool_message["content"])
-                except (ValueError, TypeError):
-                    parsed = None
-                if isinstance(parsed, dict):
-                    parsed["source_ref"] = source_ref
-                    tool_message["content"] = json.dumps(parsed, ensure_ascii=False)
-                else:
-                    tool_message["content"] = (
-                        f"[Quelle {source_ref}: {exposed_name}]\n" + tool_message["content"]
-                    )
+                tool_message["content"] = annotate_source_result(
+                    tool_message["content"], source_ref=source_ref,
+                    tool_name=str(exposed_name),
+                )
         if user_message is not None:
             notice = {
                 "role": MCP_USER_MESSAGE_ROLE,
