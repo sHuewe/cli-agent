@@ -275,3 +275,75 @@ def test_provider_id_reused_across_questions_receives_new_registered_id():
     assert state.tool_results[new_id]["source_ref"] == "S2"
     assert "[Quelle S2:" in messages[2]["content"]
     assert state.evidences["old"]["tool_calls"][0]["call_id"] == "reused-provider-id"
+
+
+def test_cited_refs_remain_in_both_model_tool_enums_after_96_new_results():
+    state = EvidenceState()
+    state.register_result("first", tool_name="sensor")
+    state.add_evidence({"id": "fact", "type": "observation",
+                        "statement": "Old relevant source", "source_refs": ["S1"]})
+    for n in range(2, 111):
+        state.register_result(f"call-{n}", tool_name="sensor")
+    for tool in state.tool_definitions()[1:]:
+        offered = tool["function"]["parameters"]["properties"]["source_refs"]["items"]["enum"]
+        assert "S1" in offered
+        assert "S110" in offered
+        assert "S2" not in offered
+        assert len(offered) == 97
+    state.update_evidence({"id": "fact", "source_refs": ["S1", "S110"]})
+    assert [s["source_ref"] for s in state.evidences["fact"]["tool_calls"]] == ["S1", "S110"]
+
+
+def test_split_tools_record_bounded_diagnostics_for_success_and_error():
+    import asyncio
+    from types import SimpleNamespace
+    from cli_agent.agent_loop import run_model_loop
+    from cli_agent.config import LoggingConfig
+
+    class Model:
+        def __init__(self):
+            self.i = 0
+
+        async def chat(self, *, messages, tools):
+            self.i += 1
+            if self.i == 1:
+                return {"role": "assistant", "content": "", "tool_calls": [{
+                    "id": "valid-plan", "type": "function", "function": {
+                        "name": "agent__update_plan",
+                        "arguments": {"goal": "test", "steps": [
+                            {"id": "read", "description": "Fetch", "status": "in_progress"}
+                        ]},
+                    },
+                }]}
+            if self.i == 2:
+                return {"role": "assistant", "content": "", "tool_calls": [{
+                    "id": "invalid-evidence", "type": "function", "function": {
+                        "name": "agent__add_evidence",
+                        "arguments": {"id": "note", "type": "observation",
+                                      "statement": "test", "source_refs": ["S900"],
+                                      "plan_step_id": "read"},
+                    },
+                }]}
+            return {"role": "assistant", "content": "done"}
+
+    state = EvidenceState()
+    state.debug_enabled = True
+    agent = SimpleNamespace(
+        _evidence_state=state, model_client=Model(),
+        _agui_frontend_tools={}, logging_config=LoggingConfig(),
+        _dump_context=lambda *a, **k: None,
+        _dump_value=lambda *a, **k: None,
+    )
+    messages = [{"role": "system", "content": "rules"}]
+    assert asyncio.run(run_model_loop(
+        agent, messages=messages, tools=state.tool_definitions(),
+        routes={}, enabled_server_names=None, max_tool_calls=4, phase="main",
+    )) == "done"
+    assert [e["status"] for e in state.debug_updates] == ["success", "error"]
+    assert [e["call_id"] for e in state.debug_updates] == ["valid-plan", "invalid-evidence"]
+    assert "read" in state.debug_updates[0]["arguments"]
+    assert "S900" in state.debug_updates[1]["arguments"]
+    assert "Unbekannte source_ref" in state.debug_updates[1]["error"]
+    assert "debug_updates" not in state.snapshot()
+    assert all(c["function"]["arguments"] == {}
+               for m in messages for c in m.get("tool_calls", []))
