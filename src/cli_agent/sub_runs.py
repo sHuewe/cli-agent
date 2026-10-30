@@ -11,7 +11,7 @@ from .evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
 
 START_SUB_RUN = "agent__start_sub_run"
 MAX_SUB_RUN_TOOLS = 200
-MAX_SUB_RUNS_PER_TASK = 4
+MAX_SUB_RUNS_PER_TASK = 10
 SUB_RUN_TOOL = {
     "type": "function",
     "function": {
