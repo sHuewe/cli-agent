@@ -531,11 +531,20 @@ class EvidenceState(EvidenceOperationsMixin):
         """Only task-relevant working memory; omit internal compaction IDs."""
         # The model only needs compact, human-readable references. Keep
         # provider-specific call IDs in the internal diagnostic snapshot.
-        visible = copy.deepcopy(list(self.evidences.values()))
-        for evidence in visible:
-            for source in evidence["tool_calls"]:
-                if "source_ref" in source:
-                    source.pop("call_id", None)
+        visible = [
+            {
+                "id": item["id"],
+                "type": item["type"],
+                "statement": item["statement"],
+                "source_refs": [
+                    source["source_ref"] for source in item["tool_calls"]
+                    if "source_ref" in source
+                ],
+                **({"plan_step_id": item["plan_step_id"]}
+                   if "plan_step_id" in item else {}),
+            }
+            for item in self.evidences.values()
+        ]
         state: dict[str, Any] = {"evidences": visible}
         if self.plan is not None:
             state["plan"] = copy.deepcopy(self.plan)
