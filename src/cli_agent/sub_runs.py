@@ -17,12 +17,17 @@ SUB_RUN_TOOL = {
     "function": {
         "name": START_SUB_RUN,
         "description": (
-            "EXPENSIVE: starts a separate multi-step LLM context and incurs additional "
-            "model calls, tokens and latency. Delegate only substantial, independent "
-            "investigations where context isolation clearly helps. Never delegate "
-            "single tool queries, simple calculations, plan updates or summaries. "
-            "Sub-runs share the current session's permissions and artifacts, and "
-            "return a compact JSON result and selected verified evidence IDs."
+            "Delegate a substantial, clearly scoped investigation to a separate "
+            "multi-step LLM context. Consider using this EARLY when even one "
+            "research, search or analysis task will require many tool calls, "
+            "multiple steps or extensive intermediate results; it need not be "
+            "independent of every other task. The coordinator keeps oversight "
+            "and final synthesis while the sub-run returns a compact result "
+            "with verified evidence IDs. Prefer delegation when isolating work "
+            "would reduce coordinator context. Do not delegate trivial queries, "
+            "calculations, plan updates or short summaries. Sub-runs reuse "
+            "session permissions and artifacts but incur additional model "
+            "calls, tokens and latency."
         ),
         "parameters": {
             "type": "object", "additionalProperties": False,
