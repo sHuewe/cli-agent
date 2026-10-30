@@ -87,6 +87,7 @@ async def run_model_loop(
     knowledge_state: _KnowledgeRunState | None = None,
     max_concept_reads: int | None = None,
     run_state: ModelLoopRunState | None = None,
+    reserved_tool_call_ids: set[str] | None = None,
 ) -> str:
     state = run_state or ModelLoopRunState()
     calls = state.tool_calls
@@ -116,11 +117,12 @@ async def run_model_loop(
                 ),
             )
             log_model_call_diagnostics(agent.model_client, phase=phase)
-            _assign_tool_call_ids(
-                message, messages,
-                reserved_ids=set(getattr(getattr(agent, "_evidence_state", None), "tool_results", {}))
-                if phase in {"main", "sub"} else None,
-            )
+            reserved_ids = set(reserved_tool_call_ids or ())
+            if phase in {"main", "sub"}:
+                reserved_ids.update(
+                    getattr(getattr(agent, "_evidence_state", None), "tool_results", {})
+                )
+            _assign_tool_call_ids(message, messages, reserved_ids=reserved_ids)
             messages.append(message)
             if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None:
                 agent._evidence_state.pending_error = None
@@ -532,7 +534,7 @@ async def run_model_loop(
                 args = sub_call["function"].get("arguments") or {}
                 if isinstance(args, str):
                     args = json.loads(args)
-                result_text = json.dumps(await execute_sub_run(agent, args), ensure_ascii=False)
+                result_text = json.dumps(await execute_sub_run(agent, args, coordinator_messages=messages), ensure_ascii=False)
             except (ValueError, RuntimeError, TypeError) as exc:
                 status = "error"
                 result_text = json.dumps({"status": "failed", "error": str(exc)[:1200]}, ensure_ascii=False)
