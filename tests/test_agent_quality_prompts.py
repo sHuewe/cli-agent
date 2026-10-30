@@ -217,6 +217,82 @@ def test_sub_run_prompt_explains_existing_evidence_artifacts_and_handoff(tmp_pat
     assert "source_artifacts" in SUB_RUN_TOOL["function"]["parameters"]["properties"]["evidence_ids"]["description"]
 
 
+
+def test_sub_run_retries_invalid_response_using_same_context_and_budget(monkeypatch) -> None:
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.sub_runs import execute_sub_run
+    import cli_agent.agent_loop as agent_loop
+
+    seen = []
+
+    async def fake_run_model_loop(agent, *, messages, run_state, phase, **kwargs):
+        assert phase == "sub"
+        seen.append((id(messages), id(run_state), list(messages)))
+        return (
+            "This is not JSON."
+            if len(seen) == 1
+            else json.dumps({
+                "status": "completed", "summary": "Investigated the inputs.",
+                "evidence_ids": [], "confidence": "medium",
+                "uncertainties": [],
+            })
+        )
+
+    monkeypatch.setattr(agent_loop, "run_model_loop", fake_run_model_loop)
+    agent = SimpleNamespace(
+        max_tool_calls=15, _sub_runs=[], _evidence_state=EvidenceState(),
+        _active_servers=set(), _server_instructions={}, _tool_routes={},
+        _model_tools=lambda: [],
+        _build_reference_context_message=lambda **kwargs: None,
+        _main_tools_need_workspace_context=lambda names: False,
+    )
+    result = asyncio.run(execute_sub_run(agent, {
+        "task": "Investigate the selected time intervals using trusted data.",
+    }))
+    assert result["status"] == "completed"
+    assert len(seen) == 2
+    assert seen[0][0:2] == seen[1][0:2]
+    assert "Validierungsfehler" in seen[1][2][-1]["content"]
+    assert agent._sub_runs[0]["status"] == "completed"
+
+
+def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
+    import asyncio
+    from types import SimpleNamespace
+    import pytest
+
+    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.sub_runs import execute_sub_run
+    from cli_agent.agent_conversation import MAX_RESPONSE_FORMAT_REPAIRS
+    import cli_agent.agent_loop as agent_loop
+
+    invocations = []
+
+    async def invalid_response(agent, *, messages, run_state, **kwargs):
+        invocations.append((id(messages), id(run_state)))
+        return "Still not JSON."
+
+    monkeypatch.setattr(agent_loop, "run_model_loop", invalid_response)
+    agent = SimpleNamespace(
+        _sub_runs=[], _evidence_state=EvidenceState(),
+        _active_servers=set(), _server_instructions={}, _tool_routes={},
+        _model_tools=lambda: [],
+        _build_reference_context_message=lambda **kwargs: None,
+        _main_tools_need_workspace_context=lambda names: False,
+    )
+    with pytest.raises(ValueError, match="nach 2 Korrekturversuchen"):
+        asyncio.run(execute_sub_run(agent, {
+            "task": "Investigate the selected intervals and return findings.",
+        }))
+    assert len(invocations) == MAX_RESPONSE_FORMAT_REPAIRS + 1
+    assert len(set(invocations)) == 1
+    assert agent._sub_runs[0]["status"] == "failed"
+
+
 def test_prompt_changes_remain_compact() -> None:
     assert len(BASE_SYSTEM_PROMPT) + len(MCP_TOOL_SYSTEM_RULE) <= 850
     assert len(_server_instructions("read")) <= 1_743
