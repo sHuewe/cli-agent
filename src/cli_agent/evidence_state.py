@@ -544,7 +544,8 @@ class EvidenceState(EvidenceOperationsMixin):
     def snapshot(self) -> dict[str, Any]:
         """Complete diagnostic snapshot, including hidden-call bookkeeping."""
         return {
-            **self.model_snapshot(),
+            "evidences": copy.deepcopy(list(self.evidences.values())),
+            **({"plan": copy.deepcopy(self.plan)} if self.plan is not None else {}),
             "compacted_tool_call_ids": sorted(self.compacted),
         }
 
