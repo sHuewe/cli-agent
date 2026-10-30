@@ -50,9 +50,9 @@ def test_evidence_rules_apply_without_mcp_tools(tmp_path: Path) -> None:
     prompt = _agent(tmp_path)._build_system_prompt()
     assert "Superlative durch vollständige Vergleiche" in prompt
     assert "sonst benenne Kandidaten" in prompt
-    assert "Messwert, Berechnung und Hypothese" in prompt
-    assert "Ereignisse an\nkonkreten Daten" in prompt
-    assert "UTC-/Lokalzeiten mit explizitem Offset" in prompt
+    assert "belegte Fakten, Ableitungen und Hypothesen" in prompt
+    assert "verlässlicher Quellen" in prompt
+    assert "Zeitzonen und Zeitgrenzen" in prompt
     assert "grundloser Datei-Inventarisierung" not in prompt
 
 
