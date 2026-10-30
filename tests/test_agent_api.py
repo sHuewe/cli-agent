@@ -436,6 +436,8 @@ async def test_agui_http_validation_bounded_json_and_proprietary_routes_removed(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("internal_tool", [
+    "agent__update_plan",
+    "agent__add_evidence",
     "agent__update_evidence",
     "agent__publish_artifact",
 ])

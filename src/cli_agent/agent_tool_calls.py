@@ -18,6 +18,7 @@ from .agent_knowledge import (
     tool_result_text,
 )
 from .agent_types import ToolRoute
+from .evidence_tools import annotate_source_result
 from .mcp_limits import (
     MCP_TOOL_CALL_TIMEOUT_SECONDS,
     await_mcp_operation,
@@ -493,8 +494,14 @@ async def process_tool_calls(
                     metadata = json.loads(model_result_text)
                 except (TypeError, ValueError):
                     metadata = None
-            evidence.register_result(tool_call_id, tool_name=str(exposed_name),
-                                     artifact_metadata=metadata)
+            source_ref = evidence.register_result(
+                tool_call_id, tool_name=str(exposed_name), artifact_metadata=metadata,
+            )
+            if source_ref is not None:
+                tool_message["content"] = annotate_source_result(
+                    tool_message["content"], source_ref=source_ref,
+                    tool_name=str(exposed_name),
+                )
         if user_message is not None:
             notice = {
                 "role": MCP_USER_MESSAGE_ROLE,

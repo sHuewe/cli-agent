@@ -10,7 +10,7 @@ import pytest
 
 from cli_agent.ag_ui_frontend_tools import (
     FrontendToolCall, FrontendToolHandoff, checked_frontend_results,
-    history_for_model, normalize_frontend_tools,
+    history_for_model, normalize_frontend_tools, FRONTEND_FAILURE_META_KEY,
 )
 from cli_agent.agent_api import AgentApiService, create_app
 from cli_agent.agent_loop import run_model_loop
@@ -1143,3 +1143,55 @@ async def test_frontend_tool_cannot_shadow_internal_evidence_name():
             assert "kollidierender Tool-Name" in response.json()["error"]
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_resumed_frontend_results_expose_verified_short_source_refs():
+    import json
+    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.evidence_state import EvidenceState
+
+    class Agent(ConversationMixin):
+        def __init__(self):
+            self.history = []
+            self._evidence_state = EvidenceState()
+            self._agui_pending_original_prompt = "Use two frontend tools"
+            self._agui_pending_working_messages = [
+                {"role": "system", "content": "rules"},
+                {"role": "user", "content": "Use two frontend tools"},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "one", "type": "function",
+                     "function": {"name": "show_view", "arguments": "{}"}},
+                    {"id": "two", "type": "function",
+                     "function": {"name": "read_frontend", "arguments": "{}"}},
+                    {"id": "failed", "type": "function",
+                     "function": {"name": "broken_frontend", "arguments": "{}"}},
+                ]},
+            ]
+            self._tool_routes = {}
+            self._active_servers = set()
+            self.max_tool_calls = 6
+            self._agui_frontend_tools = {}
+
+        def _model_tools(self): return []
+        def _dump_context(self, *_args, **_kwargs): pass
+
+        async def _run_model_loop(self, **kwargs):
+            self.received = kwargs["messages"]
+            return "Done"
+
+    agent = Agent()
+    results = [
+        {"role": "tool", "tool_call_id": "one", "content": "view opened"},
+        {"role": "tool", "tool_call_id": "two",
+         "content": '{"value": 7}'},
+        {"role": "tool", "tool_call_id": "failed", "content": "FEHLER: denied",
+         "_meta": {FRONTEND_FAILURE_META_KEY: True}},
+    ]
+    assert await agent.continue_after_frontend_tools(results) == "Done"
+    assert agent._evidence_state.tool_results["one"]["source_ref"] == "S1"
+    assert agent._evidence_state.tool_results["two"]["source_ref"] == "S2"
+    assert "failed" not in agent._evidence_state.tool_results
+    assert agent.received[-3]["content"].startswith("[Quelle S1: show_view]")
+    assert json.loads(agent.received[-2]["content"])["source_ref"] == "S2"
+    assert agent.received[-1]["content"] == "FEHLER: denied"

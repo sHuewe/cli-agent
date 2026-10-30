@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from .message_visibility import messages_for_model
+from .evidence_tools import EvidenceOperationsMixin
 
 EVIDENCE_TOOL_NAME = "agent__update_evidence"
 MAX_EVIDENCES = 64
@@ -153,11 +154,12 @@ class EvidenceError(ValueError):
     """Invalid agent-internal evidence update; model can correct and retry."""
 
 
-class EvidenceState:
+class EvidenceState(EvidenceOperationsMixin):
     def __init__(self) -> None:
         self.evidences: dict[str, dict[str, Any]] = {}
         self.plan: dict[str, Any] | None = None
         self.tool_results: dict[str, dict[str, Any]] = {}
+        self._next_source_number = 1
         self.compacted: set[str] = set()
         self.pending_error: str | None = None
         # Not part of snapshot(), and never included in model-facing messages.
@@ -175,9 +177,17 @@ class EvidenceState:
     ) -> None:
         if not isinstance(call_id, str) or not call_id or len(call_id) > 128:
             return
-        if call_id in self.tool_results or len(self.tool_results) >= MAX_SOURCE_CALLS:
-            return
-        source: dict[str, Any] = {"tool_name": tool_name}
+        if call_id in self.tool_results:
+            return self.tool_results[call_id]["source_ref"]
+        if len(self.tool_results) >= MAX_SOURCE_CALLS:
+            cited = {src["call_id"] for e in self.evidences.values() for src in e["tool_calls"]}
+            victim = next((key for key in self.tool_results if key not in cited), None)
+            if victim is None:
+                return None
+            del self.tool_results[victim]
+        source_ref = f"S{self._next_source_number}"
+        self._next_source_number += 1
+        source: dict[str, Any] = {"tool_name": tool_name, "source_ref": source_ref}
         if artifact_metadata is not None:
             # Only the result-artifact store's own successful output may supply
             # this metadata. In particular, never trust a path from raw MCP text.
@@ -190,8 +200,21 @@ class EvidenceState:
             record_sets = artifact_metadata.get("record_sets")
             if isinstance(record_sets, list) and "workspace_path" in source:
                 source["record_sets"] = copy.deepcopy(record_sets)
+        if artifact_metadata is not None:
+            for field in ("operation", "export_format"):
+                value = artifact_metadata.get(field)
+                if isinstance(value, str):
+                    source[field] = value[:80]
+            rows = artifact_metadata.get("row_count")
+            if type(rows) is int and rows >= 0:
+                source["row_count"] = rows
+            columns = artifact_metadata.get("columns")
+            if isinstance(columns, list):
+                source["columns"] = [v for v in columns[:24] if isinstance(v, str)]
         self.tool_results[call_id] = source
         self._refresh_live_tool_definition()
+        self.refresh_model_tools()
+        return source_ref
 
     def tool_definition(self) -> dict[str, Any]:
         """Expose completed call IDs to the model as bounded schema enums.
@@ -506,9 +529,14 @@ class EvidenceState:
 
     def model_snapshot(self) -> dict[str, Any]:
         """Only task-relevant working memory; omit internal compaction IDs."""
-        state: dict[str, Any] = {
-            "evidences": copy.deepcopy(list(self.evidences.values())),
-        }
+        # The model only needs compact, human-readable references. Keep
+        # provider-specific call IDs in the internal diagnostic snapshot.
+        visible = copy.deepcopy(list(self.evidences.values()))
+        for evidence in visible:
+            for source in evidence["tool_calls"]:
+                if "source_ref" in source:
+                    source.pop("call_id", None)
+        state: dict[str, Any] = {"evidences": visible}
         if self.plan is not None:
             state["plan"] = copy.deepcopy(self.plan)
         return state
@@ -516,7 +544,8 @@ class EvidenceState:
     def snapshot(self) -> dict[str, Any]:
         """Complete diagnostic snapshot, including hidden-call bookkeeping."""
         return {
-            **self.model_snapshot(),
+            "evidences": copy.deepcopy(list(self.evidences.values())),
+            **({"plan": copy.deepcopy(self.plan)} if self.plan is not None else {}),
             "compacted_tool_call_ids": sorted(self.compacted),
         }
 

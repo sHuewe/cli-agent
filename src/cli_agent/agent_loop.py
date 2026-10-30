@@ -16,7 +16,8 @@ from .agent_knowledge import (
 from .agent_tool_calls import process_tool_calls
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
-from .evidence_state import EVIDENCE_TOOL_NAME, EvidenceError
+from .evidence_state import EvidenceError
+from .evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, EvidenceInputError
 from .artifact_publication import PUBLISH_TOOL_NAME, register_artifact
 from .model import log_model_call_diagnostics
 
@@ -26,6 +27,8 @@ logger = logging.getLogger("cli_agent.agent_loop")
 def _assign_tool_call_ids(
     message: dict[str, Any],
     previous_messages: list[dict[str, Any]],
+    *,
+    reserved_ids: set[str] | None = None,
 ) -> None:
     """Give id-less provider calls stable per-run IDs before execution.
 
@@ -50,6 +53,7 @@ def _assign_tool_call_ids(
         if prior.get("role") == "tool"
         and isinstance(prior.get("tool_call_id"), str)
     )
+    used_ids.update(reserved_ids or ())
     for call in tool_calls:
         if not isinstance(call, dict):
             continue
@@ -111,7 +115,11 @@ async def run_model_loop(
                 ),
             )
             log_model_call_diagnostics(agent.model_client, phase=phase)
-            _assign_tool_call_ids(message, messages)
+            _assign_tool_call_ids(
+                message, messages,
+                reserved_ids=set(getattr(getattr(agent, "_evidence_state", None), "tool_results", {}))
+                if phase == "main" else None,
+            )
             messages.append(message)
             if phase == "main" and getattr(agent, "_evidence_state", None) is not None:
                 agent._evidence_state.pending_error = None
@@ -379,7 +387,10 @@ async def run_model_loop(
                 import uuid
                 for call in tool_calls:
                     function = call.get("function") or {}
-                    if function.get("name") in frontend:
+                    if function.get("name") in frontend and function.get("name") not in {
+                        PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME,
+                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME,
+                    }:
                         arguments = function.get("arguments") or {}
                         arguments = (arguments if isinstance(arguments, str)
                                      else json.dumps(arguments, ensure_ascii=False))
@@ -393,13 +404,15 @@ async def run_model_loop(
         backend_calls = (
             [call for call in tool_calls
              if call.get("function", {}).get("name")
-             not in getattr(agent, "_agui_frontend_tools", {})]
+             not in (set(getattr(agent, "_agui_frontend_tools", {}))
+                     - {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME,
+                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME})]
             if frontend_calls else tool_calls
         )
         evidence = getattr(agent, "_evidence_state", None) if phase == "main" else None
         evidence_calls = [
             call for call in backend_calls
-            if (call.get("function") or {}).get("name") == EVIDENCE_TOOL_NAME
+            if (call.get("function") or {}).get("name") in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME}
         ] if evidence is not None else []
         backend_calls = [call for call in backend_calls if call not in evidence_calls]
         publish_calls = [
@@ -436,18 +449,26 @@ async def run_model_loop(
             state.tool_calls = calls
             event_callback = getattr(agent, "event_callback", None)
             event_id = internal_call["id"]
+            tool_name = internal_call["function"]["name"]
             if event_callback is not None:
                 await event_callback(
                     "tool_started",
-                    {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME},
+                    {"call_id": event_id, "tool": tool_name},
                 )
             status = "success"
+            debug_args = (internal_call.get("function") or {}).get("arguments")
+            debug_error = None
             previous_count = len(evidence.evidences)
             previous_compacted = len(evidence.compacted)
             try:
                 raw_args = (internal_call.get("function") or {}).get("arguments") or {}
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                evidence.update(args, call_id=event_id)
+                if tool_name == PLAN_TOOL_NAME:
+                    evidence.update_plan(args)
+                elif tool_name == ADD_EVIDENCE_TOOL_NAME:
+                    evidence.add_evidence(args)
+                else:
+                    evidence.update_evidence(args)
                 result_text = (
                     "Evidence-State erfolgreich aktualisiert. "
                     f"Einträge: {len(evidence.evidences)} "
@@ -458,14 +479,20 @@ async def run_model_loop(
                 )
                 logger.info("evidence_state_updated entries=%d hidden=%d",
                             len(evidence.evidences), len(evidence.compacted))
-            except (EvidenceError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            except (EvidenceError, EvidenceInputError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 status = "error"
+                debug_error = f"{type(exc).__name__}: {exc}"
                 result_text = (
                     "Evidence-Update NICHT übernommen: " + str(exc)[:1800]
                     + " Korrigiere die konkret genannten Argumente und versuche es erneut."
                 )
                 logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
             finally:
+                if evidence.debug_enabled:
+                    evidence.record_debug_update(
+                        call_id=event_id, arguments=debug_args,
+                        status=status, error=debug_error,
+                    )
                 # Keep a protocol-complete, short confirmation in the model
                 # history, but never repeat the potentially huge evidence
                 # payload in the assistant tool call's arguments.
@@ -478,7 +505,7 @@ async def run_model_loop(
                 if event_callback is not None:
                     await event_callback(
                         "tool_finished",
-                        {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME,
+                        {"call_id": event_id, "tool": tool_name,
                          "status": status},
                     )
         for publish_call in publish_calls:

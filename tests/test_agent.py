@@ -1459,12 +1459,16 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
         "demo__read",
         "demo__write",
+        "agent__update_plan",
+        "agent__add_evidence",
         "agent__update_evidence",
         "agent__publish_artifact",
     ]
     assert agent.set_tool_enabled("demo__write", enabled=False) is True
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
         "demo__read",
+        "agent__update_plan",
+        "agent__add_evidence",
         "agent__update_evidence",
         "agent__publish_artifact",
     ]
@@ -1478,6 +1482,8 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
         "demo__read",
         "demo__write",
+        "agent__update_plan",
+        "agent__add_evidence",
         "agent__update_evidence",
         "agent__publish_artifact",
     ]
@@ -1620,7 +1626,8 @@ def test_evidence_working_memory_guidance_is_in_system_prompt_only_with_tools(
     tmp_path: Path,
 ) -> None:
     agent = make_agent(tmp_path)
-    assert "strukturiertes Arbeitsgedächtnis mit" not in agent._build_system_prompt()
+    prompt = agent._build_system_prompt()
+    assert "agent__update_plan" not in prompt
 
     agent._server_tools = {
         "sensor": [{"type": "function", "function": {
@@ -1630,20 +1637,12 @@ def test_evidence_working_memory_guidance_is_in_system_prompt_only_with_tools(
     }
     agent._active_servers = {"sensor"}
     prompt = agent._build_system_prompt()
-
+    assert "agent__update_plan" in prompt
+    assert "agent__add_evidence" in prompt
     assert "agent__update_evidence" in prompt
-    assert "strukturiertes Arbeitsgedächtnis mit" in prompt
-    assert "BEVOR du mit dem nächsten Untersuchungsschritt" in prompt
-    assert "exakten call_id-Werte" in prompt
-    assert "widerlegte oder überholte Evidences" in prompt
-    assert "kein Evidence-Update nötig" in prompt
-    assert "Kühlzeitfenster" not in prompt
-    assert "abgeschlossenen Teilanalyse" in prompt
-    assert "KEINE Kopie" in prompt
-    assert "preview_data" in prompt
-    assert "Aggregationen, Joins" in prompt
-    assert "Erzwinge keine" in prompt
-    assert "der erste Arbeitsschritt" in prompt
-    assert "BEVOR du die eigentliche Untersuchung beginnst" in prompt
+    assert "S1, S2" in prompt
+    assert "tool_call_id-Werte" in prompt
+    assert "Session" in prompt
     assert "plan_step_id" in prompt
-    assert "Einfache Aufgaben benötigen keinen Plan" in prompt
+    assert "Einfache Aufgaben brauchen keinen Plan" in prompt
+    assert "keine zusätzlichen LLM-Validierungsrunden" in prompt

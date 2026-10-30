@@ -980,12 +980,12 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             normalize_frontend_tools, checked_frontend_results,
             history_for_model,
         )
-        from .evidence_state import EVIDENCE_TOOL_NAME
+        from .evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
         from .artifact_publication import PUBLISH_TOOL_NAME
         # Internal agent tools are not routed MCP tools and are deliberately
         # omitted from tool_states_snapshot(). Frontend clients must never
         # shadow them, even before any external tool has been enabled.
-        reserved_names = {EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME}
+        reserved_names = {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME}
         reserved_names.update(getattr(session.agent, "_tool_routes", {}))
         if hasattr(session.agent, "tool_states_snapshot"):
             reserved_names.update(
