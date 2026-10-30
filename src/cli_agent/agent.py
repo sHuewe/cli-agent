@@ -593,7 +593,16 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 "werden. Für einzelne Toolabfragen, triviale Berechnungen oder "
                 "kurze Zusammenfassungen ist Delegation unnötig. Sub-Runs sind "
                 "optional und benötigen zusätzliche Modellaufrufe; entscheide "
-                "nach dem erwarteten Nutzen der Kontextentlastung."
+                "nach dem erwarteten Nutzen der Kontextentlastung. "
+                "Der Hauptagent ist Koordinator und Prüfer, der Subagent bearbeitet "
+                "ein klar definiertes Arbeitspaket. Formuliere für jeden Sub-Run "
+                "das konkrete Teilziel, bereits gesicherte Erkenntnisse, "
+                "Abgrenzungen und das erwartete überprüfbare Ergebnis. "
+                "Wiederhole nicht bloß die vollständige Benutzeraufgabe, wenn "
+                "nur ein Teil davon delegiert werden soll; vermeide doppelte "
+                "Recherche. Eine vollständige operative Delegation ist möglich, "
+                "wenn du sie bewusst wählst: Der Hauptagent behält auch dann "
+                "Ergebnisprüfung, Einordnung und finale Antwort."
             )
 
         if active_instructions:
