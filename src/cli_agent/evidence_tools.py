@@ -35,7 +35,7 @@ def annotate_source_result(content: str, *, source_ref: str, tool_name: str) -> 
     if isinstance(decoded, dict):
         decoded["source_ref"] = source_ref
         return json.dumps(decoded, ensure_ascii=False)
-    return f"[Quelle {source_ref}: {tool_name}]\\n".replace("\\\\n", "\\n") + content
+    return f"[Quelle {source_ref}: {tool_name}]\n" + content
 
 
 def _tool(name: str, description: str, fields: dict, required: list[str]) -> dict:
