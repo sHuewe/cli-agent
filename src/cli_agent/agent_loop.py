@@ -456,6 +456,8 @@ async def run_model_loop(
                     {"call_id": event_id, "tool": tool_name},
                 )
             status = "success"
+            debug_args = (internal_call.get("function") or {}).get("arguments")
+            debug_error = None
             previous_count = len(evidence.evidences)
             previous_compacted = len(evidence.compacted)
             try:
@@ -479,12 +481,18 @@ async def run_model_loop(
                             len(evidence.evidences), len(evidence.compacted))
             except (EvidenceError, EvidenceInputError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 status = "error"
+                debug_error = f"{type(exc).__name__}: {exc}"
                 result_text = (
                     "Evidence-Update NICHT übernommen: " + str(exc)[:1800]
                     + " Korrigiere die konkret genannten Argumente und versuche es erneut."
                 )
                 logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
             finally:
+                if evidence.debug_enabled:
+                    evidence.record_debug_update(
+                        call_id=event_id, arguments=debug_args,
+                        status=status, error=debug_error,
+                    )
                 # Keep a protocol-complete, short confirmation in the model
                 # history, but never repeat the potentially huge evidence
                 # payload in the assistant tool call's arguments.
