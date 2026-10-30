@@ -110,7 +110,7 @@ def test_model_projection_appends_single_snapshot_after_completed_tool_results()
     assert projected[:-1] == original
     assert projected[-1]["role"] == "user"
     assert "[cli-agent evidence state:" in projected[-1]["content"]
-    assert json.loads(projected[-1]["content"].split("\\n", 1)[1]) == state.model_snapshot()
+    assert json.loads(projected[-1]["content"].split("\n", 1)[1]) == state.model_snapshot()
     assert messages == original
     assert sum("[cli-agent evidence state:" in str(msg.get("content", ""))
                for msg in projected) == 1
