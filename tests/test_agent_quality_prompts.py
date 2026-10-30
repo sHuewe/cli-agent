@@ -314,6 +314,42 @@ def test_completed_sub_run_requires_new_source_backed_evidence() -> None:
     )["evidence_ids"] == []
 
 
+def test_sub_run_evidence_tools_ignore_plan_ids_and_hide_schema_field() -> None:
+    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.sub_runs import _delegated_evidence_context, SUB_RUN_RULES
+
+    parent = EvidenceState()
+    parent.register_result("call-one", tool_name="sensor")
+    parent.update_plan({"goal": "Investigate", "steps": [
+        {"id": "step-1", "description": "Analyze", "status": "in_progress"}
+    ]})
+    parent.add_evidence({"id": "existing", "type": "observation",
+                         "statement": "Original finding.", "source_refs": ["S1"],
+                         "plan_step_id": "step-1"})
+    inherited = _delegated_evidence_context(parent, ["existing"])
+    assert "plan_step_id" not in inherited["existing_evidences"][0]
+
+    child = EvidenceState()
+    child._sub_run_no_plan = True
+    child.register_result("child-call", tool_name="sensor")
+    child.evidences["existing"] = dict(parent.evidences["existing"])
+    child.evidences["existing"].pop("plan_step_id")
+    tools = child.tool_definitions()
+    for tool in tools[1:]:
+        assert "plan_step_id" not in tool["function"]["parameters"]["properties"]
+    child.add_evidence({"id": "new", "type": "observation",
+                        "statement": "Child finding.", "source_refs": ["S1"],
+                        "plan_step_id": "step-1"})
+    assert "plan_step_id" not in child.evidences["new"]
+    child.update_evidence({"id": "new", "statement": "Updated finding.",
+                           "plan_step_id": "step-1"})
+    assert "plan_step_id" not in child.evidences["new"]
+    child.register_result("child-call-two", tool_name="sensor")
+    assert all("plan_step_id" not in tool["function"]["parameters"]["properties"]
+               for tool in child.tool_definitions()[1:])
+    assert "Sub-runs have NO local plan" in SUB_RUN_RULES
+
+
 def test_prompt_changes_remain_compact() -> None:
     assert len(BASE_SYSTEM_PROMPT) + len(MCP_TOOL_SYSTEM_RULE) <= 850
     assert len(_server_instructions("read")) <= 1_743
