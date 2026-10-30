@@ -149,7 +149,7 @@ def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch
     async def fake_run_model_loop(agent, *, max_tool_calls, phase, **kwargs):
         seen.append((max_tool_calls, phase))
         return json.dumps({
-            "status": "completed", "summary": "No evidence was needed.",
+            "status": "partial", "summary": "No verifiable findings yet.",
             "evidence_ids": [], "confidence": "low", "uncertainties": [],
         })
 
@@ -172,7 +172,7 @@ def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch
     from cli_agent.sub_runs import MAX_SUB_RUNS_PER_TASK
     assert MAX_SUB_RUNS_PER_TASK == 10
     assert seen == [(200, "sub")]
-    assert result["status"] == "completed"
+    assert result["status"] == "partial"
     assert agent._evidence_state is not None
     assert not hasattr(agent, "_coordinator_evidence_state")
 
@@ -236,7 +236,7 @@ def test_sub_run_retries_invalid_response_using_same_context_and_budget(monkeypa
             "This is not JSON."
             if len(seen) == 1
             else json.dumps({
-                "status": "completed", "summary": "Investigated the inputs.",
+                "status": "partial", "summary": "Investigation has no verified finding.",
                 "evidence_ids": [], "confidence": "medium",
                 "uncertainties": [],
             })
@@ -253,11 +253,11 @@ def test_sub_run_retries_invalid_response_using_same_context_and_budget(monkeypa
     result = asyncio.run(execute_sub_run(agent, {
         "task": "Investigate the selected time intervals using trusted data.",
     }))
-    assert result["status"] == "completed"
+    assert result["status"] == "partial"
     assert len(seen) == 2
     assert seen[0][0:2] == seen[1][0:2]
     assert "Validierungsfehler" in seen[1][2][-1]["content"]
-    assert agent._sub_runs[0]["status"] == "completed"
+    assert agent._sub_runs[0]["status"] == "partial"
 
 
 def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
@@ -291,6 +291,27 @@ def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
     assert len(invocations) == MAX_RESPONSE_FORMAT_REPAIRS + 1
     assert len(set(invocations)) == 1
     assert agent._sub_runs[0]["status"] == "failed"
+
+
+def test_completed_sub_run_requires_new_source_backed_evidence() -> None:
+    import pytest
+    from cli_agent.sub_runs import SUB_RUN_RULES, validate_sub_result
+    assert "agent__add_evidence" in SUB_RUN_RULES
+    assert "MUST create at least one new evidence" in SUB_RUN_RULES
+    completed = {
+        "status": "completed", "summary": "Found a result",
+        "evidence_ids": [], "confidence": "high", "uncertainties": [],
+    }
+    with pytest.raises(ValueError, match="mindestens eine NEUE Evidence"):
+        validate_sub_result(json.dumps(completed), set())
+    assert validate_sub_result(
+        json.dumps({**completed, "evidence_ids": ["new-finding"]}),
+        {"new-finding"},
+    )["evidence_ids"] == ["new-finding"]
+    assert validate_sub_result(
+        json.dumps({**completed, "status": "partial"}),
+        set(),
+    )["evidence_ids"] == []
 
 
 def test_prompt_changes_remain_compact() -> None:
