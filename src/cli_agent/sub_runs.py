@@ -241,30 +241,65 @@ async def execute_sub_run(
               "evidence_state": local, "status": "running"}
     agent._sub_runs.append(record)
     from .agent_loop import ModelLoopRunState, run_model_loop
+    from .agent_conversation import MAX_RESPONSE_FORMAT_REPAIRS
     previous = agent._evidence_state
     previous_coordinator = getattr(agent, "_coordinator_evidence_state", None)
     agent._coordinator_evidence_state = previous
     try:
         agent._evidence_state = local
-        answer = await run_model_loop(
-            agent, messages=messages, tools=tools, routes=agent._tool_routes,
-            enabled_server_names=set(agent._active_servers),
-            max_tool_calls=MAX_SUB_RUN_TOOLS,
-            phase="sub", run_state=ModelLoopRunState(),
-            reserved_tool_call_ids={
-                call["id"]
-                for message in (coordinator_messages or [])
-                if message.get("role") == "assistant"
-                for call in message.get("tool_calls", [])
-                if isinstance(call, dict) and isinstance(call.get("id"), str)
-            } | {
-                message["tool_call_id"]
-                for message in (coordinator_messages or [])
-                if message.get("role") == "tool"
-                and isinstance(message.get("tool_call_id"), str)
-            },
-        )
-        result = validate_sub_result(answer, set(local.evidences) - inherited)
+        run_state = ModelLoopRunState()
+        reserved_tool_call_ids = {
+            call["id"]
+            for message in (coordinator_messages or [])
+            if message.get("role") == "assistant"
+            for call in message.get("tool_calls", [])
+            if isinstance(call, dict) and isinstance(call.get("id"), str)
+        } | {
+            message["tool_call_id"]
+            for message in (coordinator_messages or [])
+            if message.get("role") == "tool"
+            and isinstance(message.get("tool_call_id"), str)
+        }
+        loop_kwargs = {
+            "messages": messages, "tools": tools, "routes": agent._tool_routes,
+            "enabled_server_names": set(agent._active_servers),
+            "max_tool_calls": MAX_SUB_RUN_TOOLS, "phase": "sub",
+            "run_state": run_state, "reserved_tool_call_ids": reserved_tool_call_ids,
+        }
+        answer = await run_model_loop(agent, **loop_kwargs)
+        # Use the same bounded response-format retry budget as the main agent.
+        # Crucially, keep both messages and run_state: completed analysis and
+        # tool-call limits must not be reset for a formatting correction.
+        for attempt in range(MAX_RESPONSE_FORMAT_REPAIRS + 1):
+            try:
+                result = validate_sub_result(
+                    answer, set(local.evidences) - inherited,
+                )
+                break
+            except (ValueError, TypeError) as exc:
+                if attempt == MAX_RESPONSE_FORMAT_REPAIRS:
+                    raise ValueError(
+                        "Sub-Run lieferte auch nach "
+                        f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen "
+                        f"kein gültiges Ergebnis: {exc}"
+                    ) from exc
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Deine letzte finale Antwort ist kein gültiges "
+                        "Sub-Run-Ergebnis. Korrigiere nur die Abschlussantwort; "
+                        "verwende die vorhandenen Ergebnisse und Evidences und "
+                        "wiederhole abgeschlossene Untersuchungen nicht. "
+                        "Antworte ausschließlich mit einem JSON-Objekt mit exakt "
+                        "den Feldern status (completed/partial/blocked/failed), "
+                        "summary (String), evidence_ids (Liste neu gespeicherter "
+                        "Evidence-IDs), confidence (high/medium/low) und "
+                        "uncertainties (Liste von Strings). "
+                        "Keine Markdown-Codeblöcke oder Begleittexte. "
+                        f"Validierungsfehler: {str(exc)[:500]}"
+                    ),
+                })
+                answer = await run_model_loop(agent, **loop_kwargs)
         if result["status"] in {"completed", "partial"}:
             # Child IDs are local to the delegated context. Remap collisions
             # deterministically and return the promoted IDs to the coordinator.
