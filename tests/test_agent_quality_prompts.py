@@ -95,6 +95,9 @@ def test_sub_run_guidance_encourages_early_single_task_delegation(tmp_path: Path
     assert "viele Toolaufrufe" in prompt
     assert "starte den Sub-Run vor ihrer" in prompt
     assert "einzelne Toolabfragen" in prompt
+    assert "Hauptagent ist Koordinator und Prüfer" in prompt
+    assert "ein klar definiertes Arbeitspaket" in prompt
+    assert "vollständige operative Delegation ist möglich" in prompt
 
     description = SUB_RUN_TOOL["function"]["description"]
     assert "even one" in description
@@ -166,6 +169,8 @@ def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch
         "task": "Investigate a sufficiently complex and independent work package.",
     }))
     assert MAX_SUB_RUN_TOOLS == 200
+    from cli_agent.sub_runs import MAX_SUB_RUNS_PER_TASK
+    assert MAX_SUB_RUNS_PER_TASK == 10
     assert seen == [(200, "sub")]
     assert result["status"] == "completed"
     assert agent._evidence_state is not None
