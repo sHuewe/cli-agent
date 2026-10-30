@@ -1642,7 +1642,8 @@ def test_evidence_working_memory_guidance_is_in_system_prompt_only_with_tools(
     assert "agent__update_evidence" in prompt
     assert "S1, S2" in prompt
     assert "tool_call_id-Werte" in prompt
-    assert "Session" in prompt
+    assert "sessionweit bestehen, der Plan nicht" in prompt
     assert "plan_step_id" in prompt
-    assert "Einfache Aufgaben brauchen keinen Plan" in prompt
-    assert "keine zusätzlichen LLM-Validierungsrunden" in prompt
+    assert "Bei mehrstufigen" in prompt
+    assert "Der Plan wird bei jeder neuen Benutzeraufgabe entfernt" in prompt
+    assert "Keine zusätzlichen\nLLM-Validierungsrunden" in prompt
