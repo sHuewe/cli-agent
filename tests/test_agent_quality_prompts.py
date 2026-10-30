@@ -177,6 +177,46 @@ def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch
     assert not hasattr(agent, "_coordinator_evidence_state")
 
 
+
+def test_delegated_evidence_context_resolves_only_trusted_live_artifacts() -> None:
+    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.sub_runs import _delegated_evidence_context
+
+    state = EvidenceState()
+    state.register_result("data-call", tool_name="data__resample_data",
+                          artifact_metadata={"workspace_path": ".cli-agent/real.json",
+                                             "records_path": "/rows", "row_count": 8})
+    state.register_result("plain-call", tool_name="sensor__get_values")
+    state.add_evidence({"id": "selected", "type": "observation",
+                        "statement": "Eight rows processed.", "source_refs": ["S1", "S2"]})
+    state.add_evidence({"id": "other", "type": "observation",
+                        "statement": "Other observation.", "source_refs": ["S2"]})
+    context = _delegated_evidence_context(state, ["selected"])
+    assert [e["id"] for e in context["existing_evidences"]] == ["selected"]
+    assert context["source_artifacts"] == {
+        "S1": {"workspace_path": ".cli-agent/real.json", "records_path": "/rows"}
+    }
+    assert state.evidences["selected"]["tool_calls"][0]["workspace_path"] == ".cli-agent/real.json"
+
+    state.begin_task()
+    assert _delegated_evidence_context(state, ["selected"])["source_artifacts"] == {}
+
+
+def test_sub_run_prompt_explains_existing_evidence_artifacts_and_handoff(tmp_path: Path) -> None:
+    from cli_agent.sub_runs import SUB_RUN_RULES, SUB_RUN_TOOL
+
+    agent = _agent(tmp_path)
+    agent._active_servers = {"example"}
+    agent._server_tools = {"example": [{"function": {"name": "example__search"}}]}
+    prompt = agent._build_system_prompt()
+    assert "in getrennten Modellschritten" in prompt
+    assert "evidence_ids" in prompt
+    assert "bloße Erwähnung im task reicht" in prompt
+    assert "source_artifacts" in SUB_RUN_RULES
+    assert "workspace_path" in SUB_RUN_RULES
+    assert "source_artifacts" in SUB_RUN_TOOL["function"]["parameters"]["properties"]["evidence_ids"]["description"]
+
+
 def test_prompt_changes_remain_compact() -> None:
     assert len(BASE_SYSTEM_PROMPT) + len(MCP_TOOL_SYSTEM_RULE) <= 850
     assert len(_server_instructions("read")) <= 1_743
