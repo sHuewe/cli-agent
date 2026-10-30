@@ -392,7 +392,7 @@ async def run_model_loop(
                     function = call.get("function") or {}
                     if function.get("name") in frontend and function.get("name") not in {
                         PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME,
-                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME,
+                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME, START_SUB_RUN,
                     }:
                         arguments = function.get("arguments") or {}
                         arguments = (arguments if isinstance(arguments, str)
@@ -409,7 +409,7 @@ async def run_model_loop(
              if call.get("function", {}).get("name")
              not in (set(getattr(agent, "_agui_frontend_tools", {}))
                      - {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME,
-                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME})]
+                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME, START_SUB_RUN})]
             if frontend_calls else tool_calls
         )
         evidence = getattr(agent, "_evidence_state", None) if phase in {"main", "sub"} else None
