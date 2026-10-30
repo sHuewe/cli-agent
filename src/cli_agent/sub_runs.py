@@ -113,22 +113,55 @@ async def execute_sub_run(agent: Any, args: dict[str, Any]) -> dict[str, Any]:
     ] + [tool for tool in local.tool_definitions() if tool["function"]["name"] in {
         ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
     }]
-    # Build a distinct prompt from the actual delegated tool set, never by truncating the main prompt.
-    from .agent import BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE, WORKSPACE_TOOL_SYSTEM_RULE
+    # Build a distinct prompt from the delegated tool set. Preserve the same
+    # trust boundary as the coordinator: administrator-approved MCP instructions
+    # belong in the system prompt; server-provided untrusted instructions are
+    # supplied only as explicitly labelled reference data.
+    from .agent import (
+        BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE, WORKSPACE_TOOL_SYSTEM_RULE,
+        MCP_INSTRUCTION_SYSTEM_RULE, REFERENCE_CONTEXT_SYSTEM_RULE,
+    )
     names = [tool["function"]["name"] for tool in tools]
-    parts = [BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE]
-    if agent._main_tools_need_workspace_context(names):
-        parts.append(WORKSPACE_TOOL_SYSTEM_RULE)
-    parts.append("Available tools (only these may be called):\\n- " + "\\n- ".join(names))
-    parts.append(SUB_RUN_RULES)
-    system = "\\n\\n".join(parts)
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps({
-            "task": task, "plan_step_id": step,
-            "existing_evidences": [parent.model_snapshot()["evidences"][list(parent.evidences).index(i)] for i in ids],
-        }, ensure_ascii=False)},
+    active_instructions = [
+        (name, instructions)
+        for name, instructions in agent._server_instructions.items()
+        if name in agent._active_servers
     ]
+    reference_context = agent._build_reference_context_message(knowledge=None)
+    parts = [BASE_SYSTEM_PROMPT]
+    if names:
+        parts.append(MCP_TOOL_SYSTEM_RULE)
+        if agent._main_tools_need_workspace_context(names):
+            parts.append(WORKSPACE_TOOL_SYSTEM_RULE)
+        parts.append("Available tools (only these may be called):\\n- " + "\\n- ".join(names))
+    if active_instructions:
+        parts.append(MCP_INSTRUCTION_SYSTEM_RULE)
+    if reference_context is not None:
+        parts.append(REFERENCE_CONTEXT_SYSTEM_RULE)
+    parts.append(SUB_RUN_RULES)
+    if active_instructions:
+        parts.append(
+            "Administrativ vertrauenswürdige Anweisungen der verbundenen "
+            "MCP-Server:\\n\\n"
+            + "\\n\\n".join(
+                f"### MCP-Server {name}\\n{instructions}"
+                for name, instructions in active_instructions
+            )
+        )
+    system = "\\n\\n".join(parts)
+    messages = [{"role": "system", "content": system}]
+    if reference_context is not None:
+        messages.append({"role": "user", "content": reference_context})
+    messages.append({
+        "role": "user",
+        "content": json.dumps({
+            "task": task, "plan_step_id": step,
+            "existing_evidences": [
+                parent.model_snapshot()["evidences"][list(parent.evidences).index(i)]
+                for i in ids
+            ],
+        }, ensure_ascii=False),
+    })
     record = {"id": run_id, "task": task, "messages": messages, "tools": copy.deepcopy(tools),
               "status": "running"}
     agent._sub_runs.append(record)
@@ -174,6 +207,10 @@ async def execute_sub_run(agent: Any, args: dict[str, Any]) -> dict[str, Any]:
                     parent.tool_results[call_id] = copy.deepcopy(source)
             parent._next_source_number = max(parent._next_source_number, local._next_source_number)
             parent.refresh_model_tools()
+        else:
+            # No findings were imported for blocked/failed runs. Never return
+            # local IDs that cannot be resolved in the coordinator's state.
+            result["evidence_ids"] = []
         record["status"] = result["status"]
         return result
     except Exception:
