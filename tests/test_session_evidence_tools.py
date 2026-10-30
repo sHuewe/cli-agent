@@ -123,3 +123,96 @@ def test_reset_history_explicitly_clears_session_evidence(tmp_path):
     agent.reset_history()
     assert agent._evidence_state.evidences == {}
     assert agent._evidence_state.tool_results == {}
+
+
+def test_main_loop_routes_new_evidence_revisions_and_removals():
+    import asyncio
+    from types import SimpleNamespace
+    from cli_agent.agent_loop import run_model_loop
+    from cli_agent.config import LoggingConfig
+
+    class Model:
+        def __init__(self):
+            self.step = 0
+
+        async def chat(self, *, messages, tools):
+            self.step += 1
+            if self.step == 1:
+                return {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "revise-1", "type": "function", "function": {
+                        "name": "agent__update_evidence",
+                        "arguments": {"id": "old", "statement": "Corrected"},
+                    }},
+                ]}
+            if self.step == 2:
+                assert state.evidences["old"]["statement"] == "Corrected"
+                return {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "remove-1", "type": "function", "function": {
+                        "name": "agent__update_evidence",
+                        "arguments": {"id": "old", "remove": True},
+                    }},
+                ]}
+            assert "old" not in state.evidences
+            return {"role": "assistant", "content": "Done"}
+
+    state = EvidenceState()
+    state.register_result("sensor-call", tool_name="sensor")
+    state.add_evidence({"id": "old", "type": "observation",
+                        "statement": "Original", "source_refs": ["S1"]})
+    agent = SimpleNamespace(
+        _evidence_state=state, model_client=Model(),
+        _agui_frontend_tools={}, logging_config=LoggingConfig(),
+        _dump_context=lambda *a, **k: None,
+        _dump_value=lambda *a, **k: None,
+    )
+    messages = [{"role": "system", "content": "rules"}]
+    answer = asyncio.run(run_model_loop(
+        agent, messages=messages, tools=state.tool_definitions(),
+        routes={}, enabled_server_names=None, max_tool_calls=5, phase="main",
+    ))
+    assert answer == "Done"
+    assert not state.evidences
+    completions = [m for m in messages if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in completions] == ["revise-1", "remove-1"]
+    assert all("erfolgreich" in m["content"] for m in completions)
+
+
+def test_server_owned_tool_takes_precedence_even_if_frontend_dict_is_poisoned():
+    import asyncio
+    from types import SimpleNamespace
+    from cli_agent.agent_loop import run_model_loop
+    from cli_agent.config import LoggingConfig
+
+    class Model:
+        def __init__(self):
+            self.step = 0
+
+        async def chat(self, *, messages, tools):
+            self.step += 1
+            if self.step == 1:
+                return {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "plan-1", "type": "function", "function": {
+                        "name": "agent__update_plan",
+                        "arguments": {"goal": "X", "steps": [
+                            {"id": "s1", "description": "X", "status": "in_progress"}
+                        ]},
+                    }},
+                ]}
+            assert state.plan is not None
+            return {"role": "assistant", "content": "Done"}
+
+    state = EvidenceState()
+    agent = SimpleNamespace(
+        _evidence_state=state, model_client=Model(),
+        _agui_frontend_tools={"agent__update_plan": {"function": {}}},
+        logging_config=LoggingConfig(),
+        _dump_context=lambda *a, **k: None,
+        _dump_value=lambda *a, **k: None,
+    )
+    messages = [{"role": "system", "content": "rules"}]
+    answer = asyncio.run(run_model_loop(
+        agent, messages=messages, tools=state.tool_definitions(),
+        routes={}, enabled_server_names=None, max_tool_calls=5, phase="main",
+    ))
+    assert answer == "Done"
+    assert state.plan["goal"] == "X"
