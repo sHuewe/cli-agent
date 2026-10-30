@@ -119,7 +119,7 @@ async def run_model_loop(
             _assign_tool_call_ids(
                 message, messages,
                 reserved_ids=set(getattr(getattr(agent, "_evidence_state", None), "tool_results", {}))
-                if phase == "main" else None,
+                if phase in {"main", "sub"} else None,
             )
             messages.append(message)
             if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None:
