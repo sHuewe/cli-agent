@@ -91,3 +91,26 @@ def test_plan_feedback_is_model_visible():
                  if msg.get("role") == "tool"]
     assert [result["status"] for result in responses] == ["created", "unchanged"]
     assert all("plan" in result and "evidences" not in result for result in responses)
+
+
+def test_model_projection_appends_single_snapshot_after_completed_tool_results():
+    state = EvidenceState()
+    state.update_plan(_plan())
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "call-1", "type": "function",
+            "function": {"name": "sensor", "arguments": "{}"},
+        }]},
+        {"role": "tool", "tool_call_id": "call-1", "content": "result"},
+    ]
+    original = copy.deepcopy(messages)
+    projected = state.project(messages)
+    assert projected[:-1] == original
+    assert projected[-1]["role"] == "user"
+    assert "[cli-agent evidence state:" in projected[-1]["content"]
+    assert json.loads(projected[-1]["content"].split("\\n", 1)[1]) == state.model_snapshot()
+    assert messages == original
+    assert sum("[cli-agent evidence state:" in str(msg.get("content", ""))
+               for msg in projected) == 1
