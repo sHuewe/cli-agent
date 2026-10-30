@@ -77,6 +77,8 @@ class McpResultArtifacts:
             if (stat.st_dev, stat.st_ino) != self._directory_identity:
                 raise ArtifactError("Ablageordner wurde während der Session ersetzt.")
             return self._directory
+        relative = self.session_directory.relative_to(self.workspace.directory).as_posix()
+        self.workspace._reject_protected_mutation(self.session_directory)
         parent = self.workspace.directory / ".cli-agent"
         if parent.exists():
             # Refuse symlinks/junctions or an ordinary file at the parent.
@@ -86,7 +88,6 @@ class McpResultArtifacts:
         else:
             self.workspace.resolve_direct_path(".cli-agent", must_exist=False)
             parent.mkdir(mode=0o700)
-        relative = self.session_directory.relative_to(self.workspace.directory).as_posix()
         path = self.workspace.resolve_direct_path(relative, must_exist=False)
         self.workspace._reject_protected_mutation(path)
         try:
