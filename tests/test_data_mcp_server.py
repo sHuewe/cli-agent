@@ -287,7 +287,7 @@ async def test_real_read_only_mcp_chains_complete_select_and_aggregate_via_artif
         assert {stat["column"]: stat for stat in grouped_summary["column_stats"]}["total"]["max"] == 1200
     finally:
         store.cleanup()
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["source.csv"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".cli-agent", "source.csv"]
 
 
 @pytest.mark.asyncio
@@ -347,7 +347,7 @@ async def test_new_dataframe_tools_expose_typed_mcp_schemas_and_chain_artifacts(
         assert intervals.meta[METADATA_FOR_LLM_KEY]["summary"]["total_seconds"] == 7200
     finally:
         store.cleanup()
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["day1.json", "day2.json"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".cli-agent", "day1.json", "day2.json"]
 
 
 def test_wrap_tool_description_covers_all_formats(monkeypatch) -> None:
