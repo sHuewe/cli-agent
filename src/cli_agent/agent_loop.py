@@ -400,7 +400,7 @@ async def run_model_loop(
         evidence = getattr(agent, "_evidence_state", None) if phase == "main" else None
         evidence_calls = [
             call for call in backend_calls
-            if (call.get("function") or {}).get("name") in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME}
+            if (call.get("function") or {}).get("name") in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, EVIDENCE_TOOL_NAME}
         ] if evidence is not None else []
         backend_calls = [call for call in backend_calls if call not in evidence_calls]
         publish_calls = [
@@ -449,7 +449,9 @@ async def run_model_loop(
             try:
                 raw_args = (internal_call.get("function") or {}).get("arguments") or {}
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                if tool_name == PLAN_TOOL_NAME:
+                if tool_name == EVIDENCE_TOOL_NAME:
+                    evidence.update(args, call_id=event_id)
+                elif tool_name == PLAN_TOOL_NAME:
                     evidence.update_plan(args)
                 elif tool_name == ADD_EVIDENCE_TOOL_NAME:
                     evidence.add_evidence(args)
