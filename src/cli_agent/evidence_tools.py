@@ -128,6 +128,12 @@ class EvidenceOperationsMixin:
         for tool, template in zip(tools, MODEL_TOOLS):
             tool.clear()
             tool.update(copy.deepcopy(template))
+            if getattr(self, "_sub_run_no_plan", False) and tool["function"]["name"] != PLAN_TOOL_NAME:
+                tool["function"]["parameters"]["properties"].pop("plan_step_id", None)
+                tool["function"]["description"] += (
+                    " Sub-run has no local plan: omit plan_step_id; coordinator "
+                    "assigns its plan step when findings are imported."
+                )
             if tool["function"]["name"] != PLAN_TOOL_NAME and refs:
                 source_items = tool["function"]["parameters"]["properties"]["source_refs"]["items"]
                 source_items["enum"] = offered
@@ -187,7 +193,7 @@ class EvidenceOperationsMixin:
         if self.plan is not None:
             if not isinstance(step, str) or step not in {s["id"] for s in self.plan["steps"]}:
                 raise EvidenceInputError("plan_step_id muss einen aktuellen Planschritt bezeichnen.")
-        elif "plan_step_id" in args:
+        elif "plan_step_id" in args and not getattr(self, "_sub_run_no_plan", False):
             raise EvidenceInputError("plan_step_id ist ohne Plan nicht zulässig.")
         return {
             "id": evidence_id, "type": args["type"], "statement": statement,
@@ -236,7 +242,7 @@ class EvidenceOperationsMixin:
                 or len(record["statement"]) > 1200
                 or record["type"] not in ("observation", "calculation", "hypothesis")):
             raise EvidenceInputError("Ungültige Evidence-Aussage oder Typ.")
-        if "plan_step_id" in args:
+        if "plan_step_id" in args and not getattr(self, "_sub_run_no_plan", False):
             sid = args["plan_step_id"]
             if self.plan is None or sid not in {s["id"] for s in self.plan["steps"]}:
                 raise EvidenceInputError("Ungültige plan_step_id.")
