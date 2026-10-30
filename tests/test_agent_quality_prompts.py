@@ -132,6 +132,46 @@ def test_sub_run_invalid_source_refs_receive_actionable_feedback() -> None:
     assert coordinator._sub_runs == []
 
 
+
+def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch) -> None:
+    import asyncio
+    import json
+    from types import SimpleNamespace
+    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.sub_runs import MAX_SUB_RUN_TOOLS, execute_sub_run
+    import cli_agent.agent_loop as agent_loop
+
+    seen = []
+
+    async def fake_run_model_loop(agent, *, max_tool_calls, phase, **kwargs):
+        seen.append((max_tool_calls, phase))
+        return json.dumps({
+            "status": "completed", "summary": "No evidence was needed.",
+            "evidence_ids": [], "confidence": "low", "uncertainties": [],
+        })
+
+    monkeypatch.setattr(agent_loop, "run_model_loop", fake_run_model_loop)
+    agent = SimpleNamespace(
+        max_tool_calls=15,
+        _sub_runs=[],
+        _evidence_state=EvidenceState(),
+        _active_servers=set(),
+        _server_instructions={},
+        _tool_routes={},
+        _model_tools=lambda: [],
+        _build_reference_context_message=lambda **kwargs: None,
+        _main_tools_need_workspace_context=lambda names: False,
+    )
+    result = asyncio.run(execute_sub_run(agent, {
+        "task": "Investigate a sufficiently complex and independent work package.",
+    }))
+    assert MAX_SUB_RUN_TOOLS == 200
+    assert seen == [(200, "sub")]
+    assert result["status"] == "completed"
+    assert agent._evidence_state is not None
+    assert not hasattr(agent, "_coordinator_evidence_state")
+
+
 def test_prompt_changes_remain_compact() -> None:
     assert len(BASE_SYSTEM_PROMPT) + len(MCP_TOOL_SYSTEM_RULE) <= 850
     assert len(_server_instructions("read")) <= 1_743
