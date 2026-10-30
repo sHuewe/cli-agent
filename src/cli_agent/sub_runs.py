@@ -10,7 +10,7 @@ from .evidence_state import EvidenceState
 from .evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
 
 START_SUB_RUN = "agent__start_sub_run"
-MAX_SUB_RUN_TOOLS = 30
+MAX_SUB_RUN_TOOLS = 200
 MAX_SUB_RUNS_PER_TASK = 4
 SUB_RUN_TOOL = {
     "type": "function",
@@ -210,7 +210,7 @@ async def execute_sub_run(
         answer = await run_model_loop(
             agent, messages=messages, tools=tools, routes=agent._tool_routes,
             enabled_server_names=set(agent._active_servers),
-            max_tool_calls=min(agent.max_tool_calls, MAX_SUB_RUN_TOOLS),
+            max_tool_calls=MAX_SUB_RUN_TOOLS,
             phase="sub", run_state=ModelLoopRunState(),
             reserved_tool_call_ids={
                 call["id"]
