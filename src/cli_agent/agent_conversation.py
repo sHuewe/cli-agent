@@ -17,6 +17,7 @@ from .agent_loop import ModelLoopRunState, run_model_loop
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
 from .evidence_state import EvidenceState
+from .evidence_tools import annotate_source_result
 from .ag_ui_frontend_tools import FRONTEND_FAILURE_META_KEY
 from .model import log_model_call_diagnostics
 from .mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
@@ -337,7 +338,11 @@ class ConversationMixin:
                     or result.get("_meta", {}).get(FRONTEND_FAILURE_META_KEY) is True
                 ):
                     continue
-                evidence.register_result(call_id, tool_name=name)
+                source_ref = evidence.register_result(call_id, tool_name=name)
+                if source_ref is not None:
+                    result["content"] = annotate_source_result(
+                        result["content"], source_ref=source_ref, tool_name=name,
+                    )
         messages.extend(results)
         tools = self._model_tools()
         if getattr(self, "_agui_frontend_tools", None):
