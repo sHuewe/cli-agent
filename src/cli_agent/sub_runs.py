@@ -74,7 +74,10 @@ def validate_sub_result(answer: str, available: set[str]) -> dict[str, Any]:
     return result
 
 
-async def execute_sub_run(agent: Any, args: dict[str, Any]) -> dict[str, Any]:
+async def execute_sub_run(
+    agent: Any, args: dict[str, Any], *,
+    coordinator_messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if not isinstance(args, dict) or set(args) - {"task", "plan_step_id", "evidence_ids"}:
         raise ValueError("Ungültige Sub-Run-Argumente.")
     task = args.get("task")
@@ -174,6 +177,18 @@ async def execute_sub_run(agent: Any, args: dict[str, Any]) -> dict[str, Any]:
             enabled_server_names=set(agent._active_servers),
             max_tool_calls=min(agent.max_tool_calls, MAX_SUB_RUN_TOOLS),
             phase="sub", run_state=ModelLoopRunState(),
+            reserved_tool_call_ids={
+                call["id"]
+                for message in (coordinator_messages or [])
+                if message.get("role") == "assistant"
+                for call in message.get("tool_calls", [])
+                if isinstance(call, dict) and isinstance(call.get("id"), str)
+            } | {
+                message["tool_call_id"]
+                for message in (coordinator_messages or [])
+                if message.get("role") == "tool"
+                and isinstance(message.get("tool_call_id"), str)
+            },
         )
         result = validate_sub_result(answer, set(local.evidences) - inherited)
         if result["status"] in {"completed", "partial"}:
