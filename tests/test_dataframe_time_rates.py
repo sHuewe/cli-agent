@@ -12,7 +12,7 @@ from cli_agent.data_operations import DataOperationError, DataOperations
 from cli_agent.dataframe_operations import DataFrameOperations
 from cli_agent.dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
 from cli_agent.mcp_result_artifacts import METADATA_FOR_LLM_KEY, McpResultArtifacts
-from cli_agent.os_operations import Workspace
+from cli_agent.os_operations import AllowedPath, Workspace
 
 
 def _frames(tmp_path):
@@ -184,6 +184,9 @@ def test_resample_then_diff_chains_through_json_artifact(tmp_path):
     ], [25, 24, 23, 22])
     frames = _frames(tmp_path)
     store = McpResultArtifacts(tmp_path, ())
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
     try:
         sampled = frames.resample_data(
             "series.json", "30min", [ResampleAggregation("value", "mean", "avg")],

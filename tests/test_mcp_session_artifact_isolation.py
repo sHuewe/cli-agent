@@ -90,7 +90,7 @@ def test_session_artifact_parent_symlink_rejected(tmp_path):
     other.mkdir(exist_ok=True)
     (tmp_path / ".cli-agent").symlink_to(other, target_is_directory=True)
     with pytest.raises(WorkspaceError):
-        McpResultArtifacts(tmp_path, ())
+        McpResultArtifacts(tmp_path, ()).save("{}", structured=True)
 
 
 def test_allowed_path_manifest_round_trip(tmp_path):

@@ -454,6 +454,9 @@ class Workspace:
             return True
 
         allowed = self._matching_allowed_path(resolved)
+        # A protection covering the entire workspace must never be bypassed.
+        if self.directory in self.protected_paths:
+            return True
         if allowed is not None:
             # Only the protected ancestor is overridden. A nested .ssh, .env,
             # credentials file or an explicitly protected child is still denied.
@@ -736,7 +739,11 @@ class Workspace:
         capabilities that need direct file access without exposing the file
         contents through the OS MCP tool surface.
         """
-        resolver = self.resolve_direct_path if direct else self.resolve_path
+        # Allowed exceptions within sensitive directories must reject any
+        # symlink/junction indirection, including that of a parent component.
+        raw = Path(path)
+        sensitive_entry = any(part.casefold() in SENSITIVE_DIRECTORY_NAMES for part in raw.parts)
+        resolver = self.resolve_direct_path if direct or sensitive_entry else self.resolve_path
         file_path = resolver(path)
         if not file_path.is_file():
             raise WorkspaceError(f"Pfad ist keine Datei: {path!r}")

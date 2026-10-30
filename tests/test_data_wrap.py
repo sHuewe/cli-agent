@@ -17,13 +17,15 @@ from cli_agent.data_result_metadata import DECIMAL_SCALAR_KEY
 from cli_agent.mcp_result_artifacts import (
     McpResultArtifacts, METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY,
 )
-from cli_agent.os_operations import Workspace
+from cli_agent.os_operations import AllowedPath, Workspace
 
 
 @pytest.fixture
 def configured(tmp_path: Path):
-    workspace = Workspace.from_directory(tmp_path, McpServerConfig(name="data", built_in=True))
-    return create_server(DataOperations(workspace), access="read"), McpResultArtifacts(tmp_path, ()), tmp_path
+    store = McpResultArtifacts(tmp_path, ())
+    workspace = Workspace.from_directory(tmp_path, McpServerConfig(name="data", built_in=True),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+    return create_server(DataOperations(workspace), access="read"), store, tmp_path
 
 
 @pytest.mark.parametrize("content", [
@@ -138,7 +140,8 @@ async def test_precision_boolean_and_timestamps_survive_artifact_boundary(config
         assert row["timestamp"] == "2026-10-28T08:00:00.123456789+02:00"
         source = json.loads(store.metadata_result(wrapped, tool_result_text(wrapped)))
         columns, rows = DataOperations(Workspace.from_directory(
-            directory, McpServerConfig(name="data", built_in=True)
+            directory, McpServerConfig(name="data", built_in=True),
+            allowed_paths=(AllowedPath(store.session_directory, "read"),)
         ))._read_records(source["workspace_path"], records_path="/rows")
         assert rows[0]["value"] == Decimal("0.1234567890123456789012345")
         assert isinstance(rows[0]["value"], Decimal)

@@ -120,7 +120,7 @@ def test_artifacts_survive_answer_and_commands_until_next_regular_question(
     assert not first_path.exists()
     assert not first_path.parent.exists()
     assert second_path.is_file()
-    assert second_path.parent != first_path.parent
+    assert second_path.parent == first_path.parent
     assert store._bytes_written == len("new")
 
     store.cleanup()

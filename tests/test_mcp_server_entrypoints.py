@@ -349,6 +349,7 @@ def test_os_main_uses_resolved_config_workspace_and_stdio(tmp_path, monkeypatch)
             *,
             protected_paths=(),
             mutation_protected_paths=(),
+            allowed_paths=(),
         ):
             captured["workspace"] = (
                 directory,
@@ -411,6 +412,7 @@ def test_os_main_protects_effective_default_config_when_config_flag_is_omitted(t
             *,
             protected_paths=(),
             mutation_protected_paths=(),
+            allowed_paths=(),
         ):
             captured["workspace"] = (
                 directory,

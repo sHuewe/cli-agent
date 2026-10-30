@@ -617,7 +617,10 @@ def main() -> None:
                     *getattr(args, "mutation_protected_path", ()),
                     *policy_paths["mutation_protected_paths"],
                 ),
-                allowed_paths=tuple(AllowedPath(Path(entry["path"]), entry["access"]) for entry in policy_paths["allowed_paths"]),
+                **({"allowed_paths": tuple(
+                    AllowedPath(Path(entry["path"]), entry["access"])
+                    for entry in policy_paths["allowed_paths"]
+                )} if policy_paths["allowed_paths"] else {}),
             )
         operations = DataOperations(workspace)
     except (WorkspaceError, DataOperationError) as exc:

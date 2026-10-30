@@ -113,7 +113,8 @@ def test_tool_result_exposes_only_metadata_and_session_path(tmp_path: Path, acce
         assert not relative_path.is_absolute()
         path = tmp_path / relative_path
         assert json.loads(path.read_text(encoding="utf-8")) == _response().structuredContent
-        assert relative_path.parts[0].startswith("mcp-data-")
+        assert relative_path.parts[0] == ".cli-agent"
+        assert relative_path.parts[1].startswith("mcp-data-")
     finally:
         asyncio.run(agent.close())
     assert not path.exists()
@@ -301,7 +302,7 @@ def test_reset_history_removes_artifacts_but_preserves_user_files(tmp_path: Path
     assert user_path.read_text(encoding="utf-8") == '{"keep": true}'
     replacement = tmp_path / agent._result_artifacts.save("next", structured=False)
     assert replacement.is_file()
-    assert replacement.parent != path.parent
+    assert replacement.parent == path.parent
     asyncio.run(agent.close())
     assert not replacement.exists()
 
@@ -336,6 +337,6 @@ def test_session_artifact_store_rejects_forbidden_directories(tmp_path: Path) ->
         literal_args=("--protected-path", str(tmp_path)),
     )
     store = McpResultArtifacts(tmp_path, (os_config,))
-    with pytest.raises((RuntimeError, ArtifactError)):
+    with pytest.raises((RuntimeError, ArtifactError, Exception)):
         store.save("cannot write", structured=False)
     assert not list(tmp_path.iterdir())

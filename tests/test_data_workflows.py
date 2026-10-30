@@ -12,7 +12,7 @@ from cli_agent.data_result_metadata import structured_table_result
 from cli_agent.dataframe_operations import DataFrameOperations
 from cli_agent.dataframe_types import DataFrameInput, DataFrameSource, ResampleAggregation
 from cli_agent.mcp_result_artifacts import McpResultArtifacts
-from cli_agent.os_operations import Workspace
+from cli_agent.os_operations import AllowedPath, Workspace
 
 
 def _frames(tmp_path):
@@ -46,6 +46,9 @@ def test_known_pointer_join_resample_select_chain_without_json_discovery(tmp_pat
 
     frames, operations = _frames(tmp_path)
     store = McpResultArtifacts(tmp_path, ())
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
     try:
         joined = frames.join_data([
             DataFrameSource("l1.json", "L1", records_path="/points"),
@@ -89,6 +92,9 @@ def test_thirteen_history_blocks_concat_in_two_stages_then_resample(tmp_path):
 
     frames, operations = _frames(tmp_path)
     store = McpResultArtifacts(tmp_path, ())
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
     try:
         intermediate = []
         for indexes in (range(8), range(8, 13)):

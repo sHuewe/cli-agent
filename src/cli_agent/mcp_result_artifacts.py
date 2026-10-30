@@ -17,6 +17,7 @@ from typing import Any
 
 from .config import McpServerConfig
 from .os_operations import AllowedPath, Workspace, WorkspaceError
+from .filesystem_security import path_entry_is_symlink_or_reparse
 
 logger = logging.getLogger("cli_agent.mcp_result_artifacts")
 
@@ -56,7 +57,12 @@ class McpResultArtifacts:
             McpServerConfig(name="artifact", command="unused", built_in=True),
             protected_paths=protected,
             mutation_protected_paths=mutation_protected,
-            allowed_paths=(AllowedPath(self.session_directory, "write"),),
+            # Reject a hostile symlinked .cli-agent parent on first use,
+            # without blocking agent construction for unrelated operations.
+            allowed_paths=(
+                () if path_entry_is_symlink_or_reparse(workspace_directory.resolve() / ".cli-agent")
+                else (AllowedPath(self.session_directory, "write"),)
+            ),
         )
         self._directory: Path | None = None
         self._directory_identity: tuple[int, int] | None = None

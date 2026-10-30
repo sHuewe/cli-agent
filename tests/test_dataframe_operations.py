@@ -14,7 +14,7 @@ from cli_agent.mcp_result_artifacts import (
     ONLY_METADATA_TO_LLM_KEY,
     McpResultArtifacts,
 )
-from cli_agent.os_operations import Workspace
+from cli_agent.os_operations import AllowedPath, Workspace
 
 
 def _base(tmp_path):
@@ -221,7 +221,10 @@ def test_many_intervals_keep_summary_visible_without_inlining_all_rows(frames, t
     assert meta["summary"]["total_seconds"] == 199
     assert "rows" not in meta
     store = McpResultArtifacts(tmp_path, ())
-    try:
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+     try:
         exposed = store.metadata_result(result, json.dumps(result.structuredContent))
         assert len(exposed.encode("utf-8")) <= 5_000
         assert json.loads(exposed)["summary"]["interval_count"] == 199
@@ -320,7 +323,10 @@ def test_concat_data_strict_schema_reorder_deduplicate_and_artifact_chain(frames
     result = frames.concat_data(sources, unique_by=["t"], keep="last", sort_by=["t"])
     assert [row["v"] for row in result.structuredContent["rows"]] == [1, 20, 3]
     store = McpResultArtifacts(tmp_path, ())
-    try:
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+     try:
         metadata = json.loads(store.metadata_result(result, json.dumps(result.structuredContent)))
         assert metadata["records_path"] == "/rows"
         assert [row["v"] for row in frames.base._read_records(
@@ -366,7 +372,10 @@ def test_exact_join_derived_difference_and_session_cleanup(frames, tmp_path):
     assert joined.meta[METADATA_FOR_LLM_KEY]["records_path"] == "/rows"
 
     store = McpResultArtifacts(tmp_path, ())
-    serialized = json.dumps(joined.structuredContent, ensure_ascii=False)
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+     serialized = json.dumps(joined.structuredContent, ensure_ascii=False)
     metadata = json.loads(store.metadata_result(joined, serialized))
     path = metadata["workspace_path"]
     assert (tmp_path / path).is_file()
@@ -441,7 +450,10 @@ def test_join_artifact_can_be_rejoined_with_original_offset_source(frames, tmp_p
         _source("utc.json", "UTC"), _source("offset.json", "OFFSET"),
     ])
     store = McpResultArtifacts(tmp_path, ())
-    try:
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+     try:
         metadata = json.loads(store.metadata_result(result, json.dumps(result.structuredContent)))
         again = frames.join_data([
             DataFrameSource(metadata["workspace_path"], "FROM_ARTIFACT", value_column="OFFSET", records_path="/rows"),
@@ -696,7 +708,10 @@ def test_dataframe_json_preserves_float64_values_exactly(frames, tmp_path):
     assert [value.hex() for value in serialized_values] == [value.hex() for value in values]
 
     store = McpResultArtifacts(tmp_path, ())
-    try:
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+     try:
         metadata = json.loads(store.metadata_result(result, json.dumps(result.structuredContent)))
         columns, rows = frames.base._read_records(metadata["workspace_path"], records_path="/rows")
         assert columns == ["value"]
@@ -735,7 +750,10 @@ def test_derive_preserves_untouched_nullable_large_integer_columns(frames, tmp_p
                for row in derived.structuredContent["rows"])
 
     store = McpResultArtifacts(tmp_path, ())
-    try:
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+     try:
         metadata = json.loads(store.metadata_result(derived, json.dumps(derived.structuredContent)))
         _, saved_rows = frames.base._read_records(metadata["workspace_path"], records_path="/rows")
         assert [row["id"] for row in saved_rows] == expected_ids
@@ -757,7 +775,10 @@ def test_join_and_followup_derive_keep_small_float_measurements(frames, tmp_path
     assert joined.structuredContent["rows"][0]["A"].hex() == (1.4e-15).hex()
 
     store = McpResultArtifacts(tmp_path, ())
-    try:
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+     try:
         metadata = json.loads(store.metadata_result(joined, json.dumps(joined.structuredContent)))
         derived = frames.derive_columns(
             metadata["workspace_path"], [DerivedColumn("copy", "add", "A", constant=0)],
@@ -779,7 +800,10 @@ def test_empty_join_artifact_preserves_schema_for_followup_tools(frames, tmp_pat
     assert joined.structuredContent["rows"] == []
 
     store = McpResultArtifacts(tmp_path, ())
-    try:
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+     try:
         metadata = json.loads(store.metadata_result(
             joined, json.dumps(joined.structuredContent, ensure_ascii=False)
         ))
@@ -852,7 +876,10 @@ def test_large_frame_metadata_omits_rows_while_retaining_full_artifact(frames, t
     assert stats["A"]["max"] == 199
     assert stats["timestamp"]["max"].startswith("2026-06-24T07:03:19")
     store = McpResultArtifacts(tmp_path, ())
-    try:
+    frames.base.workspace = Workspace.from_directory(tmp_path,
+        McpServerConfig(name="data", config={"allow_write_files": True}),
+        allowed_paths=(AllowedPath(store.session_directory, "read"),))
+     try:
         serialized = json.dumps(result.structuredContent, ensure_ascii=False)
         model_metadata = store.metadata_result(result, serialized)
         assert len(model_metadata.encode("utf-8")) <= 5_000
