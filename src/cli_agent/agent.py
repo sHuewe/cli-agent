@@ -34,6 +34,7 @@ from .mcp_result_artifacts import McpResultArtifacts
 from .message_visibility import messages_for_model
 from .evidence_state import EvidenceState
 from .evidence_tools import ADD_EVIDENCE_TOOL_NAME
+from .sub_runs import START_SUB_RUN, SUB_RUN_TOOL
 from .artifact_publication import PUBLISH_TOOL
 from .model import ModelClient
 from .network_policy import NetworkConfig
@@ -131,6 +132,8 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         # Evidence is an agent capability, not a per-entry-point configuration.
         # No model request uses it unless relevant tools are available.
         self._evidence_state = EvidenceState()
+        self._sub_runs = []
+        self._sub_run_enabled = True
         self.model_client = model_client
         self.mcp_servers = mcp_servers
         self.max_tool_calls = max_tool_calls
@@ -571,6 +574,8 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
 
         if ADD_EVIDENCE_TOOL_NAME in available_tool_names:
             parts.append(EVIDENCE_WORKING_MEMORY_SYSTEM_RULE)
+        if START_SUB_RUN in available_tool_names:
+            parts.append("Plan, Evidences und Sub-Runs sind optional: für kleine Aufgaben keine dieser Strukturen erzwingen. Sub-Runs sind teuer und nur für eigenständige umfangreiche Teilaufgaben sinnvoll.")
 
         if active_instructions:
             parts.append(MCP_INSTRUCTION_SYSTEM_RULE)
@@ -688,6 +693,8 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             )
         ]
         if tools or getattr(self, "_agui_frontend_tools", None):
+            if self._sub_run_enabled:
+                tools.append(copy.deepcopy(SUB_RUN_TOOL))
             tools.extend(self._evidence_state.tool_definitions())
             tools.append(PUBLISH_TOOL)
         return tools

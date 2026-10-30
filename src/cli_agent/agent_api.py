@@ -1255,6 +1255,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         agent = session.agent
         return JSONResponse({
             "messages": agent.working_messages_snapshot(),
+            "sub_runs": agent.sub_run_snapshots(),
             "tools": agent.tool_states_snapshot(),
             "contexts": agent.context_states_snapshot(),
             "okf": agent.okf_status_snapshot(),

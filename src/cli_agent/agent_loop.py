@@ -14,6 +14,7 @@ from .agent_knowledge import (
     _validate_knowledge_selection,
 )
 from .agent_tool_calls import process_tool_calls
+from .sub_runs import START_SUB_RUN, execute_sub_run
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
 from .evidence_state import EvidenceError
@@ -105,7 +106,7 @@ async def run_model_loop(
             message = await agent.model_client.chat(
                 messages=(
                     agent._evidence_state.project(messages)
-                    if phase == "main" and getattr(agent, "_evidence_state", None) is not None
+                    if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None
                     else messages_for_model(messages)
                 ),
                 tools=(
@@ -121,7 +122,7 @@ async def run_model_loop(
                 if phase == "main" else None,
             )
             messages.append(message)
-            if phase == "main" and getattr(agent, "_evidence_state", None) is not None:
+            if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None:
                 agent._evidence_state.pending_error = None
         finally:
             for assistant_message, tool_call, tool_message in transient_rejections:
@@ -409,12 +410,15 @@ async def run_model_loop(
                         UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME})]
             if frontend_calls else tool_calls
         )
-        evidence = getattr(agent, "_evidence_state", None) if phase == "main" else None
+        evidence = getattr(agent, "_evidence_state", None) if phase in {"main", "sub"} else None
         evidence_calls = [
             call for call in backend_calls
             if (call.get("function") or {}).get("name") in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME}
         ] if evidence is not None else []
         backend_calls = [call for call in backend_calls if call not in evidence_calls]
+        sub_calls = [call for call in backend_calls if phase == "main" and
+                     (call.get("function") or {}).get("name") == START_SUB_RUN]
+        backend_calls = [call for call in backend_calls if call not in sub_calls]
         publish_calls = [
             call for call in backend_calls
             if (call.get("function") or {}).get("name") == PUBLISH_TOOL_NAME
@@ -422,7 +426,7 @@ async def run_model_loop(
         backend_calls = [call for call in backend_calls if call not in publish_calls]
         # Reserve the full batch BEFORE executing any backend side effects.
         # Frontend calls are just as much part of max_tool_calls as MCP calls.
-        if calls + len(frontend_calls) + len(backend_calls) + len(evidence_calls) + len(publish_calls) > max_tool_calls:
+        if calls + len(frontend_calls) + len(backend_calls) + len(evidence_calls) + len(publish_calls) + len(sub_calls) > max_tool_calls:
             raise RuntimeError(
                 f"Abbruch in Phase {phase!r} nach {max_tool_calls} Tool-Aufrufen."
             )
@@ -516,6 +520,25 @@ async def run_model_loop(
                         {"call_id": event_id, "tool": tool_name,
                          "status": status},
                     )
+        for sub_call in sub_calls:
+            calls += 1
+            state.tool_calls = calls
+            event_id = sub_call["id"]
+            callback = getattr(agent, "event_callback", None)
+            if callback is not None:
+                await callback("tool_started", {"call_id": event_id, "tool": START_SUB_RUN})
+            status = "success"
+            try:
+                args = sub_call["function"].get("arguments") or {}
+                if isinstance(args, str):
+                    args = json.loads(args)
+                result_text = json.dumps(await execute_sub_run(agent, args), ensure_ascii=False)
+            except (ValueError, RuntimeError, TypeError) as exc:
+                status = "error"
+                result_text = json.dumps({"status": "failed", "error": str(exc)[:1200]}, ensure_ascii=False)
+            messages.append({"role": "tool", "tool_call_id": event_id, "content": result_text})
+            if callback is not None:
+                await callback("tool_finished", {"call_id": event_id, "tool": START_SUB_RUN, "status": status})
         for publish_call in publish_calls:
             calls += 1
             state.tool_calls = calls

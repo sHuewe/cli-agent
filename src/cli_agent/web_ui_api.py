@@ -22,6 +22,13 @@ API_APP_JS = """
   const showWorkingContext = document.getElementById("show-working-context");
   const workingContextDialog = document.getElementById("working-context-dialog");
   const workingMessagesJson = document.getElementById("working-messages-json");
+  const contextRunSelect = document.getElementById("context-run-select");
+  let currentContextPayload = null;
+  contextRunSelect.addEventListener("change", () => {
+    if (!currentContextPayload) return;
+    const run = (currentContextPayload.sub_runs || []).find(item => item.id === contextRunSelect.value);
+    workingMessagesJson.textContent = JSON.stringify(run ? run.messages : currentContextPayload.messages, null, 2);
+  });
   const workingToolsList = document.getElementById("working-tools-list");
   const workingContextsList = document.getElementById("working-contexts-list");
   const okfState = document.getElementById("okf-state");
@@ -819,7 +826,16 @@ API_APP_JS = """
       const messages = Array.isArray(payload.messages) ? payload.messages : [];
       const tools = Array.isArray(payload.tools) ? payload.tools : [];
       const contexts = Array.isArray(payload.contexts) ? payload.contexts : [];
-      workingMessagesJson.textContent = JSON.stringify(messages, null, 2);
+      currentContextPayload = payload;
+      const previous = contextRunSelect.value;
+      contextRunSelect.replaceChildren();
+      contextRunSelect.add(new Option("Hauptlauf", "main"));
+      for (const run of (Array.isArray(payload.sub_runs) ? payload.sub_runs : [])) {
+        contextRunSelect.add(new Option("Sub-Run: " + run.task.slice(0, 75), run.id));
+      }
+      contextRunSelect.value = [...contextRunSelect.options].some(o => o.value === previous) ? previous : "main";
+      const chosen = (payload.sub_runs || []).find(run => run.id === contextRunSelect.value);
+      workingMessagesJson.textContent = JSON.stringify(chosen ? chosen.messages : messages, null, 2);
       renderTools(tools);
       renderContexts(contexts, payload.okf || {});
       return;

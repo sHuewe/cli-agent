@@ -619,6 +619,7 @@ INDEX_HTML = """<!doctype html>
         <button id="close-working-context" class="secondary" type="button">Schließen</button>
       </div>
     </div>
+    <div class="dialog-actions"><label for="context-run-select">Agentenlauf:</label><select id="context-run-select"><option value="main">Hauptlauf</option></select></div>
     <div class="context-tabs" role="tablist" aria-label="LLM Context">
       <button id="context-tab-messages" class="secondary active" type="button" role="tab" aria-selected="true" aria-controls="context-panel-messages">Messages</button>
       <button id="context-tab-tools" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-tools">Tools</button>

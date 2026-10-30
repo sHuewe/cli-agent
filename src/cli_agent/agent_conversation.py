@@ -131,6 +131,7 @@ class ConversationMixin:
             )
 
         self.history.clear()
+        self._sub_runs.clear()
         self._last_working_messages = []
         self._last_working_tools = []
         if getattr(self, "_evidence_state", None) is not None:
@@ -174,6 +175,7 @@ class ConversationMixin:
         if self.logging_config.log_prompts:
             logger.info("user_prompt=%s", prompt)
 
+        self._sub_runs.clear()
         self._knowledge_reentry_calls = 0
         self._knowledge_reentry_seen = set()
         if getattr(self, "_evidence_state", None) is not None:
@@ -377,6 +379,11 @@ class ConversationMixin:
         ])
         self._dump_context(messages, phase="main")
         return answer
+
+    def sub_run_snapshots(self) -> list[dict[str, Any]]:
+        return [{"id": run["id"], "task": run["task"], "status": run["status"],
+                 "messages": copy.deepcopy(run["messages"]), "tools": copy.deepcopy(run["tools"])}
+                for run in self._sub_runs]
 
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
         """Return the exact model-visible view of the current/last main loop."""
