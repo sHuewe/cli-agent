@@ -399,7 +399,9 @@ class ConversationMixin:
         """Return the exact model-visible view of the current/last main loop."""
 
         messages = getattr(self, "_last_working_messages", [])
-        evidence = getattr(self, "_evidence_state", None)
+        evidence = getattr(self, "_coordinator_evidence_state", None)
+        if evidence is None:
+            evidence = getattr(self, "_evidence_state", None)
         return evidence.project(messages) if evidence is not None else messages_for_model(messages)
 
     def working_tools_snapshot(self) -> list[dict[str, Any]]:
