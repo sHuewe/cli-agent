@@ -251,7 +251,55 @@ class EvidenceOperationsMixin:
         self.compacted.update(s["call_id"] for s in record["tool_calls"])
         self._refresh_live_tool_definition()
 
-    def update_plan(self, args: dict) -> None:
+    @staticmethod
+    def compact_plan(plan: dict | None) -> dict | None:
+        if plan is None:
+            return None
+        return {
+            "goal": plan["goal"],
+            "steps": [
+                {"id": step["id"], "status": step["status"]}
+                for step in plan["steps"]
+            ],
+        }
+
+    @classmethod
+    def plan_response(cls, before: dict | None, after: dict) -> dict:
+        """Describe the committed plan change for the model."""
+        kind = "created" if before is None else (
+            "unchanged" if before == after else "updated"
+        )
+        changes = []
+        old_steps = {step["id"]: step for step in before["steps"]} if before else {}
+        new_steps = {step["id"]: step for step in after["steps"]}
+        for step_id, step in new_steps.items():
+            previous = old_steps.get(step_id)
+            if previous is None:
+                changes.append({"id": step_id, "action": "added", "status": step["status"]})
+            else:
+                fields = {
+                    key: {"before": previous[key], "after": step[key]}
+                    for key in ("description", "status")
+                    if previous[key] != step[key]
+                }
+                if fields:
+                    changes.append({"id": step_id, "action": "changed", "fields": fields})
+        for step_id in old_steps:
+            if step_id not in new_steps:
+                changes.append({"id": step_id, "action": "removed"})
+        if before is not None and before["goal"] != after["goal"]:
+            changes.insert(0, {
+                "action": "goal_changed",
+                "before": before["goal"], "after": after["goal"],
+            })
+        result = {"status": kind, "plan": cls.compact_plan(after)}
+        if changes:
+            result["changes"] = changes
+        if kind == "unchanged":
+            result["message"] = "Plan unverändert. Keinen identischen Aufruf wiederholen."
+        return result
+
+    def update_plan(self, args: dict) -> dict:
         if not isinstance(args, dict) or not args or set(args) - {"goal", "steps", "remove_step_ids"}:
             raise EvidenceInputError("update_plan erwartet goal, steps oder remove_step_ids.")
         if self.plan is None:
@@ -292,4 +340,6 @@ class EvidenceOperationsMixin:
                    for v in self.evidences.values()):
                 raise EvidenceInputError("Evidence verliert ihre Planschritt-Zuordnung.")
         self._check_budget(self.evidences, plan=candidate)
+        before = copy.deepcopy(self.plan)
         self.plan = candidate
+        return self.plan_response(before, candidate)
