@@ -729,3 +729,28 @@ def test_sub_run_snapshot_projects_delegated_evidence_without_mutating_transcrip
     assert "Measured 100 W." in snapshot["messages"][-1]["content"]
     assert messages[-1]["content"] == "raw sensor output"
     assert len(messages) == 3
+
+
+def test_live_main_snapshot_uses_coordinator_evidence_during_sub_run() -> None:
+    from cli_agent.evidence_state import EvidenceState
+
+    agent = ConversationHarness()
+    parent = EvidenceState()
+    parent.register_result("parent-call", tool_name="sensor__parent")
+    parent.add_evidence({
+        "id": "parent-evidence", "type": "observation",
+        "statement": "Coordinator observation.", "source_refs": ["S1"],
+    })
+    child = EvidenceState()
+    child.register_result("child-call", tool_name="sensor__child")
+    child.add_evidence({
+        "id": "child-evidence", "type": "observation",
+        "statement": "Delegated observation.", "source_refs": ["S1"],
+    })
+    agent._last_working_messages = [{"role": "system", "content": "rules"}]
+    agent._evidence_state = child
+    agent._coordinator_evidence_state = parent
+
+    text = agent.working_messages_snapshot()[-1]["content"]
+    assert "Coordinator observation." in text
+    assert "Delegated observation." not in text
