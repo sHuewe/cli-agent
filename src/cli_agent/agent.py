@@ -61,29 +61,39 @@ verändern zu lassen.
 """
 
 EVIDENCE_WORKING_MEMORY_SYSTEM_RULE = """\
-Nutze agent__update_plan für die Planung der AKTUELLEN Benutzeraufgabe.
-Bei mehrstufigen Aufgaben zu Beginn einen kurzen Plan anlegen, danach nur
-die geänderten Schritte aktualisieren. Einfache Aufgaben brauchen keinen Plan.
-Der Plan wird bei der nächsten neuen Frage automatisch entfernt.
+Nutze agent__update_plan für den Plan der aktuellen Aufgabe. Bei mehrstufigen
+Aufgaben am Anfang einen kurzen Plan anlegen; anschließend bestehende IDs
+aktualisieren, statt dieselben Schritte unter neuen IDs erneut anzulegen.
+Die Toolantwort nennt created, updated oder unchanged und den aktuellen Plan.
+Bei unchanged keinen identischen Aufruf wiederholen; mit der Aufgabe fortfahren.
+Der Plan wird bei jeder neuen Benutzeraufgabe entfernt.
 
-Nutze agent__add_evidence für belegte, wichtige Erkenntnisse und
-agent__update_evidence nur für die Korrektur oder Entfernung bereits
-gespeicherter Evidences. Evidences bleiben innerhalb der Session über
-mehrere Benutzerfragen erhalten. Ordne bei einem bestehenden Plan neue
-Evidences per plan_step_id einem aktuellen Schritt zu.
+Nutze agent__add_evidence als LAUFENDES Arbeitsgedächtnis: Sobald eine
+relevante Teilanalyse durch abgeschlossene Tools hinreichend belegt ist,
+speichere die verdichtete Erkenntnis BEVOR du das nächste Teilziel bearbeitest.
+Warte nicht bis zum Ende, um mehrere Evidences gesammelt zu speichern.
+Nicht jedes Toolresultat und nicht jeder Planschritt braucht eine Evidence.
+Nutze agent__update_evidence, sobald neue Daten eine frühere Evidence
+widerlegen, einschränken oder präzisieren. Bei einer Folgefrage gelten alte
+Evidences als überprüfbare Vorbefunde, nicht als unumstößliche Fakten.
+Bei aktivem Plan ordne neue Evidences über plan_step_id zu. Evidences bleiben
+sessionweit bestehen, der Plan nicht.
 
-Quellen werden mit kurzen Referenzen S1, S2, ... bezeichnet. Verwende
-ausschließlich die vom Backend ausgegebenen source_refs, niemals technische
-tool_call_id-Werte. Eine Evidence benötigt mindestens eine echte Quelle.
-Toolname, echte Call-ID und Artefaktmetadaten werden vom Backend ergänzt.
-Die Quelle ist eine historische Provenienz: Alte Artefaktdateien können
-nach einer neuen Anfrage bereits gelöscht worden sein und dürfen dann
-nicht mehr als lesbare Dateien behandelt werden.
+Quellen werden mit kurzen S-Referenzen S1, S2, ... bezeichnet. Verwende
+nur Backend-Referenzen in source_refs, niemals technische tool_call_id-Werte.
+Verknüpfe nur die wenigen Quellen, die die konkrete Aussage tragen.
+Die Backend-Provenienz bleibt vollständig; Dateiartefakte früherer Aufgaben
+können bereits gelöscht sein und dürfen nicht nochmals gelesen werden.
 
-Speichere knappe, aussagekräftige Erkenntnisse und keine Rohdaten.
-Unterscheide Messung, Berechnung und Hypothese. Halte Planstatus und
-gespeicherte Erkenntnisse konsistent. Keine unnötigen Wiederholungen von
-Evidence-Updates und keine zusätzlichen LLM-Validierungsrunden.
+Fasse relevante Aussagen, Kennzahlen, Zeitfenster und Unsicherheiten knapp
+zusammen, keine Preview-Zeilen oder Rohdaten. Trenne Beobachtung, Berechnung
+und Hypothese. Eine Korrelation von Temperatur, Netzphase, PV und Speicher
+beweist keine eindeutige Ursache; berücksichtige alternative Erklärungen
+und lege den Grad der Sicherheit offen. Prüfe bei Tagesaggregationen explizit
+UTC- und lokale Kalendertagsgrenzen.
+
+Halte Plan, Evidences und Abschlussantwort konsistent. Keine zusätzlichen
+LLM-Validierungsrunden und keine redundanten Evidence-Updates.
 """
 
 MCP_INSTRUCTION_SYSTEM_RULE = """\
