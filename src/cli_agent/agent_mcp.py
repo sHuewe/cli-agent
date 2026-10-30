@@ -17,7 +17,8 @@ from .mcp_path_policy import write_path_policy
 from .agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS
 from .agent_types import ServerConfig, ToolRoute, _RuntimeMcpServerConfig
 from .config import McpServerConfig
-from .evidence_state import EVIDENCE_TOOL_NAME
+from .evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
+from .artifact_publication import PUBLISH_TOOL_NAME
 from .mcp_limits import (
     MCP_INITIALIZE_TIMEOUT_SECONDS,
     MCP_LIST_TOOLS_TIMEOUT_SECONDS,
@@ -186,7 +187,7 @@ class McpLifecycleMixin:
                 # This name is handled inside the main model loop, not by
                 # MCP routing. Reject any MCP spelling that would shadow it
                 # before committing routes, tool definitions or identity state.
-                if exposed_name == EVIDENCE_TOOL_NAME:
+                if exposed_name in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME}:
                     raise RuntimeError(
                         f"MCP-Toolname {exposed_name!r} ist für ein "
                         "internes Agent-Tool reserviert."
