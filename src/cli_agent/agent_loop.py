@@ -17,6 +17,7 @@ from .agent_tool_calls import process_tool_calls
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
 from .evidence_state import EVIDENCE_TOOL_NAME, EvidenceError
+from .evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, EvidenceInputError
 from .artifact_publication import PUBLISH_TOOL_NAME, register_artifact
 from .model import log_model_call_diagnostics
 
@@ -399,7 +400,7 @@ async def run_model_loop(
         evidence = getattr(agent, "_evidence_state", None) if phase == "main" else None
         evidence_calls = [
             call for call in backend_calls
-            if (call.get("function") or {}).get("name") == EVIDENCE_TOOL_NAME
+            if (call.get("function") or {}).get("name") in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME}
         ] if evidence is not None else []
         backend_calls = [call for call in backend_calls if call not in evidence_calls]
         publish_calls = [
@@ -436,10 +437,11 @@ async def run_model_loop(
             state.tool_calls = calls
             event_callback = getattr(agent, "event_callback", None)
             event_id = internal_call["id"]
+            tool_name = internal_call["function"]["name"]
             if event_callback is not None:
                 await event_callback(
                     "tool_started",
-                    {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME},
+                    {"call_id": event_id, "tool": tool_name},
                 )
             status = "success"
             previous_count = len(evidence.evidences)
@@ -447,7 +449,12 @@ async def run_model_loop(
             try:
                 raw_args = (internal_call.get("function") or {}).get("arguments") or {}
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                evidence.update(args, call_id=event_id)
+                if tool_name == PLAN_TOOL_NAME:
+                    evidence.update_plan(args)
+                elif tool_name == ADD_EVIDENCE_TOOL_NAME:
+                    evidence.add_evidence(args)
+                else:
+                    evidence.update_evidence(args)
                 result_text = (
                     "Evidence-State erfolgreich aktualisiert. "
                     f"Einträge: {len(evidence.evidences)} "
@@ -458,7 +465,7 @@ async def run_model_loop(
                 )
                 logger.info("evidence_state_updated entries=%d hidden=%d",
                             len(evidence.evidences), len(evidence.compacted))
-            except (EvidenceError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            except (EvidenceError, EvidenceInputError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 status = "error"
                 result_text = (
                     "Evidence-Update NICHT übernommen: " + str(exc)[:1800]
@@ -478,7 +485,7 @@ async def run_model_loop(
                 if event_callback is not None:
                     await event_callback(
                         "tool_finished",
-                        {"call_id": event_id, "tool": EVIDENCE_TOOL_NAME,
+                        {"call_id": event_id, "tool": tool_name,
                          "status": status},
                     )
         for publish_call in publish_calls:
