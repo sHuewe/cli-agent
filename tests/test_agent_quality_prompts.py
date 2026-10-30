@@ -102,6 +102,36 @@ def test_sub_run_guidance_encourages_early_single_task_delegation(tmp_path: Path
     assert "additional model" in description
 
 
+
+def test_sub_run_evidence_ids_contract_distinguishes_saved_findings_from_sources() -> None:
+    from cli_agent.sub_runs import SUB_RUN_TOOL
+
+    function = SUB_RUN_TOOL["function"]
+    field = function["parameters"]["properties"]["evidence_ids"]
+    assert "agent__add_evidence" in field["description"]
+    assert "source_ref" in field["description"]
+    assert "omit" in field["description"]
+    assert "S1/S2" in function["description"]
+
+
+def test_sub_run_invalid_source_refs_receive_actionable_feedback() -> None:
+    import asyncio
+    from types import SimpleNamespace
+    import pytest
+    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.sub_runs import execute_sub_run
+
+    coordinator = SimpleNamespace(_sub_runs=[], _evidence_state=EvidenceState())
+    with pytest.raises(ValueError, match="source_refs, keine Evidence-IDs") as error:
+        asyncio.run(execute_sub_run(coordinator, {
+            "task": "Investigate the selected time intervals and compare results.",
+            "evidence_ids": ["S1", "S4"],
+        }))
+    assert "agent__add_evidence" in str(error.value)
+    assert "lasse evidence_ids weg" in str(error.value)
+    assert coordinator._sub_runs == []
+
+
 def test_prompt_changes_remain_compact() -> None:
     assert len(BASE_SYSTEM_PROMPT) + len(MCP_TOOL_SYSTEM_RULE) <= 850
     assert len(_server_instructions("read")) <= 1_743
