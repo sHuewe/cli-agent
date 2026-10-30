@@ -109,3 +109,31 @@ def test_allowed_path_manifest_round_trip(tmp_path):
             "protected_paths": [], "mutation_protected_paths": [],
             "allowed_paths": [{"path": "/x", "access": "admin"}],
         })
+
+
+def test_incomplete_cleanup_reuses_owned_directory_without_deleting_user_file(tmp_path):
+    store = McpResultArtifacts(tmp_path, ())
+    original = tmp_path / store.save("temporary", structured=False)
+    user_owned = tmp_path / "user-owned.txt"
+    user_owned.write_text("preserve", encoding="utf-8")
+    user_owned.replace(original)
+    store.cleanup()
+    assert original.read_text(encoding="utf-8") == "preserve"
+    fresh = tmp_path / store.save("new result", structured=False)
+    assert fresh.parent == original.parent
+    assert fresh.read_text(encoding="utf-8") == "new result"
+    store.cleanup()
+    assert original.read_text(encoding="utf-8") == "preserve"
+    assert not fresh.exists()
+
+
+def test_explicit_protected_ancestor_overrides_allowed_subdirectory(tmp_path):
+    own = tmp_path / ".cli-agent" / "mcp-data-own"
+    own.mkdir(parents=True)
+    (own / "r.json").write_text("{}")
+    ws = _ws(tmp_path, allowed=(AllowedPath(own, "write"),),
+             protected=(tmp_path / ".cli-agent",))
+    with pytest.raises(WorkspaceError):
+        ws.resolve_readable_file(".cli-agent/mcp-data-own/r.json")
+    with pytest.raises(WorkspaceError):
+        ws.resolve_writable_file(".cli-agent/mcp-data-own/new.json")
