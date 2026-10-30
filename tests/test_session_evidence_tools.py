@@ -216,3 +216,62 @@ def test_server_owned_tool_takes_precedence_even_if_frontend_dict_is_poisoned():
     ))
     assert answer == "Done"
     assert state.plan["goal"] == "X"
+
+
+def test_provider_id_reused_across_questions_receives_new_registered_id():
+    import asyncio
+    from types import SimpleNamespace
+    from cli_agent.agent_loop import run_model_loop
+    from cli_agent.config import LoggingConfig
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+
+        async def chat(self, *, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "reused-provider-id", "type": "function",
+                     "function": {"name": "sensor__read", "arguments": {}}}
+                ]}
+            return {"role": "assistant", "content": "Done"}
+
+    class Sensor:
+        async def call_tool(self, name, args):
+            return SimpleNamespace(
+                content=[SimpleNamespace(text="new value")],
+                meta=None, isError=False,
+            )
+
+    state = EvidenceState()
+    assert state.register_result("reused-provider-id", tool_name="old_sensor") == "S1"
+    state.add_evidence({"id": "old", "type": "observation",
+                        "statement": "Previous reading", "source_refs": ["S1"]})
+    state.begin_task()
+    model = Model()
+    agent = SimpleNamespace(
+        _evidence_state=state, model_client=model, logging_config=LoggingConfig(),
+        _agui_frontend_tools={}, _result_artifacts=None, workspace_access="none",
+        _dump_context=lambda *a, **k: None, _dump_value=lambda *a, **k: None,
+        _tool_is_enabled=lambda name: True,
+        _tool_input_schema=lambda name, phase: {"type": "object"},
+        _requires_approval=lambda *a, **kw: False,
+    )
+    messages = [{"role": "system", "content": "rules"}]
+    assert asyncio.run(run_model_loop(
+        agent, messages=messages,
+        tools=[{"type": "function", "function": {
+            "name": "sensor__read", "parameters": {"type": "object"},
+        }}],
+        routes={"sensor__read": (
+            Sensor(), "read", SimpleNamespace(name="sensor", compress_result=False)
+        )},
+        enabled_server_names=None, max_tool_calls=3, phase="main",
+    )) == "Done"
+    new_id = messages[1]["tool_calls"][0]["id"]
+    assert new_id != "reused-provider-id"
+    assert state.tool_results["reused-provider-id"]["source_ref"] == "S1"
+    assert state.tool_results[new_id]["source_ref"] == "S2"
+    assert "[Quelle S2:" in messages[2]["content"]
+    assert state.evidences["old"]["tool_calls"][0]["call_id"] == "reused-provider-id"
