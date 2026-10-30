@@ -453,20 +453,14 @@ class Workspace:
         except (OSError, RuntimeError):
             return True
 
-        allowed = self._matching_allowed_path(resolved)
-        # A protection covering the entire workspace must never be bypassed.
-        if self.directory in self.protected_paths:
+        # Explicit exclusions always win over an allowed-path exception.
+        # Only built-in sensitivity of ancestor directories is overridden.
+        if any(resolved == protected or protected in resolved.parents
+               for protected in self.protected_paths):
             return True
+        allowed = self._matching_allowed_path(resolved)
         if allowed is not None:
-            # Only the protected ancestor is overridden. A nested .ssh, .env,
-            # credentials file or an explicitly protected child is still denied.
-            if self._is_sensitive_file(resolved, workspace=allowed.path):
-                return True
-            return any(
-                (resolved == protected or protected in resolved.parents)
-                and allowed.path in protected.parents
-                for protected in self.protected_paths
-            )
+            return self._is_sensitive_file(resolved, workspace=allowed.path)
 
         return (
             self._is_sensitive_file(resolved, workspace=self.directory)
