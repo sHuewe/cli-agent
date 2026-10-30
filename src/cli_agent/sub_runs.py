@@ -165,8 +165,10 @@ async def execute_sub_run(
             ],
         }, ensure_ascii=False),
     })
+    # Retain the delegated evidence state for the UI's model-visible context
+    # projection, even after the coordinator's state is restored.
     record = {"id": run_id, "task": task, "messages": messages, "tools": copy.deepcopy(tools),
-              "status": "running"}
+              "evidence_state": local, "status": "running"}
     agent._sub_runs.append(record)
     from .agent_loop import ModelLoopRunState, run_model_loop
     previous = agent._evidence_state
