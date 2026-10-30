@@ -172,6 +172,8 @@ async def execute_sub_run(
     agent._sub_runs.append(record)
     from .agent_loop import ModelLoopRunState, run_model_loop
     previous = agent._evidence_state
+    previous_coordinator = getattr(agent, "_coordinator_evidence_state", None)
+    agent._coordinator_evidence_state = previous
     try:
         agent._evidence_state = local
         answer = await run_model_loop(
@@ -235,3 +237,7 @@ async def execute_sub_run(
         raise
     finally:
         agent._evidence_state = previous
+        if previous_coordinator is None:
+            agent.__dict__.pop("_coordinator_evidence_state", None)
+        else:
+            agent._coordinator_evidence_state = previous_coordinator
