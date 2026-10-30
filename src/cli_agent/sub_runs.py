@@ -6,8 +6,6 @@ import json
 import uuid
 from typing import Any
 
-from .agent_conversation import _normalize_json_response
-
 from .evidence_state import EvidenceState
 from .evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
 
@@ -50,6 +48,7 @@ low), uncertainties (array of strings). Do not claim completion without evidence
 
 
 def validate_sub_result(answer: str, available: set[str]) -> dict[str, Any]:
+    from .agent_conversation import _normalize_json_response
     normalized, error = _normalize_json_response(answer)
     if error is not None:
         raise ValueError("Sub-Run lieferte kein gültiges JSON: " + error)
@@ -114,8 +113,15 @@ async def execute_sub_run(agent: Any, args: dict[str, Any]) -> dict[str, Any]:
     ] + [tool for tool in local.tool_definitions() if tool["function"]["name"] in {
         ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
     }]
-    system = agent._build_system_prompt()
-    system = system.split("Nutze agent__update_plan")[0] + SUB_RUN_RULES
+    # Build a distinct prompt from the actual delegated tool set, never by truncating the main prompt.
+    from .agent import BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE, WORKSPACE_TOOL_SYSTEM_RULE
+    names = [tool["function"]["name"] for tool in tools]
+    parts = [BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE]
+    if agent._main_tools_need_workspace_context(names):
+        parts.append(WORKSPACE_TOOL_SYSTEM_RULE)
+    parts.append("Available tools (only these may be called):\\n- " + "\\n- ".join(names))
+    parts.append(SUB_RUN_RULES)
+    system = "\\n\\n".join(parts)
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps({
@@ -144,6 +150,8 @@ async def execute_sub_run(agent: Any, args: dict[str, Any]) -> dict[str, Any]:
             candidate = {**parent.evidences, **additions}
             parent._check_budget(candidate)
             parent.evidences = candidate
+            parent.compacted.update(source["call_id"] for entry in additions.values() for source in entry["tool_calls"])
+            parent._refresh_live_tool_definition()
             for call_id, source in local.tool_results.items():
                 if call_id not in parent.tool_results:
                     parent.tool_results[call_id] = copy.deepcopy(source)
