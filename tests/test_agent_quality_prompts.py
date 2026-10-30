@@ -78,6 +78,30 @@ def test_data_instructions_reuse_artifacts_and_known_pointers() -> None:
     assert "Skip inspect_json when records_path is known" in instructions
 
 
+
+def test_sub_run_guidance_encourages_early_single_task_delegation(tmp_path: Path) -> None:
+    from cli_agent.sub_runs import START_SUB_RUN, SUB_RUN_TOOL
+
+    agent = _agent(tmp_path)
+    agent._active_servers = {"example"}
+    agent._server_tools = {
+        "example": [{"function": {"name": "example__search"}}]
+    }
+    assert START_SUB_RUN in [
+        tool["function"]["name"] for tool in agent._model_tools()
+    ]
+    prompt = agent._build_system_prompt()
+    assert "EINE abgegrenzte Teiluntersuchung" in prompt
+    assert "viele Toolaufrufe" in prompt
+    assert "starte den Sub-Run vor ihrer" in prompt
+    assert "einzelne Toolabfragen" in prompt
+
+    description = SUB_RUN_TOOL["function"]["description"]
+    assert "even one" in description
+    assert "coordinator context" in description
+    assert "additional model" in description
+
+
 def test_prompt_changes_remain_compact() -> None:
     assert len(BASE_SYSTEM_PROMPT) + len(MCP_TOOL_SYSTEM_RULE) <= 850
     assert len(_server_instructions("read")) <= 1_743
