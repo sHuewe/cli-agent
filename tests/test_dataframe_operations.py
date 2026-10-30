@@ -375,7 +375,7 @@ def test_exact_join_derived_difference_and_session_cleanup(frames, tmp_path):
     frames.base.workspace = Workspace.from_directory(tmp_path,
         McpServerConfig(name="data", config={"allow_write_files": True}),
         allowed_paths=(AllowedPath(store.session_directory, "read"),))
-     serialized = json.dumps(joined.structuredContent, ensure_ascii=False)
+    serialized = json.dumps(joined.structuredContent, ensure_ascii=False)
     metadata = json.loads(store.metadata_result(joined, serialized))
     path = metadata["workspace_path"]
     assert (tmp_path / path).is_file()
