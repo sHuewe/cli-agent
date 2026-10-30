@@ -697,3 +697,35 @@ def test_collect_knowledge_fails_on_root_index_error() -> None:
         asyncio.run(agent._collect_knowledge("question"))
 
     assert "Root-Index" in agent.dumped[-1][1]["error"]
+
+
+def test_sub_run_snapshot_projects_delegated_evidence_without_mutating_transcript() -> None:
+    from cli_agent.evidence_state import EvidenceState
+
+    agent = ConversationHarness()
+    evidence = EvidenceState()
+    evidence.register_result("call-sub", tool_name="sensor__get_value")
+    evidence.add_evidence({
+        "id": "E1", "type": "observation", "statement": "Measured 100 W.",
+        "source_refs": ["S1"],
+    })
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call-sub", "type": "function", "function": {
+                "name": "sensor__get_value", "arguments": "{}"}}
+        ]},
+        {"role": "tool", "tool_call_id": "call-sub", "content": "raw sensor output"},
+    ]
+    agent._sub_runs = [{
+        "id": "sub-1", "task": "Review sensor measurements",
+        "status": "completed", "messages": messages, "tools": [],
+        "evidence_state": evidence,
+    }]
+
+    snapshot = agent.sub_run_snapshots()[0]
+    assert snapshot["status"] == "completed"
+    assert not any(message.get("role") == "tool" for message in snapshot["messages"])
+    assert "Measured 100 W." in snapshot["messages"][-1]["content"]
+    assert messages[-1]["content"] == "raw sensor output"
+    assert len(messages) == 3
