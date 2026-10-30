@@ -23,11 +23,15 @@ SUB_RUN_TOOL = {
             "multiple steps or extensive intermediate results; it need not be "
             "independent of every other task. The coordinator keeps oversight "
             "and final synthesis while the sub-run returns a compact result "
-            "with verified evidence IDs. Prefer delegation when isolating work "
-            "would reduce coordinator context. Do not delegate trivial queries, "
-            "calculations, plan updates or short summaries. Sub-runs reuse "
-            "session permissions and artifacts but incur additional model "
-            "calls, tokens and latency."
+            "with verified evidence IDs. The optional evidence_ids input "
+            "accepts ONLY IDs of findings previously saved with agent__add_evidence; "
+            "source_ref tokens such as S1/S2 from tool results are NOT evidence IDs. "
+            "Save relevant findings first, or omit evidence_ids and let the sub-run "
+            "investigate independently. Raw tool results are not transferred. "
+            "Prefer delegation when isolating work would reduce coordinator context. "
+            "Do not delegate trivial queries, calculations, plan updates or short "
+            "summaries. Sub-runs reuse session permissions and artifacts but incur "
+            "additional model calls, tokens and latency."
         ),
         "parameters": {
             "type": "object", "additionalProperties": False,
@@ -35,8 +39,18 @@ SUB_RUN_TOOL = {
             "properties": {
                 "task": {"type": "string", "minLength": 20, "maxLength": 2500},
                 "plan_step_id": {"type": "string", "maxLength": 80},
-                "evidence_ids": {"type": "array", "maxItems": 16,
-                                 "items": {"type": "string", "maxLength": 80}},
+                "evidence_ids": {
+                    "type": "array", "maxItems": 16,
+                    "description": (
+                        "Optional: IDs of EXISTING SAVED findings created with "
+                        "agent__add_evidence in the coordinator, e.g. 'candidate-1'. "
+                        "NOT S1/S2 source_ref tokens from tool results, not tool call "
+                        "IDs, and not raw tool output. To pass prior findings, call "
+                        "agent__add_evidence first with its source_refs, then supply "
+                        "the saved finding's id here. Otherwise omit this field."
+                    ),
+                    "items": {"type": "string", "maxLength": 80},
+                },
             },
         },
     },
@@ -98,8 +112,20 @@ async def execute_sub_run(
         raise ValueError("Unbekannter Planschritt.")
     ids = args.get("evidence_ids", [])
     if (not isinstance(ids, list) or len(ids) > 16
-            or any(not isinstance(i, str) or i not in parent.evidences for i in ids)):
-        raise ValueError("Unbekannte Evidence-ID.")
+            or any(not isinstance(i, str) or len(i) > 80 for i in ids)):
+        raise ValueError("evidence_ids erwartet höchstens 16 gespeicherte Evidence-IDs.")
+    unknown_ids = [i for i in ids if i not in parent.evidences]
+    if unknown_ids:
+        available = ", ".join(list(parent.evidences)[:16]) or "keine"
+        raise ValueError(
+            "Unbekannte Evidence-ID(s): " + ", ".join(repr(i) for i in unknown_ids)
+            + ". evidence_ids akzeptiert nur IDs bereits mit agent__add_evidence "
+            "gespeicherter Evidences. S1/S2/... aus Toolantworten sind source_refs, "
+            "keine Evidence-IDs. Speichere einen relevanten Befund zunächst mit "
+            "agent__add_evidence und dessen source_refs oder lasse evidence_ids weg; "
+            "der Sub-Run kann Daten selbst abfragen. Verfügbare Evidence-IDs: "
+            + available
+        )
     run_id = "sub-" + uuid.uuid4().hex[:12]
     local = EvidenceState()
     local.tool_results = copy.deepcopy(parent.tool_results)
