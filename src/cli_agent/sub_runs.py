@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from .agent_conversation import _normalize_json_response
-from .agent_loop import ModelLoopRunState, run_model_loop
+
 from .evidence_state import EvidenceState
 from .evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
 
@@ -126,6 +126,7 @@ async def execute_sub_run(agent: Any, args: dict[str, Any]) -> dict[str, Any]:
     record = {"id": run_id, "task": task, "messages": messages, "tools": copy.deepcopy(tools),
               "status": "running"}
     agent._sub_runs.append(record)
+    from .agent_loop import ModelLoopRunState, run_model_loop
     previous = agent._evidence_state
     try:
         agent._evidence_state = local
