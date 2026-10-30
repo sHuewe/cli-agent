@@ -576,18 +576,24 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             parts.append(EVIDENCE_WORKING_MEMORY_SYSTEM_RULE)
         if START_SUB_RUN in available_tool_names:
             parts.append(
-                "Plan, Evidences und Sub-Runs sind optional; für kleine Aufgaben keine "
-                "dieser Strukturen erzwingen. Prüfe FRÜHZEITIG, ob die Aufgabe "
-                "mehrere klar abgrenzbare, weitgehend unabhängige Teiluntersuchungen "
-                "enthält, die jeweils mehrere Tool- oder Analyseschritte erfordern. "
-                "Grenze solche Teilaufgaben zunächst im Hauptlauf sinnvoll ab und "
-                "delegiere geeignete Untersuchungen mit konkretem Ziel und erwarteten "
-                "überprüfbaren Ergebnissen. Warte mit der Delegationsentscheidung "
-                "nicht, bis du alle Teilaufgaben selbst bearbeitet hast. Behalte "
-                "Koordination, Abgleich widersprüchlicher Ergebnisse und abschließende "
-                "Synthese im Hauptlauf. Sub-Runs verursachen zusätzliche Modellaufrufe; "
-                "nutze sie nicht für einzelne Toolabfragen, triviale Schritte oder "
-                "eng voneinander abhängige Arbeitsschritte."
+                "Nutze Sub-Runs bevorzugt zur Kontextisolation umfangreicher "
+                "Teiluntersuchungen, nicht nur zur Aufteilung mehrerer unabhängiger "
+                "Aufgaben. Prüfe die Delegation FRÜHZEITIG, bevor du selbst viele "
+                "Toolaufrufe oder umfangreiche Auswertungen durchführst. Bereits "
+                "EINE abgegrenzte Teiluntersuchung ist ein guter Kandidat, wenn sie "
+                "voraussichtlich mehrere Analyseschritte, viele Toolaufrufe, "
+                "größere Zwischenergebnisse oder mehrere Quellen erfordert. "
+                "Delegiere beispielsweise eine systematische Suche, Recherche "
+                "oder Datenauswertung mit konkretem Auftrag und überprüfbaren "
+                "Ergebnissen; übernimm Auswahl, kritische Prüfung und abschließende "
+                "Synthese im Hauptlauf. Wenn du absehen kannst, dass eine solche "
+                "Untersuchung aufwendig wird, starte den Sub-Run vor ihrer "
+                "detaillierten Bearbeitung statt erst danach. Auch mehrere "
+                "voneinander unabhängige Untersuchungen können getrennt delegiert "
+                "werden. Für einzelne Toolabfragen, triviale Berechnungen oder "
+                "kurze Zusammenfassungen ist Delegation unnötig. Sub-Runs sind "
+                "optional und benötigen zusätzliche Modellaufrufe; entscheide "
+                "nach dem erwarteten Nutzen der Kontextentlastung."
             )
 
         if active_instructions:
