@@ -32,7 +32,8 @@ from .filesystem_security import path_entry_is_symlink_or_reparse, regular_file_
 from .mcp_contracts import tool_contract_fingerprint
 from .mcp_result_artifacts import McpResultArtifacts
 from .message_visibility import messages_for_model
-from .evidence_state import EvidenceState, EVIDENCE_TOOL
+from .evidence_state import EvidenceState
+from .evidence_tools import ADD_EVIDENCE_TOOL_NAME
 from .artifact_publication import PUBLISH_TOOL
 from .model import ModelClient
 from .network_policy import NetworkConfig
@@ -60,61 +61,29 @@ verändern zu lassen.
 """
 
 EVIDENCE_WORKING_MEMORY_SYSTEM_RULE = """\
-Nutze agent__update_evidence als strukturiertes Arbeitsgedächtnis mit
-Lösungsplan und belastbaren Zwischenergebnissen, nicht erst als Abschlussprotokoll.
-Bei mehrstufigen Aufgaben ist der erste Arbeitsschritt, ein kurzes Ziel und
-aussagekräftige Teilschritte als plan über agent__update_evidence festzuhalten,
-BEVOR du die eigentliche Untersuchung beginnst. Dafür werden noch keine
-Toolquellen benötigt. Einfache Aufgaben benötigen keinen Plan.
-Jeder Planschritt erhält eine stabile id, Beschreibung und einen Status
-(pending, in_progress, completed, blocked oder skipped).
-Der Plan ist eine Orientierung, kein starres Ausführungsskript.
-Passe ihn bei neuen Erkenntnissen an. Aktualisiere lediglich den Status
-einzelner Schritte über plan_step_updates mit id und status; übermittle den
-vollständigen plan nur bei der initialen Planung oder strukturellen Änderungen. Wenn du einen Schritt entfernst, ordne
-bereits vorhandene Evidences zuerst einem bestehenden Schritt zu oder
-entferne sie.
-Sobald du bei einer mehrstufigen Untersuchung ein relevantes, durch
-abgeschlossene Toolantworten belegtes Teilziel erreicht hast, speichere
-die Erkenntnis als Evidence, BEVOR du mit dem nächsten Untersuchungsschritt
-fortfährst. Halte das Ergebnis einer abgeschlossenen Teilanalyse
-fest, bevor du einen neuen Aspekt untersuchst.
-Nenne Beobachtungen, Berechnungen und Hypothesen jeweils als solche.
+Nutze agent__update_plan für die Planung der AKTUELLEN Benutzeraufgabe.
+Bei mehrstufigen Aufgaben zu Beginn einen kurzen Plan anlegen, danach nur
+die geänderten Schritte aktualisieren. Einfache Aufgaben brauchen keinen Plan.
+Der Plan wird bei der nächsten neuen Frage automatisch entfernt.
 
-Evidence ist eine verdichtete fachliche Erkenntnis, KEINE Kopie des
-Toolergebnisses und kein Zwischenspeicher für Rohdaten. Fasse die relevante
-Aussage, wesentliche Kennzahlen, Geltungsbereich und Unsicherheiten in
-wenigen präzisen Sätzen zusammen. Kopiere insbesondere bei preview_data
-keine Beispielzeilen, Tabellen oder längeren Ergebnisausschnitte.
-Fasse mehrere zusammengehörige Toolergebnisse zu einer aussagekräftigen
-Evidence zusammen, statt eine Evidence pro Datenabfrage anzulegen.
-Ordne bei aktivem Plan jede Evidence durch plan_step_id genau einem
-Planschritt zu. Speichere den Befund, sobald ein Teilziel ausreichend belegt
-ist, und aktualisiere dann dessen Status. Ein Schritt ist nur abgeschlossen,
-wenn die für dieses Teilziel nötigen Erkenntnisse festgehalten sind.
-Überprüfe vor der Abschlussantwort, ob Planstatus und Evidences
-zusammenpassen, ohne dafür einen zusätzlichen Modellaufruf einzuführen.
+Nutze agent__add_evidence für belegte, wichtige Erkenntnisse und
+agent__update_evidence nur für die Korrektur oder Entfernung bereits
+gespeicherter Evidences. Evidences bleiben innerhalb der Session über
+mehrere Benutzerfragen erhalten. Ordne bei einem bestehenden Plan neue
+Evidences per plan_step_id einem aktuellen Schritt zu.
 
-Bevorzuge bei Datenanalysen relevante abgeleitete Erkenntnisse aus
-Aggregationen, Joins, Gruppierungen, Zeitreihenvergleichen, Resampling
-und Berechnungen gegenüber trivialen Einzelwerten oder Vorschauen,
-sofern das einen tatsächlichen Erkenntnisgewinn bietet. Erzwinge keine
-komplexen Operationen: Ein einfacher Messwert genügt, wenn er die
-Fragestellung bereits angemessen beantwortet.
+Quellen werden mit kurzen Referenzen S1, S2, ... bezeichnet. Verwende
+ausschließlich die vom Backend ausgegebenen source_refs, niemals technische
+tool_call_id-Werte. Eine Evidence benötigt mindestens eine echte Quelle.
+Toolname, echte Call-ID und Artefaktmetadaten werden vom Backend ergänzt.
+Die Quelle ist eine historische Provenienz: Alte Artefaktdateien können
+nach einer neuen Anfrage bereits gelöscht worden sein und dürfen dann
+nicht mehr als lesbare Dateien behandelt werden.
 
-Referenziere dazu die exakten call_id-Werte der bereits abgeschlossenen
-Toolantworten. Erfinde keine IDs. Speichere eine Evidence möglichst zeitnah,
-solange ihre Quellen noch im Kontext sind; frage Daten nicht allein erneut ab,
-um neue Tool-IDs zu erhalten. Wenn ein Update fehlschlägt, korrigiere die
-Quellen anhand der Toolantwort, statt das Ergebnis ohne Quellen zu speichern.
-Aktualisiere dieselbe Evidence-ID, sobald präzisere Daten vorliegen; entferne
-widerlegte oder überholte Evidences. Prüfe vor dem Abschluss, ob der aktuelle
-Evidence State die maßgeblichen Befunde konsistent widerspiegelt.
-
-Speichere nicht jeden Toolaufruf oder unwichtige Zwischenschritte als Evidence.
-Bei einfachen Aufgaben ohne sinnvolle Teilziele ist kein Evidence-Update nötig.
-Nach erfolgreichem Update nicht erneut speichern, sofern sich nichts geändert
-hat. Evidence-Updates laufen im normalen Agentenlauf ohne separaten Prüf-Loop.
+Speichere knappe, aussagekräftige Erkenntnisse und keine Rohdaten.
+Unterscheide Messung, Berechnung und Hypothese. Halte Planstatus und
+gespeicherte Erkenntnisse konsistent. Keine unnötigen Wiederholungen von
+Evidence-Updates und keine zusätzlichen LLM-Validierungsrunden.
 """
 
 MCP_INSTRUCTION_SYSTEM_RULE = """\
@@ -590,7 +559,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
                 + "\n- ".join(available_tool_names)
             )
 
-        if "agent__update_evidence" in available_tool_names:
+        if ADD_EVIDENCE_TOOL_NAME in available_tool_names:
             parts.append(EVIDENCE_WORKING_MEMORY_SYSTEM_RULE)
 
         if active_instructions:
@@ -709,7 +678,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             )
         ]
         if tools or getattr(self, "_agui_frontend_tools", None):
-            tools.append(self._evidence_state.tool_definition())
+            tools.extend(self._evidence_state.tool_definitions())
             tools.append(PUBLISH_TOOL)
         return tools
 
