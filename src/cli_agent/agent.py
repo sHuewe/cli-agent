@@ -575,7 +575,21 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         if ADD_EVIDENCE_TOOL_NAME in available_tool_names:
             parts.append(EVIDENCE_WORKING_MEMORY_SYSTEM_RULE)
         if START_SUB_RUN in available_tool_names:
-            parts.append("Plan, Evidences und Sub-Runs sind optional: für kleine Aufgaben keine dieser Strukturen erzwingen. Sub-Runs sind teuer und nur für eigenständige umfangreiche Teilaufgaben sinnvoll.")
+            parts.append(
+                "Plan, Evidences und Sub-Runs sind optional; für kleine Aufgaben keine "
+                "dieser Strukturen erzwingen. Prüfe aber FRÜHZEITIG Delegation, "
+                "wenn mehrere weitgehend unabhängige Datenbereiche, Zeiträume "
+                "oder Teilfragen jeweils mehrere Tool- und Analyseschritte erfordern. "
+                "Beispiel: Wähle zunächst selbst aussagekräftige Tage aus; "
+                "beauftrage anschließend einen Sub-Run pro unabhängigem Zeitfenster "
+                "mit konkreter Analyse und überprüfbaren Evidences. "
+                "Warte mit dieser Entscheidung nicht, bis du alle Zeitfenster "
+                "selbst detailliert ausgewertet hast. Behalte Auswahl, "
+                "übergreifenden Vergleich und Synthese im Hauptlauf. "
+                "Sub-Runs kosten zusätzliche Modellaufrufe; nutze sie nicht "
+                "für einzelne Toolabfragen, triviale Schritte oder eng "
+                "voneinander abhängige Berechnungen."
+            )
 
         if active_instructions:
             parts.append(MCP_INSTRUCTION_SYSTEM_RULE)
