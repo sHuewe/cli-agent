@@ -1,12 +1,14 @@
 # Code-Architektur
 
+**Paketübersicht und aktuelle Importpfade:** [`src/cli_agent/ARCHITECTURE.md`](../src/cli_agent/ARCHITECTURE.md) und die README-Dateien in den Unterpaketen. Das historische flache `src/cli_agent`-Layout wurde entfernt; es gibt keine Aliasmodule im Paket-Root.
+
 Diese Datei gibt einen kompakten Überblick über den aktuellen Aufbau des Python-Codes von `cli-agent`. Sie soll vor allem dabei helfen, sich im Projekt zu orientieren: Wo beginnt die Ausführung, welche Klassen tragen welchen Zustand, wo läuft die Agentenschleife und an welchen Stellen greifen Security- und Policy-Checks.
 
 Die Beschreibung ist bewusst auf die tragenden Bausteine konzentriert. Einzelne Hilfsfunktionen und Spezialfälle sind in den jeweiligen Modulen dokumentiert.
 
 ## Einstiegspunkt und Verdrahtung
 
-Der normale Programmeinstieg liegt in `src/cli_agent/cli.py`.
+Der normale Programmeinstieg liegt in `src/cli_agent/interfaces/cli.py`.
 
 Dort werden im Wesentlichen:
 
@@ -21,7 +23,7 @@ Dort werden im Wesentlichen:
 Der produktiv verwendete Agent ist aktuell `ContextFileCliAgent`. In `cli.py` wird dieser aus historischen Gründen unter dem lokalen Alias `WebContextCliAgent` importiert:
 
 ```python
-from .file_context import ContextFileCliAgent as WebContextCliAgent
+from cli_agent.context.file_context import ContextFileCliAgent as WebContextCliAgent
 ```
 
 Die tatsächliche Vererbungshierarchie lautet:
