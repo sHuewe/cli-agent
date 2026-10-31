@@ -970,3 +970,32 @@ async def test_mcp_session_propagates_cancel_notification(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert observed == [(42, 42)]
+
+
+@pytest.mark.asyncio
+async def test_mcp_cancel_notification_timeout_does_not_block_run_cancellation(monkeypatch):
+    """Even a non-reading MCP transport must not block CancelledError."""
+    from mcp import ClientSession
+    from cli_agent.agent_mcp import (
+        CancellableClientSession, MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS,
+    )
+
+    entered = asyncio.Event()
+
+    async def blocking_request(self, *_args, **_kwargs):
+        entered.set()
+        await asyncio.sleep(60)
+
+    async def blocked_notification(self, *_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ClientSession, "send_request", blocking_request)
+    monkeypatch.setattr(CancellableClientSession, "send_notification",
+                        blocked_notification)
+    session = object.__new__(CancellableClientSession)
+    session._request_id = 24
+    task = asyncio.create_task(session.send_request(object(), object))
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS + 1)
