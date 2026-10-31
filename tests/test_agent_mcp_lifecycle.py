@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-import cli_agent.agent_mcp as agent_mcp_module
-from cli_agent.admin_config import McpPolicy, TrustedMcpServer
-from cli_agent.agent import CliAgent
-from cli_agent.agent_knowledge import _OkfOptions
-from cli_agent.config import McpServerConfig
-from cli_agent.ollama import OllamaClient
+import cli_agent.runtime.agent_mcp as agent_mcp_module
+from cli_agent.settings.admin_config import McpPolicy, TrustedMcpServer
+from cli_agent.runtime.agent import CliAgent
+from cli_agent.context.agent_knowledge import _OkfOptions
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.models.ollama import OllamaClient
 
 
 def make_agent(

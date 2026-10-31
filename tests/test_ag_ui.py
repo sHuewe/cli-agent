@@ -10,9 +10,9 @@ import httpx
 import pytest
 from jsonschema import Draft202012Validator
 
-from cli_agent.agent_api import AgentApiService, create_app
-from cli_agent.ag_ui_protocol import parse_run_input, encode_sse
-from cli_agent.web_ui_sessions import BrowserSessionRegistry
+from cli_agent.interfaces.agent_api import AgentApiService, create_app
+from cli_agent.interfaces.ag_ui_protocol import parse_run_input, encode_sse
+from cli_agent.interfaces.web_ui_sessions import BrowserSessionRegistry
 
 
 class AgUiAgent:
@@ -457,7 +457,7 @@ async def test_agui_resume_requires_valid_pending_interrupt_and_boolean_decision
 
 @pytest.mark.asyncio
 async def test_agui_session_run_buffers_are_bounded_and_lifecycle_is_isolated():
-    from cli_agent.agent_api import AgentRun
+    from cli_agent.interfaces.agent_api import AgentRun
 
     service = AgentApiService(lambda session: AgUiAgent(session))
     session = await service.create()
@@ -497,7 +497,7 @@ async def test_agui_session_run_buffers_are_bounded_and_lifecycle_is_isolated():
 async def test_agui_mcp_tool_events_keep_consistent_ids_and_only_safe_results():
     service = AgentApiService(lambda session: AgUiAgent(session))
     session = await service.create()
-    from cli_agent.agent_api import AgentRun
+    from cli_agent.interfaces.agent_api import AgentRun
     session._run = AgentRun(id="run", thread_id="thread", prompt="x",
                             agui=True, status="running")
     run = session._run
@@ -530,7 +530,7 @@ async def test_agui_mcp_tool_events_keep_consistent_ids_and_only_safe_results():
 @pytest.mark.asyncio
 async def test_external_agui_threads_can_be_deleted_by_client_known_thread_id():
     """Sequential standalone conversations must not permanently exhaust slots."""
-    from cli_agent.agent_api import MAX_SESSIONS
+    from cli_agent.interfaces.agent_api import MAX_SESSIONS
     service = AgentApiService(lambda session: AgUiAgent(session))
     auth = {"Authorization": f"Bearer {service.token}", "Accept": "text/event-stream"}
     try:
@@ -644,7 +644,7 @@ async def test_agui_thread_deletion_releases_interrupted_agent_and_worker():
 @pytest.mark.asyncio
 async def test_slow_agui_thread_start_does_not_block_other_threads():
     """MCP startup is per-thread, not a global gate for all AG-UI runs."""
-    from cli_agent.agent_api import AgentSession
+    from cli_agent.interfaces.agent_api import AgentSession
 
     service = AgentApiService(lambda session: AgUiAgent(session))
     existing = await service.resolve_agui_thread("existing")
@@ -692,7 +692,7 @@ async def test_slow_agui_thread_start_does_not_block_other_threads():
 @pytest.mark.asyncio
 async def test_agui_thread_start_failure_releases_slot_and_allows_retry():
     """All awaiters share the failed startup and can later retry the thread."""
-    from cli_agent.agent_api import AgentSession
+    from cli_agent.interfaces.agent_api import AgentSession
 
     service = AgentApiService(lambda session: AgUiAgent(session))
     original_start = AgentSession.start
@@ -735,7 +735,7 @@ async def test_agui_thread_start_failure_releases_slot_and_allows_retry():
 @pytest.mark.parametrize("action", ["delete", "shutdown"])
 async def test_agui_thread_start_cancelled_during_cleanup(action):
     """Deletion/shutdown must also release a not-yet-published MCP session."""
-    from cli_agent.agent_api import AgentSession
+    from cli_agent.interfaces.agent_api import AgentSession
 
     service = AgentApiService(lambda session: AgUiAgent(session))
     started = asyncio.Event()
@@ -776,7 +776,7 @@ async def test_agui_thread_start_cancelled_during_cleanup(action):
 @pytest.mark.asyncio
 async def test_explicit_api_session_is_used_for_agui_and_control_endpoints():
     """POST /sessions configuration must affect the very same AG-UI worker."""
-    from cli_agent.agent_api import MAX_SESSIONS
+    from cli_agent.interfaces.agent_api import MAX_SESSIONS
 
     service = AgentApiService(lambda session: AgUiAgent(session))
     headers = {"Authorization": f"Bearer {service.token}"}
@@ -947,7 +947,7 @@ async def test_close_immediately_after_run_cancel_does_not_deadlock():
 async def test_mcp_session_propagates_cancel_notification(monkeypatch):
     """Cancel the actual MCP request ID, not an unrelated session request."""
     from mcp import ClientSession
-    from cli_agent.agent_mcp import CancellableClientSession
+    from cli_agent.runtime.agent_mcp import CancellableClientSession
 
     entered = asyncio.Event()
     observed = []
@@ -976,7 +976,7 @@ async def test_mcp_session_propagates_cancel_notification(monkeypatch):
 async def test_mcp_cancel_notification_timeout_does_not_block_run_cancellation(monkeypatch):
     """Even a non-reading MCP transport must not block CancelledError."""
     from mcp import ClientSession
-    from cli_agent.agent_mcp import (
+    from cli_agent.runtime.agent_mcp import (
         CancellableClientSession, MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS,
     )
 

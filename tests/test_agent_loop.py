@@ -4,9 +4,9 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-from cli_agent.agent_knowledge import _KnowledgeRunState
-from cli_agent.agent_loop import run_model_loop
-from cli_agent.config import LoggingConfig
+from cli_agent.context.agent_knowledge import _KnowledgeRunState
+from cli_agent.runtime.agent_loop import run_model_loop
+from cli_agent.settings.config import LoggingConfig
 
 
 class SequenceModel:
@@ -386,7 +386,7 @@ def test_knowledge_invalid_positive_cannot_be_corrected_to_false() -> None:
 
 
 def test_model_usage_diagnostics_reports_tokens_and_capacity(caplog):
-    from cli_agent.model import TokenUsage
+    from cli_agent.models.model import TokenUsage
     agent = LoopAgent([{"role": "assistant", "content": "done"}])
     agent.model_client.model = "example/model"
     agent.model_client.context_length = 8000
@@ -394,7 +394,7 @@ def test_model_usage_diagnostics_reports_tokens_and_capacity(caplog):
     agent.model_client.last_usage = TokenUsage(
         input_tokens=1000, output_tokens=25, total_tokens=1025,
     )
-    with caplog.at_level("INFO", logger="cli_agent.model"):
+    with caplog.at_level("INFO", logger="cli_agent.models.model"):
         assert _run(agent) == "done"
     assert "model=example/model" in caplog.text
     assert "input_tokens=1000" in caplog.text
@@ -404,7 +404,7 @@ def test_model_usage_diagnostics_reports_tokens_and_capacity(caplog):
 
 def test_model_usage_diagnostics_marks_missing_usage_unknown(caplog):
     agent = LoopAgent([{"role": "assistant", "content": "done"}])
-    with caplog.at_level("INFO", logger="cli_agent.model"):
+    with caplog.at_level("INFO", logger="cli_agent.models.model"):
         assert _run(agent) == "done"
     assert "input_tokens=unknown" in caplog.text
     assert "context_utilization_percent=unknown" in caplog.text

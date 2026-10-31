@@ -5,9 +5,9 @@ from pathlib import Path, PureWindowsPath
 
 import pytest
 
-import cli_agent.admin_config as admin_config_module
-from cli_agent.admin_config import default_admin_config_file, load_admin_config
-from cli_agent.config import load_config
+import cli_agent.settings.admin_config as admin_config_module
+from cli_agent.settings.admin_config import default_admin_config_file, load_admin_config
+from cli_agent.settings.config import load_config
 
 VALID_CONTRACT = "sha256:" + "a" * 64
 

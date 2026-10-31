@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from cli_agent.agent_api import (
+from cli_agent.interfaces.agent_api import (
     API_HOST, MAX_SESSIONS, AgentApiService, build_parser, create_app,
 )
 
@@ -133,8 +133,14 @@ async def test_session_limit_and_shutdown():
 
 @pytest.mark.asyncio
 async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, monkeypatch):
-    from cli_agent import admin_config, agent_api, config, execution, file_context, logging_setup, model_factory
-    from cli_agent.agent_api import build_service
+    from cli_agent.settings import admin_config
+    from cli_agent.interfaces import agent_api
+    from cli_agent.settings import config
+    from cli_agent.platform import execution
+    from cli_agent.context import file_context
+    from cli_agent.platform import logging_setup
+    from cli_agent.models import model_factory
+    from cli_agent.interfaces.agent_api import build_service
     from dataclasses import dataclass
 
     @dataclass
@@ -213,7 +219,7 @@ async def test_factory_configuration_uses_server_owned_capabilities(tmp_path, mo
 
 
 def test_api_start_rejects_invalid_static_start_options(tmp_path):
-    from cli_agent.agent_api import build_service
+    from cli_agent.interfaces.agent_api import build_service
     invalid_port = build_parser().parse_args(["--port", "0"])
     with pytest.raises(ValueError, match="Port"):
         build_service(invalid_port)
@@ -229,7 +235,7 @@ def test_api_start_rejects_invalid_static_start_options(tmp_path):
 
 @pytest.mark.asyncio
 async def test_concurrent_creation_reserves_capacity_before_startup():
-    from cli_agent.agent_api import AgentSession
+    from cli_agent.interfaces.agent_api import AgentSession
     ready = asyncio.Event()
     original_start = AgentSession.start
 
@@ -254,7 +260,7 @@ async def test_concurrent_creation_reserves_capacity_before_startup():
 
 @pytest.mark.asyncio
 async def test_start_failure_frees_reserved_session_slot():
-    from cli_agent.agent_api import AgentSession
+    from cli_agent.interfaces.agent_api import AgentSession
     original_start = AgentSession.start
 
     async def failed_start(self):
@@ -274,7 +280,7 @@ async def test_start_failure_frees_reserved_session_slot():
 def test_cli_startup_flushes_token_before_uvicorn(monkeypatch, capsys):
     """A supervisor reading piped stdout must see the credential immediately."""
     import sys
-    from cli_agent import agent_api
+    from cli_agent.interfaces import agent_api
 
     service, _agents = make_test_service()
     monkeypatch.setattr(agent_api, "build_service", lambda args: service)
@@ -311,7 +317,7 @@ def test_cli_startup_flushes_token_before_uvicorn(monkeypatch, capsys):
 
 @pytest.mark.asyncio
 async def test_replay_capacity_adapts_to_knowledge_and_custom_limits():
-    from cli_agent.agent_api import MAX_EVENTS_PER_RUN, REPLAY_EVENTS_PER_TOOL
+    from cli_agent.interfaces.agent_api import MAX_EVENTS_PER_RUN, REPLAY_EVENTS_PER_TOOL
     service, _ = make_test_service()
     session = await service.create()
     agent = session.agent
@@ -327,7 +333,7 @@ async def test_replay_capacity_adapts_to_knowledge_and_custom_limits():
 
 @pytest.mark.asyncio
 async def test_browser_run_without_sse_times_out_and_releases_session(monkeypatch):
-    from cli_agent import agent_api
+    from cli_agent.interfaces import agent_api
     monkeypatch.setattr(agent_api, "BROWSER_SSE_CONNECT_TIMEOUT", 0.04)
     service, agents = make_test_service()
     session = await service.create()
@@ -398,7 +404,7 @@ async def test_old_sse_run_subscriber_cannot_unlock_new_browser_run():
 
 @pytest.mark.asyncio
 async def test_agui_http_validation_bounded_json_and_proprietary_routes_removed():
-    from cli_agent.agent_api import MAX_JSON_BYTES
+    from cli_agent.interfaces.agent_api import MAX_JSON_BYTES
     service, _agents = make_test_service()
     async with await client_for(service) as client:
         endpoint = "/ag-ui"
@@ -558,7 +564,7 @@ async def test_published_artifact_download_is_session_bound_and_authenticated():
         session.published_artifacts[artifact_id] = {
             "path": "registered.csv", "filename": "report.csv", "mime_type": "text/csv",
         }
-        from cli_agent.agent_api import _artifact_thread_token
+        from cli_agent.interfaces.agent_api import _artifact_thread_token
         url = f"/threads/{_artifact_thread_token(sid)}/artifacts/{artifact_id}"
         assert (await client.get(url)).status_code == 401
         assert (await client.get(url, headers=headers(service))).content == b"export-data"
@@ -594,7 +600,7 @@ async def test_browser_download_requires_valid_tab_lease():
         transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
         base_url="http://127.0.0.1:8765",
     ) as client:
-        from cli_agent.agent_api import _artifact_thread_token
+        from cli_agent.interfaces.agent_api import _artifact_thread_token
         endpoint = f"/threads/{_artifact_thread_token(session.id)}/artifacts/{artifact_id}"
         browser_headers = {
             "Authorization": "Bearer browser-secret",
@@ -615,7 +621,7 @@ async def test_browser_download_requires_valid_tab_lease():
     "report/artifacts/other", "äö雪", "report%2F1",
 ])
 async def test_artifact_download_thread_ids_with_url_delimiters(thread_id):
-    from cli_agent.agent_api import AgentRun, _artifact_thread_token
+    from cli_agent.interfaces.agent_api import AgentRun, _artifact_thread_token
 
     service, _ = make_test_service()
     session = await service.resolve_agui_thread(thread_id)
@@ -652,7 +658,7 @@ async def test_artifact_download_thread_ids_with_url_delimiters(thread_id):
 
 @pytest.mark.asyncio
 async def test_browser_artifact_download_uses_decoded_thread_id_for_lease():
-    from cli_agent.agent_api import _artifact_thread_token
+    from cli_agent.interfaces.agent_api import _artifact_thread_token
 
     service, _ = make_test_service()
     session = await service.create()

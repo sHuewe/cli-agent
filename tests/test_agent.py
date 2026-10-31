@@ -6,12 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.admin_config import McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
-from cli_agent.agent import CliAgent
-from cli_agent.config import McpServerConfig
-from cli_agent.mcp_contracts import tool_contract_fingerprint
-from cli_agent.message_visibility import messages_for_model
-from cli_agent.ollama import OllamaClient
+from cli_agent.settings.admin_config import McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
+from cli_agent.runtime.agent import CliAgent
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.security.mcp_contracts import tool_contract_fingerprint
+from cli_agent.state.message_visibility import messages_for_model
+from cli_agent.models.ollama import OllamaClient
 
 
 def test_messages_for_model_strips_only_message_envelope_meta() -> None:
@@ -796,12 +796,12 @@ def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
 
     def fake_stdio_client(parameters):
         captured["parameters"] = parameters
-        from cli_agent.mcp_path_policy import read_path_policy
+        from cli_agent.security.mcp_path_policy import read_path_policy
         captured["policy"] = read_path_policy(Path(parameters.args[-1]))
         return DummyContext()
 
-    monkeypatch.setattr("cli_agent.agent_mcp.stdio_client", fake_stdio_client)
-    monkeypatch.setattr("cli_agent.agent_mcp.CancellableClientSession", lambda *_args: DummySession())
+    monkeypatch.setattr("cli_agent.runtime.agent_mcp.stdio_client", fake_stdio_client)
+    monkeypatch.setattr("cli_agent.runtime.agent_mcp.CancellableClientSession", lambda *_args: DummySession())
 
     async def exercise() -> None:
         stack = AsyncExitStack()
