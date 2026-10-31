@@ -70,7 +70,7 @@ def ensure_default_config_file() -> Path:
     config_file = default_config_file().expanduser()
     if config_file.exists():
         return config_file
-    template = files("cli_agent").joinpath("config.example.toml").read_text(encoding="utf-8")
+    template = files("cli_agent.settings").joinpath("config.example.toml").read_text(encoding="utf-8")
     config_file.parent.mkdir(parents=True, exist_ok=True)
     try:
         with config_file.open("x", encoding="utf-8") as handle:

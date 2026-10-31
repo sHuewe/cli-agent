@@ -7,10 +7,10 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .mcp_path_policy import read_path_policy
-from .config import McpServerConfig, default_config_file, load_config
-from .logging_setup import configure_logging
-from .os_operations import AllowedPath, Workspace, WorkspaceError
+from cli_agent.security.mcp_path_policy import read_path_policy
+from cli_agent.settings.config import McpServerConfig, default_config_file, load_config
+from cli_agent.platform.logging_setup import configure_logging
+from cli_agent.platform.os_operations import AllowedPath, Workspace, WorkspaceError
 
 logger = logging.getLogger(__name__)
 

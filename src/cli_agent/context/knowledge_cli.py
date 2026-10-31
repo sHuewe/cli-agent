@@ -7,9 +7,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from .admin_config import load_admin_config
-from .config import default_config_file, load_config
-from .knowledge_vector import build_index, db_path, source_root
+from cli_agent.settings.admin_config import load_admin_config
+from cli_agent.settings.config import default_config_file, load_config
+from cli_agent.context.knowledge_vector import build_index, db_path, source_root
 
 
 async def _run_index(config_file):

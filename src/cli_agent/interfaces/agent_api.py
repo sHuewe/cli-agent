@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from .web_ui import WebUiApprovalBroker
+from cli_agent.interfaces.web_ui import WebUiApprovalBroker
 
 API_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -219,7 +219,7 @@ class AgentSession:
                         if finished.agui:
                             self.agui_messages.append({"id": message_id, "role": "assistant", "content": answer})
                         if self.output_target is not None:
-                            from .file_context import is_local_agent_command
+                            from cli_agent.context.file_context import is_local_agent_command
                             if not is_local_agent_command(run.prompt):
                                 try:
                                     self.output_target.write_text(answer)
@@ -248,7 +248,7 @@ class AgentSession:
                         self._pending_frontend = None
                         self._pending_frontend_thread_id = None
                     except Exception as exc:
-                        from .ag_ui_frontend_tools import FrontendToolHandoff
+                        from cli_agent.interfaces.ag_ui_frontend_tools import FrontendToolHandoff
                         if isinstance(exc, FrontendToolHandoff) and run.agui:
                             yielded = self._run
                             if yielded is None or yielded.done:
@@ -996,7 +996,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         Optional cli-agent configuration is deliberately kept on separate
         endpoints. AG-UI peers need no cli-agent-specific run or approval API.
         """
-        from .ag_ui_protocol import parse_run_input, encode_sse
+        from cli_agent.interfaces.ag_ui_protocol import parse_run_input, encode_sse
         try:
             async with checked_json(request) as body:
                 # Application-specific control envelope on the existing AG-UI
@@ -1071,12 +1071,12 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         ) >= MAX_CONCURRENT_BROWSER_RUNS:
             return error(429, "Maximal vier parallele Web-UI-Läufe erlaubt.")
 
-        from .ag_ui_frontend_tools import (
+        from cli_agent.interfaces.ag_ui_frontend_tools import (
             normalize_frontend_tools, checked_frontend_results,
             history_for_model,
         )
-        from .evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
-        from .artifact_publication import PUBLISH_TOOL_NAME
+        from cli_agent.state.evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
+        from cli_agent.platform.artifact_publication import PUBLISH_TOOL_NAME
         # Internal agent tools are not routed MCP tools and are deliberately
         # omitted from tool_states_snapshot(). Frontend clients must never
         # shadow them, even before any external tool has been enabled.
@@ -1379,7 +1379,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         return JSONResponse({"text": session.agent.token_usage_text()})
 
     def browser_security_headers(response: Response) -> Response:
-        from .web_ui import _security_headers
+        from cli_agent.interfaces.web_ui import _security_headers
         response = _security_headers(response)
         # The API-backed browser makes same-origin fetch requests only.
         response.headers["Content-Security-Policy"] = (
@@ -1388,20 +1388,20 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         return response
 
     async def ui_index(_request: Request) -> Response:
-        from .web_ui import INDEX_HTML
+        from cli_agent.interfaces.web_ui import INDEX_HTML
         return browser_security_headers(HTMLResponse(INDEX_HTML))
 
     async def ui_css(_request: Request) -> Response:
-        from .web_ui import APP_CSS
+        from cli_agent.interfaces.web_ui import APP_CSS
         return browser_security_headers(PlainTextResponse(APP_CSS, media_type="text/css"))
 
     async def ui_js(_request: Request) -> Response:
-        from .web_ui_api import API_APP_JS
+        from cli_agent.interfaces.web_ui_api import API_APP_JS
         return browser_security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
 
     async def ui_bootstrap(request: Request) -> Response:
         assert ui is not None
-        from .web_ui_sessions import SessionOccupiedError
+        from cli_agent.interfaces.web_ui_sessions import SessionOccupiedError
         registry = ui["registry"]
         try:
             async with checked_json(request) as body:
@@ -1440,7 +1440,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
 
     async def ui_session_new(_request: Request) -> Response:
         assert ui is not None
-        from .web_ui_sessions import SessionOccupiedError
+        from cli_agent.interfaces.web_ui_sessions import SessionOccupiedError
         registry = ui["registry"]
         try:
             session = await service.create()
@@ -1459,7 +1459,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
 
     async def ui_session_ticket(request: Request) -> Response:
         assert ui is not None
-        from .web_ui_sessions import SessionOccupiedError
+        from cli_agent.interfaces.web_ui_sessions import SessionOccupiedError
         try:
             ticket = ui["registry"].invitation(request.path_params["session_id"])
         except KeyError:
@@ -1518,7 +1518,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             return error(400, str(exc))
 
     async def ui_render(request: Request) -> Response:
-        from .web_ui import _render_markdown
+        from cli_agent.interfaces.web_ui import _render_markdown
         try:
             async with checked_json(request) as body:
                 if set(body) != {"text"} or not isinstance(body["text"], str):
@@ -1532,7 +1532,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
     async def ui_command(request: Request) -> Response:
         """CLI-only commands are intentionally outside the AG-UI contract."""
         assert ui is not None
-        from .web_ui import _web_ui_command_prompt
+        from cli_agent.interfaces.web_ui import _web_ui_command_prompt
         try:
             async with checked_json(request) as body:
                 if (set(body) - {"session_id", "command", "argument"}
@@ -1668,17 +1668,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_service(args: argparse.Namespace) -> AgentApiService:
-    from .admin_config import load_admin_config
-    from .config import McpServerConfig, default_config_file, load_config
-    from .execution import (
+    from cli_agent.settings.admin_config import load_admin_config
+    from cli_agent.settings.config import McpServerConfig, default_config_file, load_config
+    from cli_agent.platform.execution import (
         apply_workspace_access_override, apply_data_override,
         apply_named_mcp_overrides, build_preapproval_callback,
         resolve_excluded_paths,
     )
-    from .file_context import ContextFileCliAgent
-    from .model_factory import create_model_client
-    from .os_operations import Workspace
-    from .logging_setup import configure_logging
+    from cli_agent.context.file_context import ContextFileCliAgent
+    from cli_agent.models.model_factory import create_model_client
+    from cli_agent.platform.os_operations import Workspace
+    from cli_agent.platform.logging_setup import configure_logging
 
     if not 1 <= args.port <= 65535:
         raise ValueError("Port muss im Bereich 1–65535 liegen.")

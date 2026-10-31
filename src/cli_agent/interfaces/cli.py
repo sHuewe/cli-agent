@@ -11,17 +11,17 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from . import __version__
-from .admin_config import AdminConfig, default_admin_config_file, load_admin_config
-from .agent import CliAgent
-from .approval_display import approval_arguments as _approval_arguments
-from .config import AppConfig, McpServerConfig, default_config_file, load_config
-from .file_context import (
+from cli_agent import __version__
+from cli_agent.settings.admin_config import AdminConfig, default_admin_config_file, load_admin_config
+from cli_agent.runtime.agent import CliAgent
+from cli_agent.interfaces.approval_display import approval_arguments as _approval_arguments
+from cli_agent.settings.config import AppConfig, McpServerConfig, default_config_file, load_config
+from cli_agent.context.file_context import (
     ContextFileCliAgent as WebContextCliAgent,
     is_local_agent_command,
     prepare_file_options,
 )
-from .execution import (
+from cli_agent.platform.execution import (
     ExecutionDependencies,
     OneShotRunOptions,
     apply_model_override,
@@ -34,18 +34,18 @@ from .execution import (
     run_once,
     resolve_excluded_paths,
 )
-from .logging_setup import configure_logging, process_log_file
-from .mcp_contracts import tool_contract_fingerprint
-from .model_factory import create_model_client
-from .prompt_template import PromptTemplate, parse_variable_assignments
-from .terminal_output import sanitize_terminal_text
-from .workspace_access import normalize_workspace_access, workspace_access_allows
-from .os_operations import Workspace
+from cli_agent.platform.logging_setup import configure_logging, process_log_file
+from cli_agent.security.mcp_contracts import tool_contract_fingerprint
+from cli_agent.models.model_factory import create_model_client
+from cli_agent.models.prompt_template import PromptTemplate, parse_variable_assignments
+from cli_agent.interfaces.terminal_output import sanitize_terminal_text
+from cli_agent.platform.workspace_access import normalize_workspace_access, workspace_access_allows
+from cli_agent.platform.os_operations import Workspace
 
 OS_MCP_SERVER_NAME = "os"
 DATA_MCP_SERVER_NAME = "data"
 REDACTED_CONFIG_VALUE = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"
-logger = logging.getLogger("cli_agent.cli")
+logger = logging.getLogger("cli_agent.interfaces.cli")
 
 
 async def _show_mcp_user_message(
@@ -669,7 +669,7 @@ async def run(args: argparse.Namespace) -> None:
 
     web_ui = bool(getattr(args, "with_web_ui", False))
     if web_ui:
-        from .web_ui import ensure_web_ui_available
+        from cli_agent.interfaces.web_ui import ensure_web_ui_available
         ensure_web_ui_available()
     approval_callback = build_approval_callback(
         getattr(args, "approve_tool", ())
@@ -682,7 +682,7 @@ async def run(args: argparse.Namespace) -> None:
         )
 
     if web_ui:
-        from .web_ui_api import run_web_ui_via_api
+        from cli_agent.interfaces.web_ui_api import run_web_ui_via_api
         await run_web_ui_via_api(
             args=args,
             config=config,

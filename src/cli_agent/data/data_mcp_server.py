@@ -13,12 +13,12 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 from pydantic import Field
 
-from .mcp_path_policy import read_path_policy
-from .config import McpServerConfig, default_config_file, load_config
-from .data_operations import DataOperationError, DataOperations, MAX_DATA_ROWS, MAX_SAMPLE_ROWS
-from .dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
-from .logging_setup import configure_logging
-from .os_operations import AllowedPath, Workspace, WorkspaceError
+from cli_agent.security.mcp_path_policy import read_path_policy
+from cli_agent.settings.config import McpServerConfig, default_config_file, load_config
+from cli_agent.data.data_operations import DataOperationError, DataOperations, MAX_DATA_ROWS, MAX_SAMPLE_ROWS
+from cli_agent.data.dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
+from cli_agent.platform.logging_setup import configure_logging
+from cli_agent.platform.os_operations import AllowedPath, Workspace, WorkspaceError
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ def create_server(
         # path-only tools or legacy inline alternatives in this mode.
         return mcp
 
-    from .data_result_metadata import (
+    from cli_agent.data.data_result_metadata import (
         SCALAR_ENCODING, _artifact_value, structured_table_result,
         structured_tables_result,
     )
@@ -204,10 +204,10 @@ def create_server(
                 "scalar_encoding": SCALAR_ENCODING,
             }, ensure_ascii=False, allow_nan=False)
         else:
-            from .data_markdown import render_markdown_table
+            from cli_agent.data.data_markdown import render_markdown_table
             content = render_markdown_table(columns, rows)
         from mcp.types import TextContent
-        from .mcp_result_artifacts import ONLY_METADATA_TO_LLM_KEY, METADATA_FOR_LLM_KEY
+        from cli_agent.security.mcp_result_artifacts import ONLY_METADATA_TO_LLM_KEY, METADATA_FOR_LLM_KEY
         return CallToolResult(
             content=[TextContent(type="text", text="Exportdatei als Session-Artefakt vorbereitet.")],
             structuredContent={"export_content": content},
@@ -352,7 +352,7 @@ def create_server(
 
     if access in {"read", "write"}:
         if getattr(operations, "workspace", None) is not None:
-            from .dataframe_operations import DataFrameOperations
+            from cli_agent.data.dataframe_operations import DataFrameOperations
 
             frames = DataFrameOperations(operations)
 

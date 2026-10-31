@@ -8,9 +8,9 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from .mcp_contracts import validate_tool_contract_fingerprint
-from .network_policy import LOCAL_HOSTS, NetworkConfig
-from .workspace_access import is_reserved_workspace_environment_name
+from cli_agent.security.mcp_contracts import validate_tool_contract_fingerprint
+from cli_agent.security.network_policy import LOCAL_HOSTS, NetworkConfig
+from cli_agent.platform.workspace_access import is_reserved_workspace_environment_name
 
 
 def _normalize_mcp_url(value: str, *, section: str) -> str:

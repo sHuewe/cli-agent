@@ -10,9 +10,9 @@ import asyncio
 from pathlib import Path
 from typing import Sequence
 
-from .admin_config import load_admin_config
-from .config import VectorKnowledgeConfig
-from .knowledge_vector import build_index, update_index
+from cli_agent.settings.admin_config import load_admin_config
+from cli_agent.settings.config import VectorKnowledgeConfig
+from cli_agent.context.knowledge_vector import build_index, update_index
 
 
 def build_parser() -> argparse.ArgumentParser:

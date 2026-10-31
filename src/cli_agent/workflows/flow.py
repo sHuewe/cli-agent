@@ -16,11 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Callable
 
-from . import __version__
-from .cli import _show_mcp_user_message, approve_tool_call
-from .admin_config import AdminConfig, load_admin_config
-from .config import AppConfig, default_config_file, load_config
-from .execution import (
+from cli_agent import __version__
+from cli_agent.interfaces.cli import _show_mcp_user_message, approve_tool_call
+from cli_agent.settings.admin_config import AdminConfig, load_admin_config
+from cli_agent.settings.config import AppConfig, default_config_file, load_config
+from cli_agent.platform.execution import (
     ApprovalCallback,
     ExecutionDependencies,
     ConversationRunOptions,
@@ -31,23 +31,23 @@ from .execution import (
     run_conversation,
     run_once,
 )
-from .file_context import (
+from cli_agent.context.file_context import (
     is_local_agent_command,
     prepare_file_options,
     prepare_output_target,
     prepare_prompt_file,
     read_existing_output_text,
 )
-from .flow_json_operations import transform_json
-from .flow_json_validation import validate_okf_plan, build_okf_manifest
-from .flow_filesystem_operations import inventory_directory, MAX_INVENTORY_ENTRIES, _workspace_directory
-from .flow_json_grouping import group_assigned_items, verify_assigned_coverage
-from .filesystem_security import path_entry_is_symlink_or_reparse
-from .logging_setup import configure_logging
-from .model import ModelRetryPolicy
-from .prompt_template import PromptTemplate
-from .terminal_output import sanitize_terminal_text
-from .agent_types import UserMessageCallback
+from cli_agent.workflows.flow_json_operations import transform_json
+from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest
+from cli_agent.workflows.flow_filesystem_operations import inventory_directory, MAX_INVENTORY_ENTRIES, _workspace_directory
+from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
+from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
+from cli_agent.platform.logging_setup import configure_logging
+from cli_agent.models.model import ModelRetryPolicy
+from cli_agent.models.prompt_template import PromptTemplate
+from cli_agent.interfaces.terminal_output import sanitize_terminal_text
+from cli_agent.state.agent_types import UserMessageCallback
 
 @dataclass
 class _FlowDiagnosticState:
