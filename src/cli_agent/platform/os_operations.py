@@ -10,12 +10,12 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 
-from cli_agent.config import McpServerConfig
-from cli_agent.filesystem_security import (
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.security.filesystem_security import (
     path_entry_is_symlink_or_reparse,
     regular_file_has_multiple_links,
 )
-from cli_agent.pdf_text import PdfTextError, read_pdf_text
+from cli_agent.context.pdf_text import PdfTextError, read_pdf_text
 
 TEXT_SUFFIXES = frozenset(
     {

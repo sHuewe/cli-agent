@@ -6,28 +6,28 @@ import logging
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
-from cli_agent.admin_config import AdminConfig, _normalize_mcp_url, load_admin_config
-from cli_agent.config import (
+from cli_agent.settings.admin_config import AdminConfig, _normalize_mcp_url, load_admin_config
+from cli_agent.settings.config import (
     AppConfig,
     McpServerConfig,
     default_config_file,
     load_config,
 )
-from cli_agent.file_context import (
+from cli_agent.context.file_context import (
     ContextFileCliAgent,
     FileContext,
     OutputTarget,
     is_local_agent_command,
     prepare_file_options,
 )
-from cli_agent.logging_setup import configure_logging
-from cli_agent.model import ModelRetryPolicy, RetryingModelClient
-from cli_agent.model_factory import create_model_client
-from cli_agent.workspace_access import normalize_workspace_access, workspace_access_allows
+from cli_agent.platform.logging_setup import configure_logging
+from cli_agent.models.model import ModelRetryPolicy, RetryingModelClient
+from cli_agent.models.model_factory import create_model_client
+from cli_agent.platform.workspace_access import normalize_workspace_access, workspace_access_allows
 
 OS_MCP_SERVER_NAME = "os"
 DATA_MCP_SERVER_NAME = "data"
-logger = logging.getLogger("cli_agent.execution")
+logger = logging.getLogger("cli_agent.platform.execution")
 ApprovalCallback = Callable[
     [str, dict[str, object]],
     Awaitable[bool | str],
@@ -176,7 +176,7 @@ def os_mcp_server_config(
         command="{python}",
         args=(
             "-m",
-            "cli_agent.os_mcp_server",
+            "cli_agent.platform.os_mcp_server",
             "--project-directory",
             "{workspace_directory}",
             "--config-file",
@@ -221,7 +221,7 @@ def data_mcp_server_config(
         command="{python}",
         args=(
             "-m",
-            "cli_agent.data_mcp_server",
+            "cli_agent.data.data_mcp_server",
             "--project-directory",
             "{workspace_directory}",
             "--config-file",

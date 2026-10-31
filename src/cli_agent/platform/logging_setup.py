@@ -9,7 +9,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import BinaryIO
 
-from cli_agent.config import LoggingConfig
+from cli_agent.settings.config import LoggingConfig
 
 
 class _FileLock:
