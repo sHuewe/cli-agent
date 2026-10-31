@@ -2141,7 +2141,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
     )
 
 
-from cli_agent.workflows.flow_json_operations import _JsonNumber, _json_dumps_preserving_numbers
+from cli_agent.workflows.flow_json_operations import _JsonNumber, _json_dump_string, _json_dumps_preserving_numbers
 
 
 def _lookup(
