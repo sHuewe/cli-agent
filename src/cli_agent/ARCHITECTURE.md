@@ -32,6 +32,7 @@ The diagram shows conceptual responsibilities rather than a strict Python import
 - [`data/`](data/README.md): deterministic structured data operations and result metadata.
 - [`security/`](security/README.md): filesystem/network security, MCP limits and schema validation worker.
 - [`interfaces/`](interfaces/README.md): Web UI, AG-UI, sessions and terminal display.
+- [`platform/`](platform/README.md): filesystem operations, execution support, local commands, artifact publication and logging.
 - `okf_mcp_server/`: existing OKF repository, server and workspace package.
 
 ## Stable entry points and integration adapters
