@@ -11,6 +11,7 @@ from .evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
 
 START_SUB_RUN = "agent__start_sub_run"
 MAX_SUB_RUN_TOOLS = 200
+SUB_RUN_SOFT_TOOL_LIMIT = 120
 MAX_SUB_RUNS_PER_TASK = 10
 SUB_RUN_TOOL = {
     "type": "function",
@@ -24,7 +25,10 @@ SUB_RUN_TOOL = {
             "steps or the entire user request in one call. Define a concrete "
             "goal, clear exclusions and verifiable output, while leaving "
             "tool strategy to the delegated agent. Consider delegation EARLY "
-            "for meaningful multi-tool analysis. The coordinator keeps "
+            "for meaningful multi-tool analysis. Estimate fan-out before "
+            "delegating: target roughly 20-50 calls per work package and split "
+            "unbounded per-event or per-row loops into separate steps. "
+            "The coordinator keeps "
             "planning, verification and final synthesis. The delegated agent "
             "should normally store "
             "at least one verified finding using agent__add_evidence and return "
@@ -212,6 +216,7 @@ async def execute_sub_run(
         )
     run_id = "sub-" + uuid.uuid4().hex[:12]
     local = EvidenceState()
+    local._sub_run_inherited_ids = set(ids)
     # The child has no plan. Its evidence tool schemas must not advertise
     # coordinator plan-step metadata, even after dynamic tool refreshes.
     local._sub_run_no_plan = True
