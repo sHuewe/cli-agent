@@ -919,3 +919,25 @@ async def test_explicit_cancel_stops_only_matching_run_and_preserves_session():
             assert service.sessions[session.id] is session
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_close_immediately_after_run_cancel_does_not_deadlock():
+    entered = asyncio.Event()
+
+    class SlowAgent(AgUiAgent):
+        async def ask(self, prompt):
+            entered.set()
+            await asyncio.sleep(60)
+
+    service = AgentApiService(lambda session: SlowAgent(session))
+    session = await service.resolve_agui_thread("close-during-cancel")
+    try:
+        session.submit("slow", thread_id="close-during-cancel",
+                       run_id="close-run", agui=True)
+        await asyncio.wait_for(entered.wait(), 2)
+        session.cancel_run(thread_id="close-during-cancel", run_id="close-run")
+        await asyncio.wait_for(session.close(), 2)
+        assert session._closed
+    finally:
+        await asyncio.wait_for(service.shutdown(), 2)
