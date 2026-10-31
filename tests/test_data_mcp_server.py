@@ -9,16 +9,16 @@ from types import SimpleNamespace
 from mcp.server.fastmcp.tools.base import Tool
 import pytest
 
-from cli_agent import data_mcp_server
-from cli_agent.agent_knowledge import tool_result_text
-from cli_agent.config import McpServerConfig
-from cli_agent.data_operations import DataOperationError, DataOperations
-from cli_agent.mcp_result_artifacts import (
+from cli_agent.data import data_mcp_server
+from cli_agent.context.agent_knowledge import tool_result_text
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.data.data_operations import DataOperationError, DataOperations
+from cli_agent.security.mcp_result_artifacts import (
     METADATA_FOR_LLM_KEY,
     ONLY_METADATA_TO_LLM_KEY,
     McpResultArtifacts,
 )
-from cli_agent.os_operations import AllowedPath, Workspace
+from cli_agent.platform.os_operations import AllowedPath, Workspace
 
 
 class FakeFastMCP:
