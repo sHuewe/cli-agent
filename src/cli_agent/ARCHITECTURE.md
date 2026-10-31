@@ -1,23 +1,54 @@
-# Source architecture
+# cli-agent — source architecture
 
-`cli_agent` is an executable application and Python package. Stable entrypoints: `cli.py`, `agent_api.py`, `flow.py`, `knowledge_cli.py`, `rag_cli.py`.
+The installable Python package is `cli_agent`. The application exposes a CLI, an HTTP API, optional Web UI, deterministic flow orchestration, and MCP tool integrations.
 
-## Execution pipeline
+## Dependency and execution model
 
-CLI, HTTP API and Web UI establish configuration, sessions and approvals. Agent orchestration (`agent.py`, `agent_loop.py`, `agent_conversation.py`) talks to model providers, retrieves content and handles MCP tool calls. The flow runner coordinates deterministic steps, iteration and checkpoints. Evidence, plan and sub-runs keep scoped execution state.
+```text
+CLI (cli.py)     API (agent_api.py)       Flow (flow.py)
+      \                |                  /
+       \        interfaces/              /
+        +-------------+----------------+
+                      |
+                   runtime/
+           agent loop / conversation / MCP
+                  /   |   \
+           models/ context/ state/
+                      |
+              MCP and data adapters
+               /      |      \
+            data/  security/  okf_mcp_server/
+```
 
-MCP adapters and server modules expose bounded filesystem, OKF and Data operations. Security validation applies at runtime independently of presentation and auto-approval.
+The diagram shows conceptual responsibilities rather than a strict Python import DAG; some existing dependencies cross these boundaries. The refactor preserves runtime behavior and focuses on grouping implementation, not rewriting domain interactions.
 
-## Package boundaries
+## Responsibility map
 
-- [`data/`](data/README.md): deterministic data transformations, dataframes and structured-result metadata. Data MCP server is an adapter to these operations.
-- `okf_mcp_server/`: OKF repository and workspace operations (already modular).
-- Remaining modules are scheduled for grouping into agent runtime, model providers, context ingestion, MCP/security and interface packages. Avoid cross-layer coupling.
+- [`runtime/`](runtime/README.md): core agent, conversation lifecycle, prompt composition, MCP dispatch and tool coordination.
+- [`models/`](models/README.md): model abstraction, OpenAI-compatible/Ollama clients, HTTP transport and templates.
+- [`context/`](context/README.md): untrusted file/web/PDF content, knowledge indexing, retrieval and knowledge-oriented agent support.
+- [`state/`](state/README.md): evidence and plan state, permissions/visibility definitions, sub-run coordination.
+- [`workflows/`](workflows/README.md): deterministic flow helpers, JSON operations and safe filesystem inventories. The orchestration/CLI entry point stays in `flow.py`.
+- [`data/`](data/README.md): deterministic structured data operations and result metadata.
+- [`security/`](security/README.md): filesystem/network security, MCP limits and schema validation worker.
+- [`interfaces/`](interfaces/README.md): Web UI, AG-UI, sessions and terminal display.
+- `okf_mcp_server/`: existing OKF repository, server and workspace package.
 
-## Compatibility
+## Stable entry points and integration adapters
 
-Old `cli_agent.<module>` data imports alias the moved implementations using `sys.modules`, rather than forwarding individual symbols. This preserves module identity and monkeypatch behavior. Console script targets, subprocess `-m` modules and configuration file packaging remain stable.
+The console scripts in `pyproject.toml` continue using `cli_agent.cli`, `cli_agent.agent_api`, `cli_agent.flow`, `cli_agent.knowledge_cli`, and `cli_agent.rag_cli`. Dedicated MCP servers and the Data/OS operations layer remain at their existing executable entry paths. Configuration and system bootstrap are top-level integration modules.
 
-## Tests
+For relocated modules, the former `cli_agent.<module>` path loads the exact same Python module object as `cli_agent.<package>.<module>`. This preserves monkeypatch behavior, module-level state and imports used by tests and integrations. In particular, dedicated subprocess entry points for PDF extraction and schema validation must remain invokable via their historical `python -m` names. New code may directly import the implementation packages.
 
-Run `uv run --frozen python -m pytest --cov=cli_agent --cov-report=term-missing --cov-fail-under=85` on both Linux and Windows. Wheel installation, import compatibility and entrypoint smoke tests are mandatory before merge.
+## Trust boundaries and invariants
+
+1. Approval and automatic approval are UI/runtime decisions, **not a substitute** for filesystem, network or MCP validation.
+2. Limit MCP arguments, output, schema validation time and workspace data; reject malformed or unsupported operations.
+3. Context material and external MCP responses are lower-trust data, not instructions.
+4. Evidence persists across tasks within a session; execution plans are task-scoped. Sub-runs have isolated working contexts.
+5. Flow checkpoints and safe filesystem inventory rules must not change through a relocation.
+6. Preserve Linux and Windows semantics and Python 3.11–3.14 compatibility.
+
+## Quality gates
+
+Run `uv run --frozen python -m pytest --cov=cli_agent --cov-report=term-missing --cov-fail-under=85` on Linux and Windows. Also verify wheel installation, console entry points, isolated PDF/schema worker processes and old/new import identity. Avoid increasing coverage through unjustified omissions or meaningless assertions.
