@@ -124,7 +124,7 @@ def test_arguments_are_bounded_before_schema_worker(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("request", "error"),
+    ("worker_request", "error"),
     [
         (None, "Ungültige"),
         ({"operation": "validate_schemas", "schemas": {}}, "Ungültige"),
@@ -137,9 +137,9 @@ def test_arguments_are_bounded_before_schema_worker(monkeypatch):
         ({"operation": "unknown"}, "Unbekannte"),
     ],
 )
-def test_schema_worker_rejects_malformed_protocol_requests(request, error):
+def test_schema_worker_rejects_malformed_protocol_requests(worker_request, error):
     with pytest.raises(RuntimeError, match=error):
-        guard._handle_request(request)
+        guard._handle_request(worker_request)
 
 
 def test_schema_worker_accepts_schema_batch():
