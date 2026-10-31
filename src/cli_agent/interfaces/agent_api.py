@@ -1,5 +1,22 @@
-"""HTTP, AG-UI and browser routes for the local agent service."""
-from cli_agent.interfaces.agent_api_sessions import *
+"""Local authenticated HTTP and AG-UI routes; session lifecycle lives separately."""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import secrets
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Callable
+
+from cli_agent.interfaces.agent_api_sessions import (
+    API_HOST, DEFAULT_PORT, MAX_SESSIONS, MAX_CONCURRENT_BROWSER_RUNS,
+    MAX_PROMPT_BYTES, MAX_EVENTS_PER_RUN, REPLAY_EVENTS_PER_TOOL,
+    REPLAY_LIFECYCLE_ALLOWANCE, MAX_JSON_BYTES, BROWSER_SSE_CONNECT_TIMEOUT,
+    _artifact_thread_token, _artifact_thread_from_token,
+    AgentRun, AgentSession, AgentApiService,
+)
 
 def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) -> Any:
     """Create a loopback-only ASGI app. Browser mode shares the same API service."""
