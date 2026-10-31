@@ -91,9 +91,9 @@ def test_sub_run_guidance_encourages_early_single_task_delegation(tmp_path: Path
         tool["function"]["name"] for tool in agent._model_tools()
     ]
     prompt = agent._build_system_prompt()
-    assert "höchstens EINEN klar eingegrenzten Planschritt" in prompt
-    assert "häufig nur einen TEIL davon" in prompt
-    assert "unterteile ihn in mehrere kleinere" in prompt
+    assert "bearbeitet nur EIN begrenztes Ergebnis innerhalb EINES" in prompt
+    assert "Planschritts, oft nur einen kleinen Teil davon" in prompt
+    assert "unterteile ihn in kleinere, einzeln überprüfbare" in prompt
     assert "mehrerer Planschritte" in prompt
     assert "klare Grenzen" in prompt
     assert "Hauptagent bleibt Koordinator und Prüfer" in prompt
