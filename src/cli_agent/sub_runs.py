@@ -304,9 +304,21 @@ async def execute_sub_run(
     from .agent_conversation import MAX_RESPONSE_FORMAT_REPAIRS
     previous = agent._evidence_state
     previous_coordinator = getattr(agent, "_coordinator_evidence_state", None)
+    # Delegated requests must not latch the owning session's context-limit
+    # state. Shallow-copy the client so model configuration and usage_history
+    # remain shared, but per-request diagnostics and the limit latch do not.
+    parent_model_client = agent.model_client
+    child_model_client = copy.copy(parent_model_client)
+    if hasattr(child_model_client, "_context_limit_reached"):
+        child_model_client._context_limit_reached = False
+    if hasattr(child_model_client, "last_usage"):
+        child_model_client.last_usage = None
+    if hasattr(child_model_client, "last_finish_reason"):
+        child_model_client.last_finish_reason = None
     agent._coordinator_evidence_state = previous
     try:
         agent._evidence_state = local
+        agent.model_client = child_model_client
         run_state = ModelLoopRunState()
         reserved_tool_call_ids = {
             call["id"]
@@ -408,6 +420,7 @@ async def execute_sub_run(
         record["status"] = "failed"
         raise
     finally:
+        agent.model_client = parent_model_client
         agent._evidence_state = previous
         if previous_coordinator is None:
             agent.__dict__.pop("_coordinator_evidence_state", None)
