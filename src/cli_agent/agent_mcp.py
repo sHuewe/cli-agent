@@ -35,6 +35,9 @@ from .workspace_access import (
 
 logger = logging.getLogger("cli_agent.agent_mcp")
 
+# Notification delivery is best-effort and must not delay a cancelled run.
+MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS = 0.5
+
 
 class CancellableClientSession(ClientSession):
     """Send MCP cancellation notifications for locally cancelled requests.
@@ -59,7 +62,7 @@ class CancellableClientSession(ClientSession):
             )
         except asyncio.CancelledError:
             import anyio
-            with anyio.CancelScope(shield=True):
+            with anyio.move_on_after(MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS, shield=True) as scope:
                 try:
                     await self.send_notification(
                         types.ClientNotification(types.CancelledNotification(
@@ -75,6 +78,8 @@ class CancellableClientSession(ClientSession):
                         "mcp_cancel_notification_failed request_id=%s",
                         request_id, exc_info=True,
                     )
+            if scope.cancel_called:
+                logger.warning("mcp_cancel_notification_timeout request_id=%s", request_id)
             raise
 
 
