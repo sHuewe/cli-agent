@@ -148,6 +148,7 @@ class AgentSession:
         self._queue: asyncio.Queue[AgentRun | None] = asyncio.Queue(maxsize=1)
         self._task: asyncio.Task[None] | None = None
         self._closed = False
+        self._closing = False
         self._busy = False
         self._run: AgentRun | None = None
         self.agent: Any = None
@@ -229,6 +230,8 @@ class AgentSession:
                         finished.emit({"type": "RUN_FINISHED", "threadId": finished.thread_id, "runId": finished.id,
                                        **({"outcome": {"type": "success"}} if finished.agui else {})})
                     except asyncio.CancelledError:
+                        if self._closing:
+                            raise
                         if not run.cancel_requested and not (
                             self._run is not None and self._run.cancel_requested
                         ):
@@ -655,6 +658,7 @@ class AgentSession:
     async def close(self) -> None:
         if self._closed and (self._task is None or self._task.done()):
             return
+        self._closing = True
         self.broker.deny_all()
         task = self._task
         if task is not None:
