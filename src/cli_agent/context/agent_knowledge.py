@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from cli_agent.agent_knowledge_support import (  # noqa: F401
+from cli_agent.context.agent_knowledge_support import (  # noqa: F401
     EXPECTED_KNOWLEDGE_TOOLS,
     KnowledgeCallKey,
     _knowledge_allowed_calls,

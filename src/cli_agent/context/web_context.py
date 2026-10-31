@@ -12,8 +12,8 @@ from urllib.parse import parse_qs, quote, unquote, unquote_plus, urlencode, urlj
 import httpx
 from trafilatura import bare_extraction
 
-from cli_agent.admin_config import WebProviderConfig
-from cli_agent.network_policy import validate_http_url
+from cli_agent.settings.admin_config import WebProviderConfig
+from cli_agent.security.network_policy import validate_http_url
 
 MAX_WEB_RESPONSE_BYTES = 5_000_000
 MAX_WEB_CONTEXT_CHARS = 500_000

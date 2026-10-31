@@ -7,10 +7,10 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
-from cli_agent.filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
-from cli_agent.local_commands import classify_local_command
-from cli_agent.os_operations import Workspace
-from cli_agent.web_context_agent import WebContextCliAgent
+from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
+from cli_agent.platform.local_commands import classify_local_command
+from cli_agent.platform.os_operations import Workspace
+from cli_agent.context.web_context_agent import WebContextCliAgent
 
 
 # Deliberately far above today's normal prompt sizes. This is a last-resort

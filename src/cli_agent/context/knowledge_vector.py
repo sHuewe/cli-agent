@@ -20,11 +20,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from cli_agent.config import VectorKnowledgeConfig
-from cli_agent.filesystem_security import regular_file_has_multiple_links
-from cli_agent.model_factory import _validate_api_key_env
-from cli_agent.config import ModelConfig
-from cli_agent.network_policy import NetworkConfig, validate_http_url
+from cli_agent.settings.config import VectorKnowledgeConfig
+from cli_agent.security.filesystem_security import regular_file_has_multiple_links
+from cli_agent.models.model_factory import _validate_api_key_env
+from cli_agent.settings.config import ModelConfig
+from cli_agent.security.network_policy import NetworkConfig, validate_http_url
 
 MAX_SOURCE_BYTES = 2_560_000
 MAX_SEARCH_QUERY = 2000
@@ -71,7 +71,7 @@ def _source_file(root: Path, relative: str) -> Path:
 
 def _read_verified_okf_bytes(root: Path, relative: str, *, max_read_bytes: int) -> bytes:
     """Read an OKF Concept through the shared bounded descriptor reader."""
-    from cli_agent.filesystem_security import read_bounded_regular_file
+    from cli_agent.security.filesystem_security import read_bounded_regular_file
     validated = _source_file(root, relative)
     identity = validated.stat()
     return read_bounded_regular_file(

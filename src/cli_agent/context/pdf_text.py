@@ -207,7 +207,7 @@ def read_pdf_text(
             raise PdfTextError(f"PDF überschreitet das Leselimit von {MAX_PDF_BYTES} Bytes.")
         result = subprocess.run(
             [
-                sys.executable, "-m", "cli_agent.pdf_text",
+                sys.executable, "-m", "cli_agent.context.pdf_text",
                 "--max-pages", str(page_limit),
                 *([] if start_page is None else ["--start-page", str(start_page)]),
                 *([] if end_page is None else ["--end-page", str(end_page)]),

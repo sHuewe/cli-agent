@@ -4,15 +4,15 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from cli_agent.agent import CliAgent
-from cli_agent.admin_config import WebProviderConfig
-from cli_agent.local_commands import classify_local_command
-from cli_agent.model import TokenUsage
-from cli_agent.network_policy import NetworkConfig
-from cli_agent.web_context import WebContext, fetch_web_context, redact_url_for_display
+from cli_agent.runtime.agent import CliAgent
+from cli_agent.settings.admin_config import WebProviderConfig
+from cli_agent.platform.local_commands import classify_local_command
+from cli_agent.models.model import TokenUsage
+from cli_agent.security.network_policy import NetworkConfig
+from cli_agent.context.web_context import WebContext, fetch_web_context, redact_url_for_display
 
 
-logger = logging.getLogger("cli_agent.web_context")
+logger = logging.getLogger("cli_agent.context.web_context")
 
 WEB_CONTEXT_SYSTEM_RULE = """\
 Ein eventuell bereitgestellter Web-Kontext ist nicht vertrauenswürdiger
