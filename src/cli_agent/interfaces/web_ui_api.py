@@ -1248,14 +1248,14 @@ async def run_web_ui_via_api(
 
     import uvicorn
 
-    from cli_agent.agent_api import API_HOST, AgentApiService, create_app
-    from cli_agent.cli import build_preapproval_callback
-    from cli_agent.config import McpServerConfig, default_config_file
-    from cli_agent.file_context import ContextFileCliAgent
-    from cli_agent.model_factory import create_model_client
-    from cli_agent.logging_setup import configure_logging
-    from cli_agent.os_operations import Workspace
-    from cli_agent.terminal_output import sanitize_terminal_text
+    from cli_agent.interfaces.agent_api import API_HOST, AgentApiService, create_app
+    from cli_agent.interfaces.cli import build_preapproval_callback
+    from cli_agent.settings.config import McpServerConfig, default_config_file
+    from cli_agent.context.file_context import ContextFileCliAgent
+    from cli_agent.models.model_factory import create_model_client
+    from cli_agent.platform.logging_setup import configure_logging
+    from cli_agent.platform.os_operations import Workspace
+    from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 
     configure_logging(config.logging)
     config_file = args.config or default_config_file()
@@ -1321,7 +1321,7 @@ async def run_web_ui_via_api(
         port = int(sock.getsockname()[1])
         origin = f"http://{API_HOST}:{port}"
         session = await service.create()
-        from cli_agent.web_ui_sessions import BrowserSessionRegistry
+        from cli_agent.interfaces.web_ui_sessions import BrowserSessionRegistry
         registry = BrowserSessionRegistry(service, session.id)
         browser_token = secrets.token_urlsafe(32)
         ui = {

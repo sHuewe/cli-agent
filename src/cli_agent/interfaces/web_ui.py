@@ -12,10 +12,10 @@ from typing import Any
 
 from markdown_it import MarkdownIt
 
-from cli_agent.approval_display import approval_arguments
-from cli_agent.local_commands import classify_local_command
-from cli_agent.os_operations import Workspace, WorkspaceError
-from cli_agent.terminal_output import sanitize_terminal_text
+from cli_agent.interfaces.approval_display import approval_arguments
+from cli_agent.platform.local_commands import classify_local_command
+from cli_agent.platform.os_operations import Workspace, WorkspaceError
+from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 
 MAX_APPROVAL_DIFF_BYTES = 128_000
 MAX_APPROVAL_DIFF_CHARS = 30_000
@@ -451,7 +451,7 @@ class WebUiApprovalBroker:
             return {"diff_error": "Ungültige Schreibargumente."}, None
         try:
             _target, original = _preview_target_bytes(self._workspace, path)
-            from cli_agent.os_operations import _decode_workspace_text
+            from cli_agent.platform.os_operations import _decode_workspace_text
             before, encoding = (
                 _decode_workspace_text(original) if original is not None else ("", "utf-8")
             )

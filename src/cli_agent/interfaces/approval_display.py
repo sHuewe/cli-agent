@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from cli_agent.terminal_output import sanitize_terminal_text
+from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 
 MAX_APPROVAL_STRING_CHARS = 2_000
 MAX_APPROVAL_STRING_HEAD = 1_500
