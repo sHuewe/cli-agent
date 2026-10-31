@@ -39,34 +39,45 @@ def _make_flow(root):
 def test_nested_foreach_restart_reuses_committed_output_after_model_failure(tmp_path, monkeypatch):
     path = _make_flow(tmp_path)
     calls = []
-    fail_once = {"enabled": True}
+    phase = {"name": "initial"}
 
     async def run_once(options, *, dependencies=None):
         calls.append(options.prompt)
         if options.prompt == "discover":
+            ids = ["one"] if phase["name"] == "initial" else ["one", "two"]
             return SimpleNamespace(
-                answer='{"items":[{"id":"one"},{"id":"two"}]}',
+                answer=json.dumps({"items": [{"id": name} for name in ids]}),
                 web_context_statuses=(),
             )
         if options.prompt == "work":
-            if fail_once["enabled"] and calls.count("work") == 2:
+            if phase["name"] == "interrupted":
                 raise RuntimeError("network failure before second checkpoint")
             return SimpleNamespace(
-                answer=json.dumps({"value": calls.count("work")}),
-                web_context_statuses=(),
+                answer='{"status":"ok"}', web_context_statuses=(),
             )
         raise AssertionError("unexpected model request")
 
     monkeypatch.setattr(flow_module, "run_once", run_once)
-    flow = flow_module.load_flow(path, workspace=tmp_path)
-    with pytest.raises(RuntimeError, match="network failure"):
-        asyncio.run(flow_module.run_flow(flow, workspace=tmp_path))
+    asyncio.run(flow_module.run_flow(
+        flow_module.load_flow(path, workspace=tmp_path), workspace=tmp_path,
+    ))
     first = tmp_path / "work" / "one.json"
     second = tmp_path / "work" / "two.json"
-    assert first.is_file()
-    assert not second.exists()
+    assert calls == ["discover", "work"]
+    assert first.is_file() and not second.exists()
     first_content = first.read_bytes()
-    fail_once["enabled"] = False
+
+    phase["name"] = "interrupted"
+    calls.clear()
+    with pytest.raises(RuntimeError, match="network failure"):
+        asyncio.run(flow_module.run_flow(
+            flow_module.load_flow(path, workspace=tmp_path), workspace=tmp_path,
+        ))
+    assert calls == ["discover", "work"]
+    assert first.read_bytes() == first_content
+    assert not second.exists()
+
+    phase["name"] = "restarted"
     calls.clear()
     asyncio.run(flow_module.run_flow(
         flow_module.load_flow(path, workspace=tmp_path), workspace=tmp_path,
@@ -74,4 +85,4 @@ def test_nested_foreach_restart_reuses_committed_output_after_model_failure(tmp_
     assert calls == ["discover", "work"]
     assert first.read_bytes() == first_content
     assert second.is_file()
-    assert json.loads(second.read_text(encoding="utf-8"))["value"] == 1
+    assert json.loads(second.read_text(encoding="utf-8")) == {"status": "ok"}
