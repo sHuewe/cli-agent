@@ -595,7 +595,6 @@ API_APP_JS = """
       reader.releaseLock();
       runId = null;
       emit({type: "busy", value: interrupted});
-      stopRun.hidden = true;
     }
   }
 
