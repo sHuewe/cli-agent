@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 import uuid
 from typing import Any
@@ -260,7 +261,10 @@ async def execute_sub_run(
         if name in agent._active_servers
     ]
     reference_context = agent._build_reference_context_message(knowledge=None)
-    parts = [BASE_SYSTEM_PROMPT]
+    parts = [
+        BASE_SYSTEM_PROMPT,
+        agent._format_current_time(datetime.datetime.now(datetime.UTC)),
+    ]
     if names:
         parts.append(MCP_TOOL_SYSTEM_RULE)
         if agent._main_tools_need_workspace_context(names):
