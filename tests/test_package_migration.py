@@ -31,6 +31,18 @@ MOVED_MODULES = {
         "evidence_state", "evidence_tools", "sub_runs",
         "agent_permissions", "agent_types", "message_visibility",
     ),
+    "runtime": (
+        "agent", "agent_conversation", "agent_loop", "agent_mcp",
+        "agent_tool_calls", "agent_prompts",
+    ),
+    "interfaces": (
+        "web_ui", "web_ui_api", "web_ui_sessions", "ag_ui_protocol",
+        "ag_ui_frontend_tools", "approval_display", "terminal_output",
+    ),
+    "platform": (
+        "os_operations", "execution", "local_commands",
+        "logging_setup", "workspace_access", "artifact_publication",
+    ),
     "workflows": (
         "flow_filesystem_operations", "flow_filesystem_windows",
         "flow_json_grouping", "flow_json_operations", "flow_json_validation",
