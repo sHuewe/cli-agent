@@ -91,18 +91,22 @@ def test_sub_run_guidance_encourages_early_single_task_delegation(tmp_path: Path
         tool["function"]["name"] for tool in agent._model_tools()
     ]
     prompt = agent._build_system_prompt()
-    assert "EINE abgegrenzte Teiluntersuchung" in prompt
-    assert "viele Toolaufrufe" in prompt
-    assert "starte den Sub-Run vor ihrer" in prompt
-    assert "einzelne Toolabfragen" in prompt
-    assert "Hauptagent ist Koordinator und Prüfer" in prompt
-    assert "ein klar definiertes Arbeitspaket" in prompt
-    assert "vollständige operative Delegation ist möglich" in prompt
+    assert "höchstens EINEN klar eingegrenzten Planschritt" in prompt
+    assert "häufig nur einen TEIL davon" in prompt
+    assert "unterteile ihn in mehrere kleinere" in prompt
+    assert "mehrerer Planschritte" in prompt
+    assert "klare Grenzen" in prompt
+    assert "Hauptagent bleibt Koordinator und Prüfer" in prompt
+    assert "begründeten Ausnahmefällen" in prompt
+    assert "früh" in prompt.lower()
 
     description = SUB_RUN_TOOL["function"]["description"]
-    assert "even one" in description
-    assert "coordinator context" in description
+    assert "ONE coordinator plan step" in description
+    assert "smaller part of that step" in description
+    assert "Split large plan steps" in description
     assert "additional model" in description
+    step = SUB_RUN_TOOL["function"]["parameters"]["properties"]["plan_step_id"]
+    assert "several smaller delegated work packages" in step["description"]
 
 
 
