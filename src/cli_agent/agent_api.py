@@ -79,6 +79,7 @@ class AgentRun:
     resume_approval: tuple[str, str] | None = None
     frontend_results: list[dict[str, Any]] | None = None
     subscriber_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    cancel_requested: bool = False
     answer: str | None = None
     error: str | None = None
     events: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
@@ -178,6 +179,10 @@ class AgentSession:
                     run = await self._queue.get()
                     if run is None:
                         return
+                    if run.cancel_requested:
+                        self._finish_cancelled(run)
+                        self._busy = False
+                        continue
                     run.status = "running"
                     run.emit({"type": "RUN_STARTED", "threadId": run.thread_id, "runId": run.id,
                               **({"protocolVersion": "1.0"} if run.agui else {})})
@@ -223,6 +228,22 @@ class AgentSession:
                         finished.status = "completed"
                         finished.emit({"type": "RUN_FINISHED", "threadId": finished.thread_id, "runId": finished.id,
                                        **({"outcome": {"type": "success"}} if finished.agui else {})})
+                    except asyncio.CancelledError:
+                        if not run.cancel_requested and not (
+                            self._run is not None and self._run.cancel_requested
+                        ):
+                            raise
+                        # The MCP AsyncExitStack belongs to this long-lived task.
+                        # Handle a run cancellation HERE rather than terminating
+                        # the worker (which would close every MCP connection).
+                        worker = asyncio.current_task()
+                        if worker is not None:
+                            while worker.cancelling():
+                                worker.uncancel()
+                        active = self._run if run.agui else run
+                        self._finish_cancelled(active if active is not None else run)
+                        self._pending_frontend = None
+                        self._pending_frontend_thread_id = None
                     except Exception as exc:
                         from .ag_ui_frontend_tools import FrontendToolHandoff
                         if isinstance(exc, FrontendToolHandoff) and run.agui:
@@ -410,6 +431,42 @@ class AgentSession:
         self._run = run
         self._queue.put_nowait(run)
         return run
+
+    @staticmethod
+    def _finish_cancelled(run: AgentRun) -> None:
+        previous = run.status
+        run.status = "cancelled"
+        if previous == "interrupted":
+            # The approval segment has already emitted RUN_FINISHED and its
+            # SSE consumer has gone away. Do not emit a second terminal event.
+            run.changed.set()
+        elif run.agui:
+            run.emit({
+                "type": "RUN_FINISHED", "threadId": run.thread_id,
+                "runId": run.id, "outcome": {"type": "cancelled"},
+            })
+        else:
+            run.emit({"type": "RUN_ERROR", "message": "Agentenlauf abgebrochen."})
+
+    def cancel_run(self, *, thread_id: str, run_id: str) -> None:
+        """Cancel only the currently active run, never the session itself.
+
+        A queued run is skipped by the worker. An executing run is interrupted
+        at the next await; the worker catches CancelledError inside the agent
+        context so that the session and its MCP transports remain available.
+        """
+        run = self._run
+        if (
+            self._closed or not self._busy or run is None
+            or run.id != run_id or run.thread_id != thread_id
+            or run.status not in {"queued", "running", "interrupted"}
+        ):
+            raise RuntimeError("Kein passender aktiver Agentenlauf.")
+        if run.cancel_requested:
+            return
+        run.cancel_requested = True
+        if run.status != "queued" and self._task is not None:
+            self._task.cancel()
 
     def run(self, run_id: str) -> AgentRun | None:
         return self._run if self._run is not None and self._run.id == run_id else None
@@ -936,14 +993,48 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         endpoints. AG-UI peers need no cli-agent-specific run or approval API.
         """
         from .ag_ui_protocol import parse_run_input, encode_sse
-        accept = request.headers.get("accept", "")
-        if "text/event-stream" not in accept and "*/*" not in accept:
-            return error(406, "Accept: text/event-stream erforderlich.")
         try:
             async with checked_json(request) as body:
+                # Application-specific control envelope on the existing AG-UI
+                # URL. Normal RunAgentInput POSTs remain strictly AG-UI 1.0.
+                if body.get("action") == "cancel":
+                    if (
+                        set(body) != {"action", "threadId", "runId"}
+                        or not all(
+                            isinstance(body.get(key), str)
+                            and 0 < len(body[key]) <= 128
+                            for key in ("threadId", "runId")
+                        )
+                    ):
+                        return error(400, "Ungültige Cancel-Anfrage.")
+                    thread_id, run_id = body["threadId"], body["runId"]
+                    browser_cancel = (
+                        ui is not None
+                        and request.headers.get("x-cli-agent-browser") == "1"
+                    )
+                    if browser_cancel:
+                        assert ui is not None
+                        if not ui["registry"].is_owner(
+                            thread_id, request.headers.get("x-cli-agent-lease")
+                        ):
+                            return error(403, "Keine gültige Browser-Bindung.")
+                        target = service.sessions.get(thread_id)
+                    else:
+                        session_id = service._agui_threads.get(thread_id)
+                        target = service.sessions.get(session_id) if session_id else None
+                    if target is None:
+                        return error(404, "AG-UI-Thread nicht gefunden.")
+                    try:
+                        target.cancel_run(thread_id=thread_id, run_id=run_id)
+                    except RuntimeError as exc:
+                        return error(409, str(exc))
+                    return JSONResponse({"status": "cancelling"}, status_code=202)
                 incoming = parse_run_input(body)
         except ValueError as exc:
             return error(400, str(exc))
+        accept = request.headers.get("accept", "")
+        if "text/event-stream" not in accept and "*/*" not in accept:
+            return error(406, "Accept: text/event-stream erforderlich.")
 
         browser = (
             ui is not None and request.headers.get("x-cli-agent-browser") == "1"
