@@ -144,6 +144,33 @@ def test_sub_run_invalid_source_refs_receive_actionable_feedback() -> None:
 
 
 
+def test_sub_run_prompt_includes_coordinator_session_timezone(monkeypatch, tmp_path: Path) -> None:
+    import asyncio
+    from cli_agent.sub_runs import execute_sub_run
+    import cli_agent.agent_loop as agent_loop
+
+    seen = []
+
+    async def fake_run_model_loop(agent, *, messages, **kwargs):
+        seen.append(messages[0]["content"])
+        return json.dumps({
+            "status": "partial", "summary": "No finding yet.",
+            "evidence_ids": [], "confidence": "low", "uncertainties": [],
+        })
+
+    monkeypatch.setattr(agent_loop, "run_model_loop", fake_run_model_loop)
+    agent = _agent(tmp_path, agent_timezone="Europe/Berlin")
+    agent._sub_runs = []
+    asyncio.run(execute_sub_run(agent, {
+        "task": "Check a local-day electricity series using the session timezone.",
+    }))
+    assert len(seen) == 1
+    assert agent.agent_timezone == "Europe/Berlin"
+    assert agent._format_current_time(datetime.now(timezone.utc))[:20] in seen[0]
+    assert "(Europe/Berlin)" in seen[0]
+    assert "Aktuelle lokale Zeit:" in seen[0]
+
+
 def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch) -> None:
     import asyncio
     import json
