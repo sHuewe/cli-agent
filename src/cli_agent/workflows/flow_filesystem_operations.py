@@ -11,7 +11,7 @@ import stat
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from cli_agent.filesystem_security import path_entry_is_symlink_or_reparse
+from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 
 
 MAX_INVENTORY_ENTRIES = 10_000
@@ -115,7 +115,7 @@ def inventory_directory(
     examined = 0
 
     if os.name == "nt":
-        from cli_agent.flow_filesystem_windows import inventory_windows
+        from cli_agent.workflows.flow_filesystem_windows import inventory_windows
         result = inventory_windows(
             root, start, suffixes=suffixes, excluded=excluded,
             recursive=recursive, max_entries=max_entries,
