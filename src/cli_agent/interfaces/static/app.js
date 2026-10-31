@@ -160,7 +160,7 @@
       const url = part.source.value;
       const filename = part.metadata?.filename;
       if (typeof url !== "string" ||
-          !/^\\/threads\\/~[A-Za-z0-9_-]+\\/artifacts\\/[a-f0-9]{32}$/.test(url) ||
+          !/^\/threads\/~[A-Za-z0-9_-]+\/artifacts\/[a-f0-9]{32}$/.test(url) ||
           typeof filename !== "string" ||
           !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(filename)) continue;
       published = true;
@@ -531,11 +531,11 @@
         if (next.done) break;
         buffer += decoder.decode(next.value, {stream: true});
         let pos;
-        while ((pos = buffer.indexOf("\\n\\n")) !== -1) {
+        while ((pos = buffer.indexOf("\n\n")) !== -1) {
           const block = buffer.slice(0, pos);
           buffer = buffer.slice(pos + 2);
-          const data = block.split("\\n").filter(line => line.startsWith("data:"))
-            .map(line => line.slice(5).trimStart()).join("\\n");
+          const data = block.split("\n").filter(line => line.startsWith("data:"))
+            .map(line => line.slice(5).trimStart()).join("\n");
           if (!data) continue;
           const event = JSON.parse(data);
           if (event.type === "TEXT_MESSAGE_CONTENT") answer += String(event.delta || "");
@@ -832,7 +832,7 @@
       const content = String(payload.content || "");
       addMessage(
         "mcp-user",
-        source ? "MCP (" + source + ")\\n" + content : content
+        source ? "MCP (" + source + ")\n" + content : content
       );
       return;
     }
@@ -869,9 +869,9 @@
       approvalDiffSection.classList.toggle("hidden", typeof payload.diff !== "string");
       approvalDiff.replaceChildren();
       if (typeof payload.diff === "string") {
-        for (const line of payload.diff.split("\\n")) {
+        for (const line of payload.diff.split("\n")) {
           const span = document.createElement("span");
-          span.textContent = line + "\\n";
+          span.textContent = line + "\n";
           if (line.startsWith("+") && !line.startsWith("+++")) span.style.color = "#288a42";
           if (line.startsWith("-") && !line.startsWith("---")) span.style.color = "#d24747";
           approvalDiff.append(span);
