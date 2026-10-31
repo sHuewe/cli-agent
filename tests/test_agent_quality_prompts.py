@@ -331,6 +331,50 @@ def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
     assert agent._sub_runs[0]["status"] == "failed"
 
 
+def test_sub_run_context_limit_does_not_poison_coordinator(monkeypatch, tmp_path: Path) -> None:
+    import asyncio
+    import pytest
+    from cli_agent.model import ContextLimitReachedError
+    from cli_agent.sub_runs import execute_sub_run
+    import cli_agent.agent_loop as agent_loop
+
+    class Client:
+        def __init__(self):
+            self._context_limit_reached = False
+            self.last_usage = "coordinator-usage"
+            self.last_finish_reason = "stop"
+            self.usage_history = []
+
+    coordinator = _agent(tmp_path)
+    coordinator.model_client = Client()
+    coordinator._sub_runs = []
+    original = coordinator.model_client
+    children = []
+
+    async def fake_run_model_loop(agent, **kwargs):
+        child = agent.model_client
+        children.append(child)
+        assert child is not original
+        assert child._context_limit_reached is False
+        assert child.last_usage is None
+        child._context_limit_reached = True
+        child.last_usage = "child-usage"
+        child.usage_history.append("child-usage")
+        raise ContextLimitReachedError("Child context full")
+
+    monkeypatch.setattr(agent_loop, "run_model_loop", fake_run_model_loop)
+    with pytest.raises(ContextLimitReachedError, match="Child context full"):
+        asyncio.run(execute_sub_run(coordinator, {
+            "task": "Investigate enough events to exceed the delegated context window.",
+        }))
+    assert coordinator.model_client is original
+    assert original._context_limit_reached is False
+    assert original.last_usage == "coordinator-usage"
+    assert original.last_finish_reason == "stop"
+    assert original.usage_history == ["child-usage"]
+    assert coordinator._sub_runs[0]["status"] == "failed"
+
+
 def test_completed_sub_run_requires_new_source_backed_evidence() -> None:
     import pytest
     from cli_agent.sub_runs import SUB_RUN_RULES, validate_sub_result
