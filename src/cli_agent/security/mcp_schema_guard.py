@@ -213,7 +213,7 @@ class _PersistentSchemaWorker:
 
         try:
             process = subprocess.Popen(
-                [sys.executable, "-m", "cli_agent.mcp_schema_guard"],
+                [sys.executable, "-m", "cli_agent.security.mcp_schema_guard"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -455,7 +455,7 @@ def validate_mcp_server_metadata(
 ) -> None:
     """Apply cheap parent-side limits, then validate schemas in the worker."""
 
-    from cli_agent import mcp_limits
+    from cli_agent.security import mcp_limits
 
     if instructions is not None and len(instructions) > mcp_limits.MAX_MCP_INSTRUCTIONS_CHARS:
         raise RuntimeError(
@@ -589,7 +589,7 @@ def _worker_schema_validator(
 ):
     """Return a checked validator from the worker-local bounded LRU cache."""
 
-    from cli_agent import mcp_limits
+    from cli_agent.security import mcp_limits
 
     schema_text = _canonical_schema_text(schema)
     digest = hashlib.sha256(schema_text.encode("utf-8")).hexdigest()
@@ -607,7 +607,7 @@ def _worker_schema_validator(
 
 
 def _handle_request(request: Any) -> dict[str, Any]:
-    from cli_agent import mcp_limits
+    from cli_agent.security import mcp_limits
 
     if not isinstance(request, dict):
         raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")

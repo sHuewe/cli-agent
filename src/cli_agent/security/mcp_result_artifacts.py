@@ -15,11 +15,11 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from cli_agent.config import McpServerConfig
-from cli_agent.os_operations import AllowedPath, Workspace, WorkspaceError
-from cli_agent.filesystem_security import path_entry_is_symlink_or_reparse
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.platform.os_operations import AllowedPath, Workspace, WorkspaceError
+from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 
-logger = logging.getLogger("cli_agent.mcp_result_artifacts")
+logger = logging.getLogger("cli_agent.security.mcp_result_artifacts")
 
 ONLY_METADATA_TO_LLM_KEY = "io.github.shuewe.cli-agent/only_metadata_to_llm"
 METADATA_FOR_LLM_KEY = "io.github.shuewe.cli-agent/meta_data_for_llm"
