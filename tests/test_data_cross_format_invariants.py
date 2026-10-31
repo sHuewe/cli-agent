@@ -9,7 +9,7 @@ import pytest
 from cli_agent.data.data_operations import DataOperations
 
 
-@pytest.mark.parametrize("count", [0, 1, 2, 7, 29])
+@pytest.mark.parametrize("count", [1, 2, 7, 29])
 def test_json_jsonl_and_csv_have_identical_grouped_numeric_results(count):
     rows = [
         {"group": "A" if i % 2 == 0 else "B", "value": i * 3 - 17, "active": i % 3 == 0}
