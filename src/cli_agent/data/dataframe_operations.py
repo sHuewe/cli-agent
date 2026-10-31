@@ -18,9 +18,9 @@ from typing import Literal
 import pandas as pd
 from mcp.types import CallToolResult
 
-from cli_agent.data_operations import DataOperationError, DataOperations, _scalar_identity, _validate_column_name
-from cli_agent.dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
-from cli_agent.data_result_metadata import structured_table_result
+from cli_agent.data.data_operations import DataOperationError, DataOperations, _scalar_identity, _validate_column_name
+from cli_agent.data.dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
+from cli_agent.data.data_result_metadata import structured_table_result
 
 MAX_FRAME_ROWS = 100_000
 MAX_FRAME_COLUMNS = 100

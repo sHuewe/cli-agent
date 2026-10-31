@@ -9,18 +9,18 @@ from decimal import Decimal, DecimalException, localcontext
 from pathlib import Path
 from typing import Any
 
-from cli_agent.data_calculator import (
+from cli_agent.data.data_calculator import (
     DECIMAL_PRECISION,
     CalculatorError,
     calculate_expression,
 )
-from cli_agent.data_markdown import (
+from cli_agent.data.data_markdown import (
     MarkdownTableError,
     extract_markdown_tables,
     render_markdown_table,
 )
-from cli_agent.data_result_metadata import DECIMAL_SCALAR_KEY, SCALAR_ENCODING
-from cli_agent.os_operations import Workspace, WorkspaceError
+from cli_agent.data.data_result_metadata import DECIMAL_SCALAR_KEY, SCALAR_ENCODING
+from cli_agent.platform.os_operations import Workspace, WorkspaceError
 
 DATA_SUFFIXES = frozenset({".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".md", ".markdown"})
 DATA_FORMATS = frozenset({"csv", "tsv", "json", "jsonl", "ndjson", "markdown"})

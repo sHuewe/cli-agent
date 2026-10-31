@@ -11,7 +11,7 @@ from typing import Mapping, Sequence
 
 from mcp.types import CallToolResult, TextContent
 
-from cli_agent.mcp_result_artifacts import METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY
+from cli_agent.security.mcp_result_artifacts import METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY
 
 
 # This is a metadata/preview budget, not a switch for inline table results.
