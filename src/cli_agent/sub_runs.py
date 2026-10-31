@@ -9,6 +9,25 @@ from typing import Any
 
 from .evidence_state import EvidenceState
 from .evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
+from .model import RetryingModelClient
+
+def _isolated_sub_run_client(client: Any) -> Any:
+    """Copy per-run model state without losing the configured retry adapter."""
+    if isinstance(client, RetryingModelClient):
+        delegated = copy.copy(client)
+        delegated._client = _isolated_sub_run_client(client._client)
+        return delegated
+    delegated = copy.copy(client)
+    if "_context_limit_reached" in vars(delegated):
+        delegated._context_limit_reached = False
+    if "last_usage" in vars(delegated):
+        delegated.last_usage = None
+    if "last_finish_reason" in vars(delegated):
+        delegated.last_finish_reason = None
+    # Keep usage_history shared for aggregate usage reporting; do not share
+    # the mutable last-response diagnostics or context-limit latch.
+    return delegated
+
 
 START_SUB_RUN = "agent__start_sub_run"
 MAX_SUB_RUN_TOOLS = 200
@@ -304,17 +323,10 @@ async def execute_sub_run(
     from .agent_conversation import MAX_RESPONSE_FORMAT_REPAIRS
     previous = agent._evidence_state
     previous_coordinator = getattr(agent, "_coordinator_evidence_state", None)
-    # Delegated requests must not latch the owning session's context-limit
-    # state. Shallow-copy the client so model configuration and usage_history
-    # remain shared, but per-request diagnostics and the limit latch do not.
+    # Isolate model state even when the provider is wrapped in the retry
+    # adapter, whose usage diagnostics are read-only forwarding properties.
     parent_model_client = agent.model_client
-    child_model_client = copy.copy(parent_model_client)
-    if hasattr(child_model_client, "_context_limit_reached"):
-        child_model_client._context_limit_reached = False
-    if hasattr(child_model_client, "last_usage"):
-        child_model_client.last_usage = None
-    if hasattr(child_model_client, "last_finish_reason"):
-        child_model_client.last_finish_reason = None
+    child_model_client = _isolated_sub_run_client(parent_model_client)
     agent._coordinator_evidence_state = previous
     try:
         agent._evidence_state = local
