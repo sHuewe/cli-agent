@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.flow import _foreach_items, load_flow
+from cli_agent.workflows.flow import _foreach_items, load_flow
 
 
 def _flow(tmp_path: Path, selector: str = "input.structure.folders"):

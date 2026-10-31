@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-import cli_agent.file_context as file_context_module
-from cli_agent.file_context import (
+import cli_agent.context.file_context as file_context_module
+from cli_agent.context.file_context import (
     FILE_CONTEXT_SYSTEM_RULE,
     ContextFileCliAgent,
     FileContext,

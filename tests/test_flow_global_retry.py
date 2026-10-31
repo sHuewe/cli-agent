@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.flow import load_flow
+from cli_agent.workflows.flow import load_flow
 
 
 def _write_prompt(tmp_path: Path) -> None:

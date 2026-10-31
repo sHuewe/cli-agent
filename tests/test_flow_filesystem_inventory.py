@@ -1,8 +1,8 @@
 from pathlib import Path
 import pytest
 import os
-from cli_agent.flow_filesystem_operations import inventory_directory
-from cli_agent.flow import load_flow
+from cli_agent.workflows.flow_filesystem_operations import inventory_directory
+from cli_agent.workflows.flow import load_flow
 
 @pytest.mark.skipif(os.name not in {"posix", "nt"}, reason="secure inventory requires POSIX or Windows")
 def test_inventory_filtered_and_sorted(tmp_path):

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from cli_agent.flow_json_grouping import group_assigned_items, verify_assigned_coverage
+from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
 
 
 def dump(value: object) -> str:
@@ -179,7 +179,7 @@ def test_split_paths_avoid_reserved_topic_paths() -> None:
 def test_max_concepts_checked_before_appending_each_part(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cli_agent.flow_json_grouping as grouping
+    import cli_agent.workflows.flow_json_grouping as grouping
 
     routes, assignments, topics = source_fixture()
     for i in range(10):
