@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import cli_agent.mcp_limits as limits
+import cli_agent.security.mcp_limits as limits
 
 
 def tool(*, name="search", description="", schema=None):

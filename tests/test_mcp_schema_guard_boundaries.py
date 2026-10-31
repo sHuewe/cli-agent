@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from cli_agent import mcp_schema_guard as guard
+from cli_agent.security import mcp_schema_guard as guard
 
 
 @pytest.mark.parametrize(

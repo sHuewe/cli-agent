@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import cli_agent.mcp_limits as limits
-import cli_agent.mcp_schema_guard as guard
+import cli_agent.security.mcp_limits as limits
+import cli_agent.security.mcp_schema_guard as guard
 
 
 def setup_function() -> None:

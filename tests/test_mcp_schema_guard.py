@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import cli_agent.mcp_schema_guard as guard
+import cli_agent.security.mcp_schema_guard as guard
 
 
 def tool(*, name="search", description="", schema=None):
@@ -218,7 +218,7 @@ def test_parent_structure_limits_apply_before_worker(
 def test_metadata_preserves_existing_size_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cli_agent.mcp_limits as limits
+    import cli_agent.security.mcp_limits as limits
 
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_DESCRIPTION_CHARS", 5)
     with pytest.raises(RuntimeError, match="zu große Beschreibung"):

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.mcp_path_policy import read_path_policy, write_path_policy
+from cli_agent.security.mcp_path_policy import read_path_policy, write_path_policy
 
 
 def test_manifest_round_trip_for_many_windows_like_paths(tmp_path: Path) -> None:
@@ -53,7 +53,7 @@ def test_manifest_invalid_data_fails_closed(
 def test_manifest_rejects_oversize_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cli_agent.mcp_path_policy as module
+    import cli_agent.security.mcp_path_policy as module
 
     manifest = tmp_path / "large.json"
     manifest.write_text(json.dumps({

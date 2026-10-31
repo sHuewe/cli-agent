@@ -5,10 +5,10 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from types import SimpleNamespace
 
-from cli_agent.admin_config import McpPolicy, TrustedMcpServer, load_admin_config
-from cli_agent.agent import CliAgent
-from cli_agent.config import McpServerConfig
-from cli_agent.ollama import OllamaClient
+from cli_agent.settings.admin_config import McpPolicy, TrustedMcpServer, load_admin_config
+from cli_agent.runtime.agent import CliAgent
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.models.ollama import OllamaClient
 
 
 class Session:
