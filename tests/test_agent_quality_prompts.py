@@ -354,6 +354,57 @@ def test_sub_run_evidence_tools_ignore_plan_ids_and_hide_schema_field() -> None:
     assert "Sub-runs have NO local plan" in SUB_RUN_RULES
 
 
+def test_delegation_warns_about_fanout_and_soft_budget(tmp_path: Path) -> None:
+    from cli_agent.sub_runs import SUB_RUN_TOOL, SUB_RUN_SOFT_TOOL_LIMIT
+
+    agent = _agent(tmp_path)
+    agent._active_servers = {"example"}
+    agent._server_tools = {"example": [{"function": {"name": "example__search"}}]}
+    prompt = agent._build_system_prompt()
+    assert "Anzahl Elemente mal Schritte" in prompt
+    assert "20 bis 50 Toolaufrufe" in prompt
+    assert "keine offenen Aufträge" in prompt
+    assert "Estimate fan-out" in SUB_RUN_TOOL["function"]["description"]
+    assert SUB_RUN_SOFT_TOOL_LIMIT == 120
+
+
+def test_sub_run_soft_limit_returns_partial_without_executing_large_batch() -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from cli_agent.agent_loop import ModelLoopRunState, run_model_loop
+    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.config import LoggingConfig
+
+    class Model:
+        async def chat(self, *, messages, tools):
+            return {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call-" + str(i), "type": "function",
+                 "function": {"name": "external__read", "arguments": {}}}
+                for i in range(4)
+            ]}
+
+    evidence = EvidenceState()
+    evidence._sub_run_inherited_ids = {"old"}
+    evidence.register_result("source-call", tool_name="external__read")
+    evidence.add_evidence({"id": "new-finding", "type": "observation",
+                           "statement": "Verified fact", "source_refs": ["S1"]})
+    agent = SimpleNamespace(
+        _evidence_state=evidence, model_client=Model(),
+        logging_config=LoggingConfig(),
+        _dump_context=lambda *a, **k: None,
+    )
+    state = ModelLoopRunState(tool_calls=118)
+    output = asyncio.run(run_model_loop(
+        agent, messages=[{"role": "system", "content": "test"}],
+        tools=[], routes={}, enabled_server_names=set(),
+        max_tool_calls=200, phase="sub", run_state=state,
+    ))
+    result = json.loads(output)
+    assert result["status"] == "partial"
+    assert result["evidence_ids"] == ["new-finding"]
+    assert state.tool_calls == 118
+
+
 def test_prompt_changes_remain_compact() -> None:
     assert len(BASE_SYSTEM_PROMPT) + len(MCP_TOOL_SYSTEM_RULE) <= 850
     assert len(_server_instructions("read")) <= 1_743
