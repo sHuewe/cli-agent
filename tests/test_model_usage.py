@@ -1,8 +1,8 @@
 import pytest
 
-from cli_agent.model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
-from cli_agent.ollama import OllamaClient
-from cli_agent.openai_client import OpenAIClient
+from cli_agent.models.model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
+from cli_agent.models.ollama import OllamaClient
+from cli_agent.models.openai_client import OpenAIClient
 
 
 def test_openai_token_usage_uses_chat_completion_fields() -> None:

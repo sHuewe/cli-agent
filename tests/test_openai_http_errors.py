@@ -5,7 +5,7 @@ import asyncio
 import httpx
 import pytest
 
-from cli_agent.openai_client import (
+from cli_agent.models.openai_client import (
     MAX_HTTP_ERROR_DETAIL_CHARS,
     OpenAIClient,
     OpenAIError,
@@ -50,7 +50,7 @@ def _response(status: int, text: str) -> httpx.Response:
 
 def test_openai_http_status_error_includes_status_and_provider_body(monkeypatch) -> None:
     monkeypatch.setattr(
-        "cli_agent.openai_client.httpx.AsyncClient",
+        "cli_agent.models.openai_client.httpx.AsyncClient",
         RejectingAsyncClient,
     )
     RejectingAsyncClient.response = _response(
@@ -77,7 +77,7 @@ def test_openai_http_status_error_includes_status_and_provider_body(monkeypatch)
 
 def test_openai_http_status_error_without_body_still_reports_status(monkeypatch) -> None:
     monkeypatch.setattr(
-        "cli_agent.openai_client.httpx.AsyncClient",
+        "cli_agent.models.openai_client.httpx.AsyncClient",
         RejectingAsyncClient,
     )
     RejectingAsyncClient.response = _response(429, "")

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from cli_agent.admin_config import ModelCredentialRule
-from cli_agent.config import ModelConfig
-from cli_agent.model_factory import create_model_client
-from cli_agent.network_policy import NetworkConfig
-from cli_agent.openai_client import OpenAIClient
+from cli_agent.settings.admin_config import ModelCredentialRule
+from cli_agent.settings.config import ModelConfig
+from cli_agent.models.model_factory import create_model_client
+from cli_agent.security.network_policy import NetworkConfig
+from cli_agent.models.openai_client import OpenAIClient
 
 
 def test_openai_client_uses_configured_api_key_env_for_localhost(monkeypatch) -> None:

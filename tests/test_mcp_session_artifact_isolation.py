@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.config import McpServerConfig
-from cli_agent.mcp_result_artifacts import McpResultArtifacts
-from cli_agent.os_operations import AllowedPath, Workspace, WorkspaceError
-from cli_agent.mcp_path_policy import read_path_policy, write_path_policy
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.security.mcp_result_artifacts import McpResultArtifacts
+from cli_agent.platform.os_operations import AllowedPath, Workspace, WorkspaceError
+from cli_agent.security.mcp_path_policy import read_path_policy, write_path_policy
 
 
 def _ws(root, allowed=(), protected=(), write=True):
