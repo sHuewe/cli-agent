@@ -378,6 +378,56 @@ def test_sub_run_context_limit_does_not_poison_coordinator(monkeypatch, tmp_path
     assert coordinator._sub_runs[0]["status"] == "failed"
 
 
+def test_retry_wrapped_sub_run_isolates_underlying_context_limit(monkeypatch, tmp_path: Path) -> None:
+    import asyncio
+    import pytest
+    from cli_agent.model import ModelRetryPolicy, RetryingModelClient, ContextLimitReachedError
+    from cli_agent.sub_runs import execute_sub_run
+    import cli_agent.agent_loop as agent_loop
+
+    class Provider:
+        model = "test"
+        base_url = "http://localhost:11434"
+        context_length = 10000
+
+        def __init__(self):
+            self._context_limit_reached = False
+            self.last_usage = "parent-usage"
+            self.last_finish_reason = "stop"
+            self.usage_history = []
+
+    parent_provider = Provider()
+    wrapped = RetryingModelClient(parent_provider, ModelRetryPolicy(max_attempts=2))
+    agent = _agent(tmp_path)
+    agent.model_client = wrapped
+    agent._sub_runs = []
+
+    async def fake_run_model_loop(agent, **kwargs):
+        delegated = agent.model_client
+        assert isinstance(delegated, RetryingModelClient)
+        assert delegated is not wrapped
+        assert delegated._client is not parent_provider
+        assert delegated._policy is wrapped._policy
+        assert delegated._client._context_limit_reached is False
+        assert delegated.last_usage is None
+        delegated._client._context_limit_reached = True
+        delegated._client.last_usage = "child-usage"
+        delegated.usage_history.append("child-usage")
+        raise ContextLimitReachedError("Delegated context exceeded")
+
+    monkeypatch.setattr(agent_loop, "run_model_loop", fake_run_model_loop)
+    with pytest.raises(ContextLimitReachedError, match="Delegated context exceeded"):
+        asyncio.run(execute_sub_run(agent, {
+            "task": "Investigate a large dataset without poisoning the coordinator.",
+        }))
+    assert agent.model_client is wrapped
+    assert parent_provider._context_limit_reached is False
+    assert parent_provider.last_usage == "parent-usage"
+    assert parent_provider.last_finish_reason == "stop"
+    assert parent_provider.usage_history == ["child-usage"]
+    assert agent._sub_runs[0]["status"] == "failed"
+
+
 def test_completed_sub_run_requires_new_source_backed_evidence() -> None:
     import pytest
     from cli_agent.sub_runs import SUB_RUN_RULES, validate_sub_result
