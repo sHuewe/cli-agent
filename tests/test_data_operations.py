@@ -202,7 +202,7 @@ def test_inspect_schema_omits_later_domains_when_total_budget_is_exceeded(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "cli_agent.data.data_operations.MAX_SCHEMA_DISTINCT_TOTAL_CHARS",
+        "cli_agent.data.data_queries.MAX_SCHEMA_DISTINCT_TOTAL_CHARS",
         20,
     )
 
@@ -232,7 +232,7 @@ def test_inspect_schema_drops_distinct_domains_before_columns(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "cli_agent.data.data_operations.MAX_SCHEMA_RESULT_CHARS",
+        "cli_agent.data.data_queries.MAX_SCHEMA_RESULT_CHARS",
         310,
     )
 
@@ -263,7 +263,7 @@ def test_inspect_schema_truncates_columns_when_metadata_exceeds_budget(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "cli_agent.data.data_operations.MAX_SCHEMA_RESULT_CHARS",
+        "cli_agent.data.data_queries.MAX_SCHEMA_RESULT_CHARS",
         240,
     )
 
@@ -461,7 +461,7 @@ def test_oversized_full_result_fails_instead_of_truncating(
         "group,value\na,1\nb,2\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(data_operations, "MAX_FULL_RESULT_BYTES", 25)
+    monkeypatch.setattr("cli_agent.data.data_queries.MAX_FULL_RESULT_BYTES", 25)
     operations = _operations(tmp_path)
     with pytest.raises(DataOperationError, match="zu groß"):
         if aggregate:
