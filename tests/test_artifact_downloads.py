@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.artifact_publication import register_artifact
-from cli_agent.config import McpServerConfig
-from cli_agent.data_mcp_server import create_server
-from cli_agent.mcp_result_artifacts import (
+from cli_agent.platform.artifact_publication import register_artifact
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.data.data_mcp_server import create_server
+from cli_agent.security.mcp_result_artifacts import (
     ArtifactError, McpResultArtifacts, ONLY_METADATA_TO_LLM_KEY, METADATA_FOR_LLM_KEY,
 )
 
@@ -35,7 +35,7 @@ class FakeFastMCP:
 def test_export_returns_only_metadata_to_model_and_preserves_full_file(
     tmp_path: Path, monkeypatch, export_format, expected,
 ):
-    import cli_agent.data_mcp_server as data_server
+    import cli_agent.data.data_mcp_server as data_server
 
     monkeypatch.setattr(data_server, "FastMCP", FakeFastMCP)
     rows = [{"time": "10:00", "value": 11}, {"time": "10:10", "value": 12}]

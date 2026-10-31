@@ -4,9 +4,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from cli_agent.agent import BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE, CliAgent
-from cli_agent.data_mcp_server import _server_instructions
-from cli_agent.ollama import OllamaClient
+from cli_agent.runtime.agent import BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE, CliAgent
+from cli_agent.data.data_mcp_server import _server_instructions
+from cli_agent.models.ollama import OllamaClient
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "agent_quality_timeseries.json"
@@ -80,7 +80,7 @@ def test_data_instructions_reuse_artifacts_and_known_pointers() -> None:
 
 
 def test_sub_run_guidance_encourages_early_single_task_delegation(tmp_path: Path) -> None:
-    from cli_agent.sub_runs import START_SUB_RUN, SUB_RUN_TOOL
+    from cli_agent.state.sub_runs import START_SUB_RUN, SUB_RUN_TOOL
 
     agent = _agent(tmp_path)
     agent._active_servers = {"example"}
@@ -115,7 +115,7 @@ def test_sub_run_guidance_encourages_early_single_task_delegation(tmp_path: Path
 
 
 def test_sub_run_evidence_ids_contract_distinguishes_saved_findings_from_sources() -> None:
-    from cli_agent.sub_runs import SUB_RUN_TOOL
+    from cli_agent.state.sub_runs import SUB_RUN_TOOL
 
     function = SUB_RUN_TOOL["function"]
     field = function["parameters"]["properties"]["evidence_ids"]
@@ -129,8 +129,8 @@ def test_sub_run_invalid_source_refs_receive_actionable_feedback() -> None:
     import asyncio
     from types import SimpleNamespace
     import pytest
-    from cli_agent.evidence_state import EvidenceState
-    from cli_agent.sub_runs import execute_sub_run
+    from cli_agent.state.evidence_state import EvidenceState
+    from cli_agent.state.sub_runs import execute_sub_run
 
     coordinator = SimpleNamespace(_sub_runs=[], _evidence_state=EvidenceState())
     with pytest.raises(ValueError, match="source_refs, keine Evidence-IDs") as error:
@@ -146,8 +146,8 @@ def test_sub_run_invalid_source_refs_receive_actionable_feedback() -> None:
 
 def test_sub_run_prompt_includes_coordinator_session_timezone(monkeypatch, tmp_path: Path) -> None:
     import asyncio
-    from cli_agent.sub_runs import execute_sub_run
-    import cli_agent.agent_loop as agent_loop
+    from cli_agent.state.sub_runs import execute_sub_run
+    import cli_agent.runtime.agent_loop as agent_loop
 
     seen = []
 
@@ -175,9 +175,9 @@ def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch
     import asyncio
     import json
     from types import SimpleNamespace
-    from cli_agent.evidence_state import EvidenceState
-    from cli_agent.sub_runs import MAX_SUB_RUN_TOOLS, execute_sub_run
-    import cli_agent.agent_loop as agent_loop
+    from cli_agent.state.evidence_state import EvidenceState
+    from cli_agent.state.sub_runs import MAX_SUB_RUN_TOOLS, execute_sub_run
+    import cli_agent.runtime.agent_loop as agent_loop
 
     seen = []
 
@@ -206,7 +206,7 @@ def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch
         "task": "Investigate a sufficiently complex and independent work package.",
     }))
     assert MAX_SUB_RUN_TOOLS == 200
-    from cli_agent.sub_runs import MAX_SUB_RUNS_PER_TASK
+    from cli_agent.state.sub_runs import MAX_SUB_RUNS_PER_TASK
     assert MAX_SUB_RUNS_PER_TASK == 10
     assert seen == [(200, "sub")]
     assert result["status"] == "partial"
@@ -216,8 +216,8 @@ def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch
 
 
 def test_delegated_evidence_context_resolves_only_trusted_live_artifacts() -> None:
-    from cli_agent.evidence_state import EvidenceState
-    from cli_agent.sub_runs import _delegated_evidence_context
+    from cli_agent.state.evidence_state import EvidenceState
+    from cli_agent.state.sub_runs import _delegated_evidence_context
 
     state = EvidenceState()
     state.register_result("data-call", tool_name="data__resample_data",
@@ -240,7 +240,7 @@ def test_delegated_evidence_context_resolves_only_trusted_live_artifacts() -> No
 
 
 def test_sub_run_prompt_explains_existing_evidence_artifacts_and_handoff(tmp_path: Path) -> None:
-    from cli_agent.sub_runs import SUB_RUN_RULES, SUB_RUN_TOOL
+    from cli_agent.state.sub_runs import SUB_RUN_RULES, SUB_RUN_TOOL
 
     agent = _agent(tmp_path)
     agent._active_servers = {"example"}
@@ -260,9 +260,9 @@ def test_sub_run_retries_invalid_response_using_same_context_and_budget(monkeypa
     import json
     from types import SimpleNamespace
 
-    from cli_agent.evidence_state import EvidenceState
-    from cli_agent.sub_runs import execute_sub_run
-    import cli_agent.agent_loop as agent_loop
+    from cli_agent.state.evidence_state import EvidenceState
+    from cli_agent.state.sub_runs import execute_sub_run
+    import cli_agent.runtime.agent_loop as agent_loop
 
     seen = []
 
@@ -304,10 +304,10 @@ def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
     from types import SimpleNamespace
     import pytest
 
-    from cli_agent.evidence_state import EvidenceState
-    from cli_agent.sub_runs import execute_sub_run
-    from cli_agent.agent_conversation import MAX_RESPONSE_FORMAT_REPAIRS
-    import cli_agent.agent_loop as agent_loop
+    from cli_agent.state.evidence_state import EvidenceState
+    from cli_agent.state.sub_runs import execute_sub_run
+    from cli_agent.runtime.agent_conversation import MAX_RESPONSE_FORMAT_REPAIRS
+    import cli_agent.runtime.agent_loop as agent_loop
 
     invocations = []
 
@@ -337,9 +337,9 @@ def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
 def test_sub_run_context_limit_does_not_poison_coordinator(monkeypatch, tmp_path: Path) -> None:
     import asyncio
     import pytest
-    from cli_agent.model import ContextLimitReachedError
-    from cli_agent.sub_runs import execute_sub_run
-    import cli_agent.agent_loop as agent_loop
+    from cli_agent.models.model import ContextLimitReachedError
+    from cli_agent.state.sub_runs import execute_sub_run
+    import cli_agent.runtime.agent_loop as agent_loop
 
     class Client:
         def __init__(self):
@@ -381,9 +381,9 @@ def test_sub_run_context_limit_does_not_poison_coordinator(monkeypatch, tmp_path
 def test_retry_wrapped_sub_run_isolates_underlying_context_limit(monkeypatch, tmp_path: Path) -> None:
     import asyncio
     import pytest
-    from cli_agent.model import ModelRetryPolicy, RetryingModelClient, ContextLimitReachedError
-    from cli_agent.sub_runs import execute_sub_run
-    import cli_agent.agent_loop as agent_loop
+    from cli_agent.models.model import ModelRetryPolicy, RetryingModelClient, ContextLimitReachedError
+    from cli_agent.state.sub_runs import execute_sub_run
+    import cli_agent.runtime.agent_loop as agent_loop
 
     class Provider:
         model = "test"
@@ -430,7 +430,7 @@ def test_retry_wrapped_sub_run_isolates_underlying_context_limit(monkeypatch, tm
 
 def test_completed_sub_run_requires_new_source_backed_evidence() -> None:
     import pytest
-    from cli_agent.sub_runs import SUB_RUN_RULES, validate_sub_result
+    from cli_agent.state.sub_runs import SUB_RUN_RULES, validate_sub_result
     assert "agent__add_evidence" in SUB_RUN_RULES
     assert "MUST create at least one new evidence" in SUB_RUN_RULES
     completed = {
@@ -450,8 +450,8 @@ def test_completed_sub_run_requires_new_source_backed_evidence() -> None:
 
 
 def test_sub_run_evidence_tools_ignore_plan_ids_and_hide_schema_field() -> None:
-    from cli_agent.evidence_state import EvidenceState
-    from cli_agent.sub_runs import _delegated_evidence_context, SUB_RUN_RULES
+    from cli_agent.state.evidence_state import EvidenceState
+    from cli_agent.state.sub_runs import _delegated_evidence_context, SUB_RUN_RULES
 
     parent = EvidenceState()
     parent.register_result("call-one", tool_name="sensor")
@@ -486,7 +486,7 @@ def test_sub_run_evidence_tools_ignore_plan_ids_and_hide_schema_field() -> None:
 
 
 def test_delegation_warns_about_fanout_and_soft_budget(tmp_path: Path) -> None:
-    from cli_agent.sub_runs import SUB_RUN_TOOL, SUB_RUN_SOFT_TOOL_LIMIT
+    from cli_agent.state.sub_runs import SUB_RUN_TOOL, SUB_RUN_SOFT_TOOL_LIMIT
 
     agent = _agent(tmp_path)
     agent._active_servers = {"example"}
@@ -502,9 +502,9 @@ def test_delegation_warns_about_fanout_and_soft_budget(tmp_path: Path) -> None:
 def test_sub_run_soft_limit_returns_partial_without_executing_large_batch() -> None:
     import asyncio
     from types import SimpleNamespace
-    from cli_agent.agent_loop import ModelLoopRunState, run_model_loop
-    from cli_agent.evidence_state import EvidenceState
-    from cli_agent.config import LoggingConfig
+    from cli_agent.runtime.agent_loop import ModelLoopRunState, run_model_loop
+    from cli_agent.state.evidence_state import EvidenceState
+    from cli_agent.settings.config import LoggingConfig
 
     class Model:
         async def chat(self, *, messages, tools):

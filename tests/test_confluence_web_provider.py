@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import cli_agent.web_context as web_context_module
-from cli_agent.admin_config import WebProviderConfig, load_admin_config
-from cli_agent.network_policy import NetworkConfig
-from cli_agent.web_context import (
+import cli_agent.context.web_context as web_context_module
+from cli_agent.settings.admin_config import WebProviderConfig, load_admin_config
+from cli_agent.security.network_policy import NetworkConfig
+from cli_agent.context.web_context import (
     WebContext,
     _confluence_api_url,
     _confluence_document,
@@ -17,7 +17,7 @@ from cli_agent.web_context import (
     _provider_matches,
     fetch_web_context,
 )
-from cli_agent.web_context_agent import WebContextCliAgent
+from cli_agent.context.web_context_agent import WebContextCliAgent
 
 
 class RecordingModel:
@@ -258,7 +258,7 @@ def test_agent_forwards_admin_providers_to_web_fetch(
             fetched_at="2026-09-17T10:00:00+00:00",
         )
 
-    monkeypatch.setattr("cli_agent.web_context_agent.fetch_web_context", fake_fetch)
+    monkeypatch.setattr("cli_agent.context.web_context_agent.fetch_web_context", fake_fetch)
     agent = WebContextCliAgent(
         tmp_path,
         RecordingModel(),

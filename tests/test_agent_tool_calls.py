@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import cli_agent.agent_tool_calls as agent_tool_calls_module
-from cli_agent.agent_knowledge import _KnowledgeRunState
-from cli_agent.agent_tool_calls import process_tool_calls
-from cli_agent.config import LoggingConfig, McpServerConfig
+import cli_agent.runtime.agent_tool_calls as agent_tool_calls_module
+from cli_agent.context.agent_knowledge import _KnowledgeRunState
+from cli_agent.runtime.agent_tool_calls import process_tool_calls
+from cli_agent.settings.config import LoggingConfig, McpServerConfig
 
 
 class FakeSession:

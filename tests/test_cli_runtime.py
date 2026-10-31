@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent import cli as cli_module
-from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
-from cli_agent.cli import McpToolInspection
-from cli_agent.config import AppConfig, McpServerConfig, ModelConfig
+from cli_agent.interfaces import cli as cli_module
+from cli_agent.settings.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
+from cli_agent.interfaces.cli import McpToolInspection
+from cli_agent.settings.config import AppConfig, McpServerConfig, ModelConfig
 
 
 def _args(tmp_path: Path, **overrides):

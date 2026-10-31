@@ -9,20 +9,20 @@ from types import SimpleNamespace
 import pytest
 
 from cli_agent import __version__
-from cli_agent import cli as cli_module
-from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
-from cli_agent.cli import (
+from cli_agent.interfaces import cli as cli_module
+from cli_agent.settings.admin_config import AdminConfig, McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
+from cli_agent.interfaces.cli import (
     _approval_arguments,
     apply_mcp_cli_overrides,
     apply_model_cli_override,
     build_approval_callback,
     build_parser,
 )
-from cli_agent.config import AgentConfig, AppConfig, McpServerConfig, ModelConfig
-from cli_agent.mcp_contracts import tool_contract_fingerprint
-from cli_agent.network_policy import NetworkConfig
-from cli_agent.os_mcp_server import resolve_mcp_config
-from cli_agent.terminal_output import sanitize_terminal_text
+from cli_agent.settings.config import AgentConfig, AppConfig, McpServerConfig, ModelConfig
+from cli_agent.security.mcp_contracts import tool_contract_fingerprint
+from cli_agent.security.network_policy import NetworkConfig
+from cli_agent.platform.os_mcp_server import resolve_mcp_config
+from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 
 
 def test_approval_summary_shows_payload_even_for_sensitive_looking_argument_names() -> None:
