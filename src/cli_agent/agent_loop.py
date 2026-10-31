@@ -14,7 +14,7 @@ from .agent_knowledge import (
     _validate_knowledge_selection,
 )
 from .agent_tool_calls import process_tool_calls
-from .sub_runs import START_SUB_RUN, execute_sub_run
+from .sub_runs import START_SUB_RUN, SUB_RUN_SOFT_TOOL_LIMIT, execute_sub_run
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
 from .evidence_state import EvidenceError
@@ -97,11 +97,47 @@ async def run_model_loop(
     require_found_content_after_correction = False
     knowledge_selection_only_mode = False
     selection_only_tool_rejections = 0
+    sub_finalization_rounds = 0
+
+    def partial_sub_result(reason: str) -> str:
+        evidence_state = getattr(agent, "_evidence_state", None)
+        existing = set(getattr(evidence_state, "_sub_run_inherited_ids", set()))
+        new_ids = [
+            item for item in getattr(evidence_state, "evidences", {})
+            if item not in existing
+        ][:16]
+        return json.dumps({
+            "status": "partial",
+            "summary": "Die Teiluntersuchung wurde am weichen Toolbudget beendet.",
+            "evidence_ids": new_ids,
+            "confidence": "low",
+            "uncertainties": [reason],
+        }, ensure_ascii=False)
+
     transient_rejections: list[
         tuple[dict[str, Any], dict[str, Any], dict[str, Any]]
     ] = []
 
     while True:
+        if phase == "sub" and calls >= SUB_RUN_SOFT_TOOL_LIMIT:
+            if sub_finalization_rounds >= 3:
+                return partial_sub_result(
+                    "Abschluss nach wiederholten Versuchen beim weichen Toolbudget."
+                )
+            sub_finalization_rounds += 1
+            if sub_finalization_rounds == 1:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Das weiche Sub-Run-Budget ist erreicht. Beende jetzt "
+                        "die Untersuchung; starte keine weiteren Datenabfragen. "
+                        "Speichere bereits verifizierte wesentliche Ergebnisse "
+                        "falls nötig mit agent__add_evidence und gib danach "
+                        "sofort das vorgeschriebene JSON mit status=partial "
+                        "oder completed und den neuen Evidence-IDs zurück. "
+                        "Beschreibe unerledigte Teile als uncertainties."
+                    ),
+                })
         agent._dump_context(messages, phase=phase)
         try:
             message = await agent.model_client.chat(
@@ -113,7 +149,12 @@ async def run_model_loop(
                 tools=(
                     []
                     if phase == "knowledge" and knowledge_selection_only_mode
-                    else tools
+                    else (
+                        [tool for tool in tools
+                         if tool["function"]["name"] == ADD_EVIDENCE_TOOL_NAME]
+                        if phase == "sub" and calls >= SUB_RUN_SOFT_TOOL_LIMIT
+                        else tools
+                    )
                 ),
             )
             log_model_call_diagnostics(agent.model_client, phase=phase)
@@ -382,6 +423,23 @@ async def run_model_loop(
 
         if tool_calls:
             empty_responses = 0
+        if phase == "sub":
+            allowed_names = {ADD_EVIDENCE_TOOL_NAME}
+            if (calls >= SUB_RUN_SOFT_TOOL_LIMIT
+                    and any((call.get("function") or {}).get("name")
+                            not in allowed_names for call in tool_calls)):
+                return partial_sub_result(
+                    "Modell wollte nach dem weichen Toolbudget weitere "
+                    "Untersuchungstools statt einer Ergebnisübergabe aufrufen."
+                )
+            if (calls < SUB_RUN_SOFT_TOOL_LIMIT
+                    and calls + len(tool_calls) > SUB_RUN_SOFT_TOOL_LIMIT):
+                # Never execute a batch that would overrun the soft budget;
+                # keep already persisted evidences instead of hard-failing.
+                return partial_sub_result(
+                    "Ein Tool-Batch hätte das weiche Sub-Run-Budget "
+                    "überschritten; weitere Arbeit muss getrennt erfolgen."
+                )
         frontend_calls = []
         if phase == "main":
             frontend = getattr(agent, "_agui_frontend_tools", {})
