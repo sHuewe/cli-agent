@@ -199,6 +199,7 @@ def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch
         _model_tools=lambda: [],
         _build_reference_context_message=lambda **kwargs: None,
         _main_tools_need_workspace_context=lambda names: False,
+        _format_current_time=lambda now: "Aktuelle lokale Zeit: " + now.isoformat(),
     )
     result = asyncio.run(execute_sub_run(agent, {
         "task": "Investigate a sufficiently complex and independent work package.",
@@ -284,6 +285,7 @@ def test_sub_run_retries_invalid_response_using_same_context_and_budget(monkeypa
         _model_tools=lambda: [],
         _build_reference_context_message=lambda **kwargs: None,
         _main_tools_need_workspace_context=lambda names: False,
+        _format_current_time=lambda now: "Aktuelle lokale Zeit: " + now.isoformat(),
     )
     result = asyncio.run(execute_sub_run(agent, {
         "task": "Investigate the selected time intervals using trusted data.",
@@ -318,6 +320,7 @@ def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
         _model_tools=lambda: [],
         _build_reference_context_message=lambda **kwargs: None,
         _main_tools_need_workspace_context=lambda names: False,
+        _format_current_time=lambda now: "Aktuelle lokale Zeit: " + now.isoformat(),
     )
     with pytest.raises(ValueError, match="nach 2 Korrekturversuchen"):
         asyncio.run(execute_sub_run(agent, {
