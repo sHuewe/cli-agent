@@ -7,9 +7,9 @@ import json
 import uuid
 from typing import Any
 
-from cli_agent.evidence_state import EvidenceState
-from cli_agent.evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
-from cli_agent.model import RetryingModelClient
+from cli_agent.state.evidence_state import EvidenceState
+from cli_agent.state.evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
+from cli_agent.models.model import RetryingModelClient
 
 def _isolated_sub_run_client(client: Any) -> Any:
     """Copy per-run model state without losing the configured retry adapter."""
@@ -168,7 +168,7 @@ verified evidence.
 
 
 def validate_sub_result(answer: str, available: set[str]) -> dict[str, Any]:
-    from cli_agent.agent_conversation import _normalize_json_response
+    from cli_agent.runtime.agent_conversation import _normalize_json_response
     normalized, error = _normalize_json_response(answer)
     if error is not None:
         raise ValueError("Sub-Run lieferte kein gültiges JSON: " + error)
@@ -269,7 +269,7 @@ async def execute_sub_run(
     # trust boundary as the coordinator: administrator-approved MCP instructions
     # belong in the system prompt; server-provided untrusted instructions are
     # supplied only as explicitly labelled reference data.
-    from cli_agent.agent import (
+    from cli_agent.runtime.agent import (
         BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE, WORKSPACE_TOOL_SYSTEM_RULE,
         MCP_INSTRUCTION_SYSTEM_RULE, REFERENCE_CONTEXT_SYSTEM_RULE,
     )
@@ -319,8 +319,8 @@ async def execute_sub_run(
     record = {"id": run_id, "task": task, "messages": messages, "tools": copy.deepcopy(tools),
               "evidence_state": local, "status": "running"}
     agent._sub_runs.append(record)
-    from cli_agent.agent_loop import ModelLoopRunState, run_model_loop
-    from cli_agent.agent_conversation import MAX_RESPONSE_FORMAT_REPAIRS
+    from cli_agent.runtime.agent_loop import ModelLoopRunState, run_model_loop
+    from cli_agent.runtime.agent_conversation import MAX_RESPONSE_FORMAT_REPAIRS
     previous = agent._evidence_state
     previous_coordinator = getattr(agent, "_coordinator_evidence_state", None)
     # Isolate model state even when the provider is wrapped in the retry

@@ -10,8 +10,8 @@ import json
 import re
 from typing import Any
 
-from cli_agent.message_visibility import messages_for_model
-from cli_agent.evidence_tools import EvidenceOperationsMixin
+from cli_agent.state.message_visibility import messages_for_model
+from cli_agent.state.evidence_tools import EvidenceOperationsMixin
 
 EVIDENCE_TOOL_NAME = "agent__update_evidence"
 MAX_EVIDENCES = 64

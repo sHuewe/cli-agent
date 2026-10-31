@@ -6,7 +6,7 @@ from typing import Any
 
 from mcp import ClientSession
 
-from cli_agent.config import McpServerConfig
+from cli_agent.settings.config import McpServerConfig
 
 
 @dataclass(frozen=True)
