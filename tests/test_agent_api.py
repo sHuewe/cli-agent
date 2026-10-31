@@ -334,7 +334,7 @@ async def test_replay_capacity_adapts_to_knowledge_and_custom_limits():
 @pytest.mark.asyncio
 async def test_browser_run_without_sse_times_out_and_releases_session(monkeypatch):
     from cli_agent.interfaces import agent_api
-    monkeypatch.setattr(agent_api, "BROWSER_SSE_CONNECT_TIMEOUT", 0.04)
+    monkeypatch.setattr("cli_agent.interfaces.agent_api_sessions.BROWSER_SSE_CONNECT_TIMEOUT", 0.04)
     service, agents = make_test_service()
     session = await service.create()
     try:
