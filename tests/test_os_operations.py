@@ -694,7 +694,7 @@ def test_read_file_rejects_line_range_for_pdf(tmp_path, monkeypatch) -> None:
     def should_not_run(_path):
         raise AssertionError("PDF extraction must not run for line ranges")
 
-    monkeypatch.setattr(os_operations, "read_pdf_text", should_not_run)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.read_pdf_text", should_not_run)
 
     with pytest.raises(WorkspaceError, match="PDF-Dateien nicht unterstützt"):
         _workspace(tmp_path).read_file(
@@ -719,8 +719,8 @@ def test_read_file_range_scan_limit_counts_raw_crlf_bytes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (tmp_path / "lines.txt").write_bytes(b"a\r\nb\r\nc\r\n")
-    monkeypatch.setattr(os_operations, "MAX_READ_RANGE_SCAN_BYTES", 6)
-    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 4)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_READ_RANGE_SCAN_BYTES", 6)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.READ_RANGE_CHUNK_BYTES", 4)
 
     with pytest.raises(WorkspaceError, match="Scan-Limit"):
         _workspace(tmp_path).read_file("lines.txt", start_line=3, end_line=3)
@@ -731,7 +731,7 @@ def test_read_file_range_handles_utf8_character_across_binary_chunks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (tmp_path / "utf8.txt").write_text("a\näöü\nz\n", encoding="utf-8")
-    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 3)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.READ_RANGE_CHUNK_BYTES", 3)
 
     assert (
         _workspace(tmp_path).read_file("utf8.txt", start_line=2, end_line=2)
@@ -839,8 +839,8 @@ def test_latin1_fallback_rejects_binary_data(tmp_path):
 def test_latin1_ranged_read_uses_one_bounded_scan(tmp_path, monkeypatch):
     path = tmp_path / "long.properties"
     path.write_bytes(b"a" * 9000 + b"\xe4\n")
-    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 512)
-    monkeypatch.setattr(os_operations, "MAX_READ_RANGE_SCAN_BYTES", 10_000)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.READ_RANGE_CHUNK_BYTES", 512)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_READ_RANGE_SCAN_BYTES", 10_000)
 
     original_open = Path.open
     scanned = []
@@ -877,8 +877,8 @@ def test_latin1_range_scan_limit_is_not_reset_on_late_decode_error(
 ):
     path = tmp_path / "long.properties"
     path.write_bytes(b"x" * 9000 + b"\xe4\n")
-    monkeypatch.setattr(os_operations, "READ_RANGE_CHUNK_BYTES", 512)
-    monkeypatch.setattr(os_operations, "MAX_READ_RANGE_SCAN_BYTES", 9_000)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.READ_RANGE_CHUNK_BYTES", 512)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_READ_RANGE_SCAN_BYTES", 9_000)
     with pytest.raises(WorkspaceError, match="Scan-Limit"):
         _workspace(tmp_path).read_file(
             "long.properties", start_line=1, end_line=1
