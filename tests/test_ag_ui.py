@@ -941,3 +941,32 @@ async def test_close_immediately_after_run_cancel_does_not_deadlock():
         assert session._closed
     finally:
         await asyncio.wait_for(service.shutdown(), 2)
+
+
+@pytest.mark.asyncio
+async def test_mcp_session_propagates_cancel_notification(monkeypatch):
+    """Cancel the actual MCP request ID, not an unrelated session request."""
+    from mcp import ClientSession
+    from cli_agent.agent_mcp import CancellableClientSession
+
+    entered = asyncio.Event()
+    observed = []
+
+    async def blocking_request(self, *_args, **_kwargs):
+        entered.set()
+        await asyncio.sleep(60)
+
+    async def recorded_notification(self, notification, related_request_id=None):
+        observed.append((notification.root.params.requestId, related_request_id))
+
+    monkeypatch.setattr(ClientSession, "send_request", blocking_request)
+    monkeypatch.setattr(CancellableClientSession, "send_notification",
+                        recorded_notification)
+    session = object.__new__(CancellableClientSession)
+    session._request_id = 42
+    task = asyncio.create_task(session.send_request(object(), object))
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert observed == [(42, 42)]
