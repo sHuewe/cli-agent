@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..filesystem_security import read_bounded_regular_file
+from cli_agent.security.filesystem_security import read_bounded_regular_file
 from .workspace import WorkspacePathError, WorkspaceRoot
 from .repository_support import OkfRepositoryError, RepositoryMetadataMixin
 

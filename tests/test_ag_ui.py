@@ -61,7 +61,7 @@ def _input(thread, prompt, *, run_id=None, messages=None, resume=None):
 
 
 _AGUI_SCHEMA = json.loads(
-    files("cli_agent").joinpath("ag_ui_schema_1_0.json").read_text("utf-8")
+    files("cli_agent.interfaces").joinpath("ag_ui_schema_1_0.json").read_text("utf-8")
 )
 _EVENT_VALIDATOR = Draft202012Validator(_AGUI_SCHEMA)
 _INPUT_VALIDATOR = Draft202012Validator({

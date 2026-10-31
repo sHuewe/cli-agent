@@ -7,8 +7,8 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from ..config import load_config
-from ..logging_setup import configure_logging
+from cli_agent.settings.config import load_config
+from cli_agent.platform.logging_setup import configure_logging
 from .repository import OkfRepository, OkfRepositoryError
 
 logger = logging.getLogger(__name__)
