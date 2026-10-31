@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.admin_config import WebProviderConfig
-from cli_agent.model import TokenUsage
-from cli_agent.web_context import (
+from cli_agent.settings.admin_config import WebProviderConfig
+from cli_agent.models.model import TokenUsage
+from cli_agent.context.web_context import (
     WebContext,
     _confluence_api_url,
     _confluence_document,
@@ -17,7 +17,7 @@ from cli_agent.web_context import (
     _validate_web_url,
     redact_url_for_display,
 )
-from cli_agent.web_context_agent import LoopTokenUsage, WebContextCliAgent
+from cli_agent.context.web_context_agent import LoopTokenUsage, WebContextCliAgent
 
 
 def test_extract_html_uses_main_content() -> None:
@@ -196,7 +196,7 @@ def test_add_web_context_keeps_full_url_internal_but_redacts_cli_output(
             fetched_at="2026-09-19T18:00:00+00:00",
         )
 
-    monkeypatch.setattr("cli_agent.web_context_agent.fetch_web_context", fake_fetch)
+    monkeypatch.setattr("cli_agent.context.web_context_agent.fetch_web_context", fake_fetch)
     agent = make_agent(tmp_path)
 
     answer = asyncio.run(agent.ask(f"add_web_context {requested}"))
@@ -249,7 +249,7 @@ def test_add_web_context_is_session_command_not_history(
     async def fake_fetch(url: str, **_: object) -> WebContext:
         return example_context(url)
 
-    monkeypatch.setattr("cli_agent.web_context_agent.fetch_web_context", fake_fetch)
+    monkeypatch.setattr("cli_agent.context.web_context_agent.fetch_web_context", fake_fetch)
     agent = make_agent(tmp_path)
 
     answer = asyncio.run(agent.ask("add_web_context http://localhost:8080/docs"))
@@ -752,7 +752,7 @@ def test_history_reset_also_resets_last_usage(tmp_path: Path) -> None:
 
 
 def test_nested_knowledge_usage_not_double_counted_as_main(tmp_path: Path, monkeypatch):
-    from cli_agent.agent import CliAgent
+    from cli_agent.runtime.agent import CliAgent
 
     main_first = TokenUsage(input_tokens=100, output_tokens=10, total_tokens=110)
     knowledge = TokenUsage(input_tokens=500, output_tokens=50, total_tokens=550)

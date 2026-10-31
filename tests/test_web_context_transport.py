@@ -8,8 +8,8 @@ from typing import Iterator
 
 import pytest
 
-import cli_agent.web_context as web_context_module
-from cli_agent.web_context import fetch_web_context
+import cli_agent.context.web_context as web_context_module
+from cli_agent.context.web_context import fetch_web_context
 
 
 class _Handler(BaseHTTPRequestHandler):

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from cli_agent.agent_api import AgentApiService, create_app
-from cli_agent.web_ui_sessions import BrowserSessionRegistry
+from cli_agent.interfaces.agent_api import AgentApiService, create_app
+from cli_agent.interfaces.web_ui_sessions import BrowserSessionRegistry
 
 
 class BrowserAgent:
@@ -214,7 +214,7 @@ async def test_cli_initial_context_and_output_are_run_on_session_worker():
 
 def test_bootstrap_preserves_initial_context_diagnostics():
     """The web UI must not clear initial context-loading errors on bootstrap."""
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     bootstrap = API_APP_JS.split("async function bootstrap() {", 1)[1]
     # Initial messages are displayed by the session-event handler; the
@@ -229,7 +229,7 @@ def test_bootstrap_preserves_initial_context_diagnostics():
 
 def test_browser_rendering_failures_fall_back_to_plain_text():
     """A failed optional Markdown request must never hide the model answer."""
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     assert 'async function renderAnswer(text)' in API_APP_JS
     assert 'catch (_error) {' in API_APP_JS.split(
@@ -241,7 +241,7 @@ def test_browser_rendering_failures_fall_back_to_plain_text():
 
 
 def test_local_exit_and_quit_are_not_sent_to_agent():
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
     assert '["exit", "quit"].includes(msg.content.trim().toLowerCase())' in dispatch
@@ -255,7 +255,7 @@ def test_local_exit_and_quit_are_not_sent_to_agent():
 
 
 def test_browser_buttons_submit_structured_commands():
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     dispatch = API_APP_JS.split("async function dispatchAction(msg)", 1)[1]
     assert 'msg.type === "command"' in dispatch
@@ -271,7 +271,7 @@ def test_browser_agui_transcript_compaction_with_real_javascript():
     import shutil
     import subprocess
 
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     node = shutil.which("node")
     if not node:
@@ -337,7 +337,7 @@ def test_browser_agui_transcript_compaction_with_real_javascript():
 
 
 def test_browser_agui_messages_are_trimmed_before_post_and_restored_after_rejection():
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     assert "result.messages = compactAguiHistory(result);" in API_APP_JS
     dispatch = API_APP_JS.split('if (msg.type === "message") {', 1)[1]
@@ -349,7 +349,7 @@ def test_browser_agui_messages_are_trimmed_before_post_and_restored_after_reject
 
 
 def test_browser_wire_transcript_is_bounded_without_truncating_latest_prompt():
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     bound = API_APP_JS.split("function boundAguiMessages() {", 1)[1].split(
         "function aguiInput(", 1
@@ -368,7 +368,7 @@ def test_browser_wire_transcript_is_bounded_without_truncating_latest_prompt():
 
 
 def test_cancelled_exit_confirmation_keeps_composer_interactive():
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     form = API_APP_JS.split('form.addEventListener("submit",', 1)[1].split(
         'prompt.addEventListener("keydown"', 1
@@ -385,7 +385,7 @@ def test_cancelled_exit_confirmation_keeps_composer_interactive():
 
 
 def test_paused_approval_sessions_are_actionable_in_sessions_dialog():
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     rendered = API_APP_JS.split('async function refreshSessions()', 1)[1].split(
         'let heartbeat = null;', 1
@@ -404,8 +404,13 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
     import sys
     import types
 
-    from cli_agent import cli, file_context, model_factory, os_operations, web_ui_api
-    from cli_agent import agent_api, logging_setup
+    from cli_agent.interfaces import cli
+    from cli_agent.context import file_context
+    from cli_agent.models import model_factory
+    from cli_agent.platform import os_operations
+    from cli_agent.interfaces import web_ui_api
+    from cli_agent.interfaces import agent_api
+    from cli_agent.platform import logging_setup
 
     monkeypatch.setattr(logging_setup, "configure_logging", lambda _config: None)
 
@@ -531,7 +536,7 @@ def test_api_backed_browser_javascript_syntax():
     import shutil
     import subprocess
 
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     node = shutil.which("node")
     if node is None:
@@ -548,7 +553,7 @@ def test_browser_tool_calls_display_all_statuses_and_survive_approval_resume():
     import shutil
     import subprocess
 
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     node = shutil.which("node")
     if not node:
@@ -660,7 +665,7 @@ def test_browser_published_document_uses_authenticated_download_and_rejects_unsa
     """Exercise document ContentParts and the download button in actual Node.js."""
     import shutil
     import subprocess
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     node = shutil.which("node")
     if not node:
@@ -778,7 +783,7 @@ def test_cancelled_session_close_does_not_issue_delete_request():
     import shutil
     import subprocess
 
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     node = shutil.which("node")
     if node is None:
@@ -809,7 +814,7 @@ def test_approval_resume_rejection_preserves_dialog_and_allows_retry():
     import shutil
     import subprocess
 
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     node = shutil.which("node")
     if not node:
@@ -902,7 +907,7 @@ async function action(msg) {
 
 
 def test_approval_cancel_and_click_keep_interrupt_until_response():
-    from cli_agent.web_ui_api import API_APP_JS
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
 
     handlers = API_APP_JS.split('approval.addEventListener("click"', 1)[1].split(
         'quit.addEventListener("click"', 1

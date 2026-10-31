@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent import cli as cli_module
-from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
-from cli_agent.config import AppConfig, McpServerConfig
-from cli_agent.execution import (
+from cli_agent.interfaces import cli as cli_module
+from cli_agent.settings.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
+from cli_agent.settings.config import AppConfig, McpServerConfig
+from cli_agent.platform.execution import (
     ExecutionDependencies,
     OneShotRunOptions,
     apply_named_mcp_overrides,
@@ -212,7 +212,7 @@ def test_builtin_names_cannot_be_selected(name: str) -> None:
 
 
 def test_okf_name_is_reserved_when_knowledge_server_is_configured() -> None:
-    from cli_agent.config import OkfConfig
+    from cli_agent.settings.config import OkfConfig
 
     config = AppConfig(okf=OkfConfig(repository=Path("/knowledge")))
     with pytest.raises(ValueError, match="reserviert"):

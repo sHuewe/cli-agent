@@ -7,8 +7,8 @@ import json
 import httpx
 import pytest
 
-from cli_agent.agent_api import AgentApiService, create_app
-from cli_agent.web_ui_sessions import (
+from cli_agent.interfaces.agent_api import AgentApiService, create_app
+from cli_agent.interfaces.web_ui_sessions import (
     BrowserSessionRegistry, LEASE_TTL_SECONDS, SessionOccupiedError,
 )
 
@@ -307,7 +307,7 @@ async def test_browser_reconnect_is_private_and_requires_tab_lease():
 
 @pytest.mark.asyncio
 async def test_browser_agui_run_limit_keeps_heartbeats_available():
-    from cli_agent.agent_api import MAX_CONCURRENT_BROWSER_RUNS
+    from cli_agent.interfaces.agent_api import MAX_CONCURRENT_BROWSER_RUNS
     gate = asyncio.Event()
 
     class SlowAgent(_Agent):
