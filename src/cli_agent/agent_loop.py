@@ -14,6 +14,7 @@ from .agent_knowledge import (
     _validate_knowledge_selection,
 )
 from .agent_tool_calls import process_tool_calls
+from .sub_runs import START_SUB_RUN, SUB_RUN_SOFT_TOOL_LIMIT, execute_sub_run
 from .agent_types import ToolRoute
 from .message_visibility import messages_for_model
 from .evidence_state import EvidenceError
@@ -86,6 +87,7 @@ async def run_model_loop(
     knowledge_state: _KnowledgeRunState | None = None,
     max_concept_reads: int | None = None,
     run_state: ModelLoopRunState | None = None,
+    reserved_tool_call_ids: set[str] | None = None,
 ) -> str:
     state = run_state or ModelLoopRunState()
     calls = state.tool_calls
@@ -95,33 +97,75 @@ async def run_model_loop(
     require_found_content_after_correction = False
     knowledge_selection_only_mode = False
     selection_only_tool_rejections = 0
+    sub_finalization_rounds = 0
+
+    def partial_sub_result(reason: str) -> str:
+        evidence_state = getattr(agent, "_evidence_state", None)
+        existing = set(getattr(evidence_state, "_sub_run_inherited_ids", set()))
+        new_ids = [
+            item for item in getattr(evidence_state, "evidences", {})
+            if item not in existing
+        ][:16]
+        return json.dumps({
+            "status": "partial",
+            "summary": "Die Teiluntersuchung wurde am weichen Toolbudget beendet.",
+            "evidence_ids": new_ids,
+            "confidence": "low",
+            "uncertainties": [reason],
+        }, ensure_ascii=False)
+
     transient_rejections: list[
         tuple[dict[str, Any], dict[str, Any], dict[str, Any]]
     ] = []
 
     while True:
+        if phase == "sub" and calls >= SUB_RUN_SOFT_TOOL_LIMIT:
+            if sub_finalization_rounds >= 3:
+                return partial_sub_result(
+                    "Abschluss nach wiederholten Versuchen beim weichen Toolbudget."
+                )
+            sub_finalization_rounds += 1
+            if sub_finalization_rounds == 1:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Das weiche Sub-Run-Budget ist erreicht. Beende jetzt "
+                        "die Untersuchung; starte keine weiteren Datenabfragen. "
+                        "Speichere bereits verifizierte wesentliche Ergebnisse "
+                        "falls nötig mit agent__add_evidence und gib danach "
+                        "sofort das vorgeschriebene JSON mit status=partial "
+                        "oder completed und den neuen Evidence-IDs zurück. "
+                        "Beschreibe unerledigte Teile als uncertainties."
+                    ),
+                })
         agent._dump_context(messages, phase=phase)
         try:
             message = await agent.model_client.chat(
                 messages=(
                     agent._evidence_state.project(messages)
-                    if phase == "main" and getattr(agent, "_evidence_state", None) is not None
+                    if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None
                     else messages_for_model(messages)
                 ),
                 tools=(
                     []
                     if phase == "knowledge" and knowledge_selection_only_mode
-                    else tools
+                    else (
+                        [tool for tool in tools
+                         if tool["function"]["name"] == ADD_EVIDENCE_TOOL_NAME]
+                        if phase == "sub" and calls >= SUB_RUN_SOFT_TOOL_LIMIT
+                        else tools
+                    )
                 ),
             )
             log_model_call_diagnostics(agent.model_client, phase=phase)
-            _assign_tool_call_ids(
-                message, messages,
-                reserved_ids=set(getattr(getattr(agent, "_evidence_state", None), "tool_results", {}))
-                if phase == "main" else None,
-            )
+            reserved_ids = set(reserved_tool_call_ids or ())
+            if phase in {"main", "sub"}:
+                reserved_ids.update(
+                    getattr(getattr(agent, "_evidence_state", None), "tool_results", {})
+                )
+            _assign_tool_call_ids(message, messages, reserved_ids=reserved_ids)
             messages.append(message)
-            if phase == "main" and getattr(agent, "_evidence_state", None) is not None:
+            if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None:
                 agent._evidence_state.pending_error = None
         finally:
             for assistant_message, tool_call, tool_message in transient_rejections:
@@ -379,6 +423,23 @@ async def run_model_loop(
 
         if tool_calls:
             empty_responses = 0
+        if phase == "sub":
+            allowed_names = {ADD_EVIDENCE_TOOL_NAME}
+            if (calls >= SUB_RUN_SOFT_TOOL_LIMIT
+                    and any((call.get("function") or {}).get("name")
+                            not in allowed_names for call in tool_calls)):
+                return partial_sub_result(
+                    "Modell wollte nach dem weichen Toolbudget weitere "
+                    "Untersuchungstools statt einer Ergebnisübergabe aufrufen."
+                )
+            if (calls < SUB_RUN_SOFT_TOOL_LIMIT
+                    and calls + len(tool_calls) > SUB_RUN_SOFT_TOOL_LIMIT):
+                # Never execute a batch that would overrun the soft budget;
+                # keep already persisted evidences instead of hard-failing.
+                return partial_sub_result(
+                    "Ein Tool-Batch hätte das weiche Sub-Run-Budget "
+                    "überschritten; weitere Arbeit muss getrennt erfolgen."
+                )
         frontend_calls = []
         if phase == "main":
             frontend = getattr(agent, "_agui_frontend_tools", {})
@@ -389,7 +450,7 @@ async def run_model_loop(
                     function = call.get("function") or {}
                     if function.get("name") in frontend and function.get("name") not in {
                         PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME,
-                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME,
+                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME, START_SUB_RUN,
                     }:
                         arguments = function.get("arguments") or {}
                         arguments = (arguments if isinstance(arguments, str)
@@ -406,15 +467,18 @@ async def run_model_loop(
              if call.get("function", {}).get("name")
              not in (set(getattr(agent, "_agui_frontend_tools", {}))
                      - {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME,
-                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME})]
+                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME, START_SUB_RUN})]
             if frontend_calls else tool_calls
         )
-        evidence = getattr(agent, "_evidence_state", None) if phase == "main" else None
+        evidence = getattr(agent, "_evidence_state", None) if phase in {"main", "sub"} else None
         evidence_calls = [
             call for call in backend_calls
             if (call.get("function") or {}).get("name") in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME}
         ] if evidence is not None else []
         backend_calls = [call for call in backend_calls if call not in evidence_calls]
+        sub_calls = [call for call in backend_calls if phase == "main" and
+                     (call.get("function") or {}).get("name") == START_SUB_RUN]
+        backend_calls = [call for call in backend_calls if call not in sub_calls]
         publish_calls = [
             call for call in backend_calls
             if (call.get("function") or {}).get("name") == PUBLISH_TOOL_NAME
@@ -422,7 +486,7 @@ async def run_model_loop(
         backend_calls = [call for call in backend_calls if call not in publish_calls]
         # Reserve the full batch BEFORE executing any backend side effects.
         # Frontend calls are just as much part of max_tool_calls as MCP calls.
-        if calls + len(frontend_calls) + len(backend_calls) + len(evidence_calls) + len(publish_calls) > max_tool_calls:
+        if calls + len(frontend_calls) + len(backend_calls) + len(evidence_calls) + len(publish_calls) + len(sub_calls) > max_tool_calls:
             raise RuntimeError(
                 f"Abbruch in Phase {phase!r} nach {max_tool_calls} Tool-Aufrufen."
             )
@@ -516,6 +580,25 @@ async def run_model_loop(
                         {"call_id": event_id, "tool": tool_name,
                          "status": status},
                     )
+        for sub_call in sub_calls:
+            calls += 1
+            state.tool_calls = calls
+            event_id = sub_call["id"]
+            callback = getattr(agent, "event_callback", None)
+            if callback is not None:
+                await callback("tool_started", {"call_id": event_id, "tool": START_SUB_RUN})
+            status = "success"
+            try:
+                args = sub_call["function"].get("arguments") or {}
+                if isinstance(args, str):
+                    args = json.loads(args)
+                result_text = json.dumps(await execute_sub_run(agent, args, coordinator_messages=messages), ensure_ascii=False)
+            except (ValueError, RuntimeError, TypeError) as exc:
+                status = "error"
+                result_text = json.dumps({"status": "failed", "error": str(exc)[:1200]}, ensure_ascii=False)
+            messages.append({"role": "tool", "tool_call_id": event_id, "content": result_text})
+            if callback is not None:
+                await callback("tool_finished", {"call_id": event_id, "tool": START_SUB_RUN, "status": status})
         for publish_call in publish_calls:
             calls += 1
             state.tool_calls = calls

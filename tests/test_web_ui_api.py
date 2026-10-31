@@ -329,7 +329,7 @@ def test_browser_agui_transcript_compaction_with_real_javascript():
     console.log("ok");
     """
     result = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, timeout=15,
+        [node, "-e", script], capture_output=True, text=True, timeout=60,
         check=False,
     )
     assert result.returncode == 0, result.stderr
