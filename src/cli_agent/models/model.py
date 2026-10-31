@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 
 CONTEXT_LIMIT_MARGIN = 500
-logger = logging.getLogger("cli_agent.model")
+logger = logging.getLogger("cli_agent.models.model")
 
 
 class ContextLimitReachedError(RuntimeError):

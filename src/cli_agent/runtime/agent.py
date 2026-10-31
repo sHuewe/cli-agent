@@ -14,33 +14,33 @@ from zoneinfo import ZoneInfo
 
 from mcp import ClientSession
 
-from cli_agent.admin_config import McpPolicy, TrustedMcpServer, _normalize_mcp_url
-from cli_agent.agent_conversation import ConversationMixin
-from cli_agent.agent_knowledge import (
+from cli_agent.settings.admin_config import McpPolicy, TrustedMcpServer, _normalize_mcp_url
+from cli_agent.runtime.agent_conversation import ConversationMixin
+from cli_agent.context.agent_knowledge import (
     DEFAULT_OKF_MAX_CONCEPT_READS,
     DEFAULT_OKF_MAX_TOOL_CALLS,
     OkfConfigLike,
     _OkfOptions,
 )
-from cli_agent.agent_mcp import McpLifecycleMixin
-from cli_agent.agent_permissions import WRITE_TOOLS
-from cli_agent.agent_prompts import KNOWLEDGE_SYSTEM_PROMPT, HYBRID_OKF_KNOWLEDGE_PROMPT
-from cli_agent.knowledge_vector import VectorKnowledgeSession, source_root, db_path
-from cli_agent.agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageCallback
-from cli_agent.config import LoggingConfig, McpServerConfig
-from cli_agent.filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
-from cli_agent.mcp_contracts import tool_contract_fingerprint
-from cli_agent.mcp_result_artifacts import McpResultArtifacts
-from cli_agent.message_visibility import messages_for_model
-from cli_agent.evidence_state import EvidenceState
-from cli_agent.evidence_tools import ADD_EVIDENCE_TOOL_NAME
-from cli_agent.sub_runs import START_SUB_RUN, SUB_RUN_TOOL
-from cli_agent.artifact_publication import PUBLISH_TOOL
-from cli_agent.model import ModelClient
-from cli_agent.network_policy import NetworkConfig
-from cli_agent.workspace_access import normalize_workspace_access
+from cli_agent.runtime.agent_mcp import McpLifecycleMixin
+from cli_agent.state.agent_permissions import WRITE_TOOLS
+from cli_agent.runtime.agent_prompts import KNOWLEDGE_SYSTEM_PROMPT, HYBRID_OKF_KNOWLEDGE_PROMPT
+from cli_agent.context.knowledge_vector import VectorKnowledgeSession, source_root, db_path
+from cli_agent.state.agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageCallback
+from cli_agent.settings.config import LoggingConfig, McpServerConfig
+from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
+from cli_agent.security.mcp_contracts import tool_contract_fingerprint
+from cli_agent.security.mcp_result_artifacts import McpResultArtifacts
+from cli_agent.state.message_visibility import messages_for_model
+from cli_agent.state.evidence_state import EvidenceState
+from cli_agent.state.evidence_tools import ADD_EVIDENCE_TOOL_NAME
+from cli_agent.state.sub_runs import START_SUB_RUN, SUB_RUN_TOOL
+from cli_agent.platform.artifact_publication import PUBLISH_TOOL
+from cli_agent.models.model import ModelClient
+from cli_agent.security.network_policy import NetworkConfig
+from cli_agent.platform.workspace_access import normalize_workspace_access
 
-logger = logging.getLogger("cli_agent.agent")
+logger = logging.getLogger("cli_agent.runtime.agent")
 
 BASE_SYSTEM_PROMPT = """\
 Du bist ein lokaler CLI-Assistent.

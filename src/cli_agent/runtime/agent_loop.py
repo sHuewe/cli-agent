@@ -6,23 +6,23 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from cli_agent.agent_knowledge import (
+from cli_agent.context.agent_knowledge import (
     MAX_KNOWLEDGE_SELECTION_RETRIES,
     MAX_PREMATURE_KNOWLEDGE_RETRIES,
     _KnowledgeRunState,
     _fallback_knowledge_selection,
     _validate_knowledge_selection,
 )
-from cli_agent.agent_tool_calls import process_tool_calls
-from cli_agent.sub_runs import START_SUB_RUN, SUB_RUN_SOFT_TOOL_LIMIT, execute_sub_run
-from cli_agent.agent_types import ToolRoute
-from cli_agent.message_visibility import messages_for_model
-from cli_agent.evidence_state import EvidenceError
-from cli_agent.evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, EvidenceInputError
-from cli_agent.artifact_publication import PUBLISH_TOOL_NAME, register_artifact
-from cli_agent.model import log_model_call_diagnostics
+from cli_agent.runtime.agent_tool_calls import process_tool_calls
+from cli_agent.state.sub_runs import START_SUB_RUN, SUB_RUN_SOFT_TOOL_LIMIT, execute_sub_run
+from cli_agent.state.agent_types import ToolRoute
+from cli_agent.state.message_visibility import messages_for_model
+from cli_agent.state.evidence_state import EvidenceError
+from cli_agent.state.evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, EvidenceInputError
+from cli_agent.platform.artifact_publication import PUBLISH_TOOL_NAME, register_artifact
+from cli_agent.models.model import log_model_call_diagnostics
 
-logger = logging.getLogger("cli_agent.agent_loop")
+logger = logging.getLogger("cli_agent.runtime.agent_loop")
 
 
 def _assign_tool_call_ids(
@@ -444,7 +444,7 @@ async def run_model_loop(
         if phase == "main":
             frontend = getattr(agent, "_agui_frontend_tools", {})
             if frontend:
-                from cli_agent.ag_ui_frontend_tools import FrontendToolCall, FrontendToolHandoff
+                from cli_agent.interfaces.ag_ui_frontend_tools import FrontendToolCall, FrontendToolHandoff
                 import uuid
                 for call in tool_calls:
                     function = call.get("function") or {}
@@ -631,7 +631,7 @@ async def run_model_loop(
                     "call_id": event_id, "tool": PUBLISH_TOOL_NAME, "status": status,
                 })
         if frontend_calls:
-            from cli_agent.ag_ui_frontend_tools import FrontendToolHandoff
+            from cli_agent.interfaces.ag_ui_frontend_tools import FrontendToolHandoff
             # All backend calls from the same model response have been handled
             # locally first. Frontend calls must never enter MCP routing.
             raise FrontendToolHandoff(frontend_calls, message)

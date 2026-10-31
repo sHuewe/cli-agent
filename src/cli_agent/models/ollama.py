@@ -4,18 +4,18 @@ from typing import Any
 
 import httpx
 
-from cli_agent.model import (
+from cli_agent.models.model import (
     CONTEXT_LIMIT_MARGIN,
     ContextLimitReachedError,
     ModelRequestError,
     TokenUsage,
 )
-from cli_agent.model_http import (
+from cli_agent.models.model_http import (
     MAX_MODEL_RESPONSE_BYTES,
     ModelResponseTooLargeError,
     read_bounded_json_response,
 )
-from cli_agent.network_policy import LOCAL_HOSTS, validate_http_url
+from cli_agent.security.network_policy import LOCAL_HOSTS, validate_http_url
 
 ctx_large = 24576
 ctx_small = 8192

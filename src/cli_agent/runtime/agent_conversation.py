@@ -6,23 +6,23 @@ import logging
 import re
 from typing import Any
 
-from cli_agent.agent_knowledge import (
+from cli_agent.context.agent_knowledge import (
     _KnowledgeRunState,
     _assemble_knowledge_payload,
     _knowledge_allowed_calls,
     _knowledge_call_key,
     tool_result_text,
 )
-from cli_agent.agent_loop import ModelLoopRunState, run_model_loop
-from cli_agent.agent_types import ToolRoute
-from cli_agent.message_visibility import messages_for_model
-from cli_agent.evidence_state import EvidenceState
-from cli_agent.evidence_tools import annotate_source_result
-from cli_agent.ag_ui_frontend_tools import FRONTEND_FAILURE_META_KEY
-from cli_agent.model import log_model_call_diagnostics
-from cli_agent.mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
+from cli_agent.runtime.agent_loop import ModelLoopRunState, run_model_loop
+from cli_agent.state.agent_types import ToolRoute
+from cli_agent.state.message_visibility import messages_for_model
+from cli_agent.state.evidence_state import EvidenceState
+from cli_agent.state.evidence_tools import annotate_source_result
+from cli_agent.interfaces.ag_ui_frontend_tools import FRONTEND_FAILURE_META_KEY
+from cli_agent.models.model import log_model_call_diagnostics
+from cli_agent.security.mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
-logger = logging.getLogger("cli_agent.agent_conversation")
+logger = logging.getLogger("cli_agent.runtime.agent_conversation")
 MAX_RESPONSE_FORMAT_REPAIRS = 2
 _JSON_CODE_FENCE = re.compile(
     r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*)\r?\n```[ \t]*\Z",
@@ -211,7 +211,7 @@ class ConversationMixin:
         enabled_server_names = set(self._active_servers)
         main_run_state = ModelLoopRunState()
         self._agui_pending_json_repairs = 0
-        from cli_agent.ag_ui_frontend_tools import FrontendToolHandoff
+        from cli_agent.interfaces.ag_ui_frontend_tools import FrontendToolHandoff
         try:
             answer = await self._run_model_loop(
                 messages=working_messages,
@@ -351,7 +351,7 @@ class ConversationMixin:
             tools = [*tools, *self._agui_frontend_tools.values()]
         self._last_working_messages = messages
         self._last_working_tools = tools
-        from cli_agent.ag_ui_frontend_tools import FrontendToolHandoff
+        from cli_agent.interfaces.ag_ui_frontend_tools import FrontendToolHandoff
         try:
             answer = await self._run_model_loop(
                 messages=messages, tools=tools, routes=self._tool_routes,

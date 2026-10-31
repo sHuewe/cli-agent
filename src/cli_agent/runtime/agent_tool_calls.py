@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import Any
 
-from cli_agent.agent_knowledge import (
+from cli_agent.context.agent_knowledge import (
     KnowledgeCallKey,
     _KnowledgeRunState,
     _knowledge_allowed_calls,
@@ -17,23 +17,23 @@ from cli_agent.agent_knowledge import (
     _normalize_knowledge_path,
     tool_result_text,
 )
-from cli_agent.agent_types import ToolRoute
-from cli_agent.evidence_tools import annotate_source_result
-from cli_agent.mcp_limits import (
+from cli_agent.state.agent_types import ToolRoute
+from cli_agent.state.evidence_tools import annotate_source_result
+from cli_agent.security.mcp_limits import (
     MCP_TOOL_CALL_TIMEOUT_SECONDS,
     await_mcp_operation,
     enforce_mcp_tool_result_limit,
 )
-from cli_agent.mcp_schema_guard import validate_mcp_tool_arguments
-from cli_agent.mcp_result_artifacts import ArtifactError, ONLY_METADATA_TO_LLM_KEY
-from cli_agent.os_operations import WorkspaceError
-from cli_agent.message_visibility import (
+from cli_agent.security.mcp_schema_guard import validate_mcp_tool_arguments
+from cli_agent.security.mcp_result_artifacts import ArtifactError, ONLY_METADATA_TO_LLM_KEY
+from cli_agent.platform.os_operations import WorkspaceError
+from cli_agent.state.message_visibility import (
     CLI_AGENT_MESSAGE_TO_USER_META_KEY,
     MCP_USER_MESSAGE_ROLE,
     MCP_USER_MESSAGE_TYPE,
 )
 
-logger = logging.getLogger("cli_agent.agent_tool_calls")
+logger = logging.getLogger("cli_agent.runtime.agent_tool_calls")
 
 
 def _message_to_user(result: Any) -> str | None:

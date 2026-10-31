@@ -13,27 +13,27 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from cli_agent.mcp_path_policy import write_path_policy
-from cli_agent.agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS
-from cli_agent.agent_types import ServerConfig, ToolRoute, _RuntimeMcpServerConfig
-from cli_agent.config import McpServerConfig
-from cli_agent.evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
-from cli_agent.artifact_publication import PUBLISH_TOOL_NAME
-from cli_agent.mcp_limits import (
+from cli_agent.security.mcp_path_policy import write_path_policy
+from cli_agent.context.agent_knowledge import EXPECTED_KNOWLEDGE_TOOLS
+from cli_agent.state.agent_types import ServerConfig, ToolRoute, _RuntimeMcpServerConfig
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.state.evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
+from cli_agent.platform.artifact_publication import PUBLISH_TOOL_NAME
+from cli_agent.security.mcp_limits import (
     MCP_INITIALIZE_TIMEOUT_SECONDS,
     MCP_LIST_TOOLS_TIMEOUT_SECONDS,
     await_mcp_operation,
 )
-from cli_agent.mcp_schema_guard import validate_mcp_server_metadata
-from cli_agent.network_policy import validate_http_url
-from cli_agent.workspace_access import (
+from cli_agent.security.mcp_schema_guard import validate_mcp_server_metadata
+from cli_agent.security.network_policy import validate_http_url
+from cli_agent.platform.workspace_access import (
     WORKSPACE_ACCESS_ENV,
     WORKSPACE_DIRECTORY_ENV,
     is_reserved_workspace_environment_name,
     workspace_access_allows,
 )
 
-logger = logging.getLogger("cli_agent.agent_mcp")
+logger = logging.getLogger("cli_agent.runtime.agent_mcp")
 
 # Notification delivery is best-effort and must not delay a cancelled run.
 MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS = 0.5

@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 from urllib.parse import urlsplit
 
-from cli_agent.admin_config import ModelCredentialRule
-from cli_agent.config import ModelConfig
-from cli_agent.model import ModelClient
-from cli_agent.network_policy import LOCAL_HOSTS, NetworkConfig, validate_http_url
-from cli_agent.ollama import OllamaClient
-from cli_agent.openai_client import OpenAIClient
+from cli_agent.settings.admin_config import ModelCredentialRule
+from cli_agent.settings.config import ModelConfig
+from cli_agent.models.model import ModelClient
+from cli_agent.security.network_policy import LOCAL_HOSTS, NetworkConfig, validate_http_url
+from cli_agent.models.ollama import OllamaClient
+from cli_agent.models.openai_client import OpenAIClient
 
 
 def _validate_api_key_env(
