@@ -671,7 +671,7 @@ def _worker_main() -> int:
     # Import expensive validator dependencies before the readiness handshake.
     # Startup time is deliberately separate from per-validation deadlines.
     try:
-        from cli_agent import mcp_limits as _mcp_limits  # noqa: F401
+        from cli_agent.security import mcp_limits as _mcp_limits  # noqa: F401
     except Exception:
         return 1
 

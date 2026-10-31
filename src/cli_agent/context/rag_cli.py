@@ -115,7 +115,7 @@ async def init_vector_db(args: argparse.Namespace, *, incremental: bool = False)
         raise ValueError("--api-key-env wird nur für --provider openai unterstützt.")
 
     # Validate the OKF marker before contacting the embedding endpoint.
-    from .okf_mcp_server.repository import OkfRepository
+    from cli_agent.okf_mcp_server.repository import OkfRepository
 
     OkfRepository.from_directory(root, max_read_bytes=args.max_read_bytes)
 
