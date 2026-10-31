@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from cli_agent.config import McpServerConfig
-from cli_agent.data_mcp_server import _server_instructions
-from cli_agent.data_operations import DataOperations
-from cli_agent.data_result_metadata import structured_table_result
-from cli_agent.dataframe_operations import DataFrameOperations
-from cli_agent.dataframe_types import DataFrameInput, DataFrameSource, ResampleAggregation
-from cli_agent.mcp_result_artifacts import McpResultArtifacts
-from cli_agent.os_operations import AllowedPath, Workspace
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.data.data_mcp_server import _server_instructions
+from cli_agent.data.data_operations import DataOperations
+from cli_agent.data.data_result_metadata import structured_table_result
+from cli_agent.data.dataframe_operations import DataFrameOperations
+from cli_agent.data.dataframe_types import DataFrameInput, DataFrameSource, ResampleAggregation
+from cli_agent.security.mcp_result_artifacts import McpResultArtifacts
+from cli_agent.platform.os_operations import AllowedPath, Workspace
 
 
 def _frames(tmp_path):

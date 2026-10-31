@@ -4,10 +4,10 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from cli_agent.admin_config import McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
-from cli_agent.agent import CliAgent
-from cli_agent.config import McpServerConfig
-from cli_agent.mcp_contracts import tool_contract_fingerprint
+from cli_agent.settings.admin_config import McpPolicy, TrustedMcpServer, TrustedMcpToolApproval
+from cli_agent.runtime.agent import CliAgent
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.security.mcp_contracts import tool_contract_fingerprint
 
 SEARCH_SCHEMA = {
     "type": "object",

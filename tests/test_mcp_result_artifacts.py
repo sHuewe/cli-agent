@@ -7,17 +7,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.agent import CliAgent
-from cli_agent.agent_tool_calls import process_tool_calls
-from cli_agent.config import McpServerConfig
-from cli_agent.mcp_result_artifacts import (
+from cli_agent.runtime.agent import CliAgent
+from cli_agent.runtime.agent_tool_calls import process_tool_calls
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.security.mcp_result_artifacts import (
     ArtifactError,
     METADATA_FOR_LLM_KEY,
     ONLY_METADATA_TO_LLM_KEY,
     McpResultArtifacts,
 )
-from cli_agent.ollama import OllamaClient
-from cli_agent.os_operations import WorkspaceError
+from cli_agent.models.ollama import OllamaClient
+from cli_agent.platform.os_operations import WorkspaceError
 
 
 class Session:
@@ -194,8 +194,8 @@ def test_text_tool_result_is_saved_without_structured_content(tmp_path: Path) ->
 
 
 def test_structured_table_artifact_is_readable_and_removed_on_close(tmp_path: Path) -> None:
-    from cli_agent.data_result_metadata import structured_table_result
-    from cli_agent.data_operations import DataOperations
+    from cli_agent.data.data_result_metadata import structured_table_result
+    from cli_agent.data.data_operations import DataOperations
 
     agent = _agent(tmp_path, access="read")
     result = structured_table_result(["x"], [{"x": 42}], operation="select_data")
@@ -214,7 +214,7 @@ def test_structured_table_artifact_is_readable_and_removed_on_close(tmp_path: Pa
 
 
 def test_structured_metadata_budget_is_five_thousand_utf8_bytes() -> None:
-    from cli_agent.data_result_metadata import MAX_SUMMARY_METADATA_BYTES, structured_table_result
+    from cli_agent.data.data_result_metadata import MAX_SUMMARY_METADATA_BYTES, structured_table_result
 
     assert MAX_SUMMARY_METADATA_BYTES == 5_000
     small = structured_table_result(["value"], [{"value": "ä" * 100}], operation="select_data")
@@ -225,7 +225,7 @@ def test_structured_metadata_budget_is_five_thousand_utf8_bytes() -> None:
 
 
 def test_artifact_metadata_allows_results_above_generic_mcp_limit(tmp_path: Path, monkeypatch) -> None:
-    from cli_agent import mcp_limits
+    from cli_agent.security import mcp_limits
 
     monkeypatch.setattr(mcp_limits, "MAX_MCP_TOOL_RESULT_CHARS", 100)
     agent = _agent(tmp_path, access="read")

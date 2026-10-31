@@ -5,16 +5,16 @@ import json
 import pandas as pd
 import pytest
 
-from cli_agent.config import McpServerConfig
-from cli_agent.data_operations import DataOperationError, DataOperations
-from cli_agent.dataframe_operations import DataFrameOperations
-from cli_agent.dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
-from cli_agent.mcp_result_artifacts import (
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.data.data_operations import DataOperationError, DataOperations
+from cli_agent.data.dataframe_operations import DataFrameOperations
+from cli_agent.data.dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
+from cli_agent.security.mcp_result_artifacts import (
     METADATA_FOR_LLM_KEY,
     ONLY_METADATA_TO_LLM_KEY,
     McpResultArtifacts,
 )
-from cli_agent.os_operations import AllowedPath, Workspace
+from cli_agent.platform.os_operations import AllowedPath, Workspace
 
 
 def _base(tmp_path):
@@ -359,7 +359,7 @@ def test_concat_data_rejects_missing_columns_or_implicit_overflow(frames, tmp_pa
         frames.concat_data([_input("l1.json"), _input("wrong.json")])
     with pytest.raises(DataOperationError, match="unique_by"):
         frames.concat_data([_input("l1.json"), _input("l1.json")], unique_by=["missing"])
-    monkeypatch.setattr("cli_agent.dataframe_operations.MAX_FRAME_ROWS", 5)
+    monkeypatch.setattr("cli_agent.data.dataframe_operations.MAX_FRAME_ROWS", 5)
     with pytest.raises(DataOperationError, match="Zeilenlimit"):
         frames.concat_data([_input("l1.json"), _input("l1.json")])
 
@@ -668,7 +668,7 @@ def test_resample_rejects_huge_sparse_span_before_allocating(frames, tmp_path, m
 
 
 def test_resample_checks_exact_bucket_count_at_limit(frames, tmp_path, monkeypatch):
-    from cli_agent import dataframe_operations
+    from cli_agent.data import dataframe_operations
 
     monkeypatch.setattr(dataframe_operations, "MAX_FRAME_ROWS", 3)
     _write_json(tmp_path, "three.json", [
@@ -850,7 +850,7 @@ def test_empty_json_array_without_declared_schema_is_unchanged():
 
 
 def test_pandas_output_bound_and_non_numeric_data_are_rejected(frames, tmp_path, monkeypatch):
-    from cli_agent import dataframe_operations
+    from cli_agent.data import dataframe_operations
 
     _write_json(tmp_path, "bad.json", [
         {"timestamp": "2026-06-24T07:00:00", "power": "not-a-number"},
@@ -890,7 +890,7 @@ def test_large_frame_metadata_omits_rows_while_retaining_full_artifact(frames, t
 
 
 def test_dataframe_results_always_have_bounded_preview_metadata():
-    from cli_agent.dataframe_operations import MAX_FRAME_RESULT_CHARS
+    from cli_agent.data.dataframe_operations import MAX_FRAME_RESULT_CHARS
 
     assert MAX_FRAME_RESULT_CHARS == 16_000_000
     # Exercise the same serialization and metadata logic as the Pandas tools.
@@ -903,7 +903,7 @@ def test_dataframe_results_always_have_bounded_preview_metadata():
 
 @pytest.mark.asyncio
 async def test_fastmcp_schema_and_result_meta_roundtrip(frames):
-    from cli_agent.data_mcp_server import create_server
+    from cli_agent.data.data_mcp_server import create_server
 
     server = create_server(frames.base, access="write")
     tool = server._tool_manager.get_tool("join_data")

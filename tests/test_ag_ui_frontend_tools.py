@@ -8,12 +8,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from cli_agent.ag_ui_frontend_tools import (
+from cli_agent.interfaces.ag_ui_frontend_tools import (
     FrontendToolCall, FrontendToolHandoff, checked_frontend_results,
     history_for_model, normalize_frontend_tools, FRONTEND_FAILURE_META_KEY,
 )
-from cli_agent.agent_api import AgentApiService, create_app
-from cli_agent.agent_loop import run_model_loop
+from cli_agent.interfaces.agent_api import AgentApiService, create_app
+from cli_agent.runtime.agent_loop import run_model_loop
 
 
 def definition(name="show_view"):
@@ -113,7 +113,7 @@ def test_frontend_results_error_and_content_part_reduction():
     result = checked_frontend_results(messages, pending)[0]
     assert result["content"] == "FEHLER: permission denied\nopened\nsuccess"
     assert result["_meta"]["io.github.shuewe.cli-agent/frontend_tool_failed"] is True
-    from cli_agent.message_visibility import messages_for_model
+    from cli_agent.state.message_visibility import messages_for_model
     assert "_meta" not in messages_for_model([result])[0]
     messages[-1]["error"] = 14
     with pytest.raises(ValueError, match="Fehler"):
@@ -251,7 +251,7 @@ async def test_frontend_handoff_and_followup_without_replaying_agent_call():
             from importlib.resources import files
             from jsonschema import Draft202012Validator
             schema = json.loads(
-                files("cli_agent").joinpath("ag_ui_schema_1_0.json").read_text("utf-8")
+                files("cli_agent.interfaces").joinpath("ag_ui_schema_1_0.json").read_text("utf-8")
             )
             for event in events:
                 Draft202012Validator(schema).validate(event)
@@ -332,7 +332,7 @@ async def test_frontend_handoff_and_followup_without_replaying_agent_call():
 
 @pytest.mark.asyncio
 async def test_real_conversation_mixin_resumes_checkpoint_without_replaying_prompt():
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Agent(ConversationMixin):
         def __init__(self):
@@ -382,7 +382,7 @@ async def test_real_conversation_mixin_resumes_checkpoint_without_replaying_prom
 
 @pytest.mark.asyncio
 async def test_conversation_mixin_supports_multiple_frontend_handoffs():
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Agent(ConversationMixin):
         history = []
@@ -512,7 +512,7 @@ async def test_agui_tool_result_from_another_thread_is_rejected():
 @pytest.mark.asyncio
 async def test_real_conversation_entry_records_unfinished_frontend_checkpoint():
     """The actual ConversationMixin.ask() must checkpoint before unwinding."""
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Agent(ConversationMixin):
         def __init__(self):
@@ -703,7 +703,7 @@ async def test_duplicate_frontend_tool_ids_fail_run_without_killing_worker():
 
 @pytest.mark.asyncio
 async def test_frontend_tool_budget_is_counted_before_any_backend_side_effect():
-    from cli_agent.agent_loop import ModelLoopRunState
+    from cli_agent.runtime.agent_loop import ModelLoopRunState
 
     class Model:
         async def chat(self, **_kwargs):
@@ -742,8 +742,8 @@ async def test_frontend_tool_budget_is_counted_before_any_backend_side_effect():
 
 @pytest.mark.asyncio
 async def test_frontend_continuation_repairs_json_response_and_preserves_budget():
-    from cli_agent.agent_conversation import ConversationMixin
-    from cli_agent.agent_loop import ModelLoopRunState
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_loop import ModelLoopRunState
 
     class Agent(ConversationMixin):
         def __init__(self):
@@ -781,7 +781,7 @@ async def test_frontend_continuation_repairs_json_response_and_preserves_budget(
 
 @pytest.mark.asyncio
 async def test_frontend_continuation_rejects_json_after_exhausted_repairs():
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Agent(ConversationMixin):
         history = []
@@ -806,8 +806,8 @@ async def test_frontend_continuation_rejects_json_after_exhausted_repairs():
 @pytest.mark.asyncio
 async def test_json_repair_frontend_tool_handoff_saves_checkpoint_and_resumes():
     """A tool first requested by JSON repair must have a resumable checkpoint."""
-    from cli_agent.agent_conversation import ConversationMixin
-    from cli_agent.agent_loop import ModelLoopRunState
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_loop import ModelLoopRunState
 
     class Agent(ConversationMixin):
         def __init__(self):
@@ -866,7 +866,7 @@ async def test_json_repair_frontend_tool_handoff_saves_checkpoint_and_resumes():
 
 @pytest.mark.asyncio
 async def test_json_repair_budget_not_reset_by_frontend_handoff():
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Agent(ConversationMixin):
         def __init__(self):
@@ -902,8 +902,8 @@ async def test_json_repair_budget_not_reset_by_frontend_handoff():
 @pytest.mark.asyncio
 async def test_frontend_handoff_during_json_repair_keeps_checkpoint_and_budget():
     """A frontend call from JSON-repair must survive into a new AG-UI run."""
-    from cli_agent.agent_conversation import ConversationMixin
-    from cli_agent.agent_loop import ModelLoopRunState
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_loop import ModelLoopRunState
 
     class Agent(ConversationMixin):
         def __init__(self):
@@ -957,7 +957,7 @@ async def test_frontend_handoff_during_json_repair_keeps_checkpoint_and_budget()
 
 @pytest.mark.asyncio
 async def test_repair_budget_is_not_reset_by_repeated_frontend_handoffs():
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Agent(ConversationMixin):
         def __init__(self):
@@ -1006,8 +1006,8 @@ async def test_repair_budget_is_not_reset_by_repeated_frontend_handoffs():
 
 @pytest.mark.asyncio
 async def test_frontend_evidence_source_registered_on_resume():
-    from cli_agent.agent_conversation import ConversationMixin
-    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+    from cli_agent.state.evidence_state import EvidenceState
 
     class Agent(ConversationMixin):
         def __init__(self):
@@ -1068,9 +1068,9 @@ async def test_frontend_evidence_source_registered_on_resume():
 
 @pytest.mark.asyncio
 async def test_failed_frontend_result_cannot_be_used_as_evidence():
-    from cli_agent.agent_conversation import ConversationMixin
-    from cli_agent.evidence_state import EvidenceState, EvidenceError
-    from cli_agent.message_visibility import messages_for_model
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+    from cli_agent.state.evidence_state import EvidenceState, EvidenceError
+    from cli_agent.state.message_visibility import messages_for_model
 
     class Agent(ConversationMixin):
         def __init__(self):
@@ -1123,7 +1123,7 @@ async def test_failed_frontend_result_cannot_be_used_as_evidence():
 
 @pytest.mark.asyncio
 async def test_frontend_tool_cannot_shadow_internal_evidence_name():
-    from cli_agent.evidence_state import EVIDENCE_TOOL_NAME
+    from cli_agent.state.evidence_state import EVIDENCE_TOOL_NAME
 
     service = AgentApiService(lambda session: FrontendFakeAgent(session))
     headers = {"Authorization": "Bearer " + service.token, "Accept": "text/event-stream"}
@@ -1148,8 +1148,8 @@ async def test_frontend_tool_cannot_shadow_internal_evidence_name():
 @pytest.mark.asyncio
 async def test_resumed_frontend_results_expose_verified_short_source_refs():
     import json
-    from cli_agent.agent_conversation import ConversationMixin
-    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+    from cli_agent.state.evidence_state import EvidenceState
 
     class Agent(ConversationMixin):
         def __init__(self):

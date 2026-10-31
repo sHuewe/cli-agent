@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.config import load_config
+from cli_agent.settings.config import load_config
 
 
 @pytest.mark.parametrize(

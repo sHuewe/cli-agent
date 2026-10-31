@@ -7,13 +7,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.agent import CliAgent
-from cli_agent.config import McpServerConfig
+from cli_agent.runtime.agent import CliAgent
+from cli_agent.settings.config import McpServerConfig
 from cli_agent.okf_mcp_server.repository import OkfRepository
 from cli_agent.okf_mcp_server.repository_support import OkfRepositoryError
-from cli_agent.os_operations import Workspace, WorkspaceError
-from cli_agent.web_context import WebContext
-from cli_agent.web_context_agent import WebContextCliAgent, _url_for_log
+from cli_agent.platform.os_operations import Workspace, WorkspaceError
+from cli_agent.context.web_context import WebContext
+from cli_agent.context.web_context_agent import WebContextCliAgent, _url_for_log
 
 
 class RecordingModel:
@@ -150,10 +150,10 @@ def test_web_context_log_does_not_include_query_secret(tmp_path: Path, monkeypat
             fetched_at="2026-09-13T18:00:00+00:00",
         )
 
-    monkeypatch.setattr("cli_agent.web_context_agent.fetch_web_context", fake_fetch)
+    monkeypatch.setattr("cli_agent.context.web_context_agent.fetch_web_context", fake_fetch)
     agent = WebContextCliAgent(tmp_path, RecordingModel(), ())
     agent._exit_stack = SimpleNamespace()
-    caplog.set_level("INFO", logger="cli_agent.web_context")
+    caplog.set_level("INFO", logger="cli_agent.context.web_context")
 
     asyncio.run(agent.ask("add_web_context https://docs.example/start?token=supersecret"))
 

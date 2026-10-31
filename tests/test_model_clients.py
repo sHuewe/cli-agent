@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from cli_agent.model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
-from cli_agent.ollama import OllamaClient, OllamaError, ctx_large
-from cli_agent.openai_client import OpenAIClient, OpenAIError
+from cli_agent.models.model import CONTEXT_LIMIT_MARGIN, ContextLimitReachedError, TokenUsage
+from cli_agent.models.ollama import OllamaClient, OllamaError, ctx_large
+from cli_agent.models.openai_client import OpenAIClient, OpenAIError
 
 
 class FakeResponse:
@@ -176,7 +176,7 @@ def test_openai_context_limit_error_without_usage_uses_generic_message() -> None
 
 
 def test_openai_chat_builds_request_headers_tools_and_normalizes_response(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.openai_client.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.openai_client.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse(
         {
             "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
@@ -232,7 +232,7 @@ def test_openai_chat_builds_request_headers_tools_and_normalizes_response(monkey
 
 
 def test_openai_chat_without_api_key_omits_authorization_header(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.openai_client.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.openai_client.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse(
         {"choices": [{"message": {"content": "ok"}}]}
     )
@@ -250,7 +250,7 @@ def test_openai_chat_without_api_key_omits_authorization_header(monkeypatch) -> 
 
 
 def test_openai_chat_without_tools_omits_tool_fields_and_respects_explicit_auth_header(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.openai_client.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.openai_client.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse(
         {"choices": [{"message": {"content": "ok"}}]}
     )
@@ -271,7 +271,7 @@ def test_openai_chat_without_tools_omits_tool_fields_and_respects_explicit_auth_
 
 
 def test_openai_chat_wraps_http_error(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.openai_client.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.openai_client.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.post_error = httpx.ConnectError("offline")
     client = OpenAIClient(
         base_url="http://localhost:8000/v1",
@@ -286,7 +286,7 @@ def test_openai_chat_wraps_http_error(monkeypatch) -> None:
 
 
 def test_openai_chat_rejects_unexpected_response_shape(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.openai_client.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.openai_client.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse({"choices": []})
     client = OpenAIClient(
         base_url="http://localhost:8000/v1",
@@ -299,7 +299,7 @@ def test_openai_chat_rejects_unexpected_response_shape(monkeypatch) -> None:
 
 
 def test_openai_chat_discards_response_when_usage_reaches_context_limit(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.openai_client.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.openai_client.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse(
         {
             "usage": {"prompt_tokens": 1500, "completion_tokens": 10},
@@ -355,7 +355,7 @@ def test_ollama_context_limit_error_without_usage_is_generic() -> None:
 
 
 def test_ollama_chat_builds_secure_request_and_tracks_usage(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.ollama.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.ollama.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse(
         {
             "prompt_eval_count": 22,
@@ -388,7 +388,7 @@ def test_ollama_chat_builds_secure_request_and_tracks_usage(monkeypatch) -> None
 
 
 def test_ollama_chat_wraps_http_error(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.ollama.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.ollama.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse(
         {},
         error=httpx.HTTPStatusError(
@@ -406,7 +406,7 @@ def test_ollama_chat_wraps_http_error(monkeypatch) -> None:
 
 
 def test_ollama_chat_rejects_missing_message(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.ollama.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.ollama.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse({"prompt_eval_count": 1, "eval_count": 1})
     client = OllamaClient(base_url="http://localhost:11434", model="m")
 
@@ -415,7 +415,7 @@ def test_ollama_chat_rejects_missing_message(monkeypatch) -> None:
 
 
 def test_ollama_chat_discards_response_at_context_limit(monkeypatch) -> None:
-    monkeypatch.setattr("cli_agent.ollama.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("cli_agent.models.ollama.httpx.AsyncClient", FakeAsyncClient)
     FakeAsyncClient.response = FakeResponse(
         {
             "prompt_eval_count": 2000,

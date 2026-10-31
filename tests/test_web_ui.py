@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent import web_ui
-from cli_agent.cli import build_parser
+from cli_agent.interfaces import web_ui
+from cli_agent.interfaces.cli import build_parser
 
 
 def test_web_ui_flag_is_optional_and_defaults_off() -> None:
@@ -166,7 +166,7 @@ def test_web_ui_header_is_sticky() -> None:
 
 
 def test_working_messages_snapshot_is_detached() -> None:
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Dummy(ConversationMixin):
         pass
@@ -184,7 +184,7 @@ def test_working_messages_snapshot_is_detached() -> None:
 
 
 def test_working_tools_snapshot_is_detached() -> None:
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Dummy(ConversationMixin):
         pass
@@ -202,7 +202,7 @@ def test_working_tools_snapshot_is_detached() -> None:
 
 
 def test_working_tools_snapshot_defaults_to_empty_list() -> None:
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Dummy(ConversationMixin):
         pass
@@ -212,7 +212,7 @@ def test_working_tools_snapshot_defaults_to_empty_list() -> None:
 
 
 def test_history_reset_clears_conversation_diagnostics() -> None:
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Dummy(ConversationMixin):
         pass
@@ -256,8 +256,8 @@ def test_web_ui_broker_sends_mcp_user_message_event() -> None:
 
 
 def test_write_diff_preview_and_changed_file_rejection(tmp_path):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     (tmp_path / "a.properties").write_bytes(b"color=gr\xfcn\n")
     workspace = Workspace.from_directory(
@@ -290,8 +290,8 @@ def test_write_diff_preview_and_changed_file_rejection(tmp_path):
 
 
 def test_write_diff_cannot_read_protected_or_external_paths(tmp_path):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     (tmp_path / "private.txt").write_text("secret")
     workspace = Workspace.from_directory(
@@ -310,8 +310,8 @@ def test_write_diff_cannot_read_protected_or_external_paths(tmp_path):
 
 
 def test_external_tool_never_receives_local_file_diff(tmp_path):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     (tmp_path / "source.txt").write_text("private")
     broker = web_ui.WebUiApprovalBroker(
@@ -329,8 +329,8 @@ def test_external_tool_never_receives_local_file_diff(tmp_path):
 
 @pytest.mark.parametrize("newline", ["\r\n", "\r", "\n"])
 def test_write_diff_ignores_existing_line_ending_style(tmp_path, newline):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     (tmp_path / "file.txt").write_bytes(
         ("".join(f"line{i}{newline}" for i in range(1500))).encode("utf-8")
@@ -354,8 +354,8 @@ def test_write_diff_ignores_existing_line_ending_style(tmp_path, newline):
 
 
 def test_write_diff_escapes_unicode_controls_in_paths_and_content(tmp_path):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     filename = "a\u202eb.txt"
     (tmp_path / filename).write_text("old\u2066value", encoding="utf-8")
@@ -385,8 +385,8 @@ def test_write_diff_escapes_unicode_controls_in_paths_and_content(tmp_path):
     ],
 )
 def test_write_diff_marks_unterminated_lines(tmp_path, before, after, removed, added):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     (tmp_path / "file.txt").write_text(before, encoding="utf-8")
     broker = web_ui.WebUiApprovalBroker(
@@ -403,8 +403,8 @@ def test_write_diff_marks_unterminated_lines(tmp_path, before, after, removed, a
 
 
 def test_write_preview_limits_reads_before_open(tmp_path, monkeypatch):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     path = tmp_path / "large.txt"
     path.write_bytes(b"a" * (web_ui.MAX_APPROVAL_DIFF_BYTES + 1))
@@ -420,8 +420,8 @@ def test_write_preview_limits_reads_before_open(tmp_path, monkeypatch):
 
 
 def test_write_preview_rejects_symlink_swap_before_open(tmp_path, monkeypatch):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     target = tmp_path / "a.txt"
     secret = tmp_path / "secret.txt"
@@ -452,8 +452,8 @@ def test_write_preview_rejects_symlink_swap_before_open(tmp_path, monkeypatch):
 
 
 def test_write_preview_rejects_file_growth_on_confirm(tmp_path):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     path = tmp_path / "a.txt"
     path.write_text("initial", encoding="utf-8")
@@ -485,8 +485,8 @@ def test_write_preview_rejects_file_growth_on_confirm(tmp_path):
 
 @pytest.mark.parametrize("decision", ["no", "yes", "session"])
 def test_blocked_write_approval_can_be_dismissed_without_authorizing(tmp_path, decision):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     (tmp_path / "huge.txt").write_bytes(
         b"a" * (web_ui.MAX_APPROVAL_DIFF_BYTES + 1)
@@ -522,8 +522,8 @@ def test_blocked_write_approval_can_be_dismissed_without_authorizing(tmp_path, d
 
 @pytest.mark.skipif(web_ui.os.name == "nt", reason="POSIX st_ino fallback only")
 def test_write_preview_fails_closed_when_inode_unavailable(tmp_path, monkeypatch):
-    from cli_agent.config import McpServerConfig
-    from cli_agent.os_operations import Workspace
+    from cli_agent.settings.config import McpServerConfig
+    from cli_agent.platform.os_operations import Workspace
 
     file_path = tmp_path / "safe.txt"
     file_path.write_text("legitimate")

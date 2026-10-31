@@ -6,13 +6,13 @@ import json
 
 import pytest
 
-from cli_agent.config import McpServerConfig
-from cli_agent.data_mcp_server import create_server
-from cli_agent.data_operations import DataOperationError, DataOperations
-from cli_agent.dataframe_operations import DataFrameOperations
-from cli_agent.dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
-from cli_agent.mcp_result_artifacts import METADATA_FOR_LLM_KEY, McpResultArtifacts
-from cli_agent.os_operations import AllowedPath, Workspace
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.data.data_mcp_server import create_server
+from cli_agent.data.data_operations import DataOperationError, DataOperations
+from cli_agent.data.dataframe_operations import DataFrameOperations
+from cli_agent.data.dataframe_types import DataFrameSource, DerivedColumn, ResampleAggregation
+from cli_agent.security.mcp_result_artifacts import METADATA_FOR_LLM_KEY, McpResultArtifacts
+from cli_agent.platform.os_operations import AllowedPath, Workspace
 
 
 def _frames(tmp_path):

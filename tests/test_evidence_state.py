@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import pytest
 
-from cli_agent.evidence_state import EvidenceError, EvidenceState, EVIDENCE_TOOL, EVIDENCE_TOOL_NAME
+from cli_agent.state.evidence_state import EvidenceError, EvidenceState, EVIDENCE_TOOL, EVIDENCE_TOOL_NAME
 
 
 def _entry(call_id="call-1", evidence_id="e0"):
@@ -121,9 +121,9 @@ def test_no_evidence_has_no_added_context():
 def test_internal_evidence_tool_call_is_transient_in_main_loop():
     import asyncio
     from types import SimpleNamespace
-    from cli_agent.agent_loop import run_model_loop
-    from cli_agent.config import LoggingConfig
-    from cli_agent.evidence_tools import ADD_EVIDENCE_TOOL_NAME
+    from cli_agent.runtime.agent_loop import run_model_loop
+    from cli_agent.settings.config import LoggingConfig
+    from cli_agent.state.evidence_tools import ADD_EVIDENCE_TOOL_NAME
 
     class Model:
         def __init__(self):
@@ -189,7 +189,7 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
 
 
 def test_evidence_is_available_by_default_with_tools(tmp_path):
-    from cli_agent.agent import CliAgent
+    from cli_agent.runtime.agent import CliAgent
 
     agent = CliAgent(tmp_path, object(), ())
     assert isinstance(agent._evidence_state, EvidenceState)
@@ -211,9 +211,9 @@ def test_evidence_is_available_by_default_with_tools(tmp_path):
 def test_idless_ollama_tool_calls_support_evidence_compaction():
     import asyncio
     from types import SimpleNamespace
-    from cli_agent.agent_loop import run_model_loop
-    from cli_agent.config import LoggingConfig
-    from cli_agent.evidence_tools import ADD_EVIDENCE_TOOL_NAME
+    from cli_agent.runtime.agent_loop import run_model_loop
+    from cli_agent.settings.config import LoggingConfig
+    from cli_agent.state.evidence_tools import ADD_EVIDENCE_TOOL_NAME
 
     class Model:
         def __init__(self):
@@ -292,9 +292,9 @@ def test_idless_ollama_tool_calls_support_evidence_compaction():
 def test_evidence_updates_use_regular_tool_activity_events():
     import asyncio
     from types import SimpleNamespace
-    from cli_agent.agent_loop import run_model_loop
-    from cli_agent.config import LoggingConfig
-    from cli_agent.evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
+    from cli_agent.runtime.agent_loop import run_model_loop
+    from cli_agent.settings.config import LoggingConfig
+    from cli_agent.state.evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME
 
     events = []
 
@@ -376,7 +376,7 @@ def test_evidence_requires_at_least_one_verified_source():
     assert EVIDENCE_TOOL_NAME == "agent__update_evidence"
 
     schema = __import__(
-        "cli_agent.evidence_state", fromlist=["EVIDENCE_TOOL"]
+        "cli_agent.state.evidence_state", fromlist=["EVIDENCE_TOOL"]
     ).EVIDENCE_TOOL["function"]["parameters"]
     assert schema["properties"]["evidences"]["items"]["properties"][
         "tool_calls"]["minItems"] == 1

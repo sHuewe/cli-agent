@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from cli_agent import __version__
-import cli_agent.flow as flow_module
-from cli_agent.flow import load_flow, run_flow, validate_flow
+import cli_agent.workflows.flow as flow_module
+from cli_agent.workflows.flow import load_flow, run_flow, validate_flow
 
 
 def _write_config(path: Path) -> None:
@@ -6784,7 +6784,7 @@ with_mcp = ["fachsoftware", "validator"]
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     monkeypatch.setattr(flow_module, "run_conversation", fake_run_conversation)
 
-    from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
+    from cli_agent.settings.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
 
     dependencies = flow_module.ExecutionDependencies(
         load_admin_config=lambda: AdminConfig(
@@ -6841,8 +6841,8 @@ def test_flow_mcp_preflight_rejects_invalid_selection_before_first_step(
     existing: bool,
     error: type[Exception],
 ) -> None:
-    from cli_agent.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
-    from cli_agent.config import AppConfig, McpServerConfig
+    from cli_agent.settings.admin_config import AdminConfig, McpPolicy, TrustedMcpServer
+    from cli_agent.settings.config import AppConfig, McpServerConfig
 
     (tmp_path / "first.md").write_text("first", encoding="utf-8")
     (tmp_path / "second.md").write_text("second", encoding="utf-8")
@@ -6915,7 +6915,7 @@ def test_flow_mcp_preflight_recurses_into_child_flows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cli_agent.admin_config import AdminConfig
+    from cli_agent.settings.admin_config import AdminConfig
 
     (tmp_path / "first.md").write_text("first", encoding="utf-8")
     (tmp_path / "child.md").write_text("child", encoding="utf-8")

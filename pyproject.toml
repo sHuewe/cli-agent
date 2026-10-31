@@ -33,17 +33,17 @@ dev = [
 ]
 
 [project.scripts]
-cli-agent = "cli_agent.cli:main"
-cli-agent-api = "cli_agent.agent_api:main"
-cli-agent-flow = "cli_agent.flow:main"
-cli-agent-knowledge = "cli_agent.knowledge_cli:main"
-cli-agent-rag = "cli_agent.rag_cli:main"
+cli-agent = "cli_agent.interfaces.cli:main"
+cli-agent-api = "cli_agent.interfaces.agent_api:main"
+cli-agent-flow = "cli_agent.workflows.flow:main"
+cli-agent-knowledge = "cli_agent.context.knowledge_cli:main"
+cli-agent-rag = "cli_agent.context.rag_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cli_agent"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/cli_agent/config.example.toml" = "cli_agent/config.example.toml"
+"src/cli_agent/settings/config.example.toml" = "cli_agent/settings/config.example.toml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import cli_agent.agent_conversation as agent_conversation_module
-from cli_agent.ag_ui_frontend_tools import FrontendToolHandoff
-from cli_agent.agent_conversation import ConversationMixin
-from cli_agent.mcp_result_artifacts import McpResultArtifacts
+import cli_agent.runtime.agent_conversation as agent_conversation_module
+from cli_agent.interfaces.ag_ui_frontend_tools import FrontendToolHandoff
+from cli_agent.runtime.agent_conversation import ConversationMixin
+from cli_agent.security.mcp_result_artifacts import McpResultArtifacts
 
 
 class ConversationHarness(ConversationMixin):
@@ -700,7 +700,7 @@ def test_collect_knowledge_fails_on_root_index_error() -> None:
 
 
 def test_sub_run_snapshot_projects_delegated_evidence_without_mutating_transcript() -> None:
-    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.state.evidence_state import EvidenceState
 
     agent = ConversationHarness()
     evidence = EvidenceState()
@@ -732,7 +732,7 @@ def test_sub_run_snapshot_projects_delegated_evidence_without_mutating_transcrip
 
 
 def test_live_main_snapshot_uses_coordinator_evidence_during_sub_run() -> None:
-    from cli_agent.evidence_state import EvidenceState
+    from cli_agent.state.evidence_state import EvidenceState
 
     agent = ConversationHarness()
     parent = EvidenceState()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cli_agent.network_policy import NetworkConfig, validate_http_url
+from cli_agent.security.network_policy import NetworkConfig, validate_http_url
 
 
 def test_default_network_policy_is_local_only() -> None:

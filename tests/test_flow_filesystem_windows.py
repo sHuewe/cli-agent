@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.flow_filesystem_operations import inventory_directory
+from cli_agent.workflows.flow_filesystem_operations import inventory_directory
 
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows-only inventory tests")

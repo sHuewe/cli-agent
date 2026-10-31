@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 
-from cli_agent.data_result_metadata import (
+from cli_agent.data.data_result_metadata import (
     MAX_SUMMARY_METADATA_BYTES,
     add_large_result_summary,
     structured_table_result,
 )
-from cli_agent.mcp_result_artifacts import METADATA_FOR_LLM_KEY
+from cli_agent.security.mcp_result_artifacts import METADATA_FOR_LLM_KEY
 
 
 def _large_metadata(columns, rows, *, operation="select_data"):

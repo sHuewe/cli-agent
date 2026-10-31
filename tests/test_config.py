@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-import cli_agent.config as config_module
-from cli_agent.config import load_config
-from cli_agent.logging_setup import (
+import cli_agent.settings.config as config_module
+from cli_agent.settings.config import load_config
+from cli_agent.platform.logging_setup import (
     _FileLock,
     _cleanup_process_log_files,
     configure_logging,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cli_agent.mcp_contracts import (
+from cli_agent.security.mcp_contracts import (
     tool_contract_fingerprint,
     validate_tool_contract_fingerprint,
 )

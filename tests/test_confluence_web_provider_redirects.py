@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-import cli_agent.web_context as web_context_module
-from cli_agent.admin_config import WebProviderConfig
-from cli_agent.web_context import (
+import cli_agent.context.web_context as web_context_module
+from cli_agent.settings.admin_config import WebProviderConfig
+from cli_agent.context.web_context import (
     _confluence_get_json,
     _validate_confluence_credential_url,
 )

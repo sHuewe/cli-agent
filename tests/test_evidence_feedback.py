@@ -4,7 +4,7 @@ import copy
 import json
 from types import SimpleNamespace
 
-from cli_agent.evidence_state import EvidenceState
+from cli_agent.state.evidence_state import EvidenceState
 
 
 def _plan():
@@ -56,8 +56,8 @@ def test_compact_projection_retains_internal_provenance():
 
 
 def test_plan_feedback_is_model_visible():
-    from cli_agent.agent_loop import run_model_loop
-    from cli_agent.config import LoggingConfig
+    from cli_agent.runtime.agent_loop import run_model_loop
+    from cli_agent.settings.config import LoggingConfig
 
     class Model:
         def __init__(self):

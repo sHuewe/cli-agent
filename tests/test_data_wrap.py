@@ -9,15 +9,15 @@ from pathlib import Path
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
-from cli_agent.agent_knowledge import tool_result_text
-from cli_agent.config import McpServerConfig
-from cli_agent.data_mcp_server import create_server
-from cli_agent.data_operations import DataOperationError, DataOperations, MAX_DATA_PAYLOAD_CHARS
-from cli_agent.data_result_metadata import DECIMAL_SCALAR_KEY
-from cli_agent.mcp_result_artifacts import (
+from cli_agent.context.agent_knowledge import tool_result_text
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.data.data_mcp_server import create_server
+from cli_agent.data.data_operations import DataOperationError, DataOperations, MAX_DATA_PAYLOAD_CHARS
+from cli_agent.data.data_result_metadata import DECIMAL_SCALAR_KEY
+from cli_agent.security.mcp_result_artifacts import (
     McpResultArtifacts, METADATA_FOR_LLM_KEY, ONLY_METADATA_TO_LLM_KEY,
 )
-from cli_agent.os_operations import AllowedPath, Workspace
+from cli_agent.platform.os_operations import AllowedPath, Workspace
 
 
 @pytest.fixture

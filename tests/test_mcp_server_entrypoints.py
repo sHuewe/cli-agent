@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.config import McpServerConfig
+from cli_agent.settings.config import McpServerConfig
 from cli_agent.okf_mcp_server import server as okf_server
-from cli_agent import os_mcp_server
+from cli_agent.platform import os_mcp_server
 
 
 class FakeFastMCP:

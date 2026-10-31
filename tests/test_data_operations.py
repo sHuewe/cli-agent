@@ -6,16 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.config import McpServerConfig
-from cli_agent.data_markdown import (
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.data.data_markdown import (
     MarkdownTableError,
     extract_markdown_tables as parse_markdown_tables,
 )
-from cli_agent.data_operations import (
+from cli_agent.data.data_operations import (
     DataOperationError,
     DataOperations,
 )
-from cli_agent.os_operations import Workspace, WorkspaceError
+from cli_agent.platform.os_operations import Workspace, WorkspaceError
 
 
 def _operations(tmp_path: Path, *, protected_paths=()) -> DataOperations:
@@ -202,7 +202,7 @@ def test_inspect_schema_omits_later_domains_when_total_budget_is_exceeded(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "cli_agent.data_operations.MAX_SCHEMA_DISTINCT_TOTAL_CHARS",
+        "cli_agent.data.data_operations.MAX_SCHEMA_DISTINCT_TOTAL_CHARS",
         20,
     )
 
@@ -232,7 +232,7 @@ def test_inspect_schema_drops_distinct_domains_before_columns(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "cli_agent.data_operations.MAX_SCHEMA_RESULT_CHARS",
+        "cli_agent.data.data_operations.MAX_SCHEMA_RESULT_CHARS",
         310,
     )
 
@@ -263,7 +263,7 @@ def test_inspect_schema_truncates_columns_when_metadata_exceeds_budget(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "cli_agent.data_operations.MAX_SCHEMA_RESULT_CHARS",
+        "cli_agent.data.data_operations.MAX_SCHEMA_RESULT_CHARS",
         240,
     )
 
@@ -454,7 +454,7 @@ def test_select_and_aggregate_return_all_rows_beyond_previous_limits(
 def test_oversized_full_result_fails_instead_of_truncating(
     tmp_path: Path, monkeypatch, aggregate: bool,
 ) -> None:
-    from cli_agent import data_operations
+    from cli_agent.data import data_operations
 
     assert data_operations.MAX_FULL_RESULT_BYTES == 16_000_000
     (tmp_path / "many.csv").write_text(

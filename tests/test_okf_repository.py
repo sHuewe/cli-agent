@@ -414,7 +414,7 @@ def test_knowledge_read_reports_truncated_internal_links(tmp_path: Path) -> None
 
 @pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX symlink swap")
 def test_discovery_rejects_replaced_symlink_before_read(tmp_path, monkeypatch):
-    import cli_agent.filesystem_security as security
+    import cli_agent.security.filesystem_security as security
     (tmp_path / "index.md").write_text("[Concept](concept.md)", encoding="utf-8")
     concept = tmp_path / "concept.md"
     concept.write_text(_concept(), encoding="utf-8")
@@ -459,7 +459,7 @@ def test_okf_read_rejects_junction_parent(tmp_path: Path):
 def test_windows_pinned_directory_denies_concurrent_write_handle(tmp_path: Path, monkeypatch):
     import ctypes
     from ctypes import wintypes
-    import cli_agent.filesystem_security as security
+    import cli_agent.security.filesystem_security as security
     root = tmp_path / "okf"
     root.mkdir()
     (root / "index.md").write_text("Root", encoding="utf-8")

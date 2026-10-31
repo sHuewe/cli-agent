@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from cli_agent.agent import CliAgent
+from cli_agent.runtime.agent import CliAgent
 
 
 def test_stdio_environment_enables_python_safe_path_for_all_servers(monkeypatch) -> None:

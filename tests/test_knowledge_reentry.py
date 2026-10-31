@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cli_agent.agent import CliAgent
+from cli_agent.runtime.agent import CliAgent
 
 
 @pytest.mark.asyncio
@@ -64,7 +64,7 @@ def test_knowledge_prompt_matches_available_backends(mode):
 
 @pytest.mark.asyncio
 async def test_disabled_okf_hybrid_does_not_call_embedding_or_knowledge_loop():
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Harness(ConversationMixin):
         pass
@@ -83,7 +83,7 @@ async def test_disabled_okf_hybrid_does_not_call_embedding_or_knowledge_loop():
 
 @pytest.mark.asyncio
 async def test_optional_hybrid_vector_start_failure_uses_okf_only():
-    from cli_agent.agent_conversation import ConversationMixin
+    from cli_agent.runtime.agent_conversation import ConversationMixin
 
     class Harness(ConversationMixin):
         pass

@@ -7,9 +7,9 @@ import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
 
-from cli_agent import pdf_text
-from cli_agent.config import McpServerConfig
-from cli_agent.os_operations import Workspace, WorkspaceError
+from cli_agent.context import pdf_text
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.platform.os_operations import Workspace, WorkspaceError
 
 
 def _pdf(*texts: str, encrypted: bool = False) -> bytes:

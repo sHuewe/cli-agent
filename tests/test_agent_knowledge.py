@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.agent_prompts import KNOWLEDGE_SYSTEM_PROMPT
-from cli_agent.agent_knowledge import (
+from cli_agent.runtime.agent_prompts import KNOWLEDGE_SYSTEM_PROMPT
+from cli_agent.context.agent_knowledge import (
     _KnowledgeRunState,
     _assemble_knowledge_payload,
     _fallback_knowledge_selection,
     _validate_knowledge_selection,
 )
-from cli_agent.agent_knowledge_support import _knowledge_allowed_calls
+from cli_agent.context.agent_knowledge_support import _knowledge_allowed_calls
 
 
 def _state_with_concept() -> tuple[_KnowledgeRunState, str]:

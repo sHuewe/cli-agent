@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from cli_agent.config import LoggingConfig
-from cli_agent.logging_setup import (
+from cli_agent.settings.config import LoggingConfig
+from cli_agent.platform.logging_setup import (
     _process_lock_file,
     configure_logging,
     process_log_file,

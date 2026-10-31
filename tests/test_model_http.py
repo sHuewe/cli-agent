@@ -6,7 +6,7 @@ import gzip
 import httpx
 import pytest
 
-from cli_agent.model_http import (
+from cli_agent.models.model_http import (
     ModelResponseTooLargeError,
     read_bounded_json_response,
     read_bounded_response_bytes,

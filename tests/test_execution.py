@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent.admin_config import AdminConfig
-from cli_agent.config import AppConfig, ModelConfig
-from cli_agent.execution import (
+from cli_agent.settings.admin_config import AdminConfig
+from cli_agent.settings.config import AppConfig, ModelConfig
+from cli_agent.platform.execution import (
     ConversationRunOptions,
     ExecutionDependencies,
     OneShotRunOptions,
@@ -18,8 +18,8 @@ from cli_agent.execution import (
     run_conversation,
     run_once,
 )
-from cli_agent.file_context import FileContext
-from cli_agent.model import (
+from cli_agent.context.file_context import FileContext
+from cli_agent.models.model import (
     ModelRequestError,
     ModelRetryPolicy,
     RetryingModelClient,
@@ -279,7 +279,7 @@ def test_retrying_model_client_retries_only_retryable_errors(
     async def fake_sleep(delay):
         sleeps.append(delay)
 
-    monkeypatch.setattr("cli_agent.model.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("cli_agent.models.model.asyncio.sleep", fake_sleep)
 
     model = FakeModel()
     retrying = RetryingModelClient(
@@ -318,7 +318,7 @@ def test_retrying_model_client_does_not_retry_permanent_error(
     async def fail_sleep(_delay):
         raise AssertionError("sleep must not be called")
 
-    monkeypatch.setattr("cli_agent.model.asyncio.sleep", fail_sleep)
+    monkeypatch.setattr("cli_agent.models.model.asyncio.sleep", fail_sleep)
 
     model = FakeModel()
     retrying = RetryingModelClient(
@@ -409,7 +409,7 @@ def test_retrying_model_client_caps_initial_delay_at_maximum(
     async def fake_sleep(delay):
         sleeps.append(delay)
 
-    monkeypatch.setattr("cli_agent.model.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("cli_agent.models.model.asyncio.sleep", fake_sleep)
 
     retrying = RetryingModelClient(
         FakeModel(),
@@ -513,7 +513,7 @@ def test_run_once_rejects_unknown_response_format(tmp_path: Path) -> None:
 def test_resolve_excluded_paths_is_workspace_relative_and_deduplicated(
     tmp_path: Path,
 ) -> None:
-    from cli_agent.execution import resolve_excluded_paths
+    from cli_agent.platform.execution import resolve_excluded_paths
 
     resolved = resolve_excluded_paths(
         tmp_path,
@@ -534,7 +534,7 @@ def test_resolve_excluded_paths_rejects_workspace_escape(
     tmp_path: Path,
     path: Path,
 ) -> None:
-    from cli_agent.execution import resolve_excluded_paths
+    from cli_agent.platform.execution import resolve_excluded_paths
 
     with pytest.raises(ValueError, match="Ausgeschlossene"):
         resolve_excluded_paths(tmp_path, (path,))

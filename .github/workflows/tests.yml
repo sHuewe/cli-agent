@@ -58,6 +58,37 @@ jobs:
           --cov-report=term-missing
           --cov-fail-under=85
 
+
+  branch-coverage:
+    name: Informational branch coverage / Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned uv
+        run: python -m pip install uv==0.12.13
+      - name: Sync locked project and test dependencies
+        run: uv sync --frozen --extra dev
+      - name: Measure branch coverage without gate
+        run: >-
+          uv run --frozen python -m pytest
+          --cov=cli_agent
+          --cov-branch
+          --cov-report=term-missing
+          --cov-report=xml:branch-coverage.xml
+          --cov-fail-under=0
+      - name: Upload branch coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: branch-coverage-linux-${{ github.sha }}
+          path: branch-coverage.xml
+          if-no-files-found: ignore
+
   compatibility-test:
     name: PR compatibility / ${{ matrix.os }} / Python ${{ matrix.python-version }}
     if: ${{ github.event_name == 'pull_request' }}
@@ -141,6 +172,15 @@ jobs:
           }
           uv run --no-project --with $wheel.FullName python -c "import importlib.metadata, pathlib, tomllib, cli_agent; project = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']; expected = project['version']; assert cli_agent.__version__ == expected, f'module version {cli_agent.__version__!r} != {expected!r}'; installed = importlib.metadata.version(project['name']); assert installed == expected, f'distribution version {installed!r} != {expected!r}'"
 
+      - name: Verify relocated bundled resources in built wheel
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -Path dist -Filter *.whl | Select-Object -First 1
+          if (-not $wheel) {
+            throw "No wheel was produced in dist/."
+          }
+          uv run --no-project --with $wheel.FullName python -c "from importlib.resources import files; import json; template = files('cli_agent.settings').joinpath('config.example.toml').read_text(encoding='utf-8'); schema = json.loads(files('cli_agent.interfaces').joinpath('ag_ui_schema_1_0.json').read_text(encoding='utf-8')); assert template.strip() and isinstance(schema, dict)"
+
       - name: Verify built wheel Web UI extra installs
         shell: pwsh
         run: |
@@ -150,7 +190,7 @@ jobs:
           }
           $wheelUri = [System.Uri]::new($wheel.FullName).AbsoluteUri
           $requirement = "cli-agent[web] @ $wheelUri"
-          uv run --no-project --with "$requirement" python -c "from cli_agent.web_ui import ensure_web_ui_available; ensure_web_ui_available(); import starlette, uvicorn, websockets"
+          uv run --no-project --with "$requirement" python -c "from cli_agent.interfaces.web_ui import ensure_web_ui_available; ensure_web_ui_available(); import starlette, uvicorn, websockets"
 
       - name: Verify source distribution exists
         shell: pwsh

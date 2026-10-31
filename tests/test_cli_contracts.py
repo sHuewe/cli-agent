@@ -6,23 +6,23 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent import cli as cli_module
-from cli_agent.admin_config import (
+from cli_agent.interfaces import cli as cli_module
+from cli_agent.settings.admin_config import (
     AdminConfig,
     McpPolicy,
     TrustedMcpServer,
     TrustedMcpToolApproval,
 )
-from cli_agent.cli import (
+from cli_agent.interfaces.cli import (
     McpToolInspection,
     _inspect_mcp_tool,
     _render_tool_approval_fragment,
     _render_trusted_server_fragment,
     build_admin_parser,
 )
-from cli_agent.config import AppConfig, McpServerConfig
-from cli_agent.mcp_contracts import tool_contract_fingerprint
-from cli_agent.network_policy import NetworkConfig
+from cli_agent.settings.config import AppConfig, McpServerConfig
+from cli_agent.security.mcp_contracts import tool_contract_fingerprint
+from cli_agent.security.network_policy import NetworkConfig
 
 SCHEMA = {
     "type": "object",

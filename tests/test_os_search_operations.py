@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent import os_operations
-from cli_agent.config import McpServerConfig
-from cli_agent.os_operations import Workspace, WorkspaceError
+from cli_agent.platform import os_operations
+from cli_agent.settings.config import McpServerConfig
+from cli_agent.platform.os_operations import Workspace, WorkspaceError
 
 
 def _workspace(path: Path) -> Workspace:
