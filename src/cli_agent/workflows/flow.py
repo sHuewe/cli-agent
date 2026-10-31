@@ -2141,64 +2141,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
     )
 
 
-class _JsonNumber(str):
-    """Lossless representation of a validated JSON non-integer number."""
-
-
-def _json_dump_string(value: str) -> str:
-    dumped = json.dumps(value, ensure_ascii=False)
-    return "".join(
-        f"\\u{ord(char):04x}"
-        if 0xD800 <= ord(char) <= 0xDFFF
-        else char
-        for char in dumped
-    )
-
-
-def _json_dumps_preserving_numbers(value: Any) -> str:
-    if isinstance(value, _JsonNumber):
-        return str(value)
-    if value is None:
-        return "null"
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if isinstance(value, str):
-        return _json_dump_string(value)
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        try:
-            return json.dumps(
-                value,
-                ensure_ascii=False,
-                allow_nan=False,
-                separators=(",", ":"),
-            )
-        except ValueError as exc:
-            raise TypeError(
-                "Nicht unterstützter JSON-Wert: nicht-endlicher float"
-            ) from exc
-    if isinstance(value, list):
-        return "[" + ",".join(
-            _json_dumps_preserving_numbers(item)
-            for item in value
-        ) + "]"
-    if isinstance(value, dict):
-        parts: list[str] = []
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("JSON-Objektschlüssel müssen Strings sein.")
-            parts.append(
-                _json_dump_string(key)
-                + ":"
-                + _json_dumps_preserving_numbers(item)
-            )
-        return "{" + ",".join(parts) + "}"
-    raise TypeError(
-        f"Nicht unterstützter JSON-Wert: {type(value).__name__}"
-    )
+from cli_agent.workflows.flow_json_operations import _JsonNumber, _json_dumps_preserving_numbers
 
 
 def _lookup(
