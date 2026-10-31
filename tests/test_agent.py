@@ -801,7 +801,7 @@ def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
         return DummyContext()
 
     monkeypatch.setattr("cli_agent.agent_mcp.stdio_client", fake_stdio_client)
-    monkeypatch.setattr("cli_agent.agent_mcp.ClientSession", lambda *_args: DummySession())
+    monkeypatch.setattr("cli_agent.agent_mcp.CancellableClientSession", lambda *_args: DummySession())
 
     async def exercise() -> None:
         stack = AsyncExitStack()
