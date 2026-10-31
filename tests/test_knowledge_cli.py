@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent import knowledge_cli
+from cli_agent.context import knowledge_cli
 
 
 @pytest.mark.asyncio

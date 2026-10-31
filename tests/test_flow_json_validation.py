@@ -1,5 +1,5 @@
 import pytest
-from cli_agent.flow_json_validation import validate_okf_plan, build_okf_manifest
+from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest
 
 
 def doctrine(concepts=None):

@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.config import VectorKnowledgeConfig, load_config
-from cli_agent.knowledge_vector import (
+from cli_agent.settings.config import VectorKnowledgeConfig, load_config
+from cli_agent.context.knowledge_vector import (
     SQLiteKnowledgeStore, VectorKnowledgeSession, _chunks, build_index,
 )
-from cli_agent.network_policy import NetworkConfig
+from cli_agent.security.network_policy import NetworkConfig
 
 
 def test_vector_configuration_is_fully_optional(tmp_path):
@@ -90,7 +90,7 @@ def test_chunking_bounded():
 @pytest.mark.parametrize("provider", ["ollama", "openai"])
 async def test_embedding_provider_contracts(monkeypatch, provider):
     import httpx
-    from cli_agent.knowledge_vector import EmbeddingProvider
+    from cli_agent.context.knowledge_vector import EmbeddingProvider
 
     seen = []
     class Response:
@@ -132,7 +132,7 @@ async def test_embedding_provider_contracts(monkeypatch, provider):
 @pytest.mark.asyncio
 async def test_embedding_rejects_invalid_vectors(monkeypatch):
     import httpx
-    from cli_agent.knowledge_vector import EmbeddingProvider
+    from cli_agent.context.knowledge_vector import EmbeddingProvider
     class Response:
         def raise_for_status(self):
             pass
@@ -154,7 +154,7 @@ async def test_embedding_rejects_invalid_vectors(monkeypatch):
 
 
 def test_okf_indexing_only_reachable_valid_concepts(tmp_path):
-    from cli_agent.knowledge_vector import _okf_paths
+    from cli_agent.context.knowledge_vector import _okf_paths
     (tmp_path / "index.md").write_text("# Knowledge\n[Service](service.md)", encoding="utf-8")
     (tmp_path / "service.md").write_text(
         "---\ntype: concept\ntitle: Service\n---\n# Service",
@@ -222,7 +222,7 @@ def test_embedding_endpoint_metadata_rejects_changed_host(tmp_path):
 
 
 def test_embedding_endpoint_identity_normalization():
-    from cli_agent.knowledge_vector import _embedding_endpoint_identity
+    from cli_agent.context.knowledge_vector import _embedding_endpoint_identity
     assert _embedding_endpoint_identity("HTTPS://EXAMPLE.ORG:443/v1/") == "https://example.org/v1"
     assert _embedding_endpoint_identity("http://localhost:11434/") == "http://localhost:11434"
     with pytest.raises(ValueError):
@@ -263,7 +263,7 @@ def test_readonly_sqlite_uri_handles_query_and_fragment_in_filename(tmp_path):
 ])
 async def test_openai_embedding_rejects_bad_indices(monkeypatch, indices):
     import httpx
-    from cli_agent.knowledge_vector import EmbeddingProvider
+    from cli_agent.context.knowledge_vector import EmbeddingProvider
     class Response:
         def raise_for_status(self):
             pass
@@ -287,7 +287,7 @@ async def test_openai_embedding_rejects_bad_indices(monkeypatch, indices):
 
 def test_boolean_embeddings_and_non_finite_stored_vectors_are_rejected(tmp_path):
     import struct
-    from cli_agent.knowledge_vector import _encode
+    from cli_agent.context.knowledge_vector import _encode
     with pytest.raises(ValueError, match="ungültige"):
         _encode([True, 0.5])
     store = SQLiteKnowledgeStore(tmp_path / "corrupt.sqlite", readonly=False)
@@ -307,7 +307,7 @@ def test_boolean_embeddings_and_non_finite_stored_vectors_are_rejected(tmp_path)
 
 @pytest.mark.asyncio
 async def test_okf_only_vector_index_rejects_raw_and_builds_reachable_concepts(tmp_path, monkeypatch):
-    from cli_agent.knowledge_vector import EmbeddingProvider, update_index
+    from cli_agent.context.knowledge_vector import EmbeddingProvider, update_index
     root = tmp_path / "okf"
     root.mkdir()
     (root / "index.md").write_text("# Knowledge\n[Service](service.md)", encoding="utf-8")
@@ -333,7 +333,7 @@ async def test_okf_only_vector_index_rejects_raw_and_builds_reachable_concepts(t
 
 
 def test_okf_verified_read_enforces_configured_limit(tmp_path):
-    from cli_agent.knowledge_vector import _read_source
+    from cli_agent.context.knowledge_vector import _read_source
     (tmp_path / "concept.md").write_text(
         "---\ntype: concept\n---\n# A\n" + "content " * 100, encoding="utf-8"
     )
@@ -346,7 +346,7 @@ def test_okf_verified_read_enforces_configured_limit(tmp_path):
 
 @pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX symlink race regression")
 def test_okf_verified_read_blocks_swapped_symlink(tmp_path, monkeypatch):
-    import cli_agent.knowledge_vector as module
+    import cli_agent.context.knowledge_vector as module
     root = tmp_path / "okf"
     root.mkdir()
     document = root / "concept.md"
@@ -366,7 +366,7 @@ def test_okf_verified_read_blocks_swapped_symlink(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_okf_read_limit_is_bound_to_index_metadata(tmp_path, monkeypatch):
-    from cli_agent.knowledge_vector import EmbeddingProvider, update_index
+    from cli_agent.context.knowledge_vector import EmbeddingProvider, update_index
     root = tmp_path / "okf"
     root.mkdir()
     (root / "index.md").write_text("[A](a.md)", encoding="utf-8")

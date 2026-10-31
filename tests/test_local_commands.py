@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cli_agent.local_commands import classify_local_command
+from cli_agent.platform.local_commands import classify_local_command
 
 
 def test_exact_local_command_is_parsed() -> None:

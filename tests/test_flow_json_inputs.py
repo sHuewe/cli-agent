@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import cli_agent.flow as flow_module
-from cli_agent.flow import load_flow, run_flow
+import cli_agent.workflows.flow as flow_module
+from cli_agent.workflows.flow import load_flow, run_flow
 
 
 def _flow(workspace: Path, text: str, name: str = "flow.toml"):

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from cli_agent.flow import load_flow, run_flow, validate_flow
-from cli_agent.flow_json_operations import transform_json
+from cli_agent.workflows.flow import load_flow, run_flow, validate_flow
+from cli_agent.workflows.flow_json_operations import transform_json
 
 
 def test_json_batch_count_and_order() -> None:
@@ -82,7 +82,7 @@ def test_deterministic_step_reads_completed_checkpoint_without_llm(
     )
     flow = load_flow(Path("flow.toml"), workspace=tmp_path)
     assert flow.steps[-1].prompt_file is None
-    from cli_agent import flow as flow_module
+    from cli_agent.workflows import flow as flow_module
 
     async def unexpected_model(*args: object, **kwargs: object) -> None:
         raise AssertionError("No model should run")
@@ -120,7 +120,7 @@ def test_batch_byte_limit_includes_json_envelope() -> None:
 
 
 def test_batch_count_is_bounded_before_unbounded_allocation() -> None:
-    import cli_agent.flow_json_operations as module
+    import cli_agent.workflows.flow_json_operations as module
 
     with pytest.raises(ValueError, match="Batch-Anzahllimit"):
         module.transform_json(
@@ -133,7 +133,7 @@ def test_batch_count_is_bounded_before_unbounded_allocation() -> None:
 def test_batch_result_limit_is_enforced_incrementally(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cli_agent.flow_json_operations as module
+    import cli_agent.workflows.flow_json_operations as module
 
     monkeypatch.setattr(module, "MAX_RESULT_BYTES", 200)
     with pytest.raises(ValueError, match="Ergebnislimit"):
@@ -157,7 +157,7 @@ def test_batch_unicode_uses_emitted_utf8_size() -> None:
 
 
 def test_batch_uses_exact_flow_serializer_for_numbers() -> None:
-    from cli_agent.flow import _JsonNumber, _json_dumps_preserving_numbers
+    from cli_agent.workflows.flow import _JsonNumber, _json_dumps_preserving_numbers
 
     source = [_JsonNumber("1e-200")] * 5
     result = transform_json(
@@ -170,7 +170,7 @@ def test_batch_uses_exact_flow_serializer_for_numbers() -> None:
 
 
 def test_batch_utf8_boundary_accounts_for_id_and_payload() -> None:
-    from cli_agent.flow import _json_dumps_preserving_numbers
+    from cli_agent.workflows.flow import _json_dumps_preserving_numbers
 
     source = ["é" * 490, "é" * 490]
     result = transform_json(
@@ -243,7 +243,7 @@ def test_batch_routes_rejects_malformed_records() -> None:
 
 
 def test_batch_routes_enforces_fragment_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    import cli_agent.flow_json_operations as module
+    import cli_agent.workflows.flow_json_operations as module
 
     monkeypatch.setattr(module, "MAX_ROUTE_FRAGMENTS", 2)
     source = [{"document_id": "m001", "chunk_id": "c001", "folder_id": "f",
