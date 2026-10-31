@@ -1,0 +1,317 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import httpx
+
+from cli_agent.model import (
+    CONTEXT_LIMIT_MARGIN,
+    ContextLimitReachedError,
+    ModelRequestError,
+    TokenUsage,
+)
+from cli_agent.model_http import (
+    MAX_MODEL_ERROR_BODY_BYTES,
+    MAX_MODEL_RESPONSE_BYTES,
+    ModelResponseTooLargeError,
+    read_bounded_json_response,
+    read_response_prefix,
+)
+from cli_agent.network_policy import LOCAL_HOSTS, validate_http_url
+
+
+MAX_HTTP_ERROR_DETAIL_CHARS = 4_000
+
+
+class OpenAIError(ModelRequestError):
+    pass
+
+
+def _safe_http_error_text(detail: str) -> str:
+    detail = detail.strip()
+    if not detail:
+        return ""
+
+    safe: list[str] = []
+    for char in detail:
+        codepoint = ord(char)
+        if char in {"\n", "\r", "\t"} or (codepoint >= 32 and codepoint != 127):
+            safe.append(char)
+        else:
+            safe.append(f"\\x{codepoint:02x}")
+
+    normalized = "".join(safe).replace("\r\n", "\n").replace("\r", "\n")
+    if len(normalized) <= MAX_HTTP_ERROR_DETAIL_CHARS:
+        return normalized
+
+    omitted = len(normalized) - MAX_HTTP_ERROR_DETAIL_CHARS
+    return normalized[:MAX_HTTP_ERROR_DETAIL_CHARS] + f"... [{omitted} Zeichen gekürzt]"
+
+
+def _safe_http_error_detail(response: httpx.Response) -> str:
+    """Return a bounded, terminal-safe response body for diagnostics.
+
+    This helper remains useful for already-buffered responses in tests and
+    diagnostics. The normal model request path reads error bodies through
+    ``read_response_prefix`` so a remote endpoint cannot force an unbounded
+    error body into memory first.
+    """
+
+    try:
+        detail = response.text
+    except Exception:
+        return ""
+    return _safe_http_error_text(detail)
+
+
+class OpenAIClient:
+    @staticmethod
+    def _convert_messages(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        converted: list[dict[str, Any]] = []
+
+        for message in messages:
+            result = dict(message)
+
+            result.pop("thinking", None)
+            result.pop("tool_name", None)
+
+            tool_calls = result.get("tool_calls")
+            if tool_calls:
+                converted_calls = []
+
+                for tool_call in tool_calls:
+                    converted_call = dict(tool_call)
+                    function = dict(converted_call.get("function", {}))
+
+                    arguments = function.get("arguments")
+                    if isinstance(arguments, dict):
+                        function["arguments"] = json.dumps(
+                            arguments,
+                            ensure_ascii=False,
+                        )
+
+                    converted_call["function"] = function
+                    converted_calls.append(converted_call)
+
+                result["tool_calls"] = converted_calls
+
+            converted.append(result)
+
+        return converted
+
+    @staticmethod
+    def _normalize_message(
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "role": "assistant",
+            "content": message.get("content") or "",
+        }
+
+        tool_calls = message.get("tool_calls")
+        if tool_calls:
+            normalized_calls = []
+
+            for tool_call in tool_calls:
+                normalized_call = dict(tool_call)
+                function = dict(normalized_call.get("function", {}))
+
+                arguments = function.get("arguments", {})
+                if isinstance(arguments, str):
+                    try:
+                        function["arguments"] = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        function["arguments"] = arguments
+
+                normalized_call["function"] = function
+                normalized_calls.append(normalized_call)
+
+            result["tool_calls"] = normalized_calls
+
+        return result
+
+    @staticmethod
+    def _token_usage(data: dict[str, Any]) -> TokenUsage | None:
+        usage = data.get("usage")
+        if not isinstance(usage, dict):
+            return None
+
+        input_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+        output_tokens = usage.get(
+            "completion_tokens",
+            usage.get("output_tokens"),
+        )
+        if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+            return None
+
+        total_tokens = usage.get("total_tokens")
+        if not isinstance(total_tokens, int):
+            total_tokens = input_tokens + output_tokens
+
+        return TokenUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str | None,
+        timeout: float = 120.0,
+        headers: dict[str, str] | None = None,
+        context_length: int | None = None,
+        allowed_hosts: tuple[str, ...] = LOCAL_HOSTS,
+    ) -> None:
+        self.base_url = validate_http_url(
+            base_url,
+            allowed_hosts=allowed_hosts,
+            purpose="OpenAI-Modell",
+        ).rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.timeout = timeout
+        self.headers = dict(headers or {})
+        self.context_length = context_length
+        self.last_usage: TokenUsage | None = None
+        self.last_finish_reason: str | None = None
+        self.usage_history: list[TokenUsage | None] = []
+        self._context_limit_reached = False
+
+    def _context_limit_error(self) -> ContextLimitReachedError:
+        usage = self.last_usage
+        if usage is None or self.context_length is None:
+            return ContextLimitReachedError(
+                "Context-Limit der aktuellen Sitzung wurde erreicht. "
+                "Es werden keine weiteren Modellanfragen gesendet. Bitte starte "
+                "eine neue Sitzung."
+            )
+        return ContextLimitReachedError(
+            "Context-Limit der aktuellen Sitzung wurde erreicht. "
+            f"Input des letzten Modellaufrufs: {usage.input_tokens} Tokens; "
+            f"konfiguriertes Limit: {self.context_length} Tokens; "
+            f"Sicherheitsreserve: {CONTEXT_LIMIT_MARGIN} Tokens. "
+            "Die Modellantwort wurde verworfen. Es werden keine weiteren "
+            "Modellanfragen gesendet. Bitte starte eine neue Sitzung."
+        )
+
+    def _check_context_limit(self) -> None:
+        if self._context_limit_reached:
+            raise self._context_limit_error()
+        if (
+            self.context_length is not None
+            and self.last_usage is not None
+            and self.last_usage.input_tokens + CONTEXT_LIMIT_MARGIN
+            >= self.context_length
+        ):
+            self._context_limit_reached = True
+            raise self._context_limit_error()
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        think: bool | None = None,
+    ) -> dict[str, Any]:
+        self._check_context_limit()
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._convert_messages(messages),
+            "stream": False,
+        }
+
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        headers = {
+            "Content-Type": "application/json",
+            **self.headers,
+        }
+
+        if self.api_key:
+            headers.setdefault(
+                "Authorization",
+                f"Bearer {self.api_key}",
+            )
+
+        self.last_usage = None
+        self.last_finish_reason = None
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                ) as response:
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        error_body, truncated = await read_response_prefix(
+                            response,
+                            max_bytes=MAX_MODEL_ERROR_BODY_BYTES,
+                        )
+                        detail = _safe_http_error_text(
+                            error_body.decode("utf-8", errors="replace")
+                        )
+                        if truncated and detail:
+                            detail += "... [HTTP-Fehlerantwort gekürzt]"
+                        suffix = f": {detail}" if detail else ""
+                        status = response.status_code
+                        retryable = status == 429 or 500 <= status <= 599
+                        raise OpenAIError(
+                            f"OpenAI-kompatibles Modell unter {self.base_url} hat die Anfrage "
+                            f"mit HTTP {status} abgelehnt{suffix}",
+                            retryable=retryable,
+                        ) from exc
+                    data = await read_bounded_json_response(
+                        response,
+                        max_bytes=MAX_MODEL_RESPONSE_BYTES,
+                    )
+        except OpenAIError:
+            raise
+        except ModelResponseTooLargeError as exc:
+            raise OpenAIError(
+                f"OpenAI-kompatibles Modell unter {self.base_url}: {exc}",
+                retryable=False,
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise OpenAIError(
+                f"OpenAI-kompatibles Modell unter "
+                f"{self.base_url} nicht erreichbar: {exc}",
+                retryable=True,
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise OpenAIError(
+                "Unerwartete Modellantwort: JSON-Root ist kein Objekt.",
+                retryable=False,
+            )
+        self.last_usage = self._token_usage(data)
+        self.usage_history.append(self.last_usage)
+        self._check_context_limit()
+
+        try:
+            choice = data["choices"][0]
+            message = choice["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise OpenAIError(
+                f"Unerwartete Modellantwort: {data}",
+                retryable=False,
+            ) from exc
+
+        reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+        self.last_finish_reason = reason if isinstance(reason, str) else None
+        return self._normalize_message(message)
