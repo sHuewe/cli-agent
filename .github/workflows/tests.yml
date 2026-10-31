@@ -141,6 +141,15 @@ jobs:
           }
           uv run --no-project --with $wheel.FullName python -c "import importlib.metadata, pathlib, tomllib, cli_agent; project = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']; expected = project['version']; assert cli_agent.__version__ == expected, f'module version {cli_agent.__version__!r} != {expected!r}'; installed = importlib.metadata.version(project['name']); assert installed == expected, f'distribution version {installed!r} != {expected!r}'"
 
+      - name: Verify relocated bundled resources in built wheel
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -Path dist -Filter *.whl | Select-Object -First 1
+          if (-not $wheel) {
+            throw "No wheel was produced in dist/."
+          }
+          uv run --no-project --with $wheel.FullName python -c "from importlib.resources import files; import json; template = files('cli_agent.settings').joinpath('config.example.toml').read_text(encoding='utf-8'); schema = json.loads(files('cli_agent.interfaces').joinpath('ag_ui_schema_1_0.json').read_text(encoding='utf-8')); assert template.strip() and isinstance(schema, dict)"
+
       - name: Verify built wheel Web UI extra installs
         shell: pwsh
         run: |
