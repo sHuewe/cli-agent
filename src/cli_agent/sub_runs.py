@@ -17,12 +17,16 @@ SUB_RUN_TOOL = {
     "function": {
         "name": START_SUB_RUN,
         "description": (
-            "Delegate a substantial, clearly scoped investigation to a separate "
-            "multi-step LLM context. Consider using this EARLY when even one "
-            "research, search or analysis task will require many tool calls, "
-            "multiple steps or extensive intermediate results; it need not be "
-            "independent of every other task. The coordinator keeps oversight "
-            "and final synthesis. The delegated agent should normally store "
+            "Delegate one narrowly scoped work package in a separate "
+            "multi-step LLM context, preferably aligned to ONE coordinator "
+            "plan step or a smaller part of that step. Split large plan steps "
+            "into multiple focused sub-runs; do not delegate several plan "
+            "steps or the entire user request in one call. Define a concrete "
+            "goal, clear exclusions and verifiable output, while leaving "
+            "tool strategy to the delegated agent. Consider delegation EARLY "
+            "for meaningful multi-tool analysis. The coordinator keeps "
+            "planning, verification and final synthesis. The delegated agent "
+            "should normally store "
             "at least one verified finding using agent__add_evidence and return "
             "its NEW id in the JSON result. Completed runs require a new finding; "
             "partial or blocked results may report why no source-backed finding "
@@ -44,7 +48,14 @@ SUB_RUN_TOOL = {
             "required": ["task"],
             "properties": {
                 "task": {"type": "string", "minLength": 20, "maxLength": 2500},
-                "plan_step_id": {"type": "string", "maxLength": 80},
+                "plan_step_id": {
+                    "type": "string", "maxLength": 80,
+                    "description": (
+                        "Optional coordinator plan step this narrowly scoped "
+                        "sub-run contributes to. A plan step can be split into "
+                        "several smaller delegated work packages."
+                    ),
+                },
                 "evidence_ids": {
                     "type": "array", "maxItems": 16,
                     "description": (
