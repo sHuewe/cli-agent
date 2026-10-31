@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli_agent import cli as cli_module
-from cli_agent.admin_config import AdminConfig
-from cli_agent.config import AppConfig, ModelConfig
+from cli_agent.interfaces import cli as cli_module
+from cli_agent.settings.admin_config import AdminConfig
+from cli_agent.settings.config import AppConfig, ModelConfig
 
 
 def _base_args(tmp_path: Path, **overrides):

@@ -5,8 +5,8 @@ import copy
 
 import pytest
 
-from cli_agent.evidence_state import EvidenceState
-from cli_agent.evidence_tools import EvidenceInputError
+from cli_agent.state.evidence_state import EvidenceState
+from cli_agent.state.evidence_tools import EvidenceInputError
 
 
 def _plan():
@@ -114,7 +114,7 @@ def test_source_registry_is_session_bounded_and_ids_never_reused():
 
 
 def test_reset_history_explicitly_clears_session_evidence(tmp_path):
-    from cli_agent.agent import CliAgent
+    from cli_agent.runtime.agent import CliAgent
     agent = CliAgent(tmp_path, object(), ())
     agent._evidence_state.register_result("call-x", tool_name="sensor")
     agent._evidence_state.add_evidence({"id": "note", "type": "observation",
@@ -128,8 +128,8 @@ def test_reset_history_explicitly_clears_session_evidence(tmp_path):
 def test_main_loop_routes_new_evidence_revisions_and_removals():
     import asyncio
     from types import SimpleNamespace
-    from cli_agent.agent_loop import run_model_loop
-    from cli_agent.config import LoggingConfig
+    from cli_agent.runtime.agent_loop import run_model_loop
+    from cli_agent.settings.config import LoggingConfig
 
     class Model:
         def __init__(self):
@@ -180,8 +180,8 @@ def test_main_loop_routes_new_evidence_revisions_and_removals():
 def test_server_owned_tool_takes_precedence_even_if_frontend_dict_is_poisoned():
     import asyncio
     from types import SimpleNamespace
-    from cli_agent.agent_loop import run_model_loop
-    from cli_agent.config import LoggingConfig
+    from cli_agent.runtime.agent_loop import run_model_loop
+    from cli_agent.settings.config import LoggingConfig
 
     class Model:
         def __init__(self):
@@ -221,8 +221,8 @@ def test_server_owned_tool_takes_precedence_even_if_frontend_dict_is_poisoned():
 def test_provider_id_reused_across_questions_receives_new_registered_id():
     import asyncio
     from types import SimpleNamespace
-    from cli_agent.agent_loop import run_model_loop
-    from cli_agent.config import LoggingConfig
+    from cli_agent.runtime.agent_loop import run_model_loop
+    from cli_agent.settings.config import LoggingConfig
 
     class Model:
         def __init__(self):
@@ -297,8 +297,8 @@ def test_cited_refs_remain_in_both_model_tool_enums_after_96_new_results():
 def test_split_tools_record_bounded_diagnostics_for_success_and_error():
     import asyncio
     from types import SimpleNamespace
-    from cli_agent.agent_loop import run_model_loop
-    from cli_agent.config import LoggingConfig
+    from cli_agent.runtime.agent_loop import run_model_loop
+    from cli_agent.settings.config import LoggingConfig
 
     class Model:
         def __init__(self):

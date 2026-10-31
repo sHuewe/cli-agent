@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cli_agent.rag_cli import build_parser, init_vector_db, main
+from cli_agent.context.rag_cli import build_parser, init_vector_db, main
 
 
 def test_rag_help_and_required_arguments(capsys):
@@ -25,8 +25,8 @@ async def test_init_vector_db_calls_shared_indexer(tmp_path, monkeypatch, capsys
     (repo / "index.md").write_text("# Knowledge", encoding="utf-8")
     index = tmp_path / "vectors.sqlite"
     called = AsyncMock(return_value=2)
-    monkeypatch.setattr("cli_agent.rag_cli.build_index", called)
-    monkeypatch.setattr("cli_agent.rag_cli.load_admin_config",
+    monkeypatch.setattr("cli_agent.context.rag_cli.build_index", called)
+    monkeypatch.setattr("cli_agent.context.rag_cli.load_admin_config",
                         lambda: argparse.Namespace(network=object(), model_credentials=()))
     args = build_parser().parse_args([
         "init-vector-db", "--okf-repo", str(repo),
@@ -48,8 +48,8 @@ async def test_openai_provider_can_be_selected(tmp_path, monkeypatch):
     repo.mkdir()
     (repo / "index.md").write_text("# Knowledge", encoding="utf-8")
     called = AsyncMock(return_value=1)
-    monkeypatch.setattr("cli_agent.rag_cli.build_index", called)
-    monkeypatch.setattr("cli_agent.rag_cli.load_admin_config",
+    monkeypatch.setattr("cli_agent.context.rag_cli.build_index", called)
+    monkeypatch.setattr("cli_agent.context.rag_cli.load_admin_config",
                         lambda: argparse.Namespace(network=object(), model_credentials=()))
     args = build_parser().parse_args([
         "init-vector-db", "--okf-repo", str(repo), "--embedding-model", "embed-1",
@@ -105,15 +105,15 @@ def test_main_prints_usage_error_without_traceback(capsys):
 
 @pytest.mark.asyncio
 async def test_update_vector_db_routes_to_incremental_indexer(tmp_path, monkeypatch, capsys):
-    from cli_agent.knowledge_vector import IndexUpdateResult
+    from cli_agent.context.knowledge_vector import IndexUpdateResult
     repo = tmp_path / "okf"
     repo.mkdir()
     (repo / "index.md").write_text("# Knowledge", encoding="utf-8")
     update = AsyncMock(return_value=IndexUpdateResult(added=1, changed=2, unchanged=3, removed=4))
     build = AsyncMock()
-    monkeypatch.setattr("cli_agent.rag_cli.update_index", update)
-    monkeypatch.setattr("cli_agent.rag_cli.build_index", build)
-    monkeypatch.setattr("cli_agent.rag_cli.load_admin_config",
+    monkeypatch.setattr("cli_agent.context.rag_cli.update_index", update)
+    monkeypatch.setattr("cli_agent.context.rag_cli.build_index", build)
+    monkeypatch.setattr("cli_agent.context.rag_cli.load_admin_config",
                         lambda: argparse.Namespace(network=object(), model_credentials=()))
     args = build_parser().parse_args([
         "update-vector-db", "--okf-repo", str(repo),

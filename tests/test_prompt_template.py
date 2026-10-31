@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cli_agent.prompt_template import PromptTemplate, parse_variable_assignments
+from cli_agent.models.prompt_template import PromptTemplate, parse_variable_assignments
 
 
 def test_template_collects_variables_in_first_occurrence_order() -> None:
@@ -93,7 +93,7 @@ def test_many_placeholders_parse_without_suffix_rescans() -> None:
 
 
 def test_placeholder_count_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    import cli_agent.prompt_template as prompt_template_module
+    import cli_agent.models.prompt_template as prompt_template_module
 
     monkeypatch.setattr(
         prompt_template_module,
@@ -106,7 +106,7 @@ def test_placeholder_count_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_rendered_prompt_size_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    import cli_agent.prompt_template as prompt_template_module
+    import cli_agent.models.prompt_template as prompt_template_module
 
     monkeypatch.setattr(
         prompt_template_module,
