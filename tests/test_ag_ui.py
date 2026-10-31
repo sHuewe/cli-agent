@@ -867,3 +867,135 @@ async def test_external_agui_cannot_claim_browser_owned_session_id():
             assert browser_session.id in service.sessions
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_explicit_cancel_stops_only_matching_run_and_preserves_session():
+    """A disconnect is not cancellation; explicit cancellation is run-scoped."""
+    entered = asyncio.Event()
+    class SlowAgent(AgUiAgent):
+        async def ask(self, prompt):
+            if prompt == "slow":
+                entered.set()
+                await asyncio.sleep(60)
+            return await super().ask(prompt)
+
+    service = AgentApiService(lambda session: SlowAgent(session))
+    headers = {"Authorization": "Bearer " + service.token}
+    try:
+        session = await service.resolve_agui_thread("cancel-thread")
+        run = session.submit("slow", agui=True, thread_id="cancel-thread",
+                             run_id="cancel-run", require_listener=False)
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1:9191",
+        ) as client:
+            payload = {"action": "cancel", "threadId": "cancel-thread",
+                       "runId": "cancel-run"}
+            wrong = await client.post("/ag-ui", json={**payload, "runId": "wrong"},
+                                      headers=headers)
+            assert wrong.status_code == 409
+            assert session._busy
+            accepted = await client.post("/ag-ui", json=payload, headers=headers)
+            assert accepted.status_code == 202
+            for _ in range(100):
+                if run.done and not session._busy:
+                    break
+                await asyncio.sleep(0.01)
+            assert run.status == "cancelled"
+            assert run.events[-1][1]["outcome"] == {"type": "cancelled"}
+            assert not session._closed
+            # Same MCP-owning session accepts another request.
+            next_run = session.submit("next", agui=True,
+                                      thread_id="cancel-thread", run_id="next-run",
+                                      require_listener=False)
+            for _ in range(100):
+                if next_run.done:
+                    break
+                await asyncio.sleep(0.01)
+            assert next_run.status == "completed"
+            assert next_run.answer == "reply next"
+            assert service.sessions[session.id] is session
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_close_immediately_after_run_cancel_does_not_deadlock():
+    entered = asyncio.Event()
+
+    class SlowAgent(AgUiAgent):
+        async def ask(self, prompt):
+            entered.set()
+            await asyncio.sleep(60)
+
+    service = AgentApiService(lambda session: SlowAgent(session))
+    session = await service.resolve_agui_thread("close-during-cancel")
+    try:
+        session.submit("slow", thread_id="close-during-cancel",
+                       run_id="close-run", agui=True)
+        await asyncio.wait_for(entered.wait(), 2)
+        session.cancel_run(thread_id="close-during-cancel", run_id="close-run")
+        await asyncio.wait_for(session.close(), 2)
+        assert session._closed
+    finally:
+        await asyncio.wait_for(service.shutdown(), 2)
+
+
+@pytest.mark.asyncio
+async def test_mcp_session_propagates_cancel_notification(monkeypatch):
+    """Cancel the actual MCP request ID, not an unrelated session request."""
+    from mcp import ClientSession
+    from cli_agent.agent_mcp import CancellableClientSession
+
+    entered = asyncio.Event()
+    observed = []
+
+    async def blocking_request(self, *_args, **_kwargs):
+        entered.set()
+        await asyncio.sleep(60)
+
+    async def recorded_notification(self, notification, related_request_id=None):
+        observed.append((notification.root.params.requestId, related_request_id))
+
+    monkeypatch.setattr(ClientSession, "send_request", blocking_request)
+    monkeypatch.setattr(CancellableClientSession, "send_notification",
+                        recorded_notification)
+    session = object.__new__(CancellableClientSession)
+    session._request_id = 42
+    task = asyncio.create_task(session.send_request(object(), object))
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert observed == [(42, 42)]
+
+
+@pytest.mark.asyncio
+async def test_mcp_cancel_notification_timeout_does_not_block_run_cancellation(monkeypatch):
+    """Even a non-reading MCP transport must not block CancelledError."""
+    from mcp import ClientSession
+    from cli_agent.agent_mcp import (
+        CancellableClientSession, MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS,
+    )
+
+    entered = asyncio.Event()
+
+    async def blocking_request(self, *_args, **_kwargs):
+        entered.set()
+        await asyncio.sleep(60)
+
+    async def blocked_notification(self, *_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ClientSession, "send_request", blocking_request)
+    monkeypatch.setattr(CancellableClientSession, "send_notification",
+                        blocked_notification)
+    session = object.__new__(CancellableClientSession)
+    session._request_id = 24
+    task = asyncio.create_task(session.send_request(object(), object))
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS + 1)

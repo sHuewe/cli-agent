@@ -165,7 +165,7 @@ def test_connect_server_times_out_during_initialize(
         stack = AsyncExitStack()
         await stack.__aenter__()
         monkeypatch.setattr(agent_mcp_module, "stdio_client", fake_stdio_client)
-        monkeypatch.setattr(agent_mcp_module, "ClientSession", fake_client_session)
+        monkeypatch.setattr(agent_mcp_module, "CancellableClientSession", fake_client_session)
         monkeypatch.setattr(
             agent_mcp_module,
             "MCP_INITIALIZE_TIMEOUT_SECONDS",
@@ -528,7 +528,7 @@ def test_external_stdio_receives_core_owned_workspace_access_environment(
         stack = AsyncExitStack()
         await stack.__aenter__()
         monkeypatch.setattr(agent_mcp_module, "stdio_client", fake_stdio_client)
-        monkeypatch.setattr(agent_mcp_module, "ClientSession", fake_client_session)
+        monkeypatch.setattr(agent_mcp_module, "CancellableClientSession", fake_client_session)
         try:
             await agent._connect_server(
                 stack,
@@ -610,7 +610,7 @@ def test_external_stdio_receives_core_owned_workspace_directory_environment(
         stack = AsyncExitStack()
         await stack.__aenter__()
         monkeypatch.setattr(agent_mcp_module, "stdio_client", fake_stdio_client)
-        monkeypatch.setattr(agent_mcp_module, "ClientSession", fake_client_session)
+        monkeypatch.setattr(agent_mcp_module, "CancellableClientSession", fake_client_session)
         try:
             await agent._connect_server(
                 stack,
@@ -665,7 +665,7 @@ def test_external_stdio_omits_workspace_directory_without_workspace_access(
         stack = AsyncExitStack()
         await stack.__aenter__()
         monkeypatch.setattr(agent_mcp_module, "stdio_client", fake_stdio_client)
-        monkeypatch.setattr(agent_mcp_module, "ClientSession", fake_client_session)
+        monkeypatch.setattr(agent_mcp_module, "CancellableClientSession", fake_client_session)
         try:
             await agent._connect_server(
                 stack,

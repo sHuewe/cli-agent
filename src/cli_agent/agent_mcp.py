@@ -35,6 +35,54 @@ from .workspace_access import (
 
 logger = logging.getLogger("cli_agent.agent_mcp")
 
+# Notification delivery is best-effort and must not delay a cancelled run.
+MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS = 0.5
+
+
+class CancellableClientSession(ClientSession):
+    """Send MCP cancellation notifications for locally cancelled requests.
+
+    The upstream SDK's send_request() drops its response waiter on cancellation
+    but does not inform the server. Capture the ID before calling the base
+    method (which assigns it synchronously before its first await).
+    This is best-effort: remote MCP servers may ignore cancellations.
+    """
+
+    async def send_request(self, request, result_type, request_read_timeout_seconds=None,
+                           metadata=None, progress_callback=None):
+        import asyncio
+        from mcp import types
+
+        request_id = self._request_id
+        try:
+            return await super().send_request(
+                request, result_type,
+                request_read_timeout_seconds=request_read_timeout_seconds,
+                metadata=metadata, progress_callback=progress_callback,
+            )
+        except asyncio.CancelledError:
+            import anyio
+            with anyio.move_on_after(MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS, shield=True) as scope:
+                try:
+                    await self.send_notification(
+                        types.ClientNotification(types.CancelledNotification(
+                            params=types.CancelledNotificationParams(
+                                requestId=request_id,
+                                reason="Agent run was cancelled",
+                            )
+                        )),
+                        related_request_id=request_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "mcp_cancel_notification_failed request_id=%s",
+                        request_id, exc_info=True,
+                    )
+            if scope.cancel_called:
+                logger.warning("mcp_cancel_notification_timeout request_id=%s", request_id)
+            raise
+
+
 
 class McpLifecycleMixin:
     async def set_server_enabled(self, server_name: str, *, enabled: bool) -> bool:
@@ -431,7 +479,7 @@ class McpLifecycleMixin:
             )
             connection = await stack.enter_async_context(streamable_http_client(server_url, http_client=http_client)); read_stream, write_stream, _ = connection
         else: raise ValueError(f"Nicht unterstützter MCP-Transport: {server_config.transport!r}")
-        session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+        session = await stack.enter_async_context(CancellableClientSession(read_stream, write_stream))
         initialize_result = await await_mcp_operation(
             session.initialize(),
             timeout_seconds=MCP_INITIALIZE_TIMEOUT_SECONDS,

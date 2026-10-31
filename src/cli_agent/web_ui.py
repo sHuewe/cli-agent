@@ -596,6 +596,7 @@ INDEX_HTML = """<!doctype html>
     <form id="composer">
       <textarea id="prompt" rows="3" placeholder="Nachricht an cli-agent" required></textarea>
       <button id="send" type="submit">Senden</button>
+      <button id="stop-run" class="secondary" type="button" hidden>Stop</button>
     </form>
   </main>
   <dialog id="sessions-dialog" class="working-context-dialog">
