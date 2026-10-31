@@ -131,6 +131,7 @@ class ConversationMixin:
             )
 
         self.history.clear()
+        getattr(self, "_sub_runs", []).clear()
         self._last_working_messages = []
         self._last_working_tools = []
         if getattr(self, "_evidence_state", None) is not None:
@@ -174,6 +175,7 @@ class ConversationMixin:
         if self.logging_config.log_prompts:
             logger.info("user_prompt=%s", prompt)
 
+        getattr(self, "_sub_runs", []).clear()
         self._knowledge_reentry_calls = 0
         self._knowledge_reentry_seen = set()
         if getattr(self, "_evidence_state", None) is not None:
@@ -378,11 +380,28 @@ class ConversationMixin:
         self._dump_context(messages, phase="main")
         return answer
 
+    def sub_run_snapshots(self) -> list[dict[str, Any]]:
+        snapshots = []
+        for run in getattr(self, "_sub_runs", []):
+            evidence = run.get("evidence_state")
+            messages = (
+                evidence.project(run["messages"])
+                if evidence is not None
+                else messages_for_model(run["messages"])
+            )
+            snapshots.append({
+                "id": run["id"], "task": run["task"], "status": run["status"],
+                "messages": messages, "tools": copy.deepcopy(run["tools"]),
+            })
+        return snapshots
+
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
         """Return the exact model-visible view of the current/last main loop."""
 
         messages = getattr(self, "_last_working_messages", [])
-        evidence = getattr(self, "_evidence_state", None)
+        evidence = getattr(self, "_coordinator_evidence_state", None)
+        if evidence is None:
+            evidence = getattr(self, "_evidence_state", None)
         return evidence.project(messages) if evidence is not None else messages_for_model(messages)
 
     def working_tools_snapshot(self) -> list[dict[str, Any]]:

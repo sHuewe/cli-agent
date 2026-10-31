@@ -486,7 +486,7 @@ async def process_tool_calls(
             tool_message["tool_name"] = exposed_name
 
         messages.append(tool_message)
-        evidence = getattr(agent, "_evidence_state", None) if phase == "main" else None
+        evidence = getattr(agent, "_evidence_state", None) if phase in {"main", "sub"} else None
         if evidence is not None and not is_error:
             metadata = None
             if artifactized:

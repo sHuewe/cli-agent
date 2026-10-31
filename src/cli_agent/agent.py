@@ -34,6 +34,7 @@ from .mcp_result_artifacts import McpResultArtifacts
 from .message_visibility import messages_for_model
 from .evidence_state import EvidenceState
 from .evidence_tools import ADD_EVIDENCE_TOOL_NAME
+from .sub_runs import START_SUB_RUN, SUB_RUN_TOOL
 from .artifact_publication import PUBLISH_TOOL
 from .model import ModelClient
 from .network_policy import NetworkConfig
@@ -45,8 +46,8 @@ BASE_SYSTEM_PROMPT = """\
 Du bist ein lokaler CLI-Assistent.
 Antworte abschließend knapp und in der Sprache des Benutzers.
 Belege Superlative durch vollständige Vergleiche; sonst benenne Kandidaten.
-Trenne Messwert, Berechnung und Hypothese; prüfe behauptete Ereignisse an
-konkreten Daten und rechne UTC-/Lokalzeiten mit explizitem Offset um.
+Trenne belegte Fakten, Ableitungen und Hypothesen; prüfe Aussagen anhand
+verlässlicher Quellen. Berücksichtige bei Bedarf Zeitzonen und Zeitgrenzen.
 """
 
 MCP_TOOL_SYSTEM_RULE = """\
@@ -85,12 +86,12 @@ Verknüpfe nur die wenigen Quellen, die die konkrete Aussage tragen.
 Die Backend-Provenienz bleibt vollständig; Dateiartefakte früherer Aufgaben
 können bereits gelöscht sein und dürfen nicht nochmals gelesen werden.
 
-Fasse relevante Aussagen, Kennzahlen, Zeitfenster und Unsicherheiten knapp
-zusammen, keine Preview-Zeilen oder Rohdaten. Trenne Beobachtung, Berechnung
-und Hypothese. Eine Korrelation von Temperatur, Netzphase, PV und Speicher
-beweist keine eindeutige Ursache; berücksichtige alternative Erklärungen
-und lege den Grad der Sicherheit offen. Prüfe bei Tagesaggregationen explizit
-UTC- und lokale Kalendertagsgrenzen.
+Fasse relevante Erkenntnisse, Kennzahlen, Rahmenbedingungen und
+Unsicherheiten knapp zusammen, keine Preview-Zeilen oder Rohdaten. Trenne
+Beobachtung, Berechnung und Hypothese. Ein statistischer oder zeitlicher
+Zusammenhang belegt allein keine Kausalität; prüfe alternative Erklärungen
+und benenne den Grad der Sicherheit. Berücksichtige bei zeitbezogenen
+Auswertungen passende Zeitzonen, Intervalle und Aggregationsgrenzen.
 
 Halte Plan, Evidences und Abschlussantwort konsistent. Keine zusätzlichen
 LLM-Validierungsrunden und keine redundanten Evidence-Updates.
@@ -131,6 +132,8 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
         # Evidence is an agent capability, not a per-entry-point configuration.
         # No model request uses it unless relevant tools are available.
         self._evidence_state = EvidenceState()
+        self._sub_runs = []
+        self._sub_run_enabled = True
         self.model_client = model_client
         self.mcp_servers = mcp_servers
         self.max_tool_calls = max_tool_calls
@@ -571,6 +574,65 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
 
         if ADD_EVIDENCE_TOOL_NAME in available_tool_names:
             parts.append(EVIDENCE_WORKING_MEMORY_SYSTEM_RULE)
+        if START_SUB_RUN in available_tool_names:
+            parts.append(
+                "Prüfe FRÜHZEITIG, ob sich ein aufwendiger Teil der Aufgabe "
+                "durch Sub-Runs mit eigenem Kontext effizient bearbeiten lässt. "
+                "Orientiere die Aufteilung am bestehenden Plan. Ein Sub-Run "
+                "bearbeitet genau EINE Analyseetappe innerhalb EINES "
+                "Planschritts, oft nur einen kleinen Teil davon. Trenne "
+                "Kandidatensuche, Detailprüfung und unabhängige Validierung "
+                "in unterschiedliche Sub-Runs. Beauftrage niemals gleichzeitig "
+                "die Rohdatenbeschaffung, das Auffinden aller Kandidaten und "
+                "deren vollständige Auswertung samt Gesamtschlussfolgerung. "
+                "Ein einzelner Planschritt darf mehrere Sub-Runs benötigen. "
+                "Schätze VOR "
+                "jedem Aufruf die nötigen Toolaufrufe ab, inklusive "
+                "Wiederholungen pro Datensatz, Zeitraum, Ereignis und "
+                "Verarbeitungsschritt (Anzahl Elemente mal Schritte). "
+                "Plane gewöhnlich etwa 20 bis 50 Toolaufrufe pro Sub-Run; "
+                "wenn deutlich mehr nötig erscheinen oder die Anzahl der "
+                "Teilfälle erst noch ermittelt werden muss, teile die Arbeit "
+                "in eine Sichtung und danach mehrere getrennte Auswertungen. "
+                "Begrenze die Zahl der zu untersuchenden Fälle explizit; "
+                "delegiere keine offenen Aufträge wie alle Ereignisse eines "
+                "Tages vollständig einzeln verarbeiten. Ist ein Planschritt "
+                "umfangreich, unterteile ihn in kleinere, einzeln überprüfbare "
+                "Sub-Runs (z.B. nach Teilfrage, Datenbereich, Zeitraum oder "
+                "Analysestufe). Verlange von einem Sub-Run "
+                "nicht die Bearbeitung mehrerer Planschritte oder die gesamte "
+                "Benutzeraufgabe. Ein Sub-Run braucht ein enges Teilziel, "
+                "klare Grenzen einschließlich dessen, was NICHT zu untersuchen "
+                "ist, und ein konkretes, überprüfbares Ergebnis. Formuliere "
+                "nur die nötigen fachlichen Randbedingungen; gib keine "
+                "ausführliche Liste einzelner Tool-Schritte vor. Formuliere "
+                "stattdessen genau EIN überprüfbares Zwischenergebnis "
+                "und explizit ausgeschlossene Folgearbeiten; lasse dem "
+                "Subagenten Freiheit bei der Wahl effizienter Werkzeuge und "
+                "Methoden. Bevorzuge bei vielen gleichartigen Fällen "
+                "gemeinsame Datenabrufe und Auswertungen auf vorhandenen "
+                "Artefakten statt je Fall dieselben Tools erneut aufzurufen. "
+                "Prüfe die fachliche Annahme und den Nutzen der Methode, "
+                "bevor du massenhafte Abfragen delegierst. "
+                "Bearbeite abhängige Teilaufträge nacheinander und "
+                "verwende zurückgegebene Evidences für den nächsten Schritt. "
+                "Der Hauptagent bleibt Koordinator und Prüfer: Er hält den "
+                "Gesamtplan aktuell, führt Ergebnisse zusammen, prüft "
+                "Widersprüche und beantwortet die Benutzerfrage. Delegiere "
+                "früh, aber nicht für einzelne Toolabfragen oder triviale "
+                "Schritte. Umfangreiche Untersuchungen nicht deshalb als "
+                "einen einzigen Sub-Run vergeben, weil dessen Tool-Limit hoch "
+                "ist. Eine vollständige operative Delegation ist nur in "
+                "begründeten Ausnahmefällen sinnvoll, wenn die Aufgabe "
+                "tatsächlich EIN abgeschlossenes Arbeitspaket bildet. "
+                "Übertrage relevante bereits gespeicherte Evidences ausdrücklich "
+                "über evidence_ids; bloße Erwähnung im task reicht nicht. "
+                "Führe agent__add_evidence und agent__start_sub_run dafür "
+                "in getrennten Modellschritten aus, damit die gespeicherten IDs "
+                "sicher verfügbar sind. Verwende keine S-Quellenreferenzen als "
+                "Evidence-IDs. Die Sub-Runs speichern eigene belegte Ergebnisse "
+                "als neue Evidences und geben ihre IDs zurück."
+            )
 
         if active_instructions:
             parts.append(MCP_INSTRUCTION_SYSTEM_RULE)
@@ -688,6 +750,8 @@ class CliAgent(McpLifecycleMixin, ConversationMixin):
             )
         ]
         if tools or getattr(self, "_agui_frontend_tools", None):
+            if self._sub_run_enabled:
+                tools.append(copy.deepcopy(SUB_RUN_TOOL))
             tools.extend(self._evidence_state.tool_definitions())
             tools.append(PUBLISH_TOOL)
         return tools

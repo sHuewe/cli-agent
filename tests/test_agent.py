@@ -1459,6 +1459,7 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
         "demo__read",
         "demo__write",
+        "agent__start_sub_run",
         "agent__update_plan",
         "agent__add_evidence",
         "agent__update_evidence",
@@ -1467,6 +1468,7 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
     assert agent.set_tool_enabled("demo__write", enabled=False) is True
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
         "demo__read",
+        "agent__start_sub_run",
         "agent__update_plan",
         "agent__add_evidence",
         "agent__update_evidence",
@@ -1482,6 +1484,7 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
     assert [tool["function"]["name"] for tool in agent._model_tools()] == [
         "demo__read",
         "demo__write",
+        "agent__start_sub_run",
         "agent__update_plan",
         "agent__add_evidence",
         "agent__update_evidence",
