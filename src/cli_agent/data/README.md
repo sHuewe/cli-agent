@@ -1,7 +1,7 @@
-# Data package
+# Data and Data MCP server
 
-Deterministic data transformation, table operations, Markdown parsing, result aggregation and bounded metadata.
+`data_mcp_server.py` exposes declarative data tools and delegates to `data_operations.py` and `dataframe_operations.py`. The package also contains `dataframe_types.py`, `data_markdown.py`, `data_calculator.py` and `data_result_metadata.py`.
 
-Modules: `data_calculator`, `data_markdown`, `data_operations`, `data_result_metadata`, `dataframe_operations`, `dataframe_types`.
+Incoming tool requests are resolved through `platform.os_operations.Workspace` and `security.mcp_path_policy`. The data layer processes bounded paths and DataFrames, returns useful result metadata, and never grants workspace access. MCP tool schemas and the 5 KB data-to-model threshold are independent of how the code is organized.
 
-The public Data MCP server (`cli_agent.data_mcp_server`) delegates into this package. Its CLI/tool contracts remain unchanged. Existing flat imports resolve to the very same module objects so monkeypatching and integrations keep working. Data operations should never bypass workspace policies; file and session boundaries are enforced at the MCP integration layer.
+Prefer `cli_agent.data.<module>` for all imports. There are no root-level aliases.

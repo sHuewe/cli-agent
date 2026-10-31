@@ -1,3 +1,5 @@
-# Platform integration package
+# Platform and OS integration
 
-Read-only and read/write OS workspace operations (`os_operations`), execution coordination (`execution`), local commands (`local_commands`), log setup (`logging_setup`), workspace access definitions (`workspace_access`) and artifact publication (`artifact_publication`). Filesystem operations must enforce authorization and path restrictions on each call; UI-level checks are not sufficient. Entry point modules stay stable. Existing flat imports alias identical implementation objects.
+`os_mcp_server.py` exposes workspace operations through the MCP protocol. `os_operations.py` implements sandboxed file access; `execution.py` assembles runtime execution services, `local_commands.py` handles local command contracts, `workspace_access.py` defines access levels, and `artifact_publication.py` manages published artifacts. `logging_setup.py` establishes diagnostics.
+
+File read/write, protected-path validation, symlinks and Windows reparse points are security-sensitive. All entry points must use the same validated workspace and permission contracts.

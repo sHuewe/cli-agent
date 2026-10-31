@@ -1,3 +1,5 @@
-# Agent state package
+# Agent state and sub-runs
 
-Evidence and plan state (`evidence_state`, `evidence_tools`), sub-run coordination (`sub_runs`), permission and visibility definitions (`agent_permissions`, `agent_types`, `message_visibility`). Evidence persists within a session while plans are per task; sub-runs must isolate their contexts. Changes to these invariants require regression tests. Compatibility import aliases preserve existing module identity and monkeypatching.
+`evidence_state.py` and `evidence_tools.py` represent session-scoped evidence and task-scoped plans. `sub_runs.py` coordinates isolated delegated runs. `agent_types.py`, `agent_permissions.py` and `message_visibility.py` define shared execution types, permissions and context visibility.
+
+Evidence remains available across user prompts within the same session; plans are discarded for a new task. Child runs cannot spawn further child runs or bypass security/permissions. State transitions must be covered with behavioral regression tests.

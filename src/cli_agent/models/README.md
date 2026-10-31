@@ -1,3 +1,5 @@
-# Models package
+# Model integrations
 
-Model abstraction, provider factory, Ollama and OpenAI-compatible clients, HTTP helpers and prompt templates. Orchestration calls the providers and owns the lifecycle and context; model clients must not bypass MCP permissions or initiate workspace writes. Legacy `cli_agent.<module>` imports are preserved as module-identity aliases.
+`model.py` defines model-client interfaces and retry policy. `model_factory.py` selects providers; `ollama.py` and `openai_client.py` implement backends. `model_http.py` contains request handling; `prompt_template.py` renders templates and variables.
+
+The agent runtime owns conversations, permissions and MCP execution. Model providers do not own workspace state and must enforce the configured transport/network constraints.

@@ -1,3 +1,5 @@
-# Agent runtime package
+# Agent orchestration
 
-Core agent execution: prompt composition, conversation lifecycle, model-loop orchestration, MCP tool coordination and response processing. It consumes model providers and context adapters, delegates evidence/sub-runs to `state/`, and applies MCP safety policy before executing tools. CLI, HTTP API, and Web UI are adapters into this runtime. Keep entrypoint-specific authorization outside the model response, with runtime checks authoritative. Flat imports remain identical module aliases, not copies.
+`agent.py` builds the agent, `agent_conversation.py` manages conversation messages, `agent_loop.py` coordinates model turns, `agent_mcp.py` manages MCP server/tool lifecycle, `agent_tool_calls.py` executes tool requests and `agent_prompts.py` supplies prompt content.
+
+The runtime integrates `models/`, `context/`, `state/` and `security/`. It enforces MCP authorization irrespective of CLI, HTTP or Flow callers. Keep tool side effects, evidence/plan updates, token budgets and sub-run isolation explicit and testable.

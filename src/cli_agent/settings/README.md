@@ -1,3 +1,5 @@
-# Configuration and administrator settings
+# Configuration and administration
 
-`config.py` defines user-facing runtime configuration, and `admin_config.py` defines administrator-controlled security and policy settings. The bundled `config.example.toml` is a resource in this package. Configuration must not bypass runtime security enforcement; CLI/API and MCP servers share the same validation semantics.
+`config.py` validates user configuration and `admin_config.py` restricts administrator-controlled access and network/credential policies. The packaged `config.example.toml` is read via `importlib.resources.files("cli_agent.settings")`.
+
+Settings are inputs to runtime policy enforcement, not a substitute for it. All entry points should share the same validated configuration structures.
