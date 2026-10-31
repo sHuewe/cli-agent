@@ -8,6 +8,7 @@ API_APP_JS = """
   const form = document.getElementById("composer");
   const prompt = document.getElementById("prompt");
   const send = document.getElementById("send");
+  const stopRun = document.getElementById("stop-run");
   const quit = document.getElementById("quit");
   // The API-backed UI supports multiple sessions; this only closes this tab's agent.
   quit.textContent = "Session beenden";
@@ -215,6 +216,8 @@ API_APP_JS = """
     const disconnected = !sessionId;
     prompt.disabled = busy;
     send.disabled = busy || disconnected;
+    stopRun.hidden = !busy || !runId;
+    stopRun.disabled = disconnected || !runId;
     showWorkingContext.disabled = disconnected;
     resetHistory.disabled = busy || disconnected;
     quit.disabled = busy || disconnected;
@@ -592,6 +595,7 @@ API_APP_JS = """
       reader.releaseLock();
       runId = null;
       emit({type: "busy", value: interrupted});
+      stopRun.hidden = true;
     }
   }
 
@@ -679,6 +683,17 @@ API_APP_JS = """
   async function dispatchAction(msg) {
     if (!sessionId) return;
     const base = "/sessions/" + sessionId;
+    if (msg.type === "cancel_run") {
+      if (!runId) return;
+      stopRun.disabled = true;
+      try {
+        await api("/ag-ui", "POST", {action: "cancel", threadId: sessionId, runId});
+      } catch (error) {
+        stopRun.disabled = false;
+        throw error;
+      }
+      return;
+    }
     if (msg.type === "message") {
       if (typeof msg.content !== "string") throw new Error("Ungültiger Prompt.");
       if (["exit", "quit"].includes(msg.content.trim().toLowerCase())) {
@@ -700,6 +715,7 @@ API_APP_JS = """
       }
       aguiMessages = input.messages;
       runId = input.runId;
+      setBusy(true);
       await watchRun(runId, response);
       return;
     }
@@ -758,6 +774,7 @@ API_APP_JS = """
           msg.decision === "yes" || msg.decision === "session" ? "running" : "denied");
         dismissApproval();
         runId = input.runId;
+        setBusy(true);
         await watchRun(runId, response);
       } catch (error) {
         if (pendingApprovalId === msg.id) {
@@ -1165,6 +1182,10 @@ API_APP_JS = """
       beginCommand(button.dataset.command);
     });
   }
+
+  stopRun.addEventListener("click", () => {
+    void dispatchAction({type: "cancel_run"}).catch(showApiError);
+  });
 
   cancelCommand.addEventListener("click", () => {
     if (pendingCommand) {
