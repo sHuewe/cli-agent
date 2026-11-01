@@ -200,3 +200,25 @@ def test_cleanup_diagnostics_invalid_output_and_reset(monkeypatch):
     reset_cleanup_tracking(agent, "Next")
     assert agent._cleanup_runs == []
     assert agent._cleanup_run_sequence == 0
+
+
+def test_cancelled_cleanup_records_terminal_status_and_propagates(monkeypatch):
+    import cli_agent.state.evidence_cleanup as cleanup
+    monkeypatch.setattr(cleanup, "MIN_EVIDENCE_BYTES", 1)
+
+    class Model:
+        async def chat(self, messages, tools):
+            raise asyncio.CancelledError()
+
+    agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model())
+    reset_cleanup_tracking(agent, "Analyse")
+    agent._evidence_state.evidences["e0"]["statement"] = "Revised"
+    agent._cleanup_plan_dirty = True
+    before = copy.deepcopy(agent._evidence_state.evidences)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(maybe_cleanup_evidences(agent))
+    assert agent._cleanup_runs[0]["processing_result"]["status"] == "cancelled"
+    assert agent._cleanup_runs[0]["processing_result"]["evidences_before"] == 4
+    assert agent._cleanup_runs[0]["processing_result"]["evidences_after"] == 4
+    assert agent._evidence_state.evidences == before
+    assert len(agent._cleanup_runs[0]["messages"]) == 2
