@@ -5,6 +5,7 @@ the delta; the cleanup answer never enters the coordinator's conversation.
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import logging
@@ -247,6 +248,11 @@ async def maybe_cleanup_evidences(agent: Any) -> None:
             "merged": len(delta["merge"]) if changed else 0,
         })
         LOGGER.info("evidence_cleanup completed changed=%s entries=%d", changed, len(state.evidences))
+    except asyncio.CancelledError:
+        # Cancellation must remain observable by the caller. The diagnostic
+        # entry must not stay stuck at 'running' after the model call stops.
+        result["status"] = "cancelled"
+        raise
     except Exception as exc:
         # Model/provider errors must not abort the user's original task.
         result["status"] = (
