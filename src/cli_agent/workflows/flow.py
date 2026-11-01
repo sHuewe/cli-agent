@@ -5165,6 +5165,145 @@ def _preflight_subflow_batch(
         )
 
 
+def _preflight_foreach_output_batch(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    items: list[Any],
+    iteration_ids: list[str | None],
+    namespace: str,
+    claimed_outputs: dict[str, str],
+    reserved_inputs: dict[str, Path],
+    initial_checkpoint_fingerprints: dict[tuple[str, str], bytes],
+) -> tuple[list[Path | None], list[bytes | None]]:
+    """Claim and verify an entire foreach output batch before any iteration runs.
+
+    Keep collision checks ahead of all output claims. This preserves the
+    existing no-model-side-effects guarantee for a conflicting batch.
+    """
+    _set_flow_diagnostic(
+        phase="preflight-outputs", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+    )
+    preflight_outputs = []
+    for item, iteration_id in zip(items, iteration_ids):
+        _set_flow_diagnostic(
+            phase="preflight-resolve-output", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id,
+        )
+        output = _output_for_iteration(
+            step,
+            workspace=workspace,
+            item=item,
+            iteration_id=iteration_id,
+            flow_input=flow_input,
+        )
+        preflight_outputs.append(output)
+    seen_output_keys: set[str] = set()
+    for output, iteration_id in zip(preflight_outputs, iteration_ids):
+        _set_flow_diagnostic(
+            phase="preflight-check-output-path", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id, output=output,
+        )
+        if output is None:
+            continue
+        key = _filesystem_path_key(output)
+        if key in seen_output_keys:
+            raise ValueError(
+                f"Schritt {step.step_id!r} erzeugt für mehrere "
+                "foreach-Elemente nicht eindeutige Output-Pfade."
+            )
+        seen_output_keys.add(key)
+    for output, iteration_id in zip(
+        preflight_outputs,
+        iteration_ids,
+    ):
+        assert output is not None
+        _set_flow_diagnostic(
+            phase="preflight-output-collision", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id, output=output,
+        )
+        reserved_input = reserved_inputs.get(
+            _filesystem_path_key(output)
+        )
+        if reserved_input is not None:
+            raise ValueError(
+                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                "mit einer reservierten Flow-Eingabe: "
+                f"{reserved_input}"
+            )
+        key = _filesystem_path_key(output)
+        previous_owner = claimed_outputs.get(key)
+        if previous_owner is not None and not step.overwrite_output:
+            owner = _output_owner(
+                step,
+                iteration_id=iteration_id,
+            )
+            raise ValueError(
+                f"Output-Datei {output} wird in diesem Flow-Lauf bereits "
+                f"von {previous_owner} beansprucht; {owner} darf denselben "
+                "Output nicht erneut verwenden."
+            )
+
+    for output, iteration_id in zip(
+        preflight_outputs,
+        iteration_ids,
+    ):
+        assert output is not None
+        _set_flow_diagnostic(
+            phase="preflight-claim-output", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id, output=output,
+        )
+        _claim_output(
+            claimed_outputs,
+            path=output,
+            owner=namespace + _output_owner(
+                step,
+                iteration_id=iteration_id,
+            ),
+            allow_replace=step.overwrite_output,
+        )
+
+    preflight_checkpoint_fingerprints = []
+    for output, iteration_id in zip(preflight_outputs, iteration_ids):
+        assert output is not None
+        _set_flow_diagnostic(
+            phase="preflight-checkpoint-or-output", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id, output=output,
+        )
+        expected_fingerprint = _run_start_fingerprint(
+            step, output, initial_checkpoint_fingerprints,
+            context.run_start_dynamic_checkpoints,
+            flow_source=flow.source,
+        )
+        if expected_fingerprint is not None:
+            _verified_preflight_checkpoint(
+                step,
+                workspace=workspace,
+                output=output,
+                expected_fingerprint=expected_fingerprint,
+            )
+        else:
+            _ensure_output_parent_directory(workspace, output)
+            prepare_output_target(
+                workspace,
+                output,
+                overwrite=step.overwrite_output,
+            )
+        preflight_checkpoint_fingerprints.append(
+            expected_fingerprint
+        )
+    return preflight_outputs, preflight_checkpoint_fingerprints
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -5321,123 +5460,16 @@ async def _run_flow_internal(
             and step.foreach is not None
             and step.output is not None
         ):
-            _set_flow_diagnostic(
-                phase="preflight-outputs", flow=flow.source,
-                namespace=namespace, step=step.step_id,
+            preflight_outputs, preflight_checkpoint_fingerprints = (
+                _preflight_foreach_output_batch(
+                    step, flow=flow, workspace=workspace,
+                    context=context, flow_input=flow_input,
+                    items=items, iteration_ids=iteration_ids,
+                    namespace=namespace, claimed_outputs=claimed_outputs,
+                    reserved_inputs=reserved_inputs,
+                    initial_checkpoint_fingerprints=initial_checkpoint_fingerprints,
+                )
             )
-            preflight_outputs = []
-            for item, iteration_id in zip(items, iteration_ids):
-                _set_flow_diagnostic(
-                    phase="preflight-resolve-output", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id,
-                )
-                output = _output_for_iteration(
-                    step,
-                    workspace=workspace,
-                    item=item,
-                    iteration_id=iteration_id,
-                    flow_input=flow_input,
-                )
-                preflight_outputs.append(output)
-            seen_output_keys: set[str] = set()
-            for output, iteration_id in zip(preflight_outputs, iteration_ids):
-                _set_flow_diagnostic(
-                    phase="preflight-check-output-path", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id, output=output,
-                )
-                if output is None:
-                    continue
-                key = _filesystem_path_key(output)
-                if key in seen_output_keys:
-                    raise ValueError(
-                        f"Schritt {step.step_id!r} erzeugt für mehrere "
-                        "foreach-Elemente nicht eindeutige Output-Pfade."
-                    )
-                seen_output_keys.add(key)
-            for output, iteration_id in zip(
-                preflight_outputs,
-                iteration_ids,
-            ):
-                assert output is not None
-                _set_flow_diagnostic(
-                    phase="preflight-output-collision", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id, output=output,
-                )
-                reserved_input = reserved_inputs.get(
-                    _filesystem_path_key(output)
-                )
-                if reserved_input is not None:
-                    raise ValueError(
-                        f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                        "mit einer reservierten Flow-Eingabe: "
-                        f"{reserved_input}"
-                    )
-                key = _filesystem_path_key(output)
-                previous_owner = claimed_outputs.get(key)
-                if previous_owner is not None and not step.overwrite_output:
-                    owner = _output_owner(
-                        step,
-                        iteration_id=iteration_id,
-                    )
-                    raise ValueError(
-                        f"Output-Datei {output} wird in diesem Flow-Lauf bereits "
-                        f"von {previous_owner} beansprucht; {owner} darf denselben "
-                        "Output nicht erneut verwenden."
-                    )
-
-            for output, iteration_id in zip(
-                preflight_outputs,
-                iteration_ids,
-            ):
-                assert output is not None
-                _set_flow_diagnostic(
-                    phase="preflight-claim-output", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id, output=output,
-                )
-                _claim_output(
-                    claimed_outputs,
-                    path=output,
-                    owner=namespace + _output_owner(
-                        step,
-                        iteration_id=iteration_id,
-                    ),
-                    allow_replace=step.overwrite_output,
-                )
-
-            preflight_checkpoint_fingerprints = []
-            for output, iteration_id in zip(preflight_outputs, iteration_ids):
-                assert output is not None
-                _set_flow_diagnostic(
-                    phase="preflight-checkpoint-or-output", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id, output=output,
-                )
-                expected_fingerprint = _run_start_fingerprint(
-                    step, output, initial_checkpoint_fingerprints,
-                    context.run_start_dynamic_checkpoints,
-                    flow_source=flow.source,
-                )
-                if expected_fingerprint is not None:
-                    _verified_preflight_checkpoint(
-                        step,
-                        workspace=workspace,
-                        output=output,
-                        expected_fingerprint=expected_fingerprint,
-                    )
-                else:
-                    _ensure_output_parent_directory(workspace, output)
-                    prepare_output_target(
-                        workspace,
-                        output,
-                        overwrite=step.overwrite_output,
-                    )
-                preflight_checkpoint_fingerprints.append(
-                    expected_fingerprint
-                )
 
         iteration_answers: list[tuple[str, bool]] = []
         foreach_parts: list[str] = []
