@@ -1086,32 +1086,8 @@ def _evaluate_when(
     return any(equal(value, part) for part in condition["in"])
 
 
-def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
-    workspace = workspace.expanduser().resolve()
-    if not workspace.is_dir():
-        raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
-
-    source = _flow_source(workspace, path)
-    try:
-        with source.open("rb") as handle:
-            raw_flow = handle.read(MAX_FLOW_FILE_BYTES + 1)
-        if len(raw_flow) > MAX_FLOW_FILE_BYTES:
-            raise ValueError(
-                f"Flow-Datei überschreitet das Limit von "
-                f"{MAX_FLOW_FILE_BYTES} Bytes."
-            )
-        values = tomllib.loads(raw_flow.decode("utf-8"))
-    except UnicodeDecodeError as exc:
-        raise ValueError("Flow-Datei ist nicht als UTF-8 lesbar.") from exc
-    except tomllib.TOMLDecodeError as exc:
-        raise ValueError(
-            f"Flow-Datei enthält ungültiges TOML: {exc}"
-        ) from exc
-    except OSError as exc:
-        raise ValueError(
-            f"Flow-Datei konnte nicht gelesen werden: {exc}"
-        ) from exc
-
+def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
+    """Validate top-level TOML options independently from step parsing."""
     allowed_root = {
         "version",
         "config",
@@ -1245,6 +1221,47 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raise ValueError(
             f"Flow enthält mehr als {MAX_FLOW_STEPS} Schritte."
         )
+
+    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps)
+
+
+def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
+    workspace = workspace.expanduser().resolve()
+    if not workspace.is_dir():
+        raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
+
+    source = _flow_source(workspace, path)
+    try:
+        with source.open("rb") as handle:
+            raw_flow = handle.read(MAX_FLOW_FILE_BYTES + 1)
+        if len(raw_flow) > MAX_FLOW_FILE_BYTES:
+            raise ValueError(
+                f"Flow-Datei überschreitet das Limit von "
+                f"{MAX_FLOW_FILE_BYTES} Bytes."
+            )
+        values = tomllib.loads(raw_flow.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ValueError("Flow-Datei ist nicht als UTF-8 lesbar.") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(
+            f"Flow-Datei enthält ungültiges TOML: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise ValueError(
+            f"Flow-Datei konnte nicht gelesen werden: {exc}"
+        ) from exc
+
+    (
+        inputs,
+        result_selector,
+        fallback_selector,
+        global_config,
+        global_model,
+        global_retry_policy,
+        global_variables,
+        excluded_paths,
+        raw_steps,
+    ) = _parse_flow_root(values)
 
     steps: list[FlowStep] = []
     known_ids: set[str] = set()
