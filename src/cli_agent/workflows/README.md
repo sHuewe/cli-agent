@@ -5,3 +5,5 @@
 Keep checkpoint, overwrite, and retry semantics stable. Validate workspace paths before any traversal and preserve POSIX no-follow / Windows reparse safety. The console script uses `cli_agent.workflows.flow:main`.
 
 `flow_models.py` contains immutable value objects (`FlowStep`, `FlowDefinition`, `JsonInputSpec`, `_FlowResultValue`, `_RunStartSnapshot`). Mutable execution budgets and the runtime context stay alongside the runner, because they must share its dynamically enforced safety limits.
+
+The root TOML configuration checks are grouped in `_parse_flow_root()`; `load_flow()` still owns validated step parsing. Mutable runtime execution remains in `flow.py` pending finer decomposition of checkpoint/foreach interactions without modifying their temporal semantics.
