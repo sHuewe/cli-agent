@@ -40,7 +40,7 @@
     }
     const result = cleanupRun.processing_result || {};
     const labels = {
-      running: "Läuft", applied: "Angewendet", unchanged: "Keine Änderung",
+      running: "Läuft", cancelled: "Abgebrochen", applied: "Angewendet", unchanged: "Keine Änderung",
       invalid: "Ungültige Antwort", failed: "Fehlgeschlagen"
     };
     const bytesBefore = Number(result.bytes_before ?? 0);
