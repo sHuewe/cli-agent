@@ -145,3 +145,58 @@ def test_invalid_llm_output_is_ignored_and_not_retried(monkeypatch):
     assert agent._evidence_state.evidences == before
     asyncio.run(maybe_cleanup_evidences(agent))
     assert len(calls) == 1
+
+def test_cleanup_diagnostics_preserve_exact_model_messages_and_processing(monkeypatch):
+    import cli_agent.state.evidence_cleanup as cleanup
+    monkeypatch.setattr(cleanup, "MIN_EVIDENCE_BYTES", 1)
+    actual = []
+
+    class Model:
+        async def chat(self, messages, tools):
+            actual.append(copy.deepcopy(messages))
+            assert tools == []
+            return {"role": "assistant", "content": json.dumps({
+                "remove": [{"id": "e3", "reason": "duplicate"}],
+                "update": [{"id": "e0", "statement": "New concise finding"}],
+                "merge": [],
+            })}
+
+    agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model())
+    reset_cleanup_tracking(agent, "How warm?")
+    agent._evidence_state.evidences["e0"]["statement"] += " revised"
+    agent._cleanup_plan_dirty = True
+    asyncio.run(maybe_cleanup_evidences(agent))
+    assert len(agent._cleanup_runs) == 1
+    run = agent._cleanup_runs[0]
+    assert run["id"] == "cleanup-1"
+    assert run["trigger"] == "plan_changed"
+    assert run["messages"][:2] == actual[0]
+    assert run["messages"][2]["role"] == "assistant"
+    assert run["processing_result"]["status"] == "applied"
+    assert run["processing_result"]["removed"] == 1
+    assert run["processing_result"]["updated"] == 1
+    assert run["processing_result"]["evidences_before"] == 4
+    assert run["processing_result"]["evidences_after"] == 3
+
+
+def test_cleanup_diagnostics_invalid_output_and_reset(monkeypatch):
+    import cli_agent.state.evidence_cleanup as cleanup
+    monkeypatch.setattr(cleanup, "MIN_EVIDENCE_BYTES", 1)
+
+    class Model:
+        async def chat(self, messages, tools):
+            return {"role": "assistant", "content": "not JSON"}
+
+    agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model())
+    reset_cleanup_tracking(agent, "Analyse")
+    agent._evidence_state.evidences["e0"]["statement"] = "Revised"
+    agent._cleanup_plan_dirty = True
+    before = copy.deepcopy(agent._evidence_state.evidences)
+    asyncio.run(maybe_cleanup_evidences(agent))
+    run = agent._cleanup_runs[0]
+    assert run["processing_result"]["status"] == "invalid"
+    assert run["messages"][-1] == {"role": "assistant", "content": "not JSON"}
+    assert agent._evidence_state.evidences == before
+    reset_cleanup_tracking(agent, "Next")
+    assert agent._cleanup_runs == []
+    assert agent._cleanup_run_sequence == 0
