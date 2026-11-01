@@ -4898,6 +4898,198 @@ def _execute_json_step(
     return answer
 
 
+async def _execute_model_iteration(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    namespace: str,
+    index: int,
+    item: Any,
+    iteration_id: str | None,
+    output: Path | None,
+    previous_output: str | None,
+    outputs: dict[str, str],
+    flow_input: dict[str, Any],
+    effective_flow_excluded_paths: tuple[Path, ...],
+    effective_retry_policy: ModelRetryPolicy | None,
+    reserved_inputs: dict[str, Path],
+    initial_checkpoint_paths: tuple[Path, ...],
+    case_colliding_step_ids: frozenset[str],
+) -> str:
+    """Run one prepared model/conversation iteration with current security guards.
+
+    Checkpoint detection, output claims and previous-output snapshots are owned
+    by the caller. The mutation protection set is calculated for each invocation
+    so descendant reservations cannot become stale.
+    """
+    flow_dir = flow.source.parent
+    contexts = _contexts_for_step(
+        step,
+        workspace=workspace,
+    )
+    config_file = (
+        _resolve_config(
+            step,
+            flow_dir=flow_dir,
+        )
+        if step.config is not None
+        else None
+    )
+    callback = build_preapproval_callback(
+        step.approve_tools,
+        fallback=context.approval_callback,
+    )
+    excluded_paths = (
+        tuple(
+            dict.fromkeys(
+                (
+                    *effective_flow_excluded_paths,
+                    *step.excluded_paths,
+                )
+            )
+        )
+        if step.workspace_access in {"read", "write"}
+        else ()
+    )
+    local_dump_prefix = _dump_prefix_for_iteration(
+        step,
+        index=index,
+        case_colliding_step_ids=case_colliding_step_ids,
+        iteration_id=(
+            iteration_id
+            if step.iteration_id is not None
+            else None
+        ),
+    )
+    dump_file_prefix = (
+        namespace.replace("/", ".") + local_dump_prefix
+        if namespace
+        else local_dump_prefix
+    )
+
+    _set_flow_diagnostic(
+        phase="model-or-mcp-execution", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+        iteration_id=iteration_id, output=output,
+    )
+    # Child invocations may have resolved new protected inputs since
+    # this parent invocation began. Do not cache the protection tuple.
+    mutation_protected_paths = tuple(dict.fromkeys((
+        *reserved_inputs.values(),
+        *context.run_start_checkpoint_paths,
+        *initial_checkpoint_paths,
+    )))
+    assert context.completed_json_outputs is not None
+    json_input_values = _resolve_json_inputs(
+        step,
+        workspace=workspace,
+        flow_input=flow_input,
+        item=item,
+        iteration_id=iteration_id,
+        completed_json_outputs=context.completed_json_outputs,
+    )
+    conversation_prompts = _conversation_prompts_for_iteration(
+        step,
+        workspace=workspace,
+        outputs=outputs,
+        item=item,
+        iteration_id=iteration_id,
+        previous_output=previous_output,
+        flow_input=flow_input,
+        json_input_values=json_input_values,
+    )
+    if conversation_prompts is None:
+        prompt = _prompt_for_iteration(
+            step,
+            workspace=workspace,
+            item=item,
+            iteration_id=iteration_id,
+            previous_output=previous_output,
+            outputs=outputs,
+            flow_input=flow_input,
+            json_input_values=json_input_values,
+        )
+        result = await run_once(
+            OneShotRunOptions(
+                workspace=workspace,
+                prompt=prompt,
+                config_file=config_file,
+                model=step.model,
+                workspace_access=step.workspace_access,
+                with_data=step.with_data,
+                with_mcp=step.with_mcp,
+                retry_policy=effective_retry_policy,
+                response_format=step.response_format,
+                context_files=contexts,
+                add_web_context=step.add_web_context,
+                output=output,
+                overwrite_output=step.overwrite_output,
+                approval_callback=callback,
+                user_message_callback=context.user_message_callback,
+                mutation_protected_paths=mutation_protected_paths,
+                excluded_paths=excluded_paths,
+                dump_file_prefix=dump_file_prefix,
+            ),
+            dependencies=context.dependencies,
+        )
+    else:
+        result = await run_conversation(
+            ConversationRunOptions(
+                workspace=workspace,
+                prompts=conversation_prompts,
+                config_file=config_file,
+                model=step.model,
+                workspace_access=step.workspace_access,
+                with_data=step.with_data,
+                with_mcp=step.with_mcp,
+                retry_policy=effective_retry_policy,
+                response_format=step.response_format,
+                context_files=contexts,
+                add_web_context=step.add_web_context,
+                output=output,
+                overwrite_output=step.overwrite_output,
+                approval_callback=callback,
+                user_message_callback=context.user_message_callback,
+                mutation_protected_paths=mutation_protected_paths,
+                excluded_paths=excluded_paths,
+                dump_file_prefix=dump_file_prefix,
+            ),
+            dependencies=context.dependencies,
+        )
+    if output is not None and step.response_format == "json":
+        _parse_structured_output(result.answer, step_id=step.step_id)
+        # OutputTarget writes UTF-8 text with unmodified newlines.
+        # read_existing_output_text subsequently normalizes them and
+        # strips an optional UTF-8 BOM. Match exactly that canonical
+        # representation without an extra filesystem read: existing
+        # one-shot execution mocks need not write an output file.
+        canonical_json = (
+            result.answer.removeprefix("\ufeff")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        )
+        context.completed_json_outputs[_filesystem_path_key(output)] = (
+            _checkpoint_fingerprint(canonical_json)
+        )
+    for status in getattr(result, "web_context_statuses", ()):
+        print(
+            sanitize_terminal_text(
+                status,
+                multiline=True,
+            )
+        )
+    if output is None:
+        print(
+            sanitize_terminal_text(
+                result.answer,
+                multiline=True,
+            )
+        )
+    return result.answer
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -5472,173 +5664,21 @@ async def _run_flow_internal(
                 record_iteration_answer(answer, True, iteration_id)
                 continue
 
-            contexts = _contexts_for_step(
-                step,
-                workspace=workspace,
-            )
-            config_file = (
-                _resolve_config(
-                    step,
-                    flow_dir=flow_dir,
-                )
-                if step.config is not None
-                else None
-            )
-            callback = build_preapproval_callback(
-                step.approve_tools,
-                fallback=context.approval_callback,
-            )
-            excluded_paths = (
-                tuple(
-                    dict.fromkeys(
-                        (
-                            *effective_flow_excluded_paths,
-                            *step.excluded_paths,
-                        )
-                    )
-                )
-                if step.workspace_access in {"read", "write"}
-                else ()
-            )
-            local_dump_prefix = _dump_prefix_for_iteration(
-                step,
-                index=index,
-                case_colliding_step_ids=case_colliding_step_ids,
-                iteration_id=(
-                    iteration_id
-                    if step.iteration_id is not None
-                    else None
-                ),
-            )
-            dump_file_prefix = (
-                namespace.replace("/", ".") + local_dump_prefix
-                if namespace
-                else local_dump_prefix
-            )
-
-            _set_flow_diagnostic(
-                phase="model-or-mcp-execution", flow=flow.source,
-                namespace=namespace, step=step.step_id,
+            answer = await _execute_model_iteration(
+                step, flow=flow, workspace=workspace, context=context,
+                namespace=namespace, index=index, item=item,
                 iteration_id=iteration_id, output=output,
-            )
-            # Child invocations may have resolved new protected inputs since
-            # this parent invocation began. Do not cache the protection tuple.
-            mutation_protected_paths = tuple(dict.fromkeys((
-                *reserved_inputs.values(),
-                *context.run_start_checkpoint_paths,
-                *initial_checkpoint_paths,
-            )))
-            assert context.completed_json_outputs is not None
-            json_input_values = _resolve_json_inputs(
-                step,
-                workspace=workspace,
+                previous_output=previous_output, outputs=outputs,
                 flow_input=flow_input,
-                item=item,
-                iteration_id=iteration_id,
-                completed_json_outputs=context.completed_json_outputs,
+                effective_flow_excluded_paths=effective_flow_excluded_paths,
+                effective_retry_policy=effective_retry_policy,
+                reserved_inputs=reserved_inputs,
+                initial_checkpoint_paths=initial_checkpoint_paths,
+                case_colliding_step_ids=case_colliding_step_ids,
             )
-            conversation_prompts = _conversation_prompts_for_iteration(
-                step,
-                workspace=workspace,
-                outputs=outputs,
-                item=item,
-                iteration_id=iteration_id,
-                previous_output=previous_output,
-                flow_input=flow_input,
-                json_input_values=json_input_values,
-            )
-            if conversation_prompts is None:
-                prompt = _prompt_for_iteration(
-                    step,
-                    workspace=workspace,
-                    item=item,
-                    iteration_id=iteration_id,
-                    previous_output=previous_output,
-                    outputs=outputs,
-                    flow_input=flow_input,
-                    json_input_values=json_input_values,
-                )
-                result = await run_once(
-                    OneShotRunOptions(
-                        workspace=workspace,
-                        prompt=prompt,
-                        config_file=config_file,
-                        model=step.model,
-                        workspace_access=step.workspace_access,
-                        with_data=step.with_data,
-                        with_mcp=step.with_mcp,
-                        retry_policy=effective_retry_policy,
-                        response_format=step.response_format,
-                        context_files=contexts,
-                        add_web_context=step.add_web_context,
-                        output=output,
-                        overwrite_output=step.overwrite_output,
-                        approval_callback=callback,
-                        user_message_callback=context.user_message_callback,
-                        mutation_protected_paths=mutation_protected_paths,
-                        excluded_paths=excluded_paths,
-                        dump_file_prefix=dump_file_prefix,
-                    ),
-                    dependencies=context.dependencies,
-                )
-            else:
-                result = await run_conversation(
-                    ConversationRunOptions(
-                        workspace=workspace,
-                        prompts=conversation_prompts,
-                        config_file=config_file,
-                        model=step.model,
-                        workspace_access=step.workspace_access,
-                        with_data=step.with_data,
-                        with_mcp=step.with_mcp,
-                        retry_policy=effective_retry_policy,
-                        response_format=step.response_format,
-                        context_files=contexts,
-                        add_web_context=step.add_web_context,
-                        output=output,
-                        overwrite_output=step.overwrite_output,
-                        approval_callback=callback,
-                        user_message_callback=context.user_message_callback,
-                        mutation_protected_paths=mutation_protected_paths,
-                        excluded_paths=excluded_paths,
-                        dump_file_prefix=dump_file_prefix,
-                    ),
-                    dependencies=context.dependencies,
-                )
-            if output is not None and step.response_format == "json":
-                _parse_structured_output(result.answer, step_id=step.step_id)
-                # OutputTarget writes UTF-8 text with unmodified newlines.
-                # read_existing_output_text subsequently normalizes them and
-                # strips an optional UTF-8 BOM. Match exactly that canonical
-                # representation without an extra filesystem read: existing
-                # one-shot execution mocks need not write an output file.
-                canonical_json = (
-                    result.answer.removeprefix("\ufeff")
-                    .replace("\r\n", "\n")
-                    .replace("\r", "\n")
-                )
-                context.completed_json_outputs[_filesystem_path_key(output)] = (
-                    _checkpoint_fingerprint(canonical_json)
-                )
             record_iteration_answer(
-                result.answer,
-                step.response_format == "json",
-                iteration_id,
+                answer, step.response_format == "json", iteration_id,
             )
-            for status in getattr(result, "web_context_statuses", ()):
-                print(
-                    sanitize_terminal_text(
-                        status,
-                        multiline=True,
-                    )
-                )
-            if output is None:
-                print(
-                    sanitize_terminal_text(
-                        result.answer,
-                        multiline=True,
-                    )
-                )
 
         if step.foreach is None:
             assert len(iteration_answers) == 1
