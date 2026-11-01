@@ -754,3 +754,18 @@ def test_live_main_snapshot_uses_coordinator_evidence_during_sub_run() -> None:
     text = agent.working_messages_snapshot()[-1]["content"]
     assert "Coordinator observation." in text
     assert "Delegated observation." not in text
+
+def test_cleanup_run_snapshots_are_isolated_from_diagnostic_storage() -> None:
+    agent = ConversationHarness()
+    original = {"id": "cleanup-1", "messages": [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "state"},
+        {"role": "assistant", "content": "{}"},
+    ], "processing_result": {"status": "applied"}}
+    agent._cleanup_runs = [original]
+    snapshots = agent.cleanup_run_snapshots()
+    assert snapshots == [original]
+    snapshots[0]["processing_result"]["status"] = "failed"
+    assert original["processing_result"]["status"] == "applied"
+    agent.reset_history()
+    assert agent.cleanup_run_snapshots() == []

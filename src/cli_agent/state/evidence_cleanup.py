@@ -5,6 +5,8 @@ the delta; the cleanup answer never enters the coordinator's conversation.
 """
 from __future__ import annotations
 
+import asyncio
+import asyncio
 import copy
 import json
 import logging
@@ -16,6 +18,7 @@ CLEANUP_EVERY_TOOL_CALLS = 20
 MIN_EVIDENCE_COUNT = 4
 MIN_EVIDENCE_BYTES = 6000
 MAX_CLEANUP_RESPONSE_CHARS = 32000
+MAX_CLEANUP_DIAGNOSTIC_RUNS = 20
 
 CLEANUP_SYSTEM_PROMPT = """\
 You consolidate a session-wide evidence store. Return ONLY a JSON object with
@@ -48,6 +51,8 @@ reduction at the cost of accuracy.
 def reset_cleanup_tracking(agent: Any, question: str) -> None:
     """A fresh user task keeps prior evidences, but resets cleanup cadence."""
     agent._cleanup_question = question
+    agent._cleanup_runs = []
+    agent._cleanup_run_sequence = 0
     agent._cleanup_tool_call_count = 0
     agent._cleanup_last_tool_count = 0
     agent._cleanup_plan_dirty = False
@@ -185,27 +190,79 @@ async def maybe_cleanup_evidences(agent: Any) -> None:
         return
 
     # Record the attempt regardless of outcome to avoid expensive retry loops.
+    trigger = "plan_changed" if getattr(agent, "_cleanup_plan_dirty", False) else "tool_calls"
     agent._cleanup_last_evidences = copy.deepcopy(state.evidences)
     agent._cleanup_last_tool_count = count
     agent._cleanup_plan_dirty = False
+
+    request_messages = [
+        {"role": "system", "content": CLEANUP_SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps({
+            "user_question": getattr(agent, "_cleanup_question", ""),
+            "evidence_state": state.model_snapshot(),
+        }, ensure_ascii=False)},
+    ]
+    agent._cleanup_run_sequence = getattr(agent, "_cleanup_run_sequence", 0) + 1
+    result = {
+        "status": "running",
+        "evidences_before": len(state.evidences),
+        "evidences_after": len(state.evidences),
+        "bytes_before": len(json.dumps(state.model_snapshot(), ensure_ascii=False).encode("utf-8")),
+        "bytes_after": len(json.dumps(state.model_snapshot(), ensure_ascii=False).encode("utf-8")),
+        "removed": 0,
+        "updated": 0,
+        "merged": 0,
+    }
+    record = {
+        "id": f"cleanup-{agent._cleanup_run_sequence}",
+        "trigger": trigger,
+        "messages": copy.deepcopy(request_messages),
+        "processing_result": result,
+    }
+    # A bounded per-task diagnostic log, never projected into the main LLM.
+    records = getattr(agent, "_cleanup_runs", None)
+    if records is None:
+        records = []
+        agent._cleanup_runs = records
+    records.append(record)
+    if len(records) > MAX_CLEANUP_DIAGNOSTIC_RUNS:
+        del records[:-MAX_CLEANUP_DIAGNOSTIC_RUNS]
+
     try:
-        response = await agent.model_client.chat(
-            messages=[
-                {"role": "system", "content": CLEANUP_SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps({
-                    "user_question": getattr(agent, "_cleanup_question", ""),
-                    "evidence_state": state.model_snapshot(),
-                }, ensure_ascii=False)},
-            ],
-            tools=[],
-        )
+        response = await agent.model_client.chat(messages=request_messages, tools=[])
         raw = response.get("content") if isinstance(response, dict) else None
+        if isinstance(raw, str):
+            # Keep the actual assistant text; cap only pathological invalid
+            # responses so the diagnostics endpoint cannot grow without bound.
+            record["messages"].append({
+                "role": "assistant",
+                "content": raw[:MAX_CLEANUP_RESPONSE_CHARS],
+            })
         if not isinstance(raw, str) or len(raw) > MAX_CLEANUP_RESPONSE_CHARS:
             raise ValueError("Cleanup returned missing or oversized JSON.")
-        changed = apply_cleanup_delta(state, json.loads(raw))
+        delta = json.loads(raw)
+        changed = apply_cleanup_delta(state, delta)
+        result.update({
+            "status": "applied" if changed else "unchanged",
+            "removed": len(delta["remove"]) if changed else 0,
+            "updated": len(delta["update"]) if changed else 0,
+            "merged": len(delta["merge"]) if changed else 0,
+        })
         LOGGER.info("evidence_cleanup completed changed=%s entries=%d", changed, len(state.evidences))
+    except asyncio.CancelledError:
+        # Cancellation must remain observable by the caller. The diagnostic
+        # entry must not stay stuck at 'running' after the model call stops.
+        result["status"] = "cancelled"
+        raise
     except Exception as exc:
         # Model/provider errors must not abort the user's original task.
+        result["status"] = (
+            "invalid" if isinstance(exc, (ValueError, TypeError, KeyError))
+            else "failed"
+        )
+        result["error"] = f"{type(exc).__name__}: {exc}"[:500]
         LOGGER.warning("evidence_cleanup skipped: %s", str(exc)[:250])
     finally:
+        result["evidences_after"] = len(state.evidences)
+        result["bytes_after"] = len(json.dumps(state.model_snapshot(), ensure_ascii=False).encode("utf-8"))
         agent._cleanup_last_evidences = copy.deepcopy(state.evidences)

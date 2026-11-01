@@ -627,6 +627,7 @@ INDEX_HTML = """<!doctype html>
       <button id="context-tab-contexts" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-contexts">Context</button>
     </div>
     <div id="context-panel-messages" class="context-panel" role="tabpanel" aria-labelledby="context-tab-messages">
+      <div id="cleanup-processing-result" class="cleanup-processing-result hidden" aria-live="polite"></div>
       <pre id="working-messages-json">[]</pre>
     </div>
     <div id="context-panel-tools" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-tools">
@@ -715,6 +716,8 @@ pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: an
 #approval-warning { color: #b42318; font-weight: 650; }
 .working-context-dialog { width: min(1100px, calc(100vw - 32px)); }
 .working-context-dialog pre { min-height: 55vh; max-height: 72vh; }
+.cleanup-processing-result { padding: 10px 12px; margin-bottom: 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); background: color-mix(in srgb, CanvasText 5%, Canvas); white-space: pre-wrap; overflow-wrap: anywhere; font-size: .92rem; }
+.cleanup-processing-result.error { border-color: #b42318; }
 .state-list { display: flex; flex-direction: column; gap: 10px; }
 .state-row { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(260px, 2fr) auto; gap: 12px; align-items: start; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 9px; }
 .state-name { font-weight: 650; overflow-wrap: anywhere; }
