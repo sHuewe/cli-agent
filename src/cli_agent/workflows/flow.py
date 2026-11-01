@@ -4841,7 +4841,7 @@ async def _run_flow_internal(
             step, outputs=outputs, statuses=statuses,
             flow_input=flow_input, output_json=output_json,
         )
-        if not items:
+        if _when_uses_item(step.when) and not items:
             statuses[step.step_id] = "skipped"
             print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
             continue
