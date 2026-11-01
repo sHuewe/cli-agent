@@ -32,6 +32,11 @@ class BrowserAgent:
     def working_messages_snapshot(self):
         return [{"role": "user", "content": "hello"}]
 
+    def cleanup_run_snapshots(self):
+        return [{"id": "cleanup-1", "trigger": "plan_changed",
+                 "messages": [{"role": "assistant", "content": "{}"}],
+                 "processing_result": {"status": "unchanged"}}]
+
     def tool_states_snapshot(self):
         return [{"name": k, "enabled": v} for k, v in self.enabled_tools.items()]
 
@@ -104,6 +109,8 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
         uri = f"/sessions/{session.id}"
         working = (await client.get(uri + "/working-context", headers=headers)).json()
         assert working["messages"][0]["content"] == "hello"
+        assert working["cleanup_runs"][0]["id"] == "cleanup-1"
+        assert working["cleanup_runs"][0]["processing_result"]["status"] == "unchanged"
         assert {c["id"] for c in working["contexts"]} == {"file:0", "web:0"}
         assert (await client.get(uri + "/usage", headers=headers)).json()["text"] == "42 tokens"
         assert (await client.patch(uri + "/context",
