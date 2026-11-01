@@ -259,3 +259,65 @@ def test_cleanup_prompt_requests_updates_for_verbose_unique_evidence():
     assert "even if no exact duplicates" in CLEANUP_SYSTEM_PROMPT
     assert '"update"' in CLEANUP_SYSTEM_PROMPT
     assert "material" in CLEANUP_SYSTEM_PROMPT.lower()
+
+
+def test_conversation_history_for_cleanup_keeps_only_dialogue():
+    from cli_agent.state.evidence_cleanup import conversation_history_for_cleanup
+    history = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "Earlier topic"},
+        {"role": "assistant", "content": "Old result"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "t"}]},
+        {"role": "tool", "content": "raw", "tool_call_id": "t"},
+        {"role": "user", "content": "[cli-agent evidence state: injected]"},
+        {"role": "user", "content": "Externer Referenzkontext für die nachfolgende Benutzeranfrage."},
+    ]
+    assert conversation_history_for_cleanup(history, "New topic") == [
+        {"role": "user", "content": "Earlier topic"},
+        {"role": "assistant", "content": "Old result"},
+        {"role": "user", "content": "New topic"},
+    ]
+
+
+def test_cleanup_receives_history_and_runs_at_ten_calls(monkeypatch):
+    from cli_agent.state import evidence_cleanup as cleanup
+    monkeypatch.setattr(cleanup, "MIN_EVIDENCE_BYTES", 1)
+    calls = []
+
+    class Model:
+        async def chat(self, messages, tools):
+            calls.append(json.loads(messages[1]["content"]))
+            return {"content": '{"remove":[],"update":[],"merge":[]}'}
+
+    agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model(),
+                            history=[{"role": "user", "content": "Previously studied X"},
+                                     {"role": "assistant", "content": "Finding about X"}])
+    reset_cleanup_tracking(agent, "Now study Y")
+    agent._evidence_state.evidences["e0"]["statement"] += " revised"
+    note_tool_calls(agent, [{"function": {"name": "sensor__read"}}] * 10)
+    asyncio.run(maybe_cleanup_evidences(agent))
+    assert len(calls) == 1
+    assert [x["content"] for x in calls[0]["conversation_history"]] == [
+        "Previously studied X", "Finding about X", "Now study Y"]
+    assert agent._cleanup_runs[0]["processing_result"]["status"] == "unchanged"
+
+
+def test_cleanup_size_pressure_trigger(monkeypatch):
+    from cli_agent.state import evidence_cleanup as cleanup
+    monkeypatch.setattr(cleanup, "MIN_EVIDENCE_BYTES", 1)
+    monkeypatch.setattr(cleanup, "CLEANUP_SIZE_PRESSURE_BYTES", 1)
+    calls = []
+
+    class Model:
+        async def chat(self, messages, tools):
+            calls.append(1)
+            return {"content": '{"remove":[],"update":[],"merge":[]}'}
+
+    agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model())
+    reset_cleanup_tracking(agent, "Investigation")
+    agent._evidence_state.evidences["e0"]["statement"] += " revised"
+    asyncio.run(maybe_cleanup_evidences(agent))
+    assert calls == [1]
+    assert agent._cleanup_runs[0]["trigger"] == "size_pressure"
+    asyncio.run(maybe_cleanup_evidences(agent))
+    assert calls == [1]
