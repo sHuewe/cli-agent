@@ -550,7 +550,7 @@ def test_api_backed_browser_javascript_syntax():
         pytest.skip("Node.js is not installed")
     result = subprocess.run(
         [node, "--check", "--input-type=commonjs"],
-        input=API_APP_JS, text=True, capture_output=True, timeout=15,
+        input=API_APP_JS, text=True, encoding="utf-8", capture_output=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
 
