@@ -222,3 +222,21 @@ def test_cancelled_cleanup_records_terminal_status_and_propagates(monkeypatch):
     assert agent._cleanup_runs[0]["processing_result"]["evidences_after"] == 4
     assert agent._evidence_state.evidences == before
     assert len(agent._cleanup_runs[0]["messages"]) == 2
+
+def test_cleanup_cancellation_records_terminal_status_and_propagates(monkeypatch):
+    import cli_agent.state.evidence_cleanup as cleanup
+    monkeypatch.setattr(cleanup, "MIN_EVIDENCE_BYTES", 1)
+
+    class Model:
+        async def chat(self, messages, tools):
+            raise asyncio.CancelledError()
+
+    agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model())
+    reset_cleanup_tracking(agent, "Analyse")
+    agent._cleanup_plan_dirty = True
+    agent._evidence_state.evidences["e0"]["statement"] += " revised"
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(maybe_cleanup_evidences(agent))
+    result = agent._cleanup_runs[0]["processing_result"]
+    assert result["status"] == "cancelled"
+    assert result["evidences_before"] == result["evidences_after"]
