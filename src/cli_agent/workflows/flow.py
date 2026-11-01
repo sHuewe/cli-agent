@@ -5387,6 +5387,107 @@ async def _execute_subflow_iteration(
     return child_result
 
 
+def _prepare_iteration_checkpoint(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    item: Any,
+    iteration_id: str | None,
+    index: int,
+    namespace: str,
+    reserved_inputs: dict[str, Path],
+    claimed_outputs: dict[str, str],
+    preflight_outputs: list[Path | None] | None,
+    preflight_checkpoint_fingerprints: list[bytes | None] | None,
+    initial_checkpoint_fingerprints: dict[tuple[str, str], bytes],
+) -> tuple[Path | None, str | None]:
+    """Claim one output and verify its run-start checkpoint before execution."""
+    output = (
+        preflight_outputs[index - 1]
+        if preflight_outputs is not None
+        else _output_for_iteration(
+            step,
+            workspace=workspace,
+            item=item,
+            iteration_id=iteration_id,
+            flow_input=flow_input,
+        )
+    )
+    _set_flow_diagnostic(
+        phase="resolve-output", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+        iteration_id=iteration_id, output=output,
+    )
+    if output is not None:
+        reserved_input = reserved_inputs.get(
+            _filesystem_path_key(output)
+        )
+        if reserved_input is not None:
+            raise ValueError(
+                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                "mit einer reservierten Flow-Eingabe: "
+                f"{reserved_input}"
+            )
+        if preflight_outputs is None:
+            _claim_output(
+                claimed_outputs,
+                path=output,
+                owner=namespace + _output_owner(
+                    step,
+                    iteration_id=iteration_id,
+                ),
+                allow_replace=step.overwrite_output,
+            )
+
+    if preflight_checkpoint_fingerprints is not None:
+        expected_fingerprint = preflight_checkpoint_fingerprints[index - 1]
+    else:
+        expected_fingerprint = (
+            _run_start_fingerprint(
+                step, output, initial_checkpoint_fingerprints,
+                context.run_start_dynamic_checkpoints,
+                flow_source=flow.source,
+            )
+            if output is not None
+            else None
+        )
+
+    _set_flow_diagnostic(
+        phase="checkpoint-or-output-preparation", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+        iteration_id=iteration_id, output=output,
+    )
+    if expected_fingerprint is not None:
+        checkpoint = _verified_preflight_checkpoint(
+            step,
+            workspace=workspace,
+            output=output,
+            expected_fingerprint=expected_fingerprint,
+        )
+    else:
+        checkpoint = None
+        if output is not None and preflight_outputs is None:
+            if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
+                directory = _render_input_text(
+                    step.filesystem_operation["directory"], flow_input,
+                )
+                inventory_root = _workspace_directory(workspace, directory)
+                if output == inventory_root or inventory_root in output.parents:
+                    raise ValueError(
+                        "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
+                    )
+            _ensure_output_parent_directory(workspace, output)
+            prepare_output_target(
+                workspace,
+                output,
+                overwrite=step.overwrite_output,
+            )
+    return output, checkpoint
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -5628,86 +5729,15 @@ async def _run_flow_internal(
                 completed_child_invocations.add((step.step_id, iteration_id))
                 continue
 
-            output = (
-                preflight_outputs[index - 1]
-                if preflight_outputs is not None
-                else _output_for_iteration(
-                    step,
-                    workspace=workspace,
-                    item=item,
-                    iteration_id=iteration_id,
-                    flow_input=flow_input,
-                )
+            output, checkpoint = _prepare_iteration_checkpoint(
+                step, flow=flow, workspace=workspace, context=context,
+                flow_input=flow_input, item=item, iteration_id=iteration_id,
+                index=index, namespace=namespace, reserved_inputs=reserved_inputs,
+                claimed_outputs=claimed_outputs,
+                preflight_outputs=preflight_outputs,
+                preflight_checkpoint_fingerprints=preflight_checkpoint_fingerprints,
+                initial_checkpoint_fingerprints=initial_checkpoint_fingerprints,
             )
-            _set_flow_diagnostic(
-                phase="resolve-output", flow=flow.source,
-                namespace=namespace, step=step.step_id,
-                iteration_id=iteration_id, output=output,
-            )
-            if output is not None:
-                reserved_input = reserved_inputs.get(
-                    _filesystem_path_key(output)
-                )
-                if reserved_input is not None:
-                    raise ValueError(
-                        f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                        "mit einer reservierten Flow-Eingabe: "
-                        f"{reserved_input}"
-                    )
-                if preflight_outputs is None:
-                    _claim_output(
-                        claimed_outputs,
-                        path=output,
-                        owner=namespace + _output_owner(
-                            step,
-                            iteration_id=iteration_id,
-                        ),
-                        allow_replace=step.overwrite_output,
-                    )
-
-            if preflight_checkpoint_fingerprints is not None:
-                expected_fingerprint = preflight_checkpoint_fingerprints[index - 1]
-            else:
-                expected_fingerprint = (
-                    _run_start_fingerprint(
-                        step, output, initial_checkpoint_fingerprints,
-                        context.run_start_dynamic_checkpoints,
-                        flow_source=flow.source,
-                    )
-                    if output is not None
-                    else None
-                )
-
-            _set_flow_diagnostic(
-                phase="checkpoint-or-output-preparation", flow=flow.source,
-                namespace=namespace, step=step.step_id,
-                iteration_id=iteration_id, output=output,
-            )
-            if expected_fingerprint is not None:
-                checkpoint = _verified_preflight_checkpoint(
-                    step,
-                    workspace=workspace,
-                    output=output,
-                    expected_fingerprint=expected_fingerprint,
-                )
-            else:
-                checkpoint = None
-                if output is not None and preflight_outputs is None:
-                    if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
-                        directory = _render_input_text(
-                            step.filesystem_operation["directory"], flow_input,
-                        )
-                        inventory_root = _workspace_directory(workspace, directory)
-                        if output == inventory_root or inventory_root in output.parents:
-                            raise ValueError(
-                                "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
-                            )
-                    _ensure_output_parent_directory(workspace, output)
-                    prepare_output_target(
-                        workspace,
-                        output,
-                        overwrite=step.overwrite_output,
-                    )
 
             if checkpoint is not None:
                 assert output is not None
