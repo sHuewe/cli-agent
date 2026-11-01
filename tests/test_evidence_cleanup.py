@@ -240,3 +240,22 @@ def test_cleanup_cancellation_records_terminal_status_and_propagates(monkeypatch
     result = agent._cleanup_runs[0]["processing_result"]
     assert result["status"] == "cancelled"
     assert result["evidences_before"] == result["evidences_after"]
+
+def test_budget_uses_model_visible_state_not_source_metadata():
+    state = evidence_state()
+    for item in state.evidences.values():
+        item["tool_calls"][0]["workspace_path"] = "x" * 15000
+        item["tool_calls"][0]["record_sets"] = [{"large": "y" * 12000}]
+    # Provenance stays intact internally but is excluded from the 32-kB LLM
+    # budget. This was blocking otherwise valid sub-run evidence promotion.
+    state._check_budget(state.evidences)
+    from cli_agent.state.evidence_tools import visible_evidence_state
+    assert state.model_snapshot() == visible_evidence_state(state.evidences, state.plan)
+    assert len(json.dumps(state.model_snapshot())) < 32000
+
+
+def test_cleanup_prompt_requests_updates_for_verbose_unique_evidence():
+    from cli_agent.state.evidence_cleanup import CLEANUP_SYSTEM_PROMPT
+    assert "even if no exact duplicates" in CLEANUP_SYSTEM_PROMPT
+    assert '"update"' in CLEANUP_SYSTEM_PROMPT
+    assert "material" in CLEANUP_SYSTEM_PROMPT.lower()
