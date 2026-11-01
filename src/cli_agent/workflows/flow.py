@@ -5090,6 +5090,81 @@ async def _execute_model_iteration(
     return result.answer
 
 
+def _preflight_subflow_batch(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+    items: list[Any],
+    iteration_ids: list[str | None],
+    namespace: str,
+    next_stack: tuple[str, ...],
+    case_colliding_step_ids: frozenset[str],
+    claimed_outputs: dict[str, str],
+    reserved_inputs: dict[str, Path],
+) -> None:
+    """Validate all concrete children before starting the first subflow.
+
+    A transient copy of output claims catches collisions between siblings
+    without mutating the live claims until actual execution.
+    """
+    _set_flow_diagnostic(
+        phase="preflight-subflow", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+    )
+    assert context.flow_cache is not None
+    child = _load_subflow_definition(
+        step,
+        workspace=workspace,
+        cache=context.flow_cache,
+    )
+    _validate_subflow_interface(step, child)
+
+    # Preflight the complete concrete subflow batch before the first
+    # child starts. Use a copy so execution still performs the real
+    # claims, while collisions across siblings/foreach items are
+    # detected without any model/tool side effects.
+    batch_claims = dict(claimed_outputs)
+    for item, iteration_id in zip(items, iteration_ids):
+        _set_flow_diagnostic(
+            phase="preflight-render-subflow-inputs",
+            flow=flow.source, namespace=namespace,
+            step=step.step_id, iteration_id=iteration_id,
+        )
+        child_input = _render_subflow_inputs(
+            step,
+            item=item,
+            iteration_id=iteration_id,
+            outputs=outputs,
+            output_json=output_json,
+            flow_input=flow_input,
+        )
+        child_namespace = _child_invocation_namespace(
+            namespace,
+            step,
+            iteration_id=iteration_id,
+            case_colliding_step_ids=case_colliding_step_ids,
+        )
+        assert context.run_start_snapshots is not None
+        assert context.preflight_budget is not None
+        _preflight_concrete_invocation_outputs(
+            child,
+            workspace=workspace,
+            cache=context.flow_cache,
+            flow_input=child_input,
+            reserved_inputs=reserved_inputs,
+            claimed_outputs=batch_claims,
+            namespace=child_namespace,
+            run_start_snapshots=context.run_start_snapshots,
+            budget=context.preflight_budget,
+            call_stack=next_stack,
+        )
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -5230,57 +5305,16 @@ async def _run_flow_internal(
         preflight_checkpoint_fingerprints: list[bytes | None] | None = None
 
         if step.flow is not None:
-            _set_flow_diagnostic(
-                phase="preflight-subflow", flow=flow.source,
-                namespace=namespace, step=step.step_id,
+            _preflight_subflow_batch(
+                step, flow=flow, workspace=workspace,
+                context=context, flow_input=flow_input,
+                outputs=outputs, output_json=output_json,
+                items=items, iteration_ids=iteration_ids,
+                namespace=namespace, next_stack=next_stack,
+                case_colliding_step_ids=case_colliding_step_ids,
+                claimed_outputs=claimed_outputs,
+                reserved_inputs=reserved_inputs,
             )
-            assert context.flow_cache is not None
-            child = _load_subflow_definition(
-                step,
-                workspace=workspace,
-                cache=context.flow_cache,
-            )
-            _validate_subflow_interface(step, child)
-
-            # Preflight the complete concrete subflow batch before the first
-            # child starts. Use a copy so execution still performs the real
-            # claims, while collisions across siblings/foreach items are
-            # detected without any model/tool side effects.
-            batch_claims = dict(claimed_outputs)
-            for item, iteration_id in zip(items, iteration_ids):
-                _set_flow_diagnostic(
-                    phase="preflight-render-subflow-inputs",
-                    flow=flow.source, namespace=namespace,
-                    step=step.step_id, iteration_id=iteration_id,
-                )
-                child_input = _render_subflow_inputs(
-                    step,
-                    item=item,
-                    iteration_id=iteration_id,
-                    outputs=outputs,
-                    output_json=output_json,
-                    flow_input=flow_input,
-                )
-                child_namespace = _child_invocation_namespace(
-                    namespace,
-                    step,
-                    iteration_id=iteration_id,
-                    case_colliding_step_ids=case_colliding_step_ids,
-                )
-                assert context.run_start_snapshots is not None
-                assert context.preflight_budget is not None
-                _preflight_concrete_invocation_outputs(
-                    child,
-                    workspace=workspace,
-                    cache=context.flow_cache,
-                    flow_input=child_input,
-                    reserved_inputs=reserved_inputs,
-                    claimed_outputs=batch_claims,
-                    namespace=child_namespace,
-                    run_start_snapshots=context.run_start_snapshots,
-                    budget=context.preflight_budget,
-                    call_stack=next_stack,
-                )
 
         if (
             step.flow is None
