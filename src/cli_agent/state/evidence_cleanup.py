@@ -197,14 +197,18 @@ async def maybe_cleanup_evidences(agent: Any) -> None:
     if state.evidences == agent._cleanup_last_evidences:
         return
     count = getattr(agent, "_cleanup_tool_call_count", 0)
+    state_size = len(json.dumps(state.model_snapshot(), ensure_ascii=False).encode("utf-8"))
     due = (getattr(agent, "_cleanup_plan_dirty", False)
            or count - getattr(agent, "_cleanup_last_tool_count", 0)
-           >= CLEANUP_EVERY_TOOL_CALLS)
+           >= CLEANUP_EVERY_TOOL_CALLS
+           or state_size >= CLEANUP_SIZE_PRESSURE_BYTES)
     if not due:
         return
 
     # Record the attempt regardless of outcome to avoid expensive retry loops.
-    trigger = "plan_changed" if getattr(agent, "_cleanup_plan_dirty", False) else "tool_calls"
+    trigger = ("plan_changed" if getattr(agent, "_cleanup_plan_dirty", False)
+               else "size_pressure" if state_size >= CLEANUP_SIZE_PRESSURE_BYTES
+               else "tool_calls")
     agent._cleanup_last_evidences = copy.deepcopy(state.evidences)
     agent._cleanup_last_tool_count = count
     agent._cleanup_plan_dirty = False
