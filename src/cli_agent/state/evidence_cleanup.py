@@ -51,7 +51,7 @@ def reset_cleanup_tracking(agent: Any, question: str) -> None:
     agent._cleanup_tool_call_count = 0
     agent._cleanup_last_tool_count = 0
     agent._cleanup_plan_dirty = False
-    agent._cleanup_last_evidences = copy.deepcopy(agent._evidence_state.evidences)
+    agent._cleanup_last_evidences = copy.deepcopy(getattr(getattr(agent, "_evidence_state", None), "evidences", {}))
 
 
 def note_tool_calls(agent: Any, calls: list[dict[str, Any]]) -> None:
