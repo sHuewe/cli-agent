@@ -204,7 +204,7 @@ async def maybe_cleanup_evidences(agent: Any) -> None:
             raise ValueError("Cleanup returned missing or oversized JSON.")
         changed = apply_cleanup_delta(state, json.loads(raw))
         LOGGER.info("evidence_cleanup completed changed=%s entries=%d", changed, len(state.evidences))
-    except (ValueError, TypeError, KeyError, RuntimeError, OSError) as exc:
+    except Exception as exc:
         # Model/provider errors must not abort the user's original task.
         LOGGER.warning("evidence_cleanup skipped: %s", str(exc)[:250])
     finally:
