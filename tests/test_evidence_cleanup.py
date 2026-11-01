@@ -115,6 +115,7 @@ def test_single_shot_without_tools_or_model_visible_result(monkeypatch):
 
     agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model())
     reset_cleanup_tracking(agent, "How warm was it?")
+    agent._evidence_state.evidences["e0"]["statement"] += " with new evidence"
     note_tool_calls(agent, [{"function": {"name": "sensor__read"}}] * 20)
     asyncio.run(maybe_cleanup_evidences(agent))
     assert len(recorded) == 1
