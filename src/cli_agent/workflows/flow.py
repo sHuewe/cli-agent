@@ -4684,6 +4684,32 @@ def _effective_step_retry_policy(
     )
 
 
+def _eligible_step_iterations(
+    step: FlowStep,
+    *,
+    outputs: dict[str, str],
+    statuses: dict[str, str],
+    flow_input: dict[str, Any],
+    output_json: dict[str, bool],
+) -> tuple[list[Any], list[str | None]]:
+    """Resolve step items and apply item-local conditions without side effects."""
+    items = _foreach_items(step, outputs=outputs, flow_input=flow_input)
+    iteration_ids = _iteration_ids(step, items=items, flow_input=flow_input)
+    if _when_uses_item(step.when):
+        selected = [
+            (item, iteration_id)
+            for item, iteration_id in zip(items, iteration_ids)
+            if _evaluate_when(
+                step.when, outputs=outputs, statuses=statuses,
+                flow_input=flow_input, item=item,
+                iteration_id=iteration_id, output_json=output_json,
+            )
+        ]
+        items = [item for item, _ in selected]
+        iteration_ids = [iteration_id for _, iteration_id in selected]
+    return items, iteration_ids
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -4811,33 +4837,14 @@ async def _run_flow_internal(
         effective_retry_policy = _effective_step_retry_policy(
             step, flow_retry_policy,
         )
-        items = _foreach_items(
-            step,
-            outputs=outputs,
-            flow_input=flow_input,
+        items, iteration_ids = _eligible_step_iterations(
+            step, outputs=outputs, statuses=statuses,
+            flow_input=flow_input, output_json=output_json,
         )
-        iteration_ids = _iteration_ids(
-            step,
-            items=items,
-            flow_input=flow_input,
-        )
-        if _when_uses_item(step.when):
-            eligible = [
-                (item, iteration_id)
-                for item, iteration_id in zip(items, iteration_ids)
-                if _evaluate_when(
-                    step.when, outputs=outputs, statuses=statuses,
-                    flow_input=flow_input, item=item,
-                    iteration_id=iteration_id,
-                    output_json=output_json,
-                )
-            ]
-            if not eligible:
-                statuses[step.step_id] = "skipped"
-                print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
-                continue
-            items = [item for item, _ in eligible]
-            iteration_ids = [iteration_id for _, iteration_id in eligible]
+        if not items:
+            statuses[step.step_id] = "skipped"
+            print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
+            continue
 
         preflight_outputs: list[Path | None] | None = None
         preflight_checkpoint_fingerprints: list[bytes | None] | None = None
