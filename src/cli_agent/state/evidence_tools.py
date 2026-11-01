@@ -22,6 +22,29 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}\Z")
 class EvidenceInputError(ValueError):
     pass
 
+def visible_evidence_state(entries: dict, plan: dict | None) -> dict:
+    """Exact model-facing evidence representation, without internal provenance."""
+    visible = [
+        {
+            "id": item["id"],
+            "type": item["type"],
+            "statement": item["statement"],
+            "source_refs": [
+                source["source_ref"] for source in item["tool_calls"]
+                if "source_ref" in source
+            ],
+            **({"plan_step_id": item["plan_step_id"]}
+               if "plan_step_id" in item else {}),
+        }
+        for item in entries.values()
+    ]
+    state: dict[str, Any] = {"evidences": visible}
+    if plan is not None:
+        state["plan"] = copy.deepcopy(plan)
+    return state
+
+
+
 
 def annotate_source_result(content: str, *, source_ref: str, tool_name: str) -> str:
     """Label a verified result without breaking JSON object consumers.
@@ -213,7 +236,7 @@ class EvidenceOperationsMixin:
     def _check_budget(self, entries: dict, plan: dict | None = None) -> None:
         if len(entries) > 64:
             raise EvidenceInputError("Evidence-Limit überschritten.")
-        state = {"plan": self.plan if plan is None else plan, "evidences": list(entries.values())}
+        state = visible_evidence_state(entries, self.plan if plan is None else plan)
         if len(json.dumps(state, ensure_ascii=False).encode("utf-8")) > 32000:
             raise EvidenceInputError("Evidence-State überschreitet das Größenlimit.")
 
