@@ -5488,6 +5488,38 @@ def _prepare_iteration_checkpoint(
     return output, checkpoint
 
 
+def _resolve_iteration_previous_output(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+    invocation_known_at_run_start: bool,
+    initial_previous_output_fingerprints: dict[tuple[str, str], bytes | None],
+) -> str | None:
+    """Read only a verified run-start snapshot, never a mid-run output."""
+    try:
+        if (
+            not invocation_known_at_run_start
+            and _uses_previous_output(step)
+        ):
+            previous_output = None
+        else:
+            previous_output = _previous_output_from_snapshot(
+                step,
+                workspace=workspace,
+                output=output,
+                fingerprints=initial_previous_output_fingerprints,
+            )
+    except ValueError as exc:
+        if step.foreach is not None and _uses_previous_output(step):
+            raise ValueError(
+                f"{exc} Bei foreach muss die Quelle vollständig aus "
+                "Run-Start-Checkpoints ableitbar sein."
+            ) from exc
+        raise
+    return previous_output
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -5761,26 +5793,11 @@ async def _run_flow_internal(
                 )
                 continue
 
-            try:
-                if (
-                    not invocation_known_at_run_start
-                    and _uses_previous_output(step)
-                ):
-                    previous_output = None
-                else:
-                    previous_output = _previous_output_from_snapshot(
-                        step,
-                        workspace=workspace,
-                        output=output,
-                        fingerprints=initial_previous_output_fingerprints,
-                    )
-            except ValueError as exc:
-                if step.foreach is not None and _uses_previous_output(step):
-                    raise ValueError(
-                        f"{exc} Bei foreach muss die Quelle vollständig aus "
-                        "Run-Start-Checkpoints ableitbar sein."
-                    ) from exc
-                raise
+            previous_output = _resolve_iteration_previous_output(
+                step, workspace=workspace, output=output,
+                invocation_known_at_run_start=invocation_known_at_run_start,
+                initial_previous_output_fingerprints=initial_previous_output_fingerprints,
+            )
 
             if step.filesystem_operation is not None:
                 answer = _execute_filesystem_step(
