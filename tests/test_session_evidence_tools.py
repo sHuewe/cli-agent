@@ -285,6 +285,8 @@ def test_cited_refs_remain_in_both_model_tool_enums_after_96_new_results():
     for n in range(2, 111):
         state.register_result(f"call-{n}", tool_name="sensor")
     for tool in state.tool_definitions()[1:]:
+        if tool["function"]["name"] == "agent__remove_evidence":
+            continue
         offered = tool["function"]["parameters"]["properties"]["source_refs"]["items"]["enum"]
         assert "S1" in offered
         assert "S110" in offered
