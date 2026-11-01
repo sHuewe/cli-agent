@@ -5304,6 +5304,89 @@ def _preflight_foreach_output_batch(
     return preflight_outputs, preflight_checkpoint_fingerprints
 
 
+async def _execute_subflow_iteration(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+    statuses: dict[str, str],
+    claimed_outputs: dict[str, str],
+    parent_protected_inputs: dict[str, Path],
+    completed_child_invocations: set[tuple[str, str | None]],
+    item: Any,
+    iteration_id: str | None,
+    namespace: str,
+    next_stack: tuple[str, ...],
+    case_colliding_step_ids: frozenset[str],
+    effective_flow_excluded_paths: tuple[Path, ...],
+    effective_retry_policy: ModelRetryPolicy | None,
+) -> _FlowResultValue:
+    """Execute a prepared child with fresh sibling protections.
+
+    Keep the child's speculative checkpoint reservations out of its inherited
+    immutable inputs. The child recomputes its own frontier after entering.
+    """
+    assert context.flow_cache is not None
+    child = _load_subflow_definition(
+        step,
+        workspace=workspace,
+        cache=context.flow_cache,
+    )
+    _validate_subflow_interface(step, child)
+    child_input = _render_subflow_inputs(
+        step,
+        item=item,
+        iteration_id=iteration_id,
+        outputs=outputs,
+        output_json=output_json,
+        flow_input=flow_input,
+    )
+    child_namespace = _child_invocation_namespace(
+        namespace,
+        step,
+        iteration_id=iteration_id,
+        case_colliding_step_ids=case_colliding_step_ids,
+    )
+    # Preserve parent and other sibling input protections, but
+    # exclude this concrete child's speculative projections.
+    # It recomputes its own conditional readers at each frontier.
+    child_inherited_inputs = dict(parent_protected_inputs)
+    _reserve_future_child_checkpoint_inputs(
+        flow, workspace=workspace, cache=context.flow_cache,
+        flow_input=flow_input, outputs=outputs,
+        output_json=output_json, statuses=statuses,
+        reserved_inputs=child_inherited_inputs,
+        claimed_outputs=claimed_outputs,
+        exclude_invocation=(step.step_id, iteration_id),
+        completed_invocations=completed_child_invocations,
+    )
+    child_result = await _run_flow_internal(
+        child,
+        workspace=workspace,
+        context=context,
+        flow_input=child_input,
+        call_stack=next_stack,
+        namespace=child_namespace,
+        inherited_excluded_paths=effective_flow_excluded_paths,
+        inherited_retry_policy=effective_retry_policy,
+        inherited_protected_inputs=child_inherited_inputs,
+    )
+    if child_result is None:
+        raise ValueError(
+            f"Subflow {child.source} besitzt kein Ergebnis."
+        )
+    _set_flow_diagnostic(
+        phase="aggregate-subflow-result", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+        iteration_id=iteration_id,
+    )
+    return child_result
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -5526,64 +5609,21 @@ async def _run_flow_internal(
             )
 
             if step.flow is not None:
-                assert context.flow_cache is not None
-                child = _load_subflow_definition(
-                    step,
-                    workspace=workspace,
-                    cache=context.flow_cache,
-                )
-                _validate_subflow_interface(step, child)
-                child_input = _render_subflow_inputs(
-                    step,
-                    item=item,
-                    iteration_id=iteration_id,
-                    outputs=outputs,
-                    output_json=output_json,
-                    flow_input=flow_input,
-                )
-                child_namespace = _child_invocation_namespace(
-                    namespace,
-                    step,
-                    iteration_id=iteration_id,
-                    case_colliding_step_ids=case_colliding_step_ids,
-                )
-                # Preserve parent and other sibling input protections, but
-                # exclude this concrete child's speculative projections.
-                # It recomputes its own conditional readers at each frontier.
-                child_inherited_inputs = dict(parent_protected_inputs)
-                _reserve_future_child_checkpoint_inputs(
-                    flow, workspace=workspace, cache=context.flow_cache,
+                child_result = await _execute_subflow_iteration(
+                    step, flow=flow, workspace=workspace, context=context,
                     flow_input=flow_input, outputs=outputs,
                     output_json=output_json, statuses=statuses,
-                    reserved_inputs=child_inherited_inputs,
                     claimed_outputs=claimed_outputs,
-                    exclude_invocation=(step.step_id, iteration_id),
-                    completed_invocations=completed_child_invocations,
-                )
-                child_result = await _run_flow_internal(
-                    child,
-                    workspace=workspace,
-                    context=context,
-                    flow_input=child_input,
-                    call_stack=next_stack,
-                    namespace=child_namespace,
-                    inherited_excluded_paths=effective_flow_excluded_paths,
-                    inherited_retry_policy=effective_retry_policy,
-                    inherited_protected_inputs=child_inherited_inputs,
-                )
-                if child_result is None:
-                    raise ValueError(
-                        f"Subflow {child.source} besitzt kein Ergebnis."
-                    )
-                _set_flow_diagnostic(
-                    phase="aggregate-subflow-result", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id,
+                    parent_protected_inputs=parent_protected_inputs,
+                    completed_child_invocations=completed_child_invocations,
+                    item=item, iteration_id=iteration_id,
+                    namespace=namespace, next_stack=next_stack,
+                    case_colliding_step_ids=case_colliding_step_ids,
+                    effective_flow_excluded_paths=effective_flow_excluded_paths,
+                    effective_retry_policy=effective_retry_policy,
                 )
                 record_iteration_answer(
-                    child_result.text,
-                    child_result.is_json,
-                    iteration_id,
+                    child_result.text, child_result.is_json, iteration_id,
                 )
                 completed_child_invocations.add((step.step_id, iteration_id))
                 continue
