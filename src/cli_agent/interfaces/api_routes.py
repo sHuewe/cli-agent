@@ -198,7 +198,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         # Internal agent tools are not routed MCP tools and are deliberately
         # omitted from tool_states_snapshot(). Frontend clients must never
         # shadow them, even before any external tool has been enabled.
-        reserved_names = {"agent__start_sub_run", PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME}
+        reserved_names = {"agent__start_sub_run", PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, "agent__remove_evidence", PUBLISH_TOOL_NAME}
         reserved_names.update(getattr(session.agent, "_tool_routes", {}))
         if hasattr(session.agent, "tool_states_snapshot"):
             reserved_names.update(
