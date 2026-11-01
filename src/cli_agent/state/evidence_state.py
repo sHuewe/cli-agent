@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 from cli_agent.state.message_visibility import messages_for_model
-from cli_agent.state.evidence_tools import EvidenceOperationsMixin
+from cli_agent.state.evidence_tools import EvidenceOperationsMixin, visible_evidence_state
 
 EVIDENCE_TOOL_NAME = "agent__update_evidence"
 MAX_EVIDENCES = 64
@@ -514,10 +514,7 @@ class EvidenceState(EvidenceOperationsMixin):
         # The state budget only covers model-facing findings and plan.
         # Compaction IDs are internal history-management bookkeeping and
         # must not consume the model's evidence budget.
-        model_state = {
-            "plan": candidate_plan,
-            "evidences": list(candidates.values()),
-        }
+        model_state = visible_evidence_state(candidates, candidate_plan)
         if len(json.dumps(model_state, ensure_ascii=False).encode("utf-8")) > MAX_EVIDENCE_STATE_BYTES:
             raise EvidenceError("Evidence-State überschreitet das Größenlimit.")
         # Commit the entire change atomically.
@@ -529,26 +526,7 @@ class EvidenceState(EvidenceOperationsMixin):
 
     def model_snapshot(self) -> dict[str, Any]:
         """Only task-relevant working memory; omit internal compaction IDs."""
-        # The model only needs compact, human-readable references. Keep
-        # provider-specific call IDs in the internal diagnostic snapshot.
-        visible = [
-            {
-                "id": item["id"],
-                "type": item["type"],
-                "statement": item["statement"],
-                "source_refs": [
-                    source["source_ref"] for source in item["tool_calls"]
-                    if "source_ref" in source
-                ],
-                **({"plan_step_id": item["plan_step_id"]}
-                   if "plan_step_id" in item else {}),
-            }
-            for item in self.evidences.values()
-        ]
-        state: dict[str, Any] = {"evidences": visible}
-        if self.plan is not None:
-            state["plan"] = copy.deepcopy(self.plan)
-        return state
+        return visible_evidence_state(self.evidences, self.plan)
 
     def snapshot(self) -> dict[str, Any]:
         """Complete diagnostic snapshot, including hidden-call bookkeeping."""
