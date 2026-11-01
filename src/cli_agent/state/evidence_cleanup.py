@@ -62,6 +62,24 @@ Do not sacrifice accuracy to meet an arbitrary size target, but an all-empty
 response for several long evidences is usually a missed compression opportunity.
 """
 
+def conversation_history_for_cleanup(history: list[dict[str, Any]], question: str) -> list[dict[str, str]]:
+    """Retain only user requests and final assistant answers, excluding tool traffic."""
+    result: list[dict[str, str]] = []
+    for message in history:
+        if not isinstance(message, dict):
+            continue
+        role, content = message.get("role"), message.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+            continue
+        if message.get("tool_calls") or message.get("tool_call_id"):
+            continue
+        if content.startswith(("[cli-agent evidence state:", "Externer Referenzkontext für die nachfolgende Benutzeranfrage.")):
+            continue
+        result.append({"role": role, "content": content})
+    result.append({"role": "user", "content": question})
+    return result
+
+
 def reset_cleanup_tracking(agent: Any, question: str) -> None:
     """A fresh user task keeps prior evidences, but resets cleanup cadence."""
     agent._cleanup_question = question
@@ -217,6 +235,8 @@ async def maybe_cleanup_evidences(agent: Any) -> None:
         {"role": "system", "content": CLEANUP_SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps({
             "user_question": getattr(agent, "_cleanup_question", ""),
+            "conversation_history": conversation_history_for_cleanup(
+                getattr(agent, "history", []), getattr(agent, "_cleanup_question", "")),
             "evidence_state": state.model_snapshot(),
         }, ensure_ascii=False)},
     ]
