@@ -285,7 +285,7 @@ def test_search_text_discards_partial_matches_from_invalid_utf8_file(
 def test_search_text_stops_at_file_scan_budget(tmp_path: Path, monkeypatch) -> None:
     for index in range(4):
         (tmp_path / f"{index}.txt").write_text("no match", encoding="utf-8")
-    monkeypatch.setattr(os_operations, "MAX_SEARCH_SCAN_FILES", 2)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_SEARCH_SCAN_FILES", 2)
 
     result = json.loads(_workspace(tmp_path).search_text(".", "needle"))
 
@@ -299,7 +299,7 @@ def test_search_text_stops_at_file_scan_budget(tmp_path: Path, monkeypatch) -> N
 def test_search_text_stops_at_byte_scan_budget(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "a.txt").write_text("a" * 8, encoding="utf-8")
     (tmp_path / "b.txt").write_text("b" * 8, encoding="utf-8")
-    monkeypatch.setattr(os_operations, "MAX_SEARCH_SCAN_BYTES", 10)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_SEARCH_SCAN_BYTES", 10)
 
     result = json.loads(_workspace(tmp_path).search_text(".", "needle"))
 
@@ -313,7 +313,7 @@ def test_search_text_stops_at_byte_scan_budget(tmp_path: Path, monkeypatch) -> N
 def test_find_files_stops_at_scan_budget(tmp_path: Path, monkeypatch) -> None:
     for index in range(4):
         (tmp_path / f"{index}.txt").write_text("x", encoding="utf-8")
-    monkeypatch.setattr(os_operations, "MAX_FIND_SCAN_FILES", 2)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_FIND_SCAN_FILES", 2)
 
     result = json.loads(_workspace(tmp_path).find_files(".", "*.py"))
 
@@ -329,7 +329,7 @@ def test_search_text_counts_filtered_entries_toward_traversal_budget(
 ) -> None:
     for index in range(4):
         (tmp_path / f"secret-{index}.log").write_text("needle", encoding="utf-8")
-    monkeypatch.setattr(os_operations, "MAX_SEARCH_SCAN_FILES", 2)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_SEARCH_SCAN_FILES", 2)
 
     result = json.loads(_workspace(tmp_path).search_text(".", "needle"))
 
@@ -345,7 +345,7 @@ def test_find_files_counts_empty_directories_toward_traversal_budget(
 ) -> None:
     for index in range(4):
         (tmp_path / f"dir-{index}").mkdir()
-    monkeypatch.setattr(os_operations, "MAX_FIND_SCAN_FILES", 2)
+    monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_FIND_SCAN_FILES", 2)
 
     result = json.loads(_workspace(tmp_path).find_files(".", "*.py"))
 

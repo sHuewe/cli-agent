@@ -159,61 +159,9 @@ def _foreach_output_source(source: str) -> str | None:
     raise ValueError(f"Ungültige foreach-Quelle: {source!r}.")
 
 
-@dataclass(frozen=True)
-class JsonInputSpec:
-    path: str
-    iterate: str | None = None
-
-
-@dataclass(frozen=True)
-class FlowStep:
-    step_id: str
-    config: Path | None
-    model: str | None
-    prompt_file: Path | None
-    flow: Path | None
-    flow_input: dict[str, Any]
-    context_files: tuple[Path, ...]
-    add_web_context: tuple[str, ...]
-    output: str | None
-    overwrite_output: bool
-    workspace_access: str
-    with_data: bool
-    with_mcp: tuple[str, ...]
-    retry_policy: ModelRetryPolicy | None
-    approve_tools: tuple[str, ...]
-    variables: dict[str, str]
-    global_variables: dict[str, str]
-    foreach: str | None
-    json_inputs: dict[str, JsonInputSpec] | None = None
-    json_operation: dict[str, Any] | None = None
-    filesystem_operation: dict[str, Any] | None = None
-    conversation_items: tuple[Any, ...] | str | None = None
-    conversation_final_prompt_file: Path | None = None
-    iteration_id: str | None = None
-    excluded_paths: tuple[Path, ...] = ()
-    response_format: str = "text"
-    # Explicit [steps.retry] keys, before load-time defaults are applied.
-    retry_overrides: dict[str, int | float] | None = None
-    when: dict[str, Any] | None = None
-
-
-@dataclass(frozen=True)
-class FlowDefinition:
-    source: Path
-    steps: tuple[FlowStep, ...]
-    excluded_paths: tuple[Path, ...] = ()
-    inputs: tuple[str, ...] = ()
-    result: str | None = None
-    result_fallback: str | None = None
-    # Root-level [retry], separate from effective per-step defaults.
-    retry_policy: ModelRetryPolicy | None = None
-
-
-@dataclass(frozen=True)
-class _FlowResultValue:
-    text: str
-    is_json: bool
+from cli_agent.workflows.flow_models import (
+    JsonInputSpec, FlowStep, FlowDefinition, _FlowResultValue, _RunStartSnapshot,
+)
 
 
 @dataclass
@@ -1138,32 +1086,8 @@ def _evaluate_when(
     return any(equal(value, part) for part in condition["in"])
 
 
-def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
-    workspace = workspace.expanduser().resolve()
-    if not workspace.is_dir():
-        raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
-
-    source = _flow_source(workspace, path)
-    try:
-        with source.open("rb") as handle:
-            raw_flow = handle.read(MAX_FLOW_FILE_BYTES + 1)
-        if len(raw_flow) > MAX_FLOW_FILE_BYTES:
-            raise ValueError(
-                f"Flow-Datei überschreitet das Limit von "
-                f"{MAX_FLOW_FILE_BYTES} Bytes."
-            )
-        values = tomllib.loads(raw_flow.decode("utf-8"))
-    except UnicodeDecodeError as exc:
-        raise ValueError("Flow-Datei ist nicht als UTF-8 lesbar.") from exc
-    except tomllib.TOMLDecodeError as exc:
-        raise ValueError(
-            f"Flow-Datei enthält ungültiges TOML: {exc}"
-        ) from exc
-    except OSError as exc:
-        raise ValueError(
-            f"Flow-Datei konnte nicht gelesen werden: {exc}"
-        ) from exc
-
+def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
+    """Validate top-level TOML options independently from step parsing."""
     allowed_root = {
         "version",
         "config",
@@ -1297,6 +1221,48 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raise ValueError(
             f"Flow enthält mehr als {MAX_FLOW_STEPS} Schritte."
         )
+
+    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry)
+
+
+def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
+    workspace = workspace.expanduser().resolve()
+    if not workspace.is_dir():
+        raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
+
+    source = _flow_source(workspace, path)
+    try:
+        with source.open("rb") as handle:
+            raw_flow = handle.read(MAX_FLOW_FILE_BYTES + 1)
+        if len(raw_flow) > MAX_FLOW_FILE_BYTES:
+            raise ValueError(
+                f"Flow-Datei überschreitet das Limit von "
+                f"{MAX_FLOW_FILE_BYTES} Bytes."
+            )
+        values = tomllib.loads(raw_flow.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ValueError("Flow-Datei ist nicht als UTF-8 lesbar.") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(
+            f"Flow-Datei enthält ungültiges TOML: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise ValueError(
+            f"Flow-Datei konnte nicht gelesen werden: {exc}"
+        ) from exc
+
+    (
+        inputs,
+        result_selector,
+        fallback_selector,
+        global_config,
+        global_model,
+        global_retry_policy,
+        global_variables,
+        excluded_paths,
+        raw_steps,
+        allowed_retry,
+    ) = _parse_flow_root(values)
 
     steps: list[FlowStep] = []
     known_ids: set[str] = set()
@@ -2193,64 +2159,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
     )
 
 
-class _JsonNumber(str):
-    """Lossless representation of a validated JSON non-integer number."""
-
-
-def _json_dump_string(value: str) -> str:
-    dumped = json.dumps(value, ensure_ascii=False)
-    return "".join(
-        f"\\u{ord(char):04x}"
-        if 0xD800 <= ord(char) <= 0xDFFF
-        else char
-        for char in dumped
-    )
-
-
-def _json_dumps_preserving_numbers(value: Any) -> str:
-    if isinstance(value, _JsonNumber):
-        return str(value)
-    if value is None:
-        return "null"
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if isinstance(value, str):
-        return _json_dump_string(value)
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        try:
-            return json.dumps(
-                value,
-                ensure_ascii=False,
-                allow_nan=False,
-                separators=(",", ":"),
-            )
-        except ValueError as exc:
-            raise TypeError(
-                "Nicht unterstützter JSON-Wert: nicht-endlicher float"
-            ) from exc
-    if isinstance(value, list):
-        return "[" + ",".join(
-            _json_dumps_preserving_numbers(item)
-            for item in value
-        ) + "]"
-    if isinstance(value, dict):
-        parts: list[str] = []
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("JSON-Objektschlüssel müssen Strings sein.")
-            parts.append(
-                _json_dump_string(key)
-                + ":"
-                + _json_dumps_preserving_numbers(item)
-            )
-        return "{" + ",".join(parts) + "}"
-    raise TypeError(
-        f"Nicht unterstützter JSON-Wert: {type(value).__name__}"
-    )
+from cli_agent.workflows.flow_json_operations import _JsonNumber, _json_dump_string, _json_dumps_preserving_numbers
 
 
 def _lookup(
@@ -2780,15 +2689,6 @@ def _prepare_flow_output(
         allow_missing_parent=True,
     )
     return None
-
-
-@dataclass(frozen=True)
-class _RunStartSnapshot:
-    checkpoint_fingerprints: dict[tuple[str, str], bytes]
-    checkpoint_paths: tuple[Path, ...]
-    previous_output_fingerprints: dict[tuple[str, str], bytes | None]
-    available_outputs: dict[str, str]
-    output_json: dict[str, bool]
 
 
 def _uses_previous_output(step: FlowStep) -> bool:
@@ -4762,6 +4662,864 @@ def _preflight_concrete_invocation_outputs(
             )
 
 
+def _effective_step_retry_policy(
+    step: FlowStep, flow_retry_policy: ModelRetryPolicy | None,
+) -> ModelRetryPolicy | None:
+    """Apply only explicitly overridden retry fields, retaining inherited defaults."""
+    if step.retry_overrides is None:
+        return flow_retry_policy
+    defaults = flow_retry_policy or ModelRetryPolicy()
+    values = step.retry_overrides
+    return ModelRetryPolicy(
+        max_attempts=values.get("max_attempts", defaults.max_attempts),
+        initial_delay_seconds=values.get(
+            "initial_delay_seconds", defaults.initial_delay_seconds
+        ),
+        backoff_multiplier=values.get(
+            "backoff_multiplier", defaults.backoff_multiplier
+        ),
+        max_delay_seconds=values.get(
+            "max_delay_seconds", defaults.max_delay_seconds
+        ),
+    )
+
+
+def _eligible_step_iterations(
+    step: FlowStep,
+    *,
+    outputs: dict[str, str],
+    statuses: dict[str, str],
+    flow_input: dict[str, Any],
+    output_json: dict[str, bool],
+) -> tuple[list[Any], list[str | None]]:
+    """Resolve step items and apply item-local conditions without side effects."""
+    items = _foreach_items(step, outputs=outputs, flow_input=flow_input)
+    iteration_ids = _iteration_ids(step, items=items, flow_input=flow_input)
+    if _when_uses_item(step.when):
+        selected = [
+            (item, iteration_id)
+            for item, iteration_id in zip(items, iteration_ids)
+            if _evaluate_when(
+                step.when, outputs=outputs, statuses=statuses,
+                flow_input=flow_input, item=item,
+                iteration_id=iteration_id, output_json=output_json,
+            )
+        ]
+        items = [item for item, _ in selected]
+        iteration_ids = [iteration_id for _, iteration_id in selected]
+    return items, iteration_ids
+
+
+def _execute_filesystem_step(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow_input: dict[str, Any],
+    output: Path | None,
+    context: _FlowExecutionContext,
+) -> str:
+    """Execute an already prepared filesystem step and record its JSON checkpoint.
+
+    Output ownership and checkpoint verification belong to the runner; this
+    function owns only the selected filesystem operation and its result.
+    """
+    assert step.filesystem_operation is not None
+    assert output is not None
+    op = step.filesystem_operation
+    if op["kind"] == "checkpoint_status":
+        expected_source = _render_input_text(op["expected_source_path"], flow_input)
+        result = {"completed": False, "checkpoint": None, "source_path": expected_source}
+        if op.get("release_source_on_miss"):
+            result["verification"] = None
+        # Reject input/output aliasing before reading or writing any
+        # candidate. Compare normalized workspace paths on both OSes.
+        candidates = [
+            _workspace_path(
+                workspace, Path(_render_input_text(template, flow_input)),
+                purpose="Checkpoint-Status", must_exist=False,
+            )
+            for template in op["paths"]
+        ]
+        source_path = _workspace_path(
+            workspace, Path(expected_source),
+            purpose="Checkpoint-Quelldatei", must_exist=False,
+        )
+        protected_inputs = [*candidates, source_path]
+        if any(_filesystem_path_key(candidate) == _filesystem_path_key(output)
+               for candidate in protected_inputs):
+            raise ValueError(
+                "checkpoint_status.output darf weder einen Eingabe-Checkpoint "
+                "noch die Quelldatei überschreiben."
+            )
+        # A matching verification record is insufficient if
+        # its source file has since been removed or replaced by
+        # a directory. Never skip work for an orphaned checkpoint.
+        source_exists = source_path.is_file()
+        for candidate in candidates:
+            if not source_exists or not candidate.is_file():
+                continue
+            try:
+                raw_checkpoint = read_existing_output_text(
+                    workspace, candidate, max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+                )
+                payload = _parse_structured_output(raw_checkpoint, step_id=step.step_id)
+            except (ValueError, OSError):
+                continue
+            if (isinstance(payload, dict)
+                    and payload.get("status") == op["expected_status"]
+                    and payload.get("source_path") == expected_source):
+                result.update(completed=True, checkpoint=str(candidate.relative_to(workspace)))
+                if op.get("release_source_on_miss"):
+                    result["verification"] = payload
+                break
+        answer = _json_dumps_preserving_numbers(result)
+        if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+            raise ValueError(
+                "checkpoint_status überschreitet Output-Größenlimit."
+            )
+        target = prepare_output_target(workspace, output, overwrite=True)
+        target.write_text(answer)
+        context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+        if op.get("release_source_on_miss") and result["completed"]:
+            # A completed read is no longer a future invocation,
+            # but its verified source remains protected globally.
+            # A miss never adds this guard, so the parent may write.
+            assert context.reserved_inputs is not None
+            context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
+        return answer
+    directory = _render_input_text(op["directory"], flow_input)
+    inventory_root = _workspace_directory(workspace, directory)
+    if output == inventory_root or inventory_root in output.parents:
+        raise ValueError("Inventur-Output darf nicht im inventarisierten Verzeichnis liegen.")
+    transformed = inventory_directory(
+        workspace, directory,
+        recursive=op.get("recursive", False),
+        extensions=tuple(op.get("extensions", [])),
+        exclude_names=tuple(op.get("exclude_names", [])),
+        max_entries=op.get("max_entries", MAX_INVENTORY_ENTRIES),
+        stable_slugs=op.get("stable_slugs", False),
+    )
+    answer = _json_dumps_preserving_numbers(transformed)
+    if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+        raise ValueError("Inventur überschreitet Output-Größenlimit.")
+    target = prepare_output_target(
+        workspace, output, overwrite=step.overwrite_output,
+    )
+    target.write_text(answer)
+    context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+    return answer
+
+
+def _execute_json_step(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow: FlowDefinition,
+    namespace: str,
+    flow_input: dict[str, Any],
+    item: Any,
+    iteration_id: str | None,
+    output: Path | None,
+    context: _FlowExecutionContext,
+) -> str:
+    """Resolve, transform and persist JSON data after output preflight."""
+    assert step.json_operation is not None
+    assert output is not None
+    assert context.completed_json_outputs is not None
+    _set_flow_diagnostic(
+        phase="json-operation", flow=flow.source,
+        namespace=namespace, step=step.step_id, output=output,
+    )
+    json_values = _resolve_json_inputs(
+        step,
+        workspace=workspace,
+        flow_input=flow_input,
+        item=item,
+        iteration_id=iteration_id,
+        completed_json_outputs=context.completed_json_outputs,
+    )
+    operation = step.json_operation
+    source = _parse_structured_output(
+        json_values[operation["input"]], step_id=step.step_id,
+    )
+    if operation["kind"] == "group_items":
+        transformed = group_assigned_items(
+            routes=_parse_structured_output(json_values["routes"], step_id=step.step_id),
+            assignments=_parse_structured_output(json_values["assignments"], step_id=step.step_id),
+            topic_plan=_parse_structured_output(json_values["topics"], step_id=step.step_id),
+            max_concept_bytes=operation.get("max_concept_bytes", 80000),
+            serializer=_json_dumps_preserving_numbers,
+        )
+    elif operation["kind"] == "verify_coverage":
+        transformed = verify_assigned_coverage(
+            plan=_parse_structured_output(json_values["plan"], step_id=step.step_id),
+            results=_parse_structured_output(json_values["results"], step_id=step.step_id),
+        )
+    elif operation["kind"] == "build_okf_manifest":
+        transformed = build_okf_manifest(
+            plan=source,
+            navigation=_parse_structured_output(json_values["navigation"], step_id=step.step_id),
+            expected_source_path=_render_input_text(operation["expected_source_path"], flow_input),
+        )
+    elif operation["kind"] == "validate_okf_plan":
+        transformed = validate_okf_plan(
+            source, plan_kind=operation["plan_kind"],
+            expected_source_path=(
+                _render_input_text(operation["expected_source_path"], flow_input)
+                if operation["plan_kind"] == "doctrine" else None
+            ),
+            expected_source_slug=(
+                _render_input_text(operation["expected_source_slug"], flow_input)
+                if operation["plan_kind"] == "doctrine" else None
+            ),
+            manifests=(
+                _parse_structured_output(json_values["manifests"], step_id=step.step_id)
+                if operation["plan_kind"] == "themes" else None
+            ),
+        )
+    else:
+        transformed = transform_json(
+            kind=operation["kind"],
+            value=source,
+            batch_size=operation.get("batch_size", 5),
+            max_batch_bytes=operation.get("max_batch_bytes", 80000),
+            serializer=_json_dumps_preserving_numbers,
+        )
+    answer = _json_dumps_preserving_numbers(transformed)
+    if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+        raise ValueError("JSON-Operation überschreitet Output-Größenlimit.")
+    target = prepare_output_target(
+        workspace, output, overwrite=step.overwrite_output,
+    )
+    target.write_text(answer)
+    context.completed_json_outputs[_filesystem_path_key(output)] = (
+        _checkpoint_fingerprint(answer)
+    )
+    return answer
+
+
+async def _execute_model_iteration(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    namespace: str,
+    index: int,
+    item: Any,
+    iteration_id: str | None,
+    output: Path | None,
+    previous_output: str | None,
+    outputs: dict[str, str],
+    flow_input: dict[str, Any],
+    effective_flow_excluded_paths: tuple[Path, ...],
+    effective_retry_policy: ModelRetryPolicy | None,
+    reserved_inputs: dict[str, Path],
+    initial_checkpoint_paths: tuple[Path, ...],
+    case_colliding_step_ids: frozenset[str],
+) -> str:
+    """Run one prepared model/conversation iteration with current security guards.
+
+    Checkpoint detection, output claims and previous-output snapshots are owned
+    by the caller. The mutation protection set is calculated for each invocation
+    so descendant reservations cannot become stale.
+    """
+    flow_dir = flow.source.parent
+    contexts = _contexts_for_step(
+        step,
+        workspace=workspace,
+    )
+    config_file = (
+        _resolve_config(
+            step,
+            flow_dir=flow_dir,
+        )
+        if step.config is not None
+        else None
+    )
+    callback = build_preapproval_callback(
+        step.approve_tools,
+        fallback=context.approval_callback,
+    )
+    excluded_paths = (
+        tuple(
+            dict.fromkeys(
+                (
+                    *effective_flow_excluded_paths,
+                    *step.excluded_paths,
+                )
+            )
+        )
+        if step.workspace_access in {"read", "write"}
+        else ()
+    )
+    local_dump_prefix = _dump_prefix_for_iteration(
+        step,
+        index=index,
+        case_colliding_step_ids=case_colliding_step_ids,
+        iteration_id=(
+            iteration_id
+            if step.iteration_id is not None
+            else None
+        ),
+    )
+    dump_file_prefix = (
+        namespace.replace("/", ".") + local_dump_prefix
+        if namespace
+        else local_dump_prefix
+    )
+
+    _set_flow_diagnostic(
+        phase="model-or-mcp-execution", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+        iteration_id=iteration_id, output=output,
+    )
+    # Child invocations may have resolved new protected inputs since
+    # this parent invocation began. Do not cache the protection tuple.
+    mutation_protected_paths = tuple(dict.fromkeys((
+        *reserved_inputs.values(),
+        *context.run_start_checkpoint_paths,
+        *initial_checkpoint_paths,
+    )))
+    assert context.completed_json_outputs is not None
+    json_input_values = _resolve_json_inputs(
+        step,
+        workspace=workspace,
+        flow_input=flow_input,
+        item=item,
+        iteration_id=iteration_id,
+        completed_json_outputs=context.completed_json_outputs,
+    )
+    conversation_prompts = _conversation_prompts_for_iteration(
+        step,
+        workspace=workspace,
+        outputs=outputs,
+        item=item,
+        iteration_id=iteration_id,
+        previous_output=previous_output,
+        flow_input=flow_input,
+        json_input_values=json_input_values,
+    )
+    if conversation_prompts is None:
+        prompt = _prompt_for_iteration(
+            step,
+            workspace=workspace,
+            item=item,
+            iteration_id=iteration_id,
+            previous_output=previous_output,
+            outputs=outputs,
+            flow_input=flow_input,
+            json_input_values=json_input_values,
+        )
+        result = await run_once(
+            OneShotRunOptions(
+                workspace=workspace,
+                prompt=prompt,
+                config_file=config_file,
+                model=step.model,
+                workspace_access=step.workspace_access,
+                with_data=step.with_data,
+                with_mcp=step.with_mcp,
+                retry_policy=effective_retry_policy,
+                response_format=step.response_format,
+                context_files=contexts,
+                add_web_context=step.add_web_context,
+                output=output,
+                overwrite_output=step.overwrite_output,
+                approval_callback=callback,
+                user_message_callback=context.user_message_callback,
+                mutation_protected_paths=mutation_protected_paths,
+                excluded_paths=excluded_paths,
+                dump_file_prefix=dump_file_prefix,
+            ),
+            dependencies=context.dependencies,
+        )
+    else:
+        result = await run_conversation(
+            ConversationRunOptions(
+                workspace=workspace,
+                prompts=conversation_prompts,
+                config_file=config_file,
+                model=step.model,
+                workspace_access=step.workspace_access,
+                with_data=step.with_data,
+                with_mcp=step.with_mcp,
+                retry_policy=effective_retry_policy,
+                response_format=step.response_format,
+                context_files=contexts,
+                add_web_context=step.add_web_context,
+                output=output,
+                overwrite_output=step.overwrite_output,
+                approval_callback=callback,
+                user_message_callback=context.user_message_callback,
+                mutation_protected_paths=mutation_protected_paths,
+                excluded_paths=excluded_paths,
+                dump_file_prefix=dump_file_prefix,
+            ),
+            dependencies=context.dependencies,
+        )
+    if output is not None and step.response_format == "json":
+        _parse_structured_output(result.answer, step_id=step.step_id)
+        # OutputTarget writes UTF-8 text with unmodified newlines.
+        # read_existing_output_text subsequently normalizes them and
+        # strips an optional UTF-8 BOM. Match exactly that canonical
+        # representation without an extra filesystem read: existing
+        # one-shot execution mocks need not write an output file.
+        canonical_json = (
+            result.answer.removeprefix("\ufeff")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        )
+        context.completed_json_outputs[_filesystem_path_key(output)] = (
+            _checkpoint_fingerprint(canonical_json)
+        )
+    for status in getattr(result, "web_context_statuses", ()):
+        print(
+            sanitize_terminal_text(
+                status,
+                multiline=True,
+            )
+        )
+    if output is None:
+        print(
+            sanitize_terminal_text(
+                result.answer,
+                multiline=True,
+            )
+        )
+    return result.answer
+
+
+def _preflight_subflow_batch(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+    items: list[Any],
+    iteration_ids: list[str | None],
+    namespace: str,
+    next_stack: tuple[str, ...],
+    case_colliding_step_ids: frozenset[str],
+    claimed_outputs: dict[str, str],
+    reserved_inputs: dict[str, Path],
+) -> None:
+    """Validate all concrete children before starting the first subflow.
+
+    A transient copy of output claims catches collisions between siblings
+    without mutating the live claims until actual execution.
+    """
+    _set_flow_diagnostic(
+        phase="preflight-subflow", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+    )
+    assert context.flow_cache is not None
+    child = _load_subflow_definition(
+        step,
+        workspace=workspace,
+        cache=context.flow_cache,
+    )
+    _validate_subflow_interface(step, child)
+
+    # Preflight the complete concrete subflow batch before the first
+    # child starts. Use a copy so execution still performs the real
+    # claims, while collisions across siblings/foreach items are
+    # detected without any model/tool side effects.
+    batch_claims = dict(claimed_outputs)
+    for item, iteration_id in zip(items, iteration_ids):
+        _set_flow_diagnostic(
+            phase="preflight-render-subflow-inputs",
+            flow=flow.source, namespace=namespace,
+            step=step.step_id, iteration_id=iteration_id,
+        )
+        child_input = _render_subflow_inputs(
+            step,
+            item=item,
+            iteration_id=iteration_id,
+            outputs=outputs,
+            output_json=output_json,
+            flow_input=flow_input,
+        )
+        child_namespace = _child_invocation_namespace(
+            namespace,
+            step,
+            iteration_id=iteration_id,
+            case_colliding_step_ids=case_colliding_step_ids,
+        )
+        assert context.run_start_snapshots is not None
+        assert context.preflight_budget is not None
+        _preflight_concrete_invocation_outputs(
+            child,
+            workspace=workspace,
+            cache=context.flow_cache,
+            flow_input=child_input,
+            reserved_inputs=reserved_inputs,
+            claimed_outputs=batch_claims,
+            namespace=child_namespace,
+            run_start_snapshots=context.run_start_snapshots,
+            budget=context.preflight_budget,
+            call_stack=next_stack,
+        )
+
+
+def _preflight_foreach_output_batch(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    items: list[Any],
+    iteration_ids: list[str | None],
+    namespace: str,
+    claimed_outputs: dict[str, str],
+    reserved_inputs: dict[str, Path],
+    initial_checkpoint_fingerprints: dict[tuple[str, str], bytes],
+) -> tuple[list[Path | None], list[bytes | None]]:
+    """Claim and verify an entire foreach output batch before any iteration runs.
+
+    Keep collision checks ahead of all output claims. This preserves the
+    existing no-model-side-effects guarantee for a conflicting batch.
+    """
+    _set_flow_diagnostic(
+        phase="preflight-outputs", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+    )
+    preflight_outputs = []
+    for item, iteration_id in zip(items, iteration_ids):
+        _set_flow_diagnostic(
+            phase="preflight-resolve-output", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id,
+        )
+        output = _output_for_iteration(
+            step,
+            workspace=workspace,
+            item=item,
+            iteration_id=iteration_id,
+            flow_input=flow_input,
+        )
+        preflight_outputs.append(output)
+    seen_output_keys: set[str] = set()
+    for output, iteration_id in zip(preflight_outputs, iteration_ids):
+        _set_flow_diagnostic(
+            phase="preflight-check-output-path", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id, output=output,
+        )
+        if output is None:
+            continue
+        key = _filesystem_path_key(output)
+        if key in seen_output_keys:
+            raise ValueError(
+                f"Schritt {step.step_id!r} erzeugt für mehrere "
+                "foreach-Elemente nicht eindeutige Output-Pfade."
+            )
+        seen_output_keys.add(key)
+    for output, iteration_id in zip(
+        preflight_outputs,
+        iteration_ids,
+    ):
+        assert output is not None
+        _set_flow_diagnostic(
+            phase="preflight-output-collision", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id, output=output,
+        )
+        reserved_input = reserved_inputs.get(
+            _filesystem_path_key(output)
+        )
+        if reserved_input is not None:
+            raise ValueError(
+                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                "mit einer reservierten Flow-Eingabe: "
+                f"{reserved_input}"
+            )
+        key = _filesystem_path_key(output)
+        previous_owner = claimed_outputs.get(key)
+        if previous_owner is not None and not step.overwrite_output:
+            owner = _output_owner(
+                step,
+                iteration_id=iteration_id,
+            )
+            raise ValueError(
+                f"Output-Datei {output} wird in diesem Flow-Lauf bereits "
+                f"von {previous_owner} beansprucht; {owner} darf denselben "
+                "Output nicht erneut verwenden."
+            )
+
+    for output, iteration_id in zip(
+        preflight_outputs,
+        iteration_ids,
+    ):
+        assert output is not None
+        _set_flow_diagnostic(
+            phase="preflight-claim-output", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id, output=output,
+        )
+        _claim_output(
+            claimed_outputs,
+            path=output,
+            owner=namespace + _output_owner(
+                step,
+                iteration_id=iteration_id,
+            ),
+            allow_replace=step.overwrite_output,
+        )
+
+    preflight_checkpoint_fingerprints = []
+    for output, iteration_id in zip(preflight_outputs, iteration_ids):
+        assert output is not None
+        _set_flow_diagnostic(
+            phase="preflight-checkpoint-or-output", flow=flow.source,
+            namespace=namespace, step=step.step_id,
+            iteration_id=iteration_id, output=output,
+        )
+        expected_fingerprint = _run_start_fingerprint(
+            step, output, initial_checkpoint_fingerprints,
+            context.run_start_dynamic_checkpoints,
+            flow_source=flow.source,
+        )
+        if expected_fingerprint is not None:
+            _verified_preflight_checkpoint(
+                step,
+                workspace=workspace,
+                output=output,
+                expected_fingerprint=expected_fingerprint,
+            )
+        else:
+            _ensure_output_parent_directory(workspace, output)
+            prepare_output_target(
+                workspace,
+                output,
+                overwrite=step.overwrite_output,
+            )
+        preflight_checkpoint_fingerprints.append(
+            expected_fingerprint
+        )
+    return preflight_outputs, preflight_checkpoint_fingerprints
+
+
+async def _execute_subflow_iteration(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    outputs: dict[str, str],
+    output_json: dict[str, bool],
+    statuses: dict[str, str],
+    claimed_outputs: dict[str, str],
+    parent_protected_inputs: dict[str, Path],
+    completed_child_invocations: set[tuple[str, str | None]],
+    item: Any,
+    iteration_id: str | None,
+    namespace: str,
+    next_stack: tuple[str, ...],
+    case_colliding_step_ids: frozenset[str],
+    effective_flow_excluded_paths: tuple[Path, ...],
+    effective_retry_policy: ModelRetryPolicy | None,
+) -> _FlowResultValue:
+    """Execute a prepared child with fresh sibling protections.
+
+    Keep the child's speculative checkpoint reservations out of its inherited
+    immutable inputs. The child recomputes its own frontier after entering.
+    """
+    assert context.flow_cache is not None
+    child = _load_subflow_definition(
+        step,
+        workspace=workspace,
+        cache=context.flow_cache,
+    )
+    _validate_subflow_interface(step, child)
+    child_input = _render_subflow_inputs(
+        step,
+        item=item,
+        iteration_id=iteration_id,
+        outputs=outputs,
+        output_json=output_json,
+        flow_input=flow_input,
+    )
+    child_namespace = _child_invocation_namespace(
+        namespace,
+        step,
+        iteration_id=iteration_id,
+        case_colliding_step_ids=case_colliding_step_ids,
+    )
+    # Preserve parent and other sibling input protections, but
+    # exclude this concrete child's speculative projections.
+    # It recomputes its own conditional readers at each frontier.
+    child_inherited_inputs = dict(parent_protected_inputs)
+    _reserve_future_child_checkpoint_inputs(
+        flow, workspace=workspace, cache=context.flow_cache,
+        flow_input=flow_input, outputs=outputs,
+        output_json=output_json, statuses=statuses,
+        reserved_inputs=child_inherited_inputs,
+        claimed_outputs=claimed_outputs,
+        exclude_invocation=(step.step_id, iteration_id),
+        completed_invocations=completed_child_invocations,
+    )
+    child_result = await _run_flow_internal(
+        child,
+        workspace=workspace,
+        context=context,
+        flow_input=child_input,
+        call_stack=next_stack,
+        namespace=child_namespace,
+        inherited_excluded_paths=effective_flow_excluded_paths,
+        inherited_retry_policy=effective_retry_policy,
+        inherited_protected_inputs=child_inherited_inputs,
+    )
+    if child_result is None:
+        raise ValueError(
+            f"Subflow {child.source} besitzt kein Ergebnis."
+        )
+    _set_flow_diagnostic(
+        phase="aggregate-subflow-result", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+        iteration_id=iteration_id,
+    )
+    return child_result
+
+
+def _prepare_iteration_checkpoint(
+    step: FlowStep,
+    *,
+    flow: FlowDefinition,
+    workspace: Path,
+    context: _FlowExecutionContext,
+    flow_input: dict[str, Any],
+    item: Any,
+    iteration_id: str | None,
+    index: int,
+    namespace: str,
+    reserved_inputs: dict[str, Path],
+    claimed_outputs: dict[str, str],
+    preflight_outputs: list[Path | None] | None,
+    preflight_checkpoint_fingerprints: list[bytes | None] | None,
+    initial_checkpoint_fingerprints: dict[tuple[str, str], bytes],
+) -> tuple[Path | None, str | None]:
+    """Claim one output and verify its run-start checkpoint before execution."""
+    output = (
+        preflight_outputs[index - 1]
+        if preflight_outputs is not None
+        else _output_for_iteration(
+            step,
+            workspace=workspace,
+            item=item,
+            iteration_id=iteration_id,
+            flow_input=flow_input,
+        )
+    )
+    _set_flow_diagnostic(
+        phase="resolve-output", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+        iteration_id=iteration_id, output=output,
+    )
+    if output is not None:
+        reserved_input = reserved_inputs.get(
+            _filesystem_path_key(output)
+        )
+        if reserved_input is not None:
+            raise ValueError(
+                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
+                "mit einer reservierten Flow-Eingabe: "
+                f"{reserved_input}"
+            )
+        if preflight_outputs is None:
+            _claim_output(
+                claimed_outputs,
+                path=output,
+                owner=namespace + _output_owner(
+                    step,
+                    iteration_id=iteration_id,
+                ),
+                allow_replace=step.overwrite_output,
+            )
+
+    if preflight_checkpoint_fingerprints is not None:
+        expected_fingerprint = preflight_checkpoint_fingerprints[index - 1]
+    else:
+        expected_fingerprint = (
+            _run_start_fingerprint(
+                step, output, initial_checkpoint_fingerprints,
+                context.run_start_dynamic_checkpoints,
+                flow_source=flow.source,
+            )
+            if output is not None
+            else None
+        )
+
+    _set_flow_diagnostic(
+        phase="checkpoint-or-output-preparation", flow=flow.source,
+        namespace=namespace, step=step.step_id,
+        iteration_id=iteration_id, output=output,
+    )
+    if expected_fingerprint is not None:
+        checkpoint = _verified_preflight_checkpoint(
+            step,
+            workspace=workspace,
+            output=output,
+            expected_fingerprint=expected_fingerprint,
+        )
+    else:
+        checkpoint = None
+        if output is not None and preflight_outputs is None:
+            if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
+                directory = _render_input_text(
+                    step.filesystem_operation["directory"], flow_input,
+                )
+                inventory_root = _workspace_directory(workspace, directory)
+                if output == inventory_root or inventory_root in output.parents:
+                    raise ValueError(
+                        "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
+                    )
+            _ensure_output_parent_directory(workspace, output)
+            prepare_output_target(
+                workspace,
+                output,
+                overwrite=step.overwrite_output,
+            )
+    return output, checkpoint
+
+
+def _resolve_iteration_previous_output(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    output: Path | None,
+    invocation_known_at_run_start: bool,
+    initial_previous_output_fingerprints: dict[tuple[str, str], bytes | None],
+) -> str | None:
+    """Read only a verified run-start snapshot, never a mid-run output."""
+    try:
+        if (
+            not invocation_known_at_run_start
+            and _uses_previous_output(step)
+        ):
+            previous_output = None
+        else:
+            previous_output = _previous_output_from_snapshot(
+                step,
+                workspace=workspace,
+                output=output,
+                fingerprints=initial_previous_output_fingerprints,
+            )
+    except ValueError as exc:
+        if step.foreach is not None and _uses_previous_output(step):
+            raise ValueError(
+                f"{exc} Bei foreach muss die Quelle vollständig aus "
+                "Run-Start-Checkpoints ableitbar sein."
+            ) from exc
+        raise
+    return previous_output
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -4886,229 +5644,48 @@ async def _run_flow_internal(
             phase="prepare-step", flow=flow.source,
             namespace=namespace, step=step.step_id,
         )
-        if step.retry_overrides is not None:
-            defaults = flow_retry_policy or ModelRetryPolicy()
-            values = step.retry_overrides
-            effective_retry_policy = ModelRetryPolicy(
-                max_attempts=values.get("max_attempts", defaults.max_attempts),
-                initial_delay_seconds=values.get(
-                    "initial_delay_seconds", defaults.initial_delay_seconds
-                ),
-                backoff_multiplier=values.get(
-                    "backoff_multiplier", defaults.backoff_multiplier
-                ),
-                max_delay_seconds=values.get(
-                    "max_delay_seconds", defaults.max_delay_seconds
-                ),
-            )
-        else:
-            effective_retry_policy = flow_retry_policy
-        items = _foreach_items(
-            step,
-            outputs=outputs,
-            flow_input=flow_input,
+        effective_retry_policy = _effective_step_retry_policy(
+            step, flow_retry_policy,
         )
-        iteration_ids = _iteration_ids(
-            step,
-            items=items,
-            flow_input=flow_input,
+        items, iteration_ids = _eligible_step_iterations(
+            step, outputs=outputs, statuses=statuses,
+            flow_input=flow_input, output_json=output_json,
         )
-        if _when_uses_item(step.when):
-            eligible = [
-                (item, iteration_id)
-                for item, iteration_id in zip(items, iteration_ids)
-                if _evaluate_when(
-                    step.when, outputs=outputs, statuses=statuses,
-                    flow_input=flow_input, item=item,
-                    iteration_id=iteration_id,
-                    output_json=output_json,
-                )
-            ]
-            if not eligible:
-                statuses[step.step_id] = "skipped"
-                print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
-                continue
-            items = [item for item, _ in eligible]
-            iteration_ids = [iteration_id for _, iteration_id in eligible]
+        if _when_uses_item(step.when) and not items:
+            statuses[step.step_id] = "skipped"
+            print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
+            continue
 
         preflight_outputs: list[Path | None] | None = None
         preflight_checkpoint_fingerprints: list[bytes | None] | None = None
 
         if step.flow is not None:
-            _set_flow_diagnostic(
-                phase="preflight-subflow", flow=flow.source,
-                namespace=namespace, step=step.step_id,
+            _preflight_subflow_batch(
+                step, flow=flow, workspace=workspace,
+                context=context, flow_input=flow_input,
+                outputs=outputs, output_json=output_json,
+                items=items, iteration_ids=iteration_ids,
+                namespace=namespace, next_stack=next_stack,
+                case_colliding_step_ids=case_colliding_step_ids,
+                claimed_outputs=claimed_outputs,
+                reserved_inputs=reserved_inputs,
             )
-            assert context.flow_cache is not None
-            child = _load_subflow_definition(
-                step,
-                workspace=workspace,
-                cache=context.flow_cache,
-            )
-            _validate_subflow_interface(step, child)
-
-            # Preflight the complete concrete subflow batch before the first
-            # child starts. Use a copy so execution still performs the real
-            # claims, while collisions across siblings/foreach items are
-            # detected without any model/tool side effects.
-            batch_claims = dict(claimed_outputs)
-            for item, iteration_id in zip(items, iteration_ids):
-                _set_flow_diagnostic(
-                    phase="preflight-render-subflow-inputs",
-                    flow=flow.source, namespace=namespace,
-                    step=step.step_id, iteration_id=iteration_id,
-                )
-                child_input = _render_subflow_inputs(
-                    step,
-                    item=item,
-                    iteration_id=iteration_id,
-                    outputs=outputs,
-                    output_json=output_json,
-                    flow_input=flow_input,
-                )
-                child_namespace = _child_invocation_namespace(
-                    namespace,
-                    step,
-                    iteration_id=iteration_id,
-                    case_colliding_step_ids=case_colliding_step_ids,
-                )
-                assert context.run_start_snapshots is not None
-                assert context.preflight_budget is not None
-                _preflight_concrete_invocation_outputs(
-                    child,
-                    workspace=workspace,
-                    cache=context.flow_cache,
-                    flow_input=child_input,
-                    reserved_inputs=reserved_inputs,
-                    claimed_outputs=batch_claims,
-                    namespace=child_namespace,
-                    run_start_snapshots=context.run_start_snapshots,
-                    budget=context.preflight_budget,
-                    call_stack=next_stack,
-                )
 
         if (
             step.flow is None
             and step.foreach is not None
             and step.output is not None
         ):
-            _set_flow_diagnostic(
-                phase="preflight-outputs", flow=flow.source,
-                namespace=namespace, step=step.step_id,
+            preflight_outputs, preflight_checkpoint_fingerprints = (
+                _preflight_foreach_output_batch(
+                    step, flow=flow, workspace=workspace,
+                    context=context, flow_input=flow_input,
+                    items=items, iteration_ids=iteration_ids,
+                    namespace=namespace, claimed_outputs=claimed_outputs,
+                    reserved_inputs=reserved_inputs,
+                    initial_checkpoint_fingerprints=initial_checkpoint_fingerprints,
+                )
             )
-            preflight_outputs = []
-            for item, iteration_id in zip(items, iteration_ids):
-                _set_flow_diagnostic(
-                    phase="preflight-resolve-output", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id,
-                )
-                output = _output_for_iteration(
-                    step,
-                    workspace=workspace,
-                    item=item,
-                    iteration_id=iteration_id,
-                    flow_input=flow_input,
-                )
-                preflight_outputs.append(output)
-            seen_output_keys: set[str] = set()
-            for output, iteration_id in zip(preflight_outputs, iteration_ids):
-                _set_flow_diagnostic(
-                    phase="preflight-check-output-path", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id, output=output,
-                )
-                if output is None:
-                    continue
-                key = _filesystem_path_key(output)
-                if key in seen_output_keys:
-                    raise ValueError(
-                        f"Schritt {step.step_id!r} erzeugt für mehrere "
-                        "foreach-Elemente nicht eindeutige Output-Pfade."
-                    )
-                seen_output_keys.add(key)
-            for output, iteration_id in zip(
-                preflight_outputs,
-                iteration_ids,
-            ):
-                assert output is not None
-                _set_flow_diagnostic(
-                    phase="preflight-output-collision", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id, output=output,
-                )
-                reserved_input = reserved_inputs.get(
-                    _filesystem_path_key(output)
-                )
-                if reserved_input is not None:
-                    raise ValueError(
-                        f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                        "mit einer reservierten Flow-Eingabe: "
-                        f"{reserved_input}"
-                    )
-                key = _filesystem_path_key(output)
-                previous_owner = claimed_outputs.get(key)
-                if previous_owner is not None and not step.overwrite_output:
-                    owner = _output_owner(
-                        step,
-                        iteration_id=iteration_id,
-                    )
-                    raise ValueError(
-                        f"Output-Datei {output} wird in diesem Flow-Lauf bereits "
-                        f"von {previous_owner} beansprucht; {owner} darf denselben "
-                        "Output nicht erneut verwenden."
-                    )
-
-            for output, iteration_id in zip(
-                preflight_outputs,
-                iteration_ids,
-            ):
-                assert output is not None
-                _set_flow_diagnostic(
-                    phase="preflight-claim-output", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id, output=output,
-                )
-                _claim_output(
-                    claimed_outputs,
-                    path=output,
-                    owner=namespace + _output_owner(
-                        step,
-                        iteration_id=iteration_id,
-                    ),
-                    allow_replace=step.overwrite_output,
-                )
-
-            preflight_checkpoint_fingerprints = []
-            for output, iteration_id in zip(preflight_outputs, iteration_ids):
-                assert output is not None
-                _set_flow_diagnostic(
-                    phase="preflight-checkpoint-or-output", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id, output=output,
-                )
-                expected_fingerprint = _run_start_fingerprint(
-                    step, output, initial_checkpoint_fingerprints,
-                    context.run_start_dynamic_checkpoints,
-                    flow_source=flow.source,
-                )
-                if expected_fingerprint is not None:
-                    _verified_preflight_checkpoint(
-                        step,
-                        workspace=workspace,
-                        output=output,
-                        expected_fingerprint=expected_fingerprint,
-                    )
-                else:
-                    _ensure_output_parent_directory(workspace, output)
-                    prepare_output_target(
-                        workspace,
-                        output,
-                        overwrite=step.overwrite_output,
-                    )
-                preflight_checkpoint_fingerprints.append(
-                    expected_fingerprint
-                )
 
         iteration_answers: list[tuple[str, bool]] = []
         foreach_parts: list[str] = []
@@ -5165,148 +5742,34 @@ async def _run_flow_internal(
             )
 
             if step.flow is not None:
-                assert context.flow_cache is not None
-                child = _load_subflow_definition(
-                    step,
-                    workspace=workspace,
-                    cache=context.flow_cache,
-                )
-                _validate_subflow_interface(step, child)
-                child_input = _render_subflow_inputs(
-                    step,
-                    item=item,
-                    iteration_id=iteration_id,
-                    outputs=outputs,
-                    output_json=output_json,
-                    flow_input=flow_input,
-                )
-                child_namespace = _child_invocation_namespace(
-                    namespace,
-                    step,
-                    iteration_id=iteration_id,
-                    case_colliding_step_ids=case_colliding_step_ids,
-                )
-                # Preserve parent and other sibling input protections, but
-                # exclude this concrete child's speculative projections.
-                # It recomputes its own conditional readers at each frontier.
-                child_inherited_inputs = dict(parent_protected_inputs)
-                _reserve_future_child_checkpoint_inputs(
-                    flow, workspace=workspace, cache=context.flow_cache,
+                child_result = await _execute_subflow_iteration(
+                    step, flow=flow, workspace=workspace, context=context,
                     flow_input=flow_input, outputs=outputs,
                     output_json=output_json, statuses=statuses,
-                    reserved_inputs=child_inherited_inputs,
                     claimed_outputs=claimed_outputs,
-                    exclude_invocation=(step.step_id, iteration_id),
-                    completed_invocations=completed_child_invocations,
-                )
-                child_result = await _run_flow_internal(
-                    child,
-                    workspace=workspace,
-                    context=context,
-                    flow_input=child_input,
-                    call_stack=next_stack,
-                    namespace=child_namespace,
-                    inherited_excluded_paths=effective_flow_excluded_paths,
-                    inherited_retry_policy=effective_retry_policy,
-                    inherited_protected_inputs=child_inherited_inputs,
-                )
-                if child_result is None:
-                    raise ValueError(
-                        f"Subflow {child.source} besitzt kein Ergebnis."
-                    )
-                _set_flow_diagnostic(
-                    phase="aggregate-subflow-result", flow=flow.source,
-                    namespace=namespace, step=step.step_id,
-                    iteration_id=iteration_id,
+                    parent_protected_inputs=parent_protected_inputs,
+                    completed_child_invocations=completed_child_invocations,
+                    item=item, iteration_id=iteration_id,
+                    namespace=namespace, next_stack=next_stack,
+                    case_colliding_step_ids=case_colliding_step_ids,
+                    effective_flow_excluded_paths=effective_flow_excluded_paths,
+                    effective_retry_policy=effective_retry_policy,
                 )
                 record_iteration_answer(
-                    child_result.text,
-                    child_result.is_json,
-                    iteration_id,
+                    child_result.text, child_result.is_json, iteration_id,
                 )
                 completed_child_invocations.add((step.step_id, iteration_id))
                 continue
 
-            output = (
-                preflight_outputs[index - 1]
-                if preflight_outputs is not None
-                else _output_for_iteration(
-                    step,
-                    workspace=workspace,
-                    item=item,
-                    iteration_id=iteration_id,
-                    flow_input=flow_input,
-                )
+            output, checkpoint = _prepare_iteration_checkpoint(
+                step, flow=flow, workspace=workspace, context=context,
+                flow_input=flow_input, item=item, iteration_id=iteration_id,
+                index=index, namespace=namespace, reserved_inputs=reserved_inputs,
+                claimed_outputs=claimed_outputs,
+                preflight_outputs=preflight_outputs,
+                preflight_checkpoint_fingerprints=preflight_checkpoint_fingerprints,
+                initial_checkpoint_fingerprints=initial_checkpoint_fingerprints,
             )
-            _set_flow_diagnostic(
-                phase="resolve-output", flow=flow.source,
-                namespace=namespace, step=step.step_id,
-                iteration_id=iteration_id, output=output,
-            )
-            if output is not None:
-                reserved_input = reserved_inputs.get(
-                    _filesystem_path_key(output)
-                )
-                if reserved_input is not None:
-                    raise ValueError(
-                        f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                        "mit einer reservierten Flow-Eingabe: "
-                        f"{reserved_input}"
-                    )
-                if preflight_outputs is None:
-                    _claim_output(
-                        claimed_outputs,
-                        path=output,
-                        owner=namespace + _output_owner(
-                            step,
-                            iteration_id=iteration_id,
-                        ),
-                        allow_replace=step.overwrite_output,
-                    )
-
-            if preflight_checkpoint_fingerprints is not None:
-                expected_fingerprint = preflight_checkpoint_fingerprints[index - 1]
-            else:
-                expected_fingerprint = (
-                    _run_start_fingerprint(
-                        step, output, initial_checkpoint_fingerprints,
-                        context.run_start_dynamic_checkpoints,
-                        flow_source=flow.source,
-                    )
-                    if output is not None
-                    else None
-                )
-
-            _set_flow_diagnostic(
-                phase="checkpoint-or-output-preparation", flow=flow.source,
-                namespace=namespace, step=step.step_id,
-                iteration_id=iteration_id, output=output,
-            )
-            if expected_fingerprint is not None:
-                checkpoint = _verified_preflight_checkpoint(
-                    step,
-                    workspace=workspace,
-                    output=output,
-                    expected_fingerprint=expected_fingerprint,
-                )
-            else:
-                checkpoint = None
-                if output is not None and preflight_outputs is None:
-                    if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
-                        directory = _render_input_text(
-                            step.filesystem_operation["directory"], flow_input,
-                        )
-                        inventory_root = _workspace_directory(workspace, directory)
-                        if output == inventory_root or inventory_root in output.parents:
-                            raise ValueError(
-                                "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
-                            )
-                    _ensure_output_parent_directory(workspace, output)
-                    prepare_output_target(
-                        workspace,
-                        output,
-                        overwrite=step.overwrite_output,
-                    )
 
             if checkpoint is not None:
                 assert output is not None
@@ -5330,357 +5793,45 @@ async def _run_flow_internal(
                 )
                 continue
 
-            try:
-                if (
-                    not invocation_known_at_run_start
-                    and _uses_previous_output(step)
-                ):
-                    previous_output = None
-                else:
-                    previous_output = _previous_output_from_snapshot(
-                        step,
-                        workspace=workspace,
-                        output=output,
-                        fingerprints=initial_previous_output_fingerprints,
-                    )
-            except ValueError as exc:
-                if step.foreach is not None and _uses_previous_output(step):
-                    raise ValueError(
-                        f"{exc} Bei foreach muss die Quelle vollständig aus "
-                        "Run-Start-Checkpoints ableitbar sein."
-                    ) from exc
-                raise
+            previous_output = _resolve_iteration_previous_output(
+                step, workspace=workspace, output=output,
+                invocation_known_at_run_start=invocation_known_at_run_start,
+                initial_previous_output_fingerprints=initial_previous_output_fingerprints,
+            )
 
             if step.filesystem_operation is not None:
-                assert output is not None
-                op = step.filesystem_operation
-                if op["kind"] == "checkpoint_status":
-                    expected_source = _render_input_text(op["expected_source_path"], flow_input)
-                    result = {"completed": False, "checkpoint": None, "source_path": expected_source}
-                    if op.get("release_source_on_miss"):
-                        result["verification"] = None
-                    # Reject input/output aliasing before reading or writing any
-                    # candidate. Compare normalized workspace paths on both OSes.
-                    candidates = [
-                        _workspace_path(
-                            workspace, Path(_render_input_text(template, flow_input)),
-                            purpose="Checkpoint-Status", must_exist=False,
-                        )
-                        for template in op["paths"]
-                    ]
-                    source_path = _workspace_path(
-                        workspace, Path(expected_source),
-                        purpose="Checkpoint-Quelldatei", must_exist=False,
-                    )
-                    protected_inputs = [*candidates, source_path]
-                    if any(_filesystem_path_key(candidate) == _filesystem_path_key(output)
-                           for candidate in protected_inputs):
-                        raise ValueError(
-                            "checkpoint_status.output darf weder einen Eingabe-Checkpoint "
-                            "noch die Quelldatei überschreiben."
-                        )
-                    # A matching verification record is insufficient if
-                    # its source file has since been removed or replaced by
-                    # a directory. Never skip work for an orphaned checkpoint.
-                    source_exists = source_path.is_file()
-                    for candidate in candidates:
-                        if not source_exists or not candidate.is_file():
-                            continue
-                        try:
-                            raw_checkpoint = read_existing_output_text(
-                                workspace, candidate, max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
-                            )
-                            payload = _parse_structured_output(raw_checkpoint, step_id=step.step_id)
-                        except (ValueError, OSError):
-                            continue
-                        if (isinstance(payload, dict)
-                                and payload.get("status") == op["expected_status"]
-                                and payload.get("source_path") == expected_source):
-                            result.update(completed=True, checkpoint=str(candidate.relative_to(workspace)))
-                            if op.get("release_source_on_miss"):
-                                result["verification"] = payload
-                            break
-                    answer = _json_dumps_preserving_numbers(result)
-                    if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
-                        raise ValueError(
-                            "checkpoint_status überschreitet Output-Größenlimit."
-                        )
-                    target = prepare_output_target(workspace, output, overwrite=True)
-                    target.write_text(answer)
-                    context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
-                    if op.get("release_source_on_miss") and result["completed"]:
-                        # A completed read is no longer a future invocation,
-                        # but its verified source remains protected globally.
-                        # A miss never adds this guard, so the parent may write.
-                        assert context.reserved_inputs is not None
-                        context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
-                    record_iteration_answer(answer, True, iteration_id)
-                    continue
-                directory = _render_input_text(op["directory"], flow_input)
-                inventory_root = _workspace_directory(workspace, directory)
-                if output == inventory_root or inventory_root in output.parents:
-                    raise ValueError("Inventur-Output darf nicht im inventarisierten Verzeichnis liegen.")
-                transformed = inventory_directory(
-                    workspace, directory,
-                    recursive=op.get("recursive", False),
-                    extensions=tuple(op.get("extensions", [])),
-                    exclude_names=tuple(op.get("exclude_names", [])),
-                    max_entries=op.get("max_entries", MAX_INVENTORY_ENTRIES),
-                    stable_slugs=op.get("stable_slugs", False),
+                answer = _execute_filesystem_step(
+                    step, workspace=workspace, flow_input=flow_input,
+                    output=output, context=context,
                 )
-                answer = _json_dumps_preserving_numbers(transformed)
-                if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
-                    raise ValueError("Inventur überschreitet Output-Größenlimit.")
-                target = prepare_output_target(
-                    workspace, output, overwrite=step.overwrite_output,
-                )
-                target.write_text(answer)
-                context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
                 record_iteration_answer(answer, True, iteration_id)
                 continue
 
             if step.json_operation is not None:
-                assert output is not None
-                assert context.completed_json_outputs is not None
-                _set_flow_diagnostic(
-                    phase="json-operation", flow=flow.source,
-                    namespace=namespace, step=step.step_id, output=output,
-                )
-                json_values = _resolve_json_inputs(
-                    step,
-                    workspace=workspace,
-                    flow_input=flow_input,
-                    item=item,
-                    iteration_id=iteration_id,
-                    completed_json_outputs=context.completed_json_outputs,
-                )
-                operation = step.json_operation
-                source = _parse_structured_output(
-                    json_values[operation["input"]], step_id=step.step_id,
-                )
-                if operation["kind"] == "group_items":
-                    transformed = group_assigned_items(
-                        routes=_parse_structured_output(json_values["routes"], step_id=step.step_id),
-                        assignments=_parse_structured_output(json_values["assignments"], step_id=step.step_id),
-                        topic_plan=_parse_structured_output(json_values["topics"], step_id=step.step_id),
-                        max_concept_bytes=operation.get("max_concept_bytes", 80000),
-                        serializer=_json_dumps_preserving_numbers,
-                    )
-                elif operation["kind"] == "verify_coverage":
-                    transformed = verify_assigned_coverage(
-                        plan=_parse_structured_output(json_values["plan"], step_id=step.step_id),
-                        results=_parse_structured_output(json_values["results"], step_id=step.step_id),
-                    )
-                elif operation["kind"] == "build_okf_manifest":
-                    transformed = build_okf_manifest(
-                        plan=source,
-                        navigation=_parse_structured_output(json_values["navigation"], step_id=step.step_id),
-                        expected_source_path=_render_input_text(operation["expected_source_path"], flow_input),
-                    )
-                elif operation["kind"] == "validate_okf_plan":
-                    transformed = validate_okf_plan(
-                        source, plan_kind=operation["plan_kind"],
-                        expected_source_path=(
-                            _render_input_text(operation["expected_source_path"], flow_input)
-                            if operation["plan_kind"] == "doctrine" else None
-                        ),
-                        expected_source_slug=(
-                            _render_input_text(operation["expected_source_slug"], flow_input)
-                            if operation["plan_kind"] == "doctrine" else None
-                        ),
-                        manifests=(
-                            _parse_structured_output(json_values["manifests"], step_id=step.step_id)
-                            if operation["plan_kind"] == "themes" else None
-                        ),
-                    )
-                else:
-                    transformed = transform_json(
-                        kind=operation["kind"],
-                        value=source,
-                        batch_size=operation.get("batch_size", 5),
-                        max_batch_bytes=operation.get("max_batch_bytes", 80000),
-                        serializer=_json_dumps_preserving_numbers,
-                    )
-                answer = _json_dumps_preserving_numbers(transformed)
-                if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
-                    raise ValueError("JSON-Operation überschreitet Output-Größenlimit.")
-                target = prepare_output_target(
-                    workspace, output, overwrite=step.overwrite_output,
-                )
-                target.write_text(answer)
-                context.completed_json_outputs[_filesystem_path_key(output)] = (
-                    _checkpoint_fingerprint(answer)
+                answer = _execute_json_step(
+                    step, workspace=workspace, flow=flow,
+                    namespace=namespace, flow_input=flow_input,
+                    item=item, iteration_id=iteration_id,
+                    output=output, context=context,
                 )
                 record_iteration_answer(answer, True, iteration_id)
                 continue
 
-            contexts = _contexts_for_step(
-                step,
-                workspace=workspace,
-            )
-            config_file = (
-                _resolve_config(
-                    step,
-                    flow_dir=flow_dir,
-                )
-                if step.config is not None
-                else None
-            )
-            callback = build_preapproval_callback(
-                step.approve_tools,
-                fallback=context.approval_callback,
-            )
-            excluded_paths = (
-                tuple(
-                    dict.fromkeys(
-                        (
-                            *effective_flow_excluded_paths,
-                            *step.excluded_paths,
-                        )
-                    )
-                )
-                if step.workspace_access in {"read", "write"}
-                else ()
-            )
-            local_dump_prefix = _dump_prefix_for_iteration(
-                step,
-                index=index,
-                case_colliding_step_ids=case_colliding_step_ids,
-                iteration_id=(
-                    iteration_id
-                    if step.iteration_id is not None
-                    else None
-                ),
-            )
-            dump_file_prefix = (
-                namespace.replace("/", ".") + local_dump_prefix
-                if namespace
-                else local_dump_prefix
-            )
-
-            _set_flow_diagnostic(
-                phase="model-or-mcp-execution", flow=flow.source,
-                namespace=namespace, step=step.step_id,
+            answer = await _execute_model_iteration(
+                step, flow=flow, workspace=workspace, context=context,
+                namespace=namespace, index=index, item=item,
                 iteration_id=iteration_id, output=output,
-            )
-            # Child invocations may have resolved new protected inputs since
-            # this parent invocation began. Do not cache the protection tuple.
-            mutation_protected_paths = tuple(dict.fromkeys((
-                *reserved_inputs.values(),
-                *context.run_start_checkpoint_paths,
-                *initial_checkpoint_paths,
-            )))
-            assert context.completed_json_outputs is not None
-            json_input_values = _resolve_json_inputs(
-                step,
-                workspace=workspace,
+                previous_output=previous_output, outputs=outputs,
                 flow_input=flow_input,
-                item=item,
-                iteration_id=iteration_id,
-                completed_json_outputs=context.completed_json_outputs,
+                effective_flow_excluded_paths=effective_flow_excluded_paths,
+                effective_retry_policy=effective_retry_policy,
+                reserved_inputs=reserved_inputs,
+                initial_checkpoint_paths=initial_checkpoint_paths,
+                case_colliding_step_ids=case_colliding_step_ids,
             )
-            conversation_prompts = _conversation_prompts_for_iteration(
-                step,
-                workspace=workspace,
-                outputs=outputs,
-                item=item,
-                iteration_id=iteration_id,
-                previous_output=previous_output,
-                flow_input=flow_input,
-                json_input_values=json_input_values,
-            )
-            if conversation_prompts is None:
-                prompt = _prompt_for_iteration(
-                    step,
-                    workspace=workspace,
-                    item=item,
-                    iteration_id=iteration_id,
-                    previous_output=previous_output,
-                    outputs=outputs,
-                    flow_input=flow_input,
-                    json_input_values=json_input_values,
-                )
-                result = await run_once(
-                    OneShotRunOptions(
-                        workspace=workspace,
-                        prompt=prompt,
-                        config_file=config_file,
-                        model=step.model,
-                        workspace_access=step.workspace_access,
-                        with_data=step.with_data,
-                        with_mcp=step.with_mcp,
-                        retry_policy=effective_retry_policy,
-                        response_format=step.response_format,
-                        context_files=contexts,
-                        add_web_context=step.add_web_context,
-                        output=output,
-                        overwrite_output=step.overwrite_output,
-                        approval_callback=callback,
-                        user_message_callback=context.user_message_callback,
-                        mutation_protected_paths=mutation_protected_paths,
-                        excluded_paths=excluded_paths,
-                        dump_file_prefix=dump_file_prefix,
-                    ),
-                    dependencies=context.dependencies,
-                )
-            else:
-                result = await run_conversation(
-                    ConversationRunOptions(
-                        workspace=workspace,
-                        prompts=conversation_prompts,
-                        config_file=config_file,
-                        model=step.model,
-                        workspace_access=step.workspace_access,
-                        with_data=step.with_data,
-                        with_mcp=step.with_mcp,
-                        retry_policy=effective_retry_policy,
-                        response_format=step.response_format,
-                        context_files=contexts,
-                        add_web_context=step.add_web_context,
-                        output=output,
-                        overwrite_output=step.overwrite_output,
-                        approval_callback=callback,
-                        user_message_callback=context.user_message_callback,
-                        mutation_protected_paths=mutation_protected_paths,
-                        excluded_paths=excluded_paths,
-                        dump_file_prefix=dump_file_prefix,
-                    ),
-                    dependencies=context.dependencies,
-                )
-            if output is not None and step.response_format == "json":
-                _parse_structured_output(result.answer, step_id=step.step_id)
-                # OutputTarget writes UTF-8 text with unmodified newlines.
-                # read_existing_output_text subsequently normalizes them and
-                # strips an optional UTF-8 BOM. Match exactly that canonical
-                # representation without an extra filesystem read: existing
-                # one-shot execution mocks need not write an output file.
-                canonical_json = (
-                    result.answer.removeprefix("\ufeff")
-                    .replace("\r\n", "\n")
-                    .replace("\r", "\n")
-                )
-                context.completed_json_outputs[_filesystem_path_key(output)] = (
-                    _checkpoint_fingerprint(canonical_json)
-                )
             record_iteration_answer(
-                result.answer,
-                step.response_format == "json",
-                iteration_id,
+                answer, step.response_format == "json", iteration_id,
             )
-            for status in getattr(result, "web_context_statuses", ()):
-                print(
-                    sanitize_terminal_text(
-                        status,
-                        multiline=True,
-                    )
-                )
-            if output is None:
-                print(
-                    sanitize_terminal_text(
-                        result.answer,
-                        multiline=True,
-                    )
-                )
 
         if step.foreach is None:
             assert len(iteration_answers) == 1
