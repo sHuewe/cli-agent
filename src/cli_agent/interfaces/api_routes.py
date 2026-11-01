@@ -469,6 +469,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         return JSONResponse({
             "messages": agent.working_messages_snapshot(),
             "sub_runs": agent.sub_run_snapshots() if callable(getattr(agent, "sub_run_snapshots", None)) else [],
+            "cleanup_runs": agent.cleanup_run_snapshots() if callable(getattr(agent, "cleanup_run_snapshots", None)) else [],
             "tools": agent.tool_states_snapshot(),
             "contexts": agent.context_states_snapshot(),
             "okf": agent.okf_status_snapshot(),
