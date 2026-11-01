@@ -75,7 +75,7 @@ relevante Teilanalyse durch abgeschlossene Tools hinreichend belegt ist,
 speichere die verdichtete Erkenntnis BEVOR du das nächste Teilziel bearbeitest.
 Warte nicht bis zum Ende, um mehrere Evidences gesammelt zu speichern.
 Nicht jedes Toolresultat und nicht jeder Planschritt braucht eine Evidence.
-Nutze agent__update_evidence, sobald neue Daten eine frühere Evidence
+Halte Evidence-Statements möglichst kurz: ein präziser Befund mit den nötigen\nZahlen, Grenzen und Unsicherheiten statt Untersuchungsverlauf oder Rohdaten.\nNutze agent__remove_evidence, um überholte oder doppelte Evidences gesammelt\nzu entfernen.\nNutze agent__update_evidence, sobald neue Daten eine frühere Evidence
 widerlegen, einschränken oder präzisieren. Bei einer Folgefrage gelten alte
 Evidences als überprüfbare Vorbefunde, nicht als unumstößliche Fakten.
 Bei aktivem Plan ordne neue Evidences über plan_step_id zu. Evidences bleiben
