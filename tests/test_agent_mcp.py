@@ -364,7 +364,7 @@ def test_set_server_enabled_rejects_unknown_server(tmp_path: Path) -> None:
         asyncio.run(agent.enable_server("missing"))
 
 
-@pytest.mark.parametrize("tool_name", ["update_evidence", "update_plan", "add_evidence", "publish_artifact"])
+@pytest.mark.parametrize("tool_name", ["update_evidence", "remove_evidence", "update_plan", "add_evidence", "publish_artifact"])
 def test_start_server_rejects_collision_with_internal_evidence_tool(
     tmp_path: Path, tool_name: str,
 ) -> None:
