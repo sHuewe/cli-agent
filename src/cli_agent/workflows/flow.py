@@ -4662,6 +4662,28 @@ def _preflight_concrete_invocation_outputs(
             )
 
 
+def _effective_step_retry_policy(
+    step: FlowStep, flow_retry_policy: ModelRetryPolicy | None,
+) -> ModelRetryPolicy | None:
+    """Apply only explicitly overridden retry fields, retaining inherited defaults."""
+    if step.retry_overrides is None:
+        return flow_retry_policy
+    defaults = flow_retry_policy or ModelRetryPolicy()
+    values = step.retry_overrides
+    return ModelRetryPolicy(
+        max_attempts=values.get("max_attempts", defaults.max_attempts),
+        initial_delay_seconds=values.get(
+            "initial_delay_seconds", defaults.initial_delay_seconds
+        ),
+        backoff_multiplier=values.get(
+            "backoff_multiplier", defaults.backoff_multiplier
+        ),
+        max_delay_seconds=values.get(
+            "max_delay_seconds", defaults.max_delay_seconds
+        ),
+    )
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -4786,23 +4808,9 @@ async def _run_flow_internal(
             phase="prepare-step", flow=flow.source,
             namespace=namespace, step=step.step_id,
         )
-        if step.retry_overrides is not None:
-            defaults = flow_retry_policy or ModelRetryPolicy()
-            values = step.retry_overrides
-            effective_retry_policy = ModelRetryPolicy(
-                max_attempts=values.get("max_attempts", defaults.max_attempts),
-                initial_delay_seconds=values.get(
-                    "initial_delay_seconds", defaults.initial_delay_seconds
-                ),
-                backoff_multiplier=values.get(
-                    "backoff_multiplier", defaults.backoff_multiplier
-                ),
-                max_delay_seconds=values.get(
-                    "max_delay_seconds", defaults.max_delay_seconds
-                ),
-            )
-        else:
-            effective_retry_policy = flow_retry_policy
+        effective_retry_policy = _effective_step_retry_policy(
+            step, flow_retry_policy,
+        )
         items = _foreach_items(
             step,
             outputs=outputs,
