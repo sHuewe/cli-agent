@@ -1222,7 +1222,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             f"Flow enthält mehr als {MAX_FLOW_STEPS} Schritte."
         )
 
-    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps)
+    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry)
 
 
 def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
@@ -1261,6 +1261,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         global_variables,
         excluded_paths,
         raw_steps,
+        allowed_retry,
     ) = _parse_flow_root(values)
 
     steps: list[FlowStep] = []
