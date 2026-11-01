@@ -22,12 +22,40 @@
   const workingContextDialog = document.getElementById("working-context-dialog");
   const workingMessagesJson = document.getElementById("working-messages-json");
   const contextRunSelect = document.getElementById("context-run-select");
+  const cleanupProcessingResult = document.getElementById("cleanup-processing-result");
   let currentContextPayload = null;
-  contextRunSelect.addEventListener("change", () => {
+  function renderSelectedWorkingMessages() {
     if (!currentContextPayload) return;
-    const run = (currentContextPayload.sub_runs || []).find(item => item.id === contextRunSelect.value);
+    const selected = contextRunSelect.value;
+    const subRun = (currentContextPayload.sub_runs || []).find(item => item.id === selected);
+    const cleanupRun = (currentContextPayload.cleanup_runs || []).find(item => item.id === selected);
+    const run = cleanupRun || subRun;
     workingMessagesJson.textContent = JSON.stringify(run ? run.messages : currentContextPayload.messages, null, 2);
-  });
+    cleanupProcessingResult.classList.toggle("hidden", !cleanupRun);
+    cleanupProcessingResult.classList.toggle("error", Boolean(cleanupRun &&
+      ["invalid", "failed"].includes(cleanupRun.processing_result?.status)));
+    if (!cleanupRun) {
+      cleanupProcessingResult.textContent = "";
+      return;
+    }
+    const result = cleanupRun.processing_result || {};
+    const labels = {
+      running: "Läuft", applied: "Angewendet", unchanged: "Keine Änderung",
+      invalid: "Ungültige Antwort", failed: "Fehlgeschlagen"
+    };
+    const bytesBefore = Number(result.bytes_before ?? 0);
+    const bytesAfter = Number(result.bytes_after ?? 0);
+    const lines = [
+      "Verarbeitung: " + (labels[result.status] || String(result.status || "Unbekannt")),
+      "Evidences: " + (result.evidences_before ?? "?") + " → " + (result.evidences_after ?? "?"),
+      "Größe: " + bytesBefore + " → " + bytesAfter + " Bytes",
+      "Entfernt: " + (result.removed ?? 0) + " · Aktualisiert: " +
+        (result.updated ?? 0) + " · Zusammengeführt: " + (result.merged ?? 0)
+    ];
+    if (result.error) lines.push("Fehler: " + String(result.error));
+    cleanupProcessingResult.textContent = lines.join("\n");
+  }
+  contextRunSelect.addEventListener("change", renderSelectedWorkingMessages);
   const workingToolsList = document.getElementById("working-tools-list");
   const workingContextsList = document.getElementById("working-contexts-list");
   const okfState = document.getElementById("okf-state");
@@ -847,9 +875,12 @@
       for (const run of (Array.isArray(payload.sub_runs) ? payload.sub_runs : [])) {
         contextRunSelect.add(new Option("Sub-Run: " + run.task.slice(0, 75), run.id));
       }
+      for (const run of (Array.isArray(payload.cleanup_runs) ? payload.cleanup_runs : [])) {
+        const cause = run.trigger === "plan_changed" ? "Planänderung" : "20 Toolaufrufe";
+        contextRunSelect.add(new Option("Cleanup #" + String(run.id).replace(/^cleanup-/, "") + " – " + cause, run.id));
+      }
       contextRunSelect.value = [...contextRunSelect.options].some(o => o.value === previous) ? previous : "main";
-      const chosen = (payload.sub_runs || []).find(run => run.id === contextRunSelect.value);
-      workingMessagesJson.textContent = JSON.stringify(chosen ? chosen.messages : messages, null, 2);
+      renderSelectedWorkingMessages();
       renderTools(tools);
       renderContexts(contexts, payload.okf || {});
       return;
