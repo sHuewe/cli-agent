@@ -91,14 +91,6 @@ MODEL_TOOLS = (
         _EVIDENCE_FIELDS, ["id", "type", "statement", "source_refs"],
     ),
     _tool(
-        REMOVE_EVIDENCE_TOOL_NAME,
-        "Remove one or more strictly redundant, obsolete or disproven session "
-        "evidences by id. Other evidences and their sources are preserved.",
-        {"evidence_ids": {"type": "array", "minItems": 1, "maxItems": 64,
-                          "uniqueItems": True, "items": {"type": "string"}}},
-        ["evidence_ids"],
-    ),
-    _tool(
         UPDATE_EVIDENCE_TOOL_NAME,
         "Revise one existing session evidence by id; provide only changed "
         "fields. Omitted fields including sources remain unchanged. "
@@ -106,6 +98,14 @@ MODEL_TOOLS = (
         "For source changes use S1/S2/... tokens, NOT tool call IDs.",
         {**_EVIDENCE_FIELDS, "remove": {"type": "boolean"}},
         ["id"],
+    ),
+    _tool(
+        REMOVE_EVIDENCE_TOOL_NAME,
+        "Remove one or more strictly redundant, obsolete or disproven session "
+        "evidences by id. Other evidences and their sources are preserved.",
+        {"evidence_ids": {"type": "array", "minItems": 1, "maxItems": 64,
+                          "uniqueItems": True, "items": {"type": "string"}}},
+        ["evidence_ids"],
     ),
 )
 
