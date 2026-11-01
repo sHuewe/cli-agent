@@ -132,6 +132,7 @@ class ConversationMixin:
 
         self.history.clear()
         getattr(self, "_sub_runs", []).clear()
+        getattr(self, "_cleanup_runs", []).clear()
         self._last_working_messages = []
         self._last_working_tools = []
         if getattr(self, "_evidence_state", None) is not None:
@@ -396,6 +397,10 @@ class ConversationMixin:
                 "messages": messages, "tools": copy.deepcopy(run["tools"]),
             })
         return snapshots
+
+    def cleanup_run_snapshots(self) -> list[dict[str, Any]]:
+        """Return cleanup diagnostics, never include them in model history."""
+        return copy.deepcopy(getattr(self, "_cleanup_runs", []))
 
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
         """Return the exact model-visible view of the current/last main loop."""
