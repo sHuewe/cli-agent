@@ -1473,6 +1473,7 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
         "agent__update_plan",
         "agent__add_evidence",
         "agent__update_evidence",
+        "agent__remove_evidence",
         "agent__publish_artifact",
     ]
 
@@ -1489,6 +1490,7 @@ def test_per_tool_runtime_toggle_filters_model_tools(tmp_path: Path) -> None:
         "agent__update_plan",
         "agent__add_evidence",
         "agent__update_evidence",
+        "agent__remove_evidence",
         "agent__publish_artifact",
     ]
 
