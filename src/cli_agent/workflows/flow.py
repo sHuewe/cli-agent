@@ -4710,6 +4710,194 @@ def _eligible_step_iterations(
     return items, iteration_ids
 
 
+def _execute_filesystem_step(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow_input: dict[str, Any],
+    output: Path | None,
+    context: _FlowExecutionContext,
+) -> str:
+    """Execute an already prepared filesystem step and record its JSON checkpoint.
+
+    Output ownership and checkpoint verification belong to the runner; this
+    function owns only the selected filesystem operation and its result.
+    """
+    assert step.filesystem_operation is not None
+    assert output is not None
+    op = step.filesystem_operation
+    if op["kind"] == "checkpoint_status":
+        expected_source = _render_input_text(op["expected_source_path"], flow_input)
+        result = {"completed": False, "checkpoint": None, "source_path": expected_source}
+        if op.get("release_source_on_miss"):
+            result["verification"] = None
+        # Reject input/output aliasing before reading or writing any
+        # candidate. Compare normalized workspace paths on both OSes.
+        candidates = [
+            _workspace_path(
+                workspace, Path(_render_input_text(template, flow_input)),
+                purpose="Checkpoint-Status", must_exist=False,
+            )
+            for template in op["paths"]
+        ]
+        source_path = _workspace_path(
+            workspace, Path(expected_source),
+            purpose="Checkpoint-Quelldatei", must_exist=False,
+        )
+        protected_inputs = [*candidates, source_path]
+        if any(_filesystem_path_key(candidate) == _filesystem_path_key(output)
+               for candidate in protected_inputs):
+            raise ValueError(
+                "checkpoint_status.output darf weder einen Eingabe-Checkpoint "
+                "noch die Quelldatei überschreiben."
+            )
+        # A matching verification record is insufficient if
+        # its source file has since been removed or replaced by
+        # a directory. Never skip work for an orphaned checkpoint.
+        source_exists = source_path.is_file()
+        for candidate in candidates:
+            if not source_exists or not candidate.is_file():
+                continue
+            try:
+                raw_checkpoint = read_existing_output_text(
+                    workspace, candidate, max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+                )
+                payload = _parse_structured_output(raw_checkpoint, step_id=step.step_id)
+            except (ValueError, OSError):
+                continue
+            if (isinstance(payload, dict)
+                    and payload.get("status") == op["expected_status"]
+                    and payload.get("source_path") == expected_source):
+                result.update(completed=True, checkpoint=str(candidate.relative_to(workspace)))
+                if op.get("release_source_on_miss"):
+                    result["verification"] = payload
+                break
+        answer = _json_dumps_preserving_numbers(result)
+        if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+            raise ValueError(
+                "checkpoint_status überschreitet Output-Größenlimit."
+            )
+        target = prepare_output_target(workspace, output, overwrite=True)
+        target.write_text(answer)
+        context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+        if op.get("release_source_on_miss") and result["completed"]:
+            # A completed read is no longer a future invocation,
+            # but its verified source remains protected globally.
+            # A miss never adds this guard, so the parent may write.
+            assert context.reserved_inputs is not None
+            context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
+        return answer
+    directory = _render_input_text(op["directory"], flow_input)
+    inventory_root = _workspace_directory(workspace, directory)
+    if output == inventory_root or inventory_root in output.parents:
+        raise ValueError("Inventur-Output darf nicht im inventarisierten Verzeichnis liegen.")
+    transformed = inventory_directory(
+        workspace, directory,
+        recursive=op.get("recursive", False),
+        extensions=tuple(op.get("extensions", [])),
+        exclude_names=tuple(op.get("exclude_names", [])),
+        max_entries=op.get("max_entries", MAX_INVENTORY_ENTRIES),
+        stable_slugs=op.get("stable_slugs", False),
+    )
+    answer = _json_dumps_preserving_numbers(transformed)
+    if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+        raise ValueError("Inventur überschreitet Output-Größenlimit.")
+    target = prepare_output_target(
+        workspace, output, overwrite=step.overwrite_output,
+    )
+    target.write_text(answer)
+    context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+    return answer
+
+
+def _execute_json_step(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow: FlowDefinition,
+    namespace: str,
+    flow_input: dict[str, Any],
+    item: Any,
+    iteration_id: str | None,
+    output: Path | None,
+    context: _FlowExecutionContext,
+) -> str:
+    """Resolve, transform and persist JSON data after output preflight."""
+    assert step.json_operation is not None
+    assert output is not None
+    assert context.completed_json_outputs is not None
+    _set_flow_diagnostic(
+        phase="json-operation", flow=flow.source,
+        namespace=namespace, step=step.step_id, output=output,
+    )
+    json_values = _resolve_json_inputs(
+        step,
+        workspace=workspace,
+        flow_input=flow_input,
+        item=item,
+        iteration_id=iteration_id,
+        completed_json_outputs=context.completed_json_outputs,
+    )
+    operation = step.json_operation
+    source = _parse_structured_output(
+        json_values[operation["input"]], step_id=step.step_id,
+    )
+    if operation["kind"] == "group_items":
+        transformed = group_assigned_items(
+            routes=_parse_structured_output(json_values["routes"], step_id=step.step_id),
+            assignments=_parse_structured_output(json_values["assignments"], step_id=step.step_id),
+            topic_plan=_parse_structured_output(json_values["topics"], step_id=step.step_id),
+            max_concept_bytes=operation.get("max_concept_bytes", 80000),
+            serializer=_json_dumps_preserving_numbers,
+        )
+    elif operation["kind"] == "verify_coverage":
+        transformed = verify_assigned_coverage(
+            plan=_parse_structured_output(json_values["plan"], step_id=step.step_id),
+            results=_parse_structured_output(json_values["results"], step_id=step.step_id),
+        )
+    elif operation["kind"] == "build_okf_manifest":
+        transformed = build_okf_manifest(
+            plan=source,
+            navigation=_parse_structured_output(json_values["navigation"], step_id=step.step_id),
+            expected_source_path=_render_input_text(operation["expected_source_path"], flow_input),
+        )
+    elif operation["kind"] == "validate_okf_plan":
+        transformed = validate_okf_plan(
+            source, plan_kind=operation["plan_kind"],
+            expected_source_path=(
+                _render_input_text(operation["expected_source_path"], flow_input)
+                if operation["plan_kind"] == "doctrine" else None
+            ),
+            expected_source_slug=(
+                _render_input_text(operation["expected_source_slug"], flow_input)
+                if operation["plan_kind"] == "doctrine" else None
+            ),
+            manifests=(
+                _parse_structured_output(json_values["manifests"], step_id=step.step_id)
+                if operation["plan_kind"] == "themes" else None
+            ),
+        )
+    else:
+        transformed = transform_json(
+            kind=operation["kind"],
+            value=source,
+            batch_size=operation.get("batch_size", 5),
+            max_batch_bytes=operation.get("max_batch_bytes", 80000),
+            serializer=_json_dumps_preserving_numbers,
+        )
+    answer = _json_dumps_preserving_numbers(transformed)
+    if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+        raise ValueError("JSON-Operation überschreitet Output-Größenlimit.")
+    target = prepare_output_target(
+        workspace, output, overwrite=step.overwrite_output,
+    )
+    target.write_text(answer)
+    context.completed_json_outputs[_filesystem_path_key(output)] = (
+        _checkpoint_fingerprint(answer)
+    )
+    return answer
+
+
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -5267,164 +5455,19 @@ async def _run_flow_internal(
                 raise
 
             if step.filesystem_operation is not None:
-                assert output is not None
-                op = step.filesystem_operation
-                if op["kind"] == "checkpoint_status":
-                    expected_source = _render_input_text(op["expected_source_path"], flow_input)
-                    result = {"completed": False, "checkpoint": None, "source_path": expected_source}
-                    if op.get("release_source_on_miss"):
-                        result["verification"] = None
-                    # Reject input/output aliasing before reading or writing any
-                    # candidate. Compare normalized workspace paths on both OSes.
-                    candidates = [
-                        _workspace_path(
-                            workspace, Path(_render_input_text(template, flow_input)),
-                            purpose="Checkpoint-Status", must_exist=False,
-                        )
-                        for template in op["paths"]
-                    ]
-                    source_path = _workspace_path(
-                        workspace, Path(expected_source),
-                        purpose="Checkpoint-Quelldatei", must_exist=False,
-                    )
-                    protected_inputs = [*candidates, source_path]
-                    if any(_filesystem_path_key(candidate) == _filesystem_path_key(output)
-                           for candidate in protected_inputs):
-                        raise ValueError(
-                            "checkpoint_status.output darf weder einen Eingabe-Checkpoint "
-                            "noch die Quelldatei überschreiben."
-                        )
-                    # A matching verification record is insufficient if
-                    # its source file has since been removed or replaced by
-                    # a directory. Never skip work for an orphaned checkpoint.
-                    source_exists = source_path.is_file()
-                    for candidate in candidates:
-                        if not source_exists or not candidate.is_file():
-                            continue
-                        try:
-                            raw_checkpoint = read_existing_output_text(
-                                workspace, candidate, max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
-                            )
-                            payload = _parse_structured_output(raw_checkpoint, step_id=step.step_id)
-                        except (ValueError, OSError):
-                            continue
-                        if (isinstance(payload, dict)
-                                and payload.get("status") == op["expected_status"]
-                                and payload.get("source_path") == expected_source):
-                            result.update(completed=True, checkpoint=str(candidate.relative_to(workspace)))
-                            if op.get("release_source_on_miss"):
-                                result["verification"] = payload
-                            break
-                    answer = _json_dumps_preserving_numbers(result)
-                    if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
-                        raise ValueError(
-                            "checkpoint_status überschreitet Output-Größenlimit."
-                        )
-                    target = prepare_output_target(workspace, output, overwrite=True)
-                    target.write_text(answer)
-                    context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
-                    if op.get("release_source_on_miss") and result["completed"]:
-                        # A completed read is no longer a future invocation,
-                        # but its verified source remains protected globally.
-                        # A miss never adds this guard, so the parent may write.
-                        assert context.reserved_inputs is not None
-                        context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
-                    record_iteration_answer(answer, True, iteration_id)
-                    continue
-                directory = _render_input_text(op["directory"], flow_input)
-                inventory_root = _workspace_directory(workspace, directory)
-                if output == inventory_root or inventory_root in output.parents:
-                    raise ValueError("Inventur-Output darf nicht im inventarisierten Verzeichnis liegen.")
-                transformed = inventory_directory(
-                    workspace, directory,
-                    recursive=op.get("recursive", False),
-                    extensions=tuple(op.get("extensions", [])),
-                    exclude_names=tuple(op.get("exclude_names", [])),
-                    max_entries=op.get("max_entries", MAX_INVENTORY_ENTRIES),
-                    stable_slugs=op.get("stable_slugs", False),
+                answer = _execute_filesystem_step(
+                    step, workspace=workspace, flow_input=flow_input,
+                    output=output, context=context,
                 )
-                answer = _json_dumps_preserving_numbers(transformed)
-                if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
-                    raise ValueError("Inventur überschreitet Output-Größenlimit.")
-                target = prepare_output_target(
-                    workspace, output, overwrite=step.overwrite_output,
-                )
-                target.write_text(answer)
-                context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
                 record_iteration_answer(answer, True, iteration_id)
                 continue
 
             if step.json_operation is not None:
-                assert output is not None
-                assert context.completed_json_outputs is not None
-                _set_flow_diagnostic(
-                    phase="json-operation", flow=flow.source,
-                    namespace=namespace, step=step.step_id, output=output,
-                )
-                json_values = _resolve_json_inputs(
-                    step,
-                    workspace=workspace,
-                    flow_input=flow_input,
-                    item=item,
-                    iteration_id=iteration_id,
-                    completed_json_outputs=context.completed_json_outputs,
-                )
-                operation = step.json_operation
-                source = _parse_structured_output(
-                    json_values[operation["input"]], step_id=step.step_id,
-                )
-                if operation["kind"] == "group_items":
-                    transformed = group_assigned_items(
-                        routes=_parse_structured_output(json_values["routes"], step_id=step.step_id),
-                        assignments=_parse_structured_output(json_values["assignments"], step_id=step.step_id),
-                        topic_plan=_parse_structured_output(json_values["topics"], step_id=step.step_id),
-                        max_concept_bytes=operation.get("max_concept_bytes", 80000),
-                        serializer=_json_dumps_preserving_numbers,
-                    )
-                elif operation["kind"] == "verify_coverage":
-                    transformed = verify_assigned_coverage(
-                        plan=_parse_structured_output(json_values["plan"], step_id=step.step_id),
-                        results=_parse_structured_output(json_values["results"], step_id=step.step_id),
-                    )
-                elif operation["kind"] == "build_okf_manifest":
-                    transformed = build_okf_manifest(
-                        plan=source,
-                        navigation=_parse_structured_output(json_values["navigation"], step_id=step.step_id),
-                        expected_source_path=_render_input_text(operation["expected_source_path"], flow_input),
-                    )
-                elif operation["kind"] == "validate_okf_plan":
-                    transformed = validate_okf_plan(
-                        source, plan_kind=operation["plan_kind"],
-                        expected_source_path=(
-                            _render_input_text(operation["expected_source_path"], flow_input)
-                            if operation["plan_kind"] == "doctrine" else None
-                        ),
-                        expected_source_slug=(
-                            _render_input_text(operation["expected_source_slug"], flow_input)
-                            if operation["plan_kind"] == "doctrine" else None
-                        ),
-                        manifests=(
-                            _parse_structured_output(json_values["manifests"], step_id=step.step_id)
-                            if operation["plan_kind"] == "themes" else None
-                        ),
-                    )
-                else:
-                    transformed = transform_json(
-                        kind=operation["kind"],
-                        value=source,
-                        batch_size=operation.get("batch_size", 5),
-                        max_batch_bytes=operation.get("max_batch_bytes", 80000),
-                        serializer=_json_dumps_preserving_numbers,
-                    )
-                answer = _json_dumps_preserving_numbers(transformed)
-                if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
-                    raise ValueError("JSON-Operation überschreitet Output-Größenlimit.")
-                target = prepare_output_target(
-                    workspace, output, overwrite=step.overwrite_output,
-                )
-                target.write_text(answer)
-                context.completed_json_outputs[_filesystem_path_key(output)] = (
-                    _checkpoint_fingerprint(answer)
+                answer = _execute_json_step(
+                    step, workspace=workspace, flow=flow,
+                    namespace=namespace, flow_input=flow_input,
+                    item=item, iteration_id=iteration_id,
+                    output=output, context=context,
                 )
                 record_iteration_answer(answer, True, iteration_id)
                 continue
