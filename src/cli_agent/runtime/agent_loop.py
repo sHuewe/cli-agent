@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import uuid
@@ -18,7 +19,8 @@ from cli_agent.state.sub_runs import START_SUB_RUN, SUB_RUN_SOFT_TOOL_LIMIT, exe
 from cli_agent.state.agent_types import ToolRoute
 from cli_agent.state.message_visibility import messages_for_model
 from cli_agent.state.evidence_state import EvidenceError
-from cli_agent.state.evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, EvidenceInputError
+from cli_agent.state.evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, REMOVE_EVIDENCE_TOOL_NAME, EvidenceInputError
+from cli_agent.state.evidence_cleanup import maybe_cleanup_evidences, note_plan_update, note_tool_calls
 from cli_agent.platform.artifact_publication import PUBLISH_TOOL_NAME, register_artifact
 from cli_agent.models.model import log_model_call_diagnostics
 
@@ -119,6 +121,8 @@ async def run_model_loop(
     ] = []
 
     while True:
+        if phase == "main":
+            await maybe_cleanup_evidences(agent)
         if phase == "sub" and calls >= SUB_RUN_SOFT_TOOL_LIMIT:
             if sub_finalization_rounds >= 3:
                 return partial_sub_result(
@@ -187,6 +191,8 @@ async def run_model_loop(
             )
 
         tool_calls = message.get("tool_calls") or []
+        if phase in {"main", "sub"}:
+            note_tool_calls(agent, tool_calls)
         if not tool_calls:
             answer = str(message.get("content") or "").strip()
             logger.info(
@@ -450,7 +456,7 @@ async def run_model_loop(
                     function = call.get("function") or {}
                     if function.get("name") in frontend and function.get("name") not in {
                         PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME,
-                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME, START_SUB_RUN,
+                        UPDATE_EVIDENCE_TOOL_NAME, REMOVE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME, START_SUB_RUN,
                     }:
                         arguments = function.get("arguments") or {}
                         arguments = (arguments if isinstance(arguments, str)
@@ -467,13 +473,13 @@ async def run_model_loop(
              if call.get("function", {}).get("name")
              not in (set(getattr(agent, "_agui_frontend_tools", {}))
                      - {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME,
-                        UPDATE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME, START_SUB_RUN})]
+                        UPDATE_EVIDENCE_TOOL_NAME, REMOVE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME, START_SUB_RUN})]
             if frontend_calls else tool_calls
         )
         evidence = getattr(agent, "_evidence_state", None) if phase in {"main", "sub"} else None
         evidence_calls = [
             call for call in backend_calls
-            if (call.get("function") or {}).get("name") in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME}
+            if (call.get("function") or {}).get("name") in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, REMOVE_EVIDENCE_TOOL_NAME}
         ] if evidence is not None else []
         backend_calls = [call for call in backend_calls if call not in evidence_calls]
         sub_calls = [call for call in backend_calls if phase == "main" and
@@ -528,10 +534,15 @@ async def run_model_loop(
                 raw_args = (internal_call.get("function") or {}).get("arguments") or {}
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 if tool_name == PLAN_TOOL_NAME:
+                    before_plan = copy.deepcopy(evidence.plan)
                     plan_result = evidence.update_plan(args)
+                    if phase == "main":
+                        note_plan_update(agent, before_plan, evidence.plan)
                     result_text = json.dumps(plan_result, ensure_ascii=False)
                 elif tool_name == ADD_EVIDENCE_TOOL_NAME:
                     evidence.add_evidence(args)
+                elif tool_name == REMOVE_EVIDENCE_TOOL_NAME:
+                    evidence.remove_evidence(args)
                 else:
                     evidence.update_evidence(args)
                 if tool_name != PLAN_TOOL_NAME:

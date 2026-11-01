@@ -180,6 +180,8 @@ class ConversationMixin:
         self._knowledge_reentry_seen = set()
         if getattr(self, "_evidence_state", None) is not None:
             self._evidence_state.begin_task()
+        from cli_agent.state.evidence_cleanup import reset_cleanup_tracking
+        reset_cleanup_tracking(self, prompt)
         knowledge = await self._collect_knowledge(prompt)
         reference_context = self._build_reference_context_message(knowledge=knowledge)
         working_messages = [

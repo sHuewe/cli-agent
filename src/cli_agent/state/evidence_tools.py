@@ -13,6 +13,7 @@ from typing import Any
 PLAN_TOOL_NAME = "agent__update_plan"
 ADD_EVIDENCE_TOOL_NAME = "agent__add_evidence"
 UPDATE_EVIDENCE_TOOL_NAME = "agent__update_evidence"
+REMOVE_EVIDENCE_TOOL_NAME = "agent__remove_evidence"
 
 _STATUSES = ("pending", "in_progress", "completed", "blocked", "skipped")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}\Z")
@@ -98,6 +99,14 @@ MODEL_TOOLS = (
         {**_EVIDENCE_FIELDS, "remove": {"type": "boolean"}},
         ["id"],
     ),
+    _tool(
+        REMOVE_EVIDENCE_TOOL_NAME,
+        "Remove one or more strictly redundant, obsolete or disproven session "
+        "evidences by id. Other evidences and their sources are preserved.",
+        {"evidence_ids": {"type": "array", "minItems": 1, "maxItems": 64,
+                          "uniqueItems": True, "items": {"type": "string"}}},
+        ["evidence_ids"],
+    ),
 )
 
 
@@ -134,7 +143,7 @@ class EvidenceOperationsMixin:
                     " Sub-run has no local plan: omit plan_step_id; coordinator "
                     "assigns its plan step when findings are imported."
                 )
-            if tool["function"]["name"] != PLAN_TOOL_NAME and refs:
+            if tool["function"]["name"] in {ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME} and refs:
                 source_items = tool["function"]["parameters"]["properties"]["source_refs"]["items"]
                 source_items["enum"] = offered
 
@@ -217,6 +226,23 @@ class EvidenceOperationsMixin:
         self.evidences = candidate
         self.compacted.update(s["call_id"] for s in record["tool_calls"])
         self._refresh_live_tool_definition()
+
+    def remove_evidence(self, args: dict) -> dict:
+        if not isinstance(args, dict) or set(args) != {"evidence_ids"}:
+            raise EvidenceInputError("remove_evidence erwartet ausschließlich evidence_ids.")
+        ids = args["evidence_ids"]
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= 64
+                or any(not isinstance(i, str) for i in ids)
+                or len(set(ids)) != len(ids)):
+            raise EvidenceInputError("Ungültige Evidence-IDs.")
+        unknown = [i for i in ids if i not in self.evidences]
+        if unknown:
+            raise EvidenceInputError("Unbekannte Evidence-IDs: " + ", ".join(unknown))
+        candidate = {k: v for k, v in self.evidences.items() if k not in set(ids)}
+        self._check_budget(candidate)
+        self.evidences = candidate
+        self.refresh_model_tools()
+        return {"removed": ids, "remaining": len(candidate)}
 
     def update_evidence(self, args: dict) -> None:
         fields = {"id", "type", "statement", "plan_step_id", "source_refs", "remove"}
