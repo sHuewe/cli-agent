@@ -86,6 +86,47 @@ Nur bei Schreibzugriff:
 | `make_directory(path)` | Erstellt ein Verzeichnis im Workspace. |
 | `copy_file(path_src, path_dst)` | Kopiert eine Datei innerhalb des Workspaces. |
 
+## Optionale Bildanalyse (Vision)
+
+Der eingebaute OS-MCP kann zusätzlich `analyze_image(path, question) -> str`
+anbieten. Der Agent wählt die Frage selbst; das Tool liefert die textuelle
+Antwort eines multimodalen Modells. Das Tool ist **nur** verfügbar, wenn
+`VISION_MODEL` in der Umgebung des gestarteten cli-agent-Prozesses gesetzt ist.
+
+Beispiel für OpenRouter (PowerShell):
+
+```powershell
+$env:VISION_MODEL = "z-ai/glm-5.3-flash"
+$env:VISION_BASE_URL = "https://openrouter.ai/api/v1"
+$env:VISION_API_KEY_ENV = "OPENROUTER_API_KEY"
+$env:OPENROUTER_API_KEY = "<TOKEN>"
+cli-agent --with-os-read
+```
+
+Die Variable `VISION_API_KEY_ENV` bezeichnet lediglich den Namen der
+Credential-Umgebungsvariable (Standard: `VISION_API_KEY`). Für OpenRouter
+müssen `openrouter.ai` in `network.model_allowed_hosts` und diese
+Credential-Variable für den Host/Provider `openai` in
+`[[model.credentials]].allowed_api_key_envs` der **Admin-Konfiguration**
+freigegeben sein. Ohne `VISION_BASE_URL` gilt die OpenRouter-API als
+Default. Für lokale OpenAI-kompatible Dienste ist auch eine Konfiguration
+ohne Credential möglich.
+
+**Der Aufruf benötigt auch mit `--with-os-read` immer eine gesonderte
+Tool-Freigabe.** Eine Freigabe erlaubt, dass der Bildinhalt und die frei
+formulierte Frage an den konfigurierten Modellserver übertragen werden.
+Anders als bei `read_file` bleiben die Bildbytes außerhalb des
+Textkontexts des Hauptagenten. Mit `--approve-tool os__analyze_image` lässt
+sich die Freigabe für den Prozesslauf ausdrücklich vorab erteilen.
+
+Unterstützt werden reguläre PNG-, JPEG- und WebP-Dateien (maximal
+8.000.000 Bytes), keine PDFs. Workspace-Pfadschutz, Secret- und
+Credential-Sperren und Hardlink-/Symlink-Prüfungen gelten ebenfalls.
+Die Frage ist auf 4.000 Zeichen, die Antwort auf 32.000 Zeichen begrenzt.
+HTTP-Redirects und Proxy-Umgebungsvariablen werden beim Vision-Aufruf
+nicht verwendet. Antwortinhalte sind **nicht vertrauenswürdig** und
+können trotz der Bildanalyse falsch oder unvollständig sein.
+
 ## Textsuche
 
 `search_text` liefert `path`, `line`, `column` und `text` pro Treffer. Zeile und

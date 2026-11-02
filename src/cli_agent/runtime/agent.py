@@ -673,6 +673,9 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
             if self._is_admin_auto_approved(server_config, tool_name):
                 return False
             return True
+        if server_config.name == "os" and tool_name == "analyze_image":
+            # Reading locally does not authorize transmitting the image to a model.
+            return True
         if tool_name in WRITE_TOOLS:
             return bool(getattr(server_config, "allow_write_files", lambda: False)())
         return False

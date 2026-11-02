@@ -436,6 +436,19 @@ class McpLifecycleMixin:
                     if built_in or not is_reserved_workspace_environment_name(key)
                 }
             )
+            if built_in and server_config.name == "os" and os.environ.get("VISION_MODEL"):
+                # Pass only the explicitly selected Vision credential to the
+                # built-in OS process; the generic stdio environment is sanitized.
+                import re
+
+                for name in ("VISION_MODEL", "VISION_BASE_URL", "VISION_API_KEY_ENV"):
+                    if name in os.environ:
+                        environment[name] = os.environ[name]
+                credential_name = os.getenv("VISION_API_KEY_ENV", "VISION_API_KEY")
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", credential_name):
+                    raise ValueError("VISION_API_KEY_ENV ist ungültig.")
+                if credential_name in os.environ:
+                    environment[credential_name] = os.environ[credential_name]
             if not built_in:
                 environment[WORKSPACE_ACCESS_ENV] = self.workspace_access
                 environment.pop(WORKSPACE_DIRECTORY_ENV, None)
