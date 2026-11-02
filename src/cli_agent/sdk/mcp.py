@@ -61,6 +61,11 @@ async def execute_direct_tool(runtime: Any, name: str, supplied: Any) -> DirectM
     if route is None:
         raise ValueError(f"Unknown or unavailable MCP tool: {name!r}")
     session, native_name, server = route
+    # This is an internal adapter to an LLM-backed knowledge sub-run, not
+    # an ordinary MCP endpoint. Invoking it would mutate conversation-run
+    # state and incur model usage outside ask().
+    if server.name == "knowledge_reentry":
+        raise ValueError("Internal knowledge reentry cannot be called directly")
     if server.name not in runtime._active_servers:
         raise ValueError(f"MCP server {server.name!r} is disabled")
     schema = runtime._tool_input_schema(name, phase="main")
@@ -92,8 +97,14 @@ async def execute_direct_tool(runtime: Any, name: str, supplied: Any) -> DirectM
         operation=f"MCP-Tool {name!r}",
     )
     text = enforce_mcp_tool_result_limit(_result_text(result))
+    structured = getattr(result, "structuredContent", None)
+    if structured is not None:
+        # The text block may be tiny even when a server returns an enormous
+        # structured payload. Check the complete JSON representation before
+        # copying or returning it, independently of the text limit.
+        enforce_mcp_tool_result_limit(json.dumps(structured, ensure_ascii=False))
     return DirectMcpResult(
         name=name, text=text,
         is_error=bool(getattr(result, "isError", False)),
-        structured_content=copy.deepcopy(getattr(result, "structuredContent", None)),
+        structured_content=copy.deepcopy(structured),
     )
