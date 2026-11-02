@@ -84,3 +84,24 @@ def test_section_output_cannot_replace_source(
             output=tmp_path / "doc.md",
         )
     assert (tmp_path / "doc.md").read_text(encoding="utf-8") == "# Important source\n"
+
+
+def test_sensitive_markdown_sources_are_rejected_before_read(tmp_path: Path) -> None:
+    from cli_agent.workflows.flow_filesystem_operations import markdown_sections
+    (tmp_path / "secrets").mkdir()
+    private = tmp_path / "secrets" / "doc.md"
+    private.write_text("# confidential-heading\n" + ("a\n" * 6000), encoding="utf-8")
+    with pytest.raises(ValueError, match="geschützt"):
+        markdown_sections(tmp_path, "secrets/doc.md", target_chars=4000)
+
+
+def test_many_headings_preserve_full_line_coverage(tmp_path: Path) -> None:
+    from cli_agent.workflows.flow_filesystem_operations import markdown_sections
+    source = tmp_path / "headings.md"
+    source.write_text("# x\n" * 50000, encoding="utf-8")
+    result = markdown_sections(tmp_path, "headings.md", target_chars=100000)
+    sections = result["sections"]
+    assert result["mode"] == "sections"
+    assert sections[0]["start_line"] == 1
+    assert sections[-1]["end_line"] == 50000
+    assert all(a["end_line"] + 1 == b["start_line"] for a, b in zip(sections, sections[1:]))
