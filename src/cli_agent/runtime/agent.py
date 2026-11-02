@@ -125,7 +125,7 @@ Dateipfade.
 """
 
 class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None, agent_timezone: str | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", workspace_access: str | None = None, agent_timezone: str | None = None, sdk_configless: bool = False) -> None:
         self.workspace_directory = workspace_directory.resolve()
         # Evidence is an agent capability, not a per-entry-point configuration.
         # No model request uses it unless relevant tools are available.
@@ -137,6 +137,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         self.max_tool_calls = max_tool_calls
         self.logging_config = logging_config or LoggingConfig()
         self.config_file = config_file
+        self._sdk_configless = sdk_configless
         self.agent_timezone = agent_timezone
         self._timezone = ZoneInfo(agent_timezone) if agent_timezone is not None else None
         self.dump_llm_context = dump_llm_context
@@ -677,16 +678,31 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         return False
 
     async def _approve_tool_call(self, tool_name: str, arguments: dict[str, Any]) -> bool:
+        # Events contain metadata only; approval arguments are sent solely to
+        # the trusted Python callback and never to general event consumers.
+        callback = getattr(self, "event_callback", None)
+        call_id = getattr(self, "_agui_approval_call_id", None)
+        if callback is not None:
+            await callback("approval_requested", {"tool": tool_name, "call_id": call_id})
+        decision: bool | str = False
         if self.approval_callback is None:
             logger.warning("tool_call_rejected name=%s reason=approval_callback_missing", tool_name)
-            return False
-        try:
-            decision = await self.approval_callback(tool_name, arguments)
-        except Exception as exc:
-            logger.error("tool_call_approval_failed name=%s error_type=%s", tool_name, type(exc).__name__)
-            return False
+        else:
+            try:
+                decision = await self.approval_callback(tool_name, arguments)
+            except Exception as exc:
+                logger.error("tool_call_approval_failed name=%s error_type=%s", tool_name, type(exc).__name__)
         if isinstance(decision, str) and decision.casefold() == "session":
             self._session_approved_tools.add(tool_name)
-            logger.info("tool_call_session_approved name=%s", tool_name)
-            return True
-        return bool(decision)
+            approved, status = True, "session"
+        elif decision is True:
+            approved, status = True, "approved"
+        else:
+            approved, status = False, "denied"
+            if decision is not False:
+                logger.warning("tool_call_rejected name=%s reason=invalid_approval_decision", tool_name)
+        if callback is not None:
+            await callback("approval_decided", {
+                "tool": tool_name, "call_id": call_id, "status": status,
+            })
+        return approved

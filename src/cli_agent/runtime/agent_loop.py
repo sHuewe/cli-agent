@@ -143,6 +143,17 @@ async def run_model_loop(
                     ),
                 })
         agent._dump_context(messages, phase=phase)
+        # Model lifecycle telemetry is an SDK opt-in. Existing CLI/API event
+        # consumers use a tool-only protocol and must remain unchanged.
+        model_event = (
+            getattr(agent, "event_callback", None)
+            if getattr(agent, "_sdk_event_reporting", False)
+            else None
+        )
+        model_call_id = f"model_{uuid.uuid4().hex}"
+        if model_event is not None:
+            await model_event("model_started", {"call_id": model_call_id, "phase": phase})
+        model_status = "success"
         try:
             message = await agent.model_client.chat(
                 messages=(
@@ -171,7 +182,14 @@ async def run_model_loop(
             messages.append(message)
             if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None:
                 agent._evidence_state.pending_error = None
+        except BaseException:
+            model_status = "error"
+            raise
         finally:
+            if model_event is not None:
+                await model_event("model_finished", {
+                    "call_id": model_call_id, "phase": phase, "status": model_status,
+                })
             for assistant_message, tool_call, tool_message in transient_rejections:
                 agent._discard_rejected_tool_call(
                     messages,
@@ -451,7 +469,6 @@ async def run_model_loop(
             frontend = getattr(agent, "_agui_frontend_tools", {})
             if frontend:
                 from cli_agent.interfaces.ag_ui_frontend_tools import FrontendToolCall, FrontendToolHandoff
-                import uuid
                 for call in tool_calls:
                     function = call.get("function") or {}
                     if function.get("name") in frontend and function.get("name") not in {

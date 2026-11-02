@@ -226,9 +226,14 @@ async def process_tool_calls(
                 # An AG-UI interrupt advertised this model-provided call ID
                 # before the decision. Even when denied, its tool lifecycle
                 # must have a correlated outcome in the resumed run.
-                if getattr(agent, "_agui_frontend_tools", None) is not None:
+                if (getattr(agent, "_agui_frontend_tools", None) is not None
+                        or getattr(agent, "_sdk_event_reporting", False)):
                     callback = getattr(agent, "event_callback", None)
                     if callback is not None:
+                        if getattr(agent, "_sdk_event_reporting", False):
+                            await callback("tool_started", {
+                                "call_id": event_id, "tool": exposed_name,
+                            })
                         await callback("tool_finished", {
                             "call_id": event_id, "tool": exposed_name,
                             "status": "denied",

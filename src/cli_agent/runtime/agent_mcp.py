@@ -95,7 +95,9 @@ class McpLifecycleMixin:
                 # The in-process knowledge reentry adapter has no stdio/HTTP
                 # connection to restart. Its route remains registered while
                 # disabled; only the active-server flag needs to change.
-                if server_name == "knowledge_reentry":
+                if server_name == "python" and getattr(server_config, "transport", "") == "python":
+                    pass
+                elif server_name == "knowledge_reentry":
                     if (
                         server_config is None
                         or not getattr(server_config, "built_in", False)
@@ -109,6 +111,9 @@ class McpLifecycleMixin:
                 self._active_servers.add(server_name)
         elif was_enabled:
             self._active_servers.discard(server_name)
+            if server_name == "python" and getattr(self._server_configs.get(server_name), "transport", "") == "python":
+                # Local SDK tools do not own an MCP transport.
+                pass
             server_stack = self._server_stacks.pop(server_name, None)
             if server_stack is not None:
                 try:
@@ -275,7 +280,27 @@ class McpLifecycleMixin:
             error = ValueError(f"Konfiguriertes OKF-Repository existiert nicht oder kein Verzeichnis: {options.repository}")
             if options.required: raise error
             logger.error("knowledge_server_disabled reason=%s", error); return
-        server_config = _RuntimeMcpServerConfig(name="okf", command="{python}", args=("-m", "cli_agent.okf_mcp_server.server", "--project-directory", str(options.repository), "--max-read-bytes", str(options.max_read_bytes), "--max-index-entries", str(options.max_index_entries), "--config-file", str(self.config_file)), compress_result=True, compress_min_chars=options.compress_min_chars)
+        # The embeddable SDK can supply its project configuration purely in
+        # Python. It must not force the OKF subprocess to load a machine-local
+        # config file; the runtime already resolved its effective options.
+        config_args = (
+            ("--sdk-configless",)
+            if getattr(self, "_sdk_configless", False)
+            else ("--config-file", str(self.config_file))
+        )
+        server_config = _RuntimeMcpServerConfig(
+            name="okf",
+            command="{python}",
+            args=(
+                "-m", "cli_agent.okf_mcp_server.server",
+                "--project-directory", str(options.repository),
+                "--max-read-bytes", str(options.max_read_bytes),
+                "--max-index-entries", str(options.max_index_entries),
+                *config_args,
+            ),
+            compress_result=True,
+            compress_min_chars=options.compress_min_chars,
+        )
         knowledge_stack = AsyncExitStack(); await knowledge_stack.__aenter__()
         try:
             session, instructions = await self._connect_server(knowledge_stack, server_config)
