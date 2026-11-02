@@ -38,6 +38,8 @@ def make_python_tool(
     if not isinstance(actual_name, str) or not _PY_NAME.fullmatch(actual_name):
         raise ValueError("Invalid Python tool name")
     signature = inspect.signature(function)
+    from typing import get_type_hints
+    hints = get_type_hints(function)
     fields: dict[str, Any] = {}
     for parameter in signature.parameters.values():
         if parameter.kind not in (
@@ -45,10 +47,10 @@ def make_python_tool(
             inspect.Parameter.KEYWORD_ONLY,
         ):
             raise TypeError("Python tools require named arguments")
-        if parameter.annotation is inspect.Parameter.empty:
+        if parameter.name not in hints:
             raise TypeError("Python tools require annotated arguments")
         default = ... if parameter.default is inspect.Parameter.empty else parameter.default
-        fields[parameter.name] = (parameter.annotation, default)
+        fields[parameter.name] = (hints[parameter.name], default)
     model = create_model(f"PythonTool_{actual_name}", **fields)
     model.model_json_schema()
     doc = description if description is not None else inspect.getdoc(function)
@@ -60,7 +62,9 @@ class PythonToolSession:
         self.tools = {tool.name: tool for tool in tools}
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolResult:
-        tool = self.tools[name]
+        tool = self.tools.get(name)
+        if tool is None:
+            return CallToolResult(content=[TextContent(type="text", text="Unknown Python tool")], isError=True)
         try:
             kwargs = tool.model.model_validate(arguments).model_dump()
             if inspect.iscoroutinefunction(tool.function):
