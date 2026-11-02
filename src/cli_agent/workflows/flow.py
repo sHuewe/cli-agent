@@ -1497,7 +1497,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
                         or ref not in {step.step_id for step in steps}):
                     raise ValueError("results_step muss ein voriger Flow-Step sein.")
-            if raw_json_operation["kind"] == "assemble_doctrine_plan":
+            if raw_json_operation["kind"] in {"assemble_doctrine_plan", "assemble_section_outlines"}:
                 ref = raw_json_operation.get("batches_step")
                 if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
                         or ref not in {step.step_id for step in steps}):
