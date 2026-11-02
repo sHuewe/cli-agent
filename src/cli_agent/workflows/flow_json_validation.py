@@ -430,6 +430,75 @@ def assemble_doctrine_concept_plan(
     return merged
 
 
+def _section_concept_metadata(
+    raw: dict[str, Any], *, section_id: str, index: int,
+) -> tuple[str, str, list[str]]:
+    """Validate local model metadata with useful errors and safe compatibility.
+
+    Previously saved local-outline checkpoints can have a scalar or omitted
+    tags field, or legitimately longer descriptive text. Preserve their
+    semantic content without silently inventing missing descriptions.
+    """
+    origin = f"Abschnitt {section_id!r}, Konzept {index}"
+    title = raw.get("title")
+    if title is None:
+        title = raw.get("name")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError(f"{origin}: title muss ein nichtleerer String sein.")
+    title = title.strip()
+    if len(title) > 500:
+        raise ValueError(
+            f"{origin}: title enthält {len(title)} Zeichen (maximal 500)."
+        )
+
+    description = raw.get("description")
+    if description is None:
+        description = raw.get("summary")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError(
+            f"{origin}: description muss ein nichtleerer String sein."
+        )
+    description = description.strip()
+    if len(description) > 4000:
+        raise ValueError(
+            f"{origin}: description enthält {len(description)} Zeichen "
+            "(maximal 4000)."
+        )
+
+    tags = raw.get("tags")
+    if tags is None:
+        tags = []
+    elif isinstance(tags, str):
+        tags = [tags]
+    elif not isinstance(tags, list):
+        raise ValueError(
+            f"{origin}: tags muss eine Liste von Strings sein."
+        )
+    if len(tags) > 40:
+        raise ValueError(
+            f"{origin}: tags enthält {len(tags)} Einträge (maximal 40)."
+        )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tag_index, value in enumerate(tags, start=1):
+        if not isinstance(value, str):
+            raise ValueError(
+                f"{origin}: tags[{tag_index}] muss ein String sein."
+            )
+        tag = value.strip()
+        if not tag:
+            continue
+        if len(tag) > 160:
+            raise ValueError(
+                f"{origin}: tags[{tag_index}] enthält {len(tag)} Zeichen "
+                "(maximal 160)."
+            )
+        if tag.casefold() not in seen:
+            seen.add(tag.casefold())
+            normalized.append(tag)
+    return title, description, normalized
+
+
 def assemble_section_outlines(
     tasks: Any, results: Any, *, source_path: str, source_slug: str,
 ) -> dict[str, Any]:
@@ -466,19 +535,15 @@ def assemble_section_outlines(
         local = _array(output.get("concepts"), "outlines.concepts")
         if len(local) > 100:
             raise ValueError("Abschnitts-Outline enthält zu viele Konzepte.")
-        for entry in local:
-            concept = _obj(entry, "outlines.concepts[]")
-            key = _slug(concept.get("topic_key"), "topic_key")
-            title = concept.get("title")
-            description = concept.get("description")
-            tags = concept.get("tags")
-            if (not isinstance(title, str) or not title.strip()
-                    or not isinstance(description, str) or not description.strip()
-                    or len(title) > 200 or len(description) > 1000
-                    or not isinstance(tags, list)
-                    or len(tags) > 20
-                    or any(not isinstance(tag, str) or len(tag) > 80 for tag in tags)):
-                raise ValueError("Ungültige Konzeptmetadaten in Abschnitts-Outline.")
+        for concept_index, entry in enumerate(local, start=1):
+            concept = _obj(entry, f"outlines[{tid}].concepts[{concept_index}]")
+            key = _slug(
+                concept.get("topic_key"),
+                f"Abschnitt {tid!r}, Konzept {concept_index}: topic_key",
+            )
+            title, description, tags = _section_concept_metadata(
+                concept, section_id=tid, index=concept_index,
+            )
             if key not in merged:
                 merged[key] = {
                     "id": key, "path": f"doctrines/{source_slug}/{key}.md",
