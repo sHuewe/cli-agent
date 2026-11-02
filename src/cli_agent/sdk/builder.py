@@ -62,7 +62,10 @@ def _admin_overrides(policy: AdminConfig, overrides: dict[str, Any]) -> AdminCon
             raise TypeError("web_providers benötigt WebProviderConfig-Objekte.")
         result = replace(result, web=WebPolicy(tuple(providers)))
     for index, rule in enumerate(result.model_credentials):
-        if _model_credential_rule(asdict(rule), index) != rule:
+        definition = asdict(rule)
+        # TOML provides lists; frozen dataclass fields intentionally use tuples.
+        definition["allowed_api_key_envs"] = list(rule.allowed_api_key_envs)
+        if _model_credential_rule(definition, index) != rule:
             raise ValueError("Ungültige model_credentials-Konfiguration.")
         if rule.host not in result.network.model_allowed_hosts:
             raise ValueError("Credential-Host muss in model_allowed_hosts enthalten sein.")
