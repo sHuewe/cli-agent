@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from cli_agent.settings.config import load_config
+from cli_agent.settings.config import AppConfig, load_config
 from cli_agent.platform.logging_setup import configure_logging
 from .repository import OkfRepository, OkfRepositoryError
 
@@ -99,12 +99,20 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Configuration file",
     )
+    parser.add_argument(
+        "--sdk-configless",
+        action="store_true",
+        help="Use SDK defaults without reading a project configuration file.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    config = load_config(path=args.config_file)
+    sdk_configless = bool(getattr(args, "sdk_configless", False))
+    if sdk_configless and args.config_file is not None:
+        raise ValueError("--sdk-configless und --config-file sind nicht kombinierbar.")
+    config = AppConfig() if sdk_configless else load_config(path=args.config_file)
     configure_logging(
         config.logging,
         logger=logger,
