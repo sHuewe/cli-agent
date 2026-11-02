@@ -678,16 +678,31 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         return False
 
     async def _approve_tool_call(self, tool_name: str, arguments: dict[str, Any]) -> bool:
+        # Events contain metadata only; approval arguments are sent solely to
+        # the trusted Python callback and never to general event consumers.
+        callback = getattr(self, "event_callback", None)
+        call_id = getattr(self, "_agui_approval_call_id", None)
+        if callback is not None:
+            await callback("approval_requested", {"tool": tool_name, "call_id": call_id})
+        decision: bool | str = False
         if self.approval_callback is None:
             logger.warning("tool_call_rejected name=%s reason=approval_callback_missing", tool_name)
-            return False
-        try:
-            decision = await self.approval_callback(tool_name, arguments)
-        except Exception as exc:
-            logger.error("tool_call_approval_failed name=%s error_type=%s", tool_name, type(exc).__name__)
-            return False
+        else:
+            try:
+                decision = await self.approval_callback(tool_name, arguments)
+            except Exception as exc:
+                logger.error("tool_call_approval_failed name=%s error_type=%s", tool_name, type(exc).__name__)
         if isinstance(decision, str) and decision.casefold() == "session":
             self._session_approved_tools.add(tool_name)
-            logger.info("tool_call_session_approved name=%s", tool_name)
-            return True
-        return bool(decision)
+            approved, status = True, "session"
+        elif decision is True:
+            approved, status = True, "approved"
+        else:
+            approved, status = False, "denied"
+            if decision is not False:
+                logger.warning("tool_call_rejected name=%s reason=invalid_approval_decision", tool_name)
+        if callback is not None:
+            await callback("approval_decided", {
+                "tool": tool_name, "call_id": call_id, "status": status,
+            })
+        return approved
