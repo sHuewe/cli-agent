@@ -66,7 +66,14 @@ class PythonToolSession:
         if tool is None:
             return CallToolResult(content=[TextContent(type="text", text="Unknown Python tool")], isError=True)
         try:
-            kwargs = tool.model.model_validate(arguments).model_dump()
+            validated = tool.model.model_validate(arguments)
+            # model_dump() recursively converts nested models and dataclasses
+            # into dictionaries. Preserve the Python objects constructed by
+            # validation: they match the registered function's annotations.
+            kwargs = {
+                field: getattr(validated, field)
+                for field in tool.model.model_fields
+            }
             if inspect.iscoroutinefunction(tool.function):
                 value = await tool.function(**kwargs)
             else:
