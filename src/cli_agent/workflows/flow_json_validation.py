@@ -345,7 +345,7 @@ def prepare_doctrine_concept_batches(
 
 
 def assemble_doctrine_concept_plan(
-    structure: Any, results: Any,
+    structure: Any, results: Any, batches: Any,
 ) -> dict[str, Any]:
     """Merge exact, complete evidence for each globally planned concept."""
     plan = _obj(structure, "structure")
@@ -359,18 +359,37 @@ def assemble_doctrine_concept_plan(
     expected = {concept["id"]: concept for concept in plan["concepts"]}
     received: dict[str, dict[str, Any]] = {}
     source = _canonical_source_path(plan.get("source_path"))
+    expected_groups: dict[str, dict[str, Any]] = {}
+    for batch in _array(_obj(batches, "batches").get("batches"), "batches.batches"):
+        group = _obj(batch, "batches.batches[]")
+        gid = group.get("id")
+        if not isinstance(gid, str) or gid in expected_groups:
+            raise ValueError("Ungültige oder doppelte Batch-ID.")
+        if group.get("source_path") != source:
+            raise ValueError("Batch verweist auf eine andere Doktrin.")
+        expected_groups[gid] = group
+    seen_groups: set[str] = set()
     for entry in records:
-        item = _obj(
-            _obj(entry, "detail_results.iterations[]").get("output"),
-            "detail_results.iterations[].output",
-        )
+        envelope = _obj(entry, "detail_results.iterations[]")
+        group_id = envelope.get("id")
+        if group_id not in expected_groups or group_id in seen_groups:
+            raise ValueError("Detailplanung enthält unbekannte oder doppelte Batch-ID.")
+        seen_groups.add(group_id)
+        group = expected_groups[group_id]
+        item = _obj(envelope.get("output"), "detail_results.iterations[].output")
         if item.get("status") != "ok":
             raise ValueError("Unvollständige Detailplanung.")
         details = _array(item.get("concepts"), "detail_results[].concepts")
+        allowed_group_ids = {
+            _obj(concept, "batches.concepts[]").get("id")
+            for concept in _array(group.get("concepts"), "batches.concepts")
+        }
+        if len(details) != len(allowed_group_ids):
+            raise ValueError("Batch enthält nicht alle vorgesehenen Konzepte.")
         for detail in details:
             concept = _obj(detail, "detail_results[].concepts[]")
             identity = concept.get("id")
-            if identity not in expected or identity in received:
+            if identity not in expected or identity not in allowed_group_ids or identity in received:
                 raise ValueError("Unbekanntes oder mehrfach geplantes Konzept.")
             original = expected[identity]
             for field in ("path", "title", "description", "type", "tags"):
@@ -387,7 +406,16 @@ def assemble_doctrine_concept_plan(
                 if (type(begin) is not int or type(end) is not int
                         or begin < 1 or end < begin):
                     raise ValueError("Ungültiger Quellenbereich.")
+                if group.get("sections"):
+                    matching = [
+                        section for section in group["sections"]
+                        if section["start_line"] <= begin <= end <= section["end_line"]
+                    ]
+                    if not matching:
+                        raise ValueError("Quellenbereich liegt außerhalb der zugewiesenen Abschnitte.")
             received[identity] = concept
+    if set(seen_groups) != set(expected_groups):
+        raise ValueError("Detailplanung enthält nicht alle Batches.")
     if set(received) != set(expected):
         raise ValueError("Detailplanung enthält nicht alle Konzepte.")
     merged = dict(plan)
