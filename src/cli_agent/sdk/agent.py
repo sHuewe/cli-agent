@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from cli_agent.platform.execution import OneShotRunOptions, prepare_agent
+from cli_agent.platform.local_commands import classify_local_command
 from cli_agent.settings.config import AppConfig
 from cli_agent.settings.admin_config import AdminConfig
 from .events import AgentEvent, ToolCallRecord
@@ -163,7 +164,15 @@ class Agent:
             calls.append(ToolCallRecord(name=name, call_id=call_id, status="interrupted"))
         history = usage_history(client)
         parsed = None
-        if getattr(runtime, "response_format", "text") == "json":
+        # The runtime handles commands locally and returns human-readable
+        # status (or syntax feedback), even in JSON response mode. Keep the
+        # same conservative classifier as the runtime: prose must still be
+        # validated as a structured model response.
+        local_command = classify_local_command(prompt)
+        if (
+            getattr(runtime, "response_format", "text") == "json"
+            and not local_command.is_local
+        ):
             def reject_constant(value: str) -> None:
                 raise ValueError(f"Invalid JSON constant: {value}")
             parsed = json.loads(answer, parse_constant=reject_constant)
