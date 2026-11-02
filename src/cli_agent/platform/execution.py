@@ -533,6 +533,23 @@ def prepare_agent(
         workspace=workspace,
     )
 
+    if project_config is not None:
+        # Built-in subprocesses must not load an unrelated default config.toml:
+        # the SDK has already resolved the effective project configuration.
+        # Access and PDF limits are explicitly passed in the subprocess argv.
+        servers = []
+        for server in config.mcp_servers:
+            if server.built_in and server.name in {OS_MCP_SERVER_NAME, DATA_MCP_SERVER_NAME}:
+                args = list(server.args)
+                marker = args.index("--config-file")
+                del args[marker:marker + 2]
+                args.append("--sdk-configless")
+                if server.name == OS_MCP_SERVER_NAME:
+                    args.extend(("--max-pdf-pages", str(config.max_pdf_pages)))
+                server = replace(server, args=tuple(args))
+            servers.append(server)
+        config = replace(config, mcp_servers=tuple(servers))
+
     if options.prepared_file_contexts or options.prepared_output_target is not None:
         if options.context_files or options.output is not None:
             raise ValueError(
