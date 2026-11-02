@@ -97,6 +97,7 @@ class Agent:
 
         old_callback = getattr(runtime, "event_callback", None)
         runtime.event_callback = emit
+        runtime._sdk_event_reporting = True
         await emit("run_started", {})
         status = "success"
         try:
@@ -107,6 +108,7 @@ class Agent:
         finally:
             await emit("run_finished", {"status": status})
             runtime.event_callback = old_callback
+            runtime._sdk_event_reporting = False
         for call_id, name in open_tools.items():
             calls.append(ToolCallRecord(name=name, call_id=call_id, status="interrupted"))
         return AgentResult(answer=answer, tool_calls=tuple(calls), events=tuple(events))
