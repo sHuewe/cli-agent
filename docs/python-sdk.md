@@ -41,29 +41,202 @@ with an `answer` string. The session retains conversation history and evidence
 between calls. MCP connections live on a single worker task even when notebook
 cells submit their prompts in separate tasks.
 
-## Separate configurations
+## Configuration API: exact signatures and accepted options
 
-- No `with_admin_config` call: strict `AdminConfig()` defaults; the
-  machine-wide policy is **not** read.
-- `with_admin_config()`: explicitly load the system-wide admin policy.
-- `with_admin_config(path="...")`: load that exact policy file; nonexistent
-  explicit files are rejected.
-- `with_admin_config(model_allowed_hosts=[...], ...)`: build a policy from
-  strict defaults without reading any file.
-- `with_admin_config(path="...", model_allowed_hosts=[...])`: load then
-  replace the named settings.
-- `with_project_config()`: load the regular default project config.
-- `with_project_config(path="...")`: load a specific project config.
-- `with_project_config(model="...", workspace="...", ...)`: start from
-  project defaults and override the given settings without reading a file.
+The real Python method signatures in `cli_agent.sdk.builder.AgentBuilder` are:
 
-Host-list overrides **replace** the previous list. For richer policies,
-`model_credentials`, `trusted_servers`, and `web_providers` accept the
-respective existing configuration dataclasses.
+```python
+def with_admin_config(
+    self, *, path: str | Path | None = None, **overrides: Any
+) -> AgentBuilder: ...
 
-The SDK does not sandbox arbitrary code running in the same Python interpreter.
-It enforces the selected runtime policy against actions of the agent/LLM.
-External tool registration from Python is reserved for a subsequent change.
+def with_project_config(
+    self, *, path: str | Path | None = None, **overrides: Any
+) -> AgentBuilder: ...
+```
+
+Both accept keyword-only arguments. **The individual options below are
+`**overrides` keys, not explicit parameters in the Python signatures.**
+Unknown keys raise `TypeError`.
+
+### Loading files versus constructing configurations in Python
+
+| Call | Behavior |
+| --- | --- |
+| No `with_admin_config` call | Use restrictive `AdminConfig()`; do **not** read the machine-wide admin file |
+| `.with_admin_config()` | Explicitly load the machine-wide admin file |
+| `.with_admin_config(path="admin.toml")` | Load the specified admin file |
+| `.with_admin_config(model_allowed_hosts=[...])` | Construct an admin policy from restrictive defaults, without reading a file |
+| `.with_admin_config(path="admin.toml", model_allowed_hosts=[...])` | Load the file and replace the named fields |
+| `.with_project_config()` | Load the normal default project config |
+| `.with_project_config(path="config.toml")` | Load the specified project config |
+| `.with_project_config(model="...", workspace="...")` | Construct from `AppConfig()` defaults, without reading the project config file |
+| `.with_project_config(path="config.toml", model="...")` | Load the file and apply the specified overrides |
+
+Administrative policy selection in the SDK does **not** change the mandatory
+system policy used by `cli-agent`, `cli-agent-api` and `cli-agent-flow`.
+Host-list overrides **replace** the existing list rather than appending.
+
+### `with_admin_config(**overrides)`
+
+Exactly these six keys are accepted:
+
+| Key | Expected Python value | Purpose |
+| --- | --- | --- |
+| `model_allowed_hosts` | `list[str] \| tuple[str, ...]` | Hostnames permitted for LLM API requests |
+| `mcp_allowed_hosts` | `list[str] \| tuple[str, ...]` | Hostnames permitted for networked MCP connections |
+| `web_allowed_hosts` | `list[str] \| tuple[str, ...]` | Hostnames permitted for configured web providers |
+| `model_credentials` | `list[ModelCredentialRule] \| tuple[ModelCredentialRule, ...]` | Whitelisted credential environment-variable names per model provider/host |
+| `trusted_servers` | `list[TrustedMcpServer] \| tuple[TrustedMcpServer, ...]` | Trusted MCP server definitions |
+| `web_providers` | `list[WebProviderConfig] \| tuple[WebProviderConfig, ...]` | Administrator-defined web provider connections |
+
+The dataclasses `ModelCredentialRule`, `TrustedMcpServer` and
+`WebProviderConfig` come from `cli_agent.settings.admin_config`.
+Host lists contain **hostnames only** (for example `"openrouter.ai"`), not
+URLs, schemes or paths. For external model API credentials, a matching
+`ModelCredentialRule(provider="openai", host="...", allowed_api_key_envs=(...))`
+is required in addition to `model_allowed_hosts`.
+
+### `with_project_config(**overrides)`
+
+The following keys modify project configuration. The model-related fields
+correspond to `ModelConfig` in `cli_agent.settings.config`.
+
+| Key | Expected Python value | Notes / defaults |
+| --- | --- | --- |
+| `provider` | `str` | `"ollama"` (default) or `"openai"` |
+| `model` | `str` | Model identifier; default `"qwen3.5:9b"` |
+| `base_url` | `str` | Model API root URL; default `"http://localhost:11434"` |
+| `api_key_env` | `str \| None` | **Environment variable name**, not the secret; default `None` |
+| `timeout` | `float` | Model request timeout in seconds; default `120.0` |
+| `headers` | `dict[str, str]` | Extra model HTTP headers; `Authorization` is not accepted here |
+| `context_length` | `int \| None` | Positive context size or `None` |
+| `timezone` | `str \| None` | Agent's configured timezone |
+| `mcp_servers` | `list[McpServerConfig] \| tuple[McpServerConfig, ...]` | Project MCP definitions |
+| `okf` | `OkfConfig \| None` | Optional OKF knowledge configuration |
+| `knowledge_vector` | `VectorKnowledgeConfig \| None` | Optional vector knowledge configuration |
+| `logging` | `LoggingConfig` | Project logging configuration |
+| `dump_llm_context` | `bool` | Enable local context diagnostics; default `False` |
+| `max_pdf_pages` | `int` | Maximum PDF pages; default `100` |
+
+These additional keys are accepted by `with_project_config`, but are
+**SDK execution options**, forwarded to the runtime rather than stored as
+`AppConfig` fields:
+
+| Key | Expected Python value | Meaning |
+| --- | --- | --- |
+| `workspace` | `str \| Path` | Working directory; defaults to the process current working directory |
+| `workspace_access` | `str \| None` | `"none"`, `"read"`, or `"write"` |
+| `with_data` | `bool` | Enable built-in Data MCP |
+| `with_mcp` | `tuple[str, ...]` | Named MCP servers to enable from admin configuration |
+| `response_format` | `str` | `"text"` (default) or `"json"` |
+| `context_files` | `tuple[Path, ...]` | Explicit local file contexts |
+| `excluded_paths` | `tuple[Path, ...]` | Paths excluded from tool access |
+| `mutation_protected_paths` | `tuple[Path, ...]` | Paths protected against changes |
+| `retry_policy` | `ModelRetryPolicy \| None` | Model retry policy |
+| `approval_callback` | `ApprovalCallback \| None` | Async approval function; prefer `.with_approval_callback(...)` |
+| `user_message_callback` | `Callable[[str, str \| None], Awaitable[None]] \| None` | Messages sent to the user |
+| `add_web_context` | `tuple[str, ...]` | URLs to supply as context during SDK initialization |
+| `dump_file_prefix` | `str \| None` | Diagnostic dump filename prefix |
+
+The configuration dataclasses are defined in
+`cli_agent.settings.config`. `ModelRetryPolicy` is defined in
+`cli_agent.models.model`. The builder validates model and policy settings;
+values forwarded as runtime options are also subject to runtime validation.
+
+### API keys: external OpenAI-compatible API (example: OpenRouter)
+
+**Do not pass the secret as `api_key`, and do not embed it in
+`base_url` or `headers`.** The supported mechanism is `api_key_env`.
+Set the environment variable in the shell or your secret manager **before
+starting the agent**:
+
+```bash
+# Linux/macOS; set the real value in your environment, not in source control:
+export OPENROUTER_API_KEY="your-secret-from-your-secret-manager"
+```
+
+PowerShell equivalent: `$env:OPENROUTER_API_KEY = "your-secret"`.
+For example, if the variable has been supplied by your environment:
+
+```python
+from cli_agent.sdk import AgentBuilder
+from cli_agent.settings.admin_config import ModelCredentialRule
+
+agent = (
+    AgentBuilder()
+    .with_admin_config(
+        model_allowed_hosts=["localhost", "openrouter.ai"],
+        model_credentials=[
+            ModelCredentialRule(
+                provider="openai",
+                host="openrouter.ai",
+                allowed_api_key_envs=("OPENROUTER_API_KEY",),
+            )
+        ],
+    )
+    .with_project_config(
+        provider="openai",
+        model="openai/gpt-4o-mini",
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        workspace=".",
+        workspace_access="read",
+    )
+    .build()
+)
+
+async with agent:
+    result = await agent.ask("Hello")
+    print(result.answer)
+```
+
+The two layers have separate responsibilities:
+
+- **Project config:** `api_key_env="OPENROUTER_API_KEY"` tells the model
+  client which environment variable to read. It does **not** contain the key.
+- **Admin config:** `model_allowed_hosts` allows the endpoint;
+  `model_credentials` authorizes sending that named variable to the exact
+  `provider="openai"` / `host="openrouter.ai"` combination.
+
+The library reads the environment variable when constructing the model
+client during `agent.start()`. If it is unset or empty, startup fails.
+If the external host is not allowed, or its credential variable is not
+whitelisted for the provider/host, startup also fails. No secret is stored
+in the project TOML or the builder arguments.
+
+For the local Ollama default, no API key is needed:
+
+```python
+agent = (
+    AgentBuilder()
+    .with_project_config(
+        provider="ollama",
+        model="qwen3.5:9b",
+        base_url="http://localhost:11434",
+    )
+    .build()
+)
+```
+
+Localhost model endpoints do not require a remote-host
+`ModelCredentialRule`. If using an OpenAI-compatible **local** model
+endpoint that requires authentication, set `provider="openai"` and
+`api_key_env="NAME_OF_LOCAL_KEY_VARIABLE"`; localhost is exempt from
+the remote credential allowlist.
+
+### Other builder signatures
+
+```python
+def with_event_callback(self, callback: Any) -> AgentBuilder: ...
+def with_default_event_callback(self, *, verbose: bool = False) -> AgentBuilder: ...
+def with_approval_callback(self, callback: Any) -> AgentBuilder: ...
+def register_tool(
+    self, function: Any, *, name: str | None = None,
+    description: str | None = None,
+) -> AgentBuilder: ...
+def build(self) -> Agent: ...
+```
 
 ## Structured progress, tool history and approvals
 
