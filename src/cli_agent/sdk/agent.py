@@ -17,6 +17,7 @@ from cli_agent.settings.admin_config import AdminConfig
 from .events import AgentEvent, ToolCallRecord
 from .usage import UsageSummary, summarize_usage, usage_history
 from .tools import ToolInfo, available_tools
+from .python_tools import register_python_tools
 from .state import SessionState, session_state
 from .artifacts import AgentArtifact, MAX_SDK_ARTIFACTS_PER_RUN, MAX_SDK_ARTIFACT_BYTES_PER_RUN
 
@@ -36,13 +37,14 @@ class Agent:
     def __init__(
         self, *, project_config: AppConfig, admin_config: AdminConfig,
         project_path: Path | None, run_options: dict[str, Any],
-        event_callback: Any = None,
+        event_callback: Any = None, python_tools: tuple = (),
     ) -> None:
         self._config = project_config
         self._policy = admin_config
         self._config_path = project_path
         self._options = dict(run_options)
         self._event_callback = event_callback
+        self._python_tools = python_tools
         self._event_queue: asyncio.Queue[AgentEvent | None] | None = None
         self._event_worker: asyncio.Task[None] | None = None
         self._worker_task: asyncio.Task[None] | None = None
@@ -210,6 +212,7 @@ class Agent:
                 opts, project_config=self._config, admin_config=self._policy,
             )
             async with prepared.agent as runtime:
+                register_python_tools(runtime, self._python_tools)
                 for url in opts.add_web_context:
                     await runtime.ask(f"add_web_context {url}")
                 self._usage_start = len(usage_history(getattr(runtime, "model_client", None)))
