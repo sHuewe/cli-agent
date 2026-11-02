@@ -67,9 +67,16 @@ class Agent:
             if event is None:
                 return
             try:
-                value = self._event_callback(event)
-                if inspect.isawaitable(value):
-                    await value
+                callback = self._event_callback
+                if inspect.iscoroutinefunction(callback):
+                    await callback(event)
+                else:
+                    # A synchronous presenter may block on console I/O or
+                    # telemetry. Run it outside the MCP-owning event loop.
+                    # Await each callback to preserve event delivery order.
+                    value = await asyncio.to_thread(callback, event)
+                    if inspect.isawaitable(value):
+                        await value
             except Exception:
                 logging.getLogger(__name__).exception("SDK event callback failed")
 
