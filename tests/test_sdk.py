@@ -979,3 +979,52 @@ def test_sdk_in_memory_okf_relative_path_resolves_from_workspace(tmp_path):
     with_file_runtime = CliAgent(tmp_path, object(), (), okf=prepared_with_file.config.okf,
                                  config_file=captured["config_file"])
     assert with_file_runtime._okf_options.repository == (project_file.parent / "knowledge").resolve()
+
+
+def test_sdk_default_project_config_retains_path_for_relative_okf(monkeypatch, tmp_path):
+    from cli_agent.settings.config import AppConfig, OkfConfig
+    from dataclasses import replace
+    from cli_agent.platform.execution import (
+        ExecutionDependencies, OneShotRunOptions, prepare_agent,
+    )
+    from cli_agent.runtime.agent import CliAgent
+
+    configuration_directory = tmp_path / "settings"
+    configuration_directory.mkdir()
+    default_file = configuration_directory / "config.toml"
+    default_file.write_text("[okf]\nrepository = 'knowledge'\n")
+    repository = configuration_directory / "knowledge"
+    repository.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    monkeypatch.setattr("cli_agent.sdk.builder.default_config_file", lambda: default_file)
+    monkeypatch.setattr(
+        "cli_agent.sdk.builder.load_config",
+        lambda path=None: replace(AppConfig(), okf=OkfConfig(repository="knowledge")),
+    )
+    loaded = AgentBuilder().with_project_config().build()
+    assert loaded._config_path == default_file
+
+    configless = AgentBuilder().with_project_config(workspace=workspace, okf=OkfConfig(repository="knowledge")).build()
+    assert configless._config_path is None
+
+    captured = {}
+    class FakeAgent:
+        def __init__(self, _workspace, _model_client, _servers, **kwargs):
+            captured.update(kwargs)
+
+    deps = ExecutionDependencies(
+        configure_logging=lambda *_: None,
+        create_model_client=lambda *_a, **_k: object(),
+        agent_type=FakeAgent,
+    )
+    prepared = prepare_agent(
+        OneShotRunOptions(workspace=workspace, prompt="test", config_file=loaded._config_path),
+        dependencies=deps,
+        project_config=loaded._config,
+        admin_config=AdminConfig(),
+    )
+    runtime = CliAgent(workspace, object(), (), okf=prepared.config.okf,
+                       config_file=captured["config_file"])
+    assert runtime._okf_options.repository == repository.resolve()
