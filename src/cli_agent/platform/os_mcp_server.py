@@ -8,7 +8,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from cli_agent.security.mcp_path_policy import read_path_policy
-from cli_agent.settings.config import McpServerConfig, default_config_file, load_config
+from cli_agent.settings.config import AppConfig, McpServerConfig, default_config_file, load_config
 from cli_agent.platform.logging_setup import configure_logging
 from cli_agent.platform.os_operations import AllowedPath, Workspace, WorkspaceError
 
@@ -211,10 +211,21 @@ def parse_args() -> argparse.Namespace:
         help="Project workspace directory fixed for this MCP process",
     )
     parser.add_argument(
+        "--sdk-configless",
+        action="store_true",
+        help="Use in-memory SDK defaults rather than loading a user config file.",
+    )
+    parser.add_argument(
         "--config-file",
         type=Path,
         default=None,
         help="Configuration file",
+    )
+    parser.add_argument(
+        "--max-pdf-pages",
+        type=int,
+        default=None,
+        help="Effective SDK page limit when --sdk-configless is enabled.",
     )
     parser.add_argument(
         "--access",
@@ -285,7 +296,14 @@ def resolve_mcp_config(
 
 def main() -> None:
     args = parse_args()
-    config = load_config(path=args.config_file)
+    if args.sdk_configless and args.config_file is not None:
+        raise ValueError("--sdk-configless und --config-file sind nicht kombinierbar.")
+    config = AppConfig() if args.sdk_configless else load_config(path=args.config_file)
+    if args.max_pdf_pages is not None:
+        if not args.sdk_configless or not 1 <= args.max_pdf_pages <= 2000:
+            raise ValueError("--max-pdf-pages ist nur für SDK-Modus (1-2000) erlaubt.")
+        from dataclasses import replace as _replace
+        config = _replace(config, max_pdf_pages=args.max_pdf_pages)
     effective_config_file = (
         args.config_file.expanduser()
         if args.config_file is not None
