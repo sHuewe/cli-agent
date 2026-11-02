@@ -84,8 +84,11 @@ sessionweit bestehen, der Plan nicht.
 Quellen werden mit kurzen S-Referenzen S1, S2, ... bezeichnet. Verwende
 nur Backend-Referenzen in source_refs, niemals technische tool_call_id-Werte.
 Verknüpfe nur die wenigen Quellen, die die konkrete Aussage tragen.
-Die Backend-Provenienz bleibt vollständig; Dateiartefakte früherer Aufgaben
-können bereits gelöscht sein und dürfen nicht nochmals gelesen werden.
+Die Backend-Provenienz bleibt vollständig; source_artifacts im Evidence-
+State enthält noch gültige, verifizierte workspace_path/records_path-Paare zu
+den source_refs. Verwende diese bei weiteren Datenoperationen, statt Dateipfade
+zu rekonstruieren. Dateiartefakte früherer Aufgaben können bereits gelöscht
+sein und dürfen nicht nochmals gelesen werden.
 
 Fasse relevante Erkenntnisse, Kennzahlen, Rahmenbedingungen und
 Unsicherheiten knapp zusammen, keine Preview-Zeilen oder Rohdaten. Trenne
