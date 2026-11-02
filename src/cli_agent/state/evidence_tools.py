@@ -22,8 +22,33 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}\Z")
 class EvidenceInputError(ValueError):
     pass
 
+def source_artifacts_from_evidences(entries: dict) -> dict[str, dict[str, Any]]:
+    """Expose only live, backend-verified artifacts cited by saved evidences.
+
+    Each source_ref appears at most once, regardless of how many findings cite
+    it. No model-supplied paths or unrelated tool results enter this mapping.
+    """
+    artifacts: dict[str, dict[str, Any]] = {}
+    for evidence in entries.values():
+        for source in evidence["tool_calls"]:
+            ref = source.get("source_ref")
+            path = source.get("workspace_path")
+            if (not isinstance(ref, str) or not isinstance(path, str)
+                    or not path or source.get("artifact_expired")):
+                continue
+            entry: dict[str, Any] = {"workspace_path": path}
+            records_path = source.get("records_path")
+            if isinstance(records_path, str):
+                entry["records_path"] = records_path
+            record_sets = source.get("record_sets")
+            if isinstance(record_sets, list):
+                entry["record_sets"] = copy.deepcopy(record_sets)
+            artifacts[ref] = entry
+    return artifacts
+
+
 def visible_evidence_state(entries: dict, plan: dict | None) -> dict:
-    """Exact model-facing evidence representation, without internal provenance."""
+    """Model-facing findings and their live artifact pointers, not raw provenance."""
     visible = [
         {
             "id": item["id"],
@@ -41,6 +66,9 @@ def visible_evidence_state(entries: dict, plan: dict | None) -> dict:
     state: dict[str, Any] = {"evidences": visible}
     if plan is not None:
         state["plan"] = copy.deepcopy(plan)
+    artifacts = source_artifacts_from_evidences(entries)
+    if artifacts:
+        state["source_artifacts"] = artifacts
     return state
 
 
