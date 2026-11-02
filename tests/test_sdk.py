@@ -101,3 +101,67 @@ def test_sdk_persistent_worker_preserves_agent_state(monkeypatch, tmp_path):
     asyncio.run(scenario())
     assert len(created) == 1
     assert created[0].prompts == ["first", "second"]
+
+
+def test_sdk_credential_dataclass_tuple_is_accepted():
+    from cli_agent.settings.admin_config import ModelCredentialRule
+    policy = (
+        AgentBuilder()
+        .with_admin_config(
+            model_allowed_hosts=["localhost", "api.example.com"],
+            model_credentials=[
+                ModelCredentialRule(
+                    provider="openai",
+                    host="api.example.com",
+                    allowed_api_key_envs=("OPENAI_API_KEY",),
+                )
+            ],
+        )
+        .build()
+        ._policy
+    )
+    assert policy.model_credentials[0].allowed_api_key_envs == ("OPENAI_API_KEY",)
+
+
+def test_sdk_builtin_mcp_uses_configless_mode_and_effective_pdf_limit(tmp_path):
+    from cli_agent.platform.execution import (
+        ExecutionDependencies, OneShotRunOptions, prepare_agent,
+    )
+    from cli_agent.settings.config import AppConfig
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, _workspace, _model_client, servers, **kwargs):
+            captured["servers"] = servers
+
+    deps = ExecutionDependencies(
+        load_config=lambda _path: (_ for _ in ()).throw(
+            AssertionError("No project file should be loaded")
+        ),
+        load_admin_config=lambda: (_ for _ in ()).throw(
+            AssertionError("No system policy should be loaded")
+        ),
+        configure_logging=lambda _config: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+    prepared = prepare_agent(
+        OneShotRunOptions(
+            workspace=tmp_path,
+            prompt="test",
+            workspace_access="read",
+            with_data=True,
+        ),
+        dependencies=deps,
+        project_config=__import__("dataclasses").replace(
+            AppConfig(), max_pdf_pages=217,
+        ),
+        admin_config=AdminConfig(),
+    )
+    servers = {s.name: s for s in prepared.config.mcp_servers}
+    assert set(servers) == {"os", "data"}
+    for server in servers.values():
+        assert "--sdk-configless" in server.args
+        assert "--config-file" not in server.args
+    os_args = servers["os"].args
+    assert os_args[os_args.index("--max-pdf-pages") + 1] == "217"
