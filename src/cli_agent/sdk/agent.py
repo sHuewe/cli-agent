@@ -18,6 +18,7 @@ from .events import AgentEvent, ToolCallRecord
 from .usage import UsageSummary, summarize_usage, usage_history
 from .tools import ToolInfo, available_tools
 from .python_tools import register_python_tools
+from .context import add_reference_context
 from .state import SessionState, session_state
 from .artifacts import AgentArtifact, MAX_SDK_ARTIFACTS_PER_RUN, MAX_SDK_ARTIFACT_BYTES_PER_RUN
 
@@ -251,6 +252,8 @@ class Agent:
                                 await runtime.enable_server(server)
                             self._usage_start = len(usage_history(getattr(runtime, "model_client", None)))
                             result = None
+                        elif action == "add_context":
+                            result = add_reference_context(runtime, payload[0], payload[1])
                         elif action == "list_tools":
                             result = available_tools(runtime)
                         elif action == "get_state":
@@ -329,6 +332,13 @@ class Agent:
             ):
                 self._worker_task.cancel()
             raise
+
+    async def add_context(self, value: Any, *, name: str | None = None) -> str:
+        """Add string-converted reference data for subsequent queries."""
+        if name is not None and (not isinstance(name, str) or not name.strip()):
+            raise ValueError("Context name must be a nonempty string")
+        text = str(value)
+        return await self._request("add_context", (text, name))
 
     async def reset_history(self) -> None:
         """Forget conversation and evidence while keeping session approvals."""
