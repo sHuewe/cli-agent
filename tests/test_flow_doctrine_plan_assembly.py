@@ -66,7 +66,7 @@ def test_missing_or_duplicate_concepts_rejected():
     with pytest.raises(ValueError, match="mehrfach"):
         assemble_doctrine_concept_plan(plan, {"iterations": [
             {"id": "b0001", "output": {"status": "ok", "concepts": [item, item]}}
-        ]}, prepare_doctrine_concept_batches(plan, analyses()))
+        ]}, prepare_doctrine_concept_batches(plan, analyses(), batch_size=2))
 
 
 def test_bad_section_refs_and_source_are_rejected():
