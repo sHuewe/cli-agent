@@ -761,22 +761,18 @@ def test_sdk_add_context_is_serialized_and_stringifies_values(monkeypatch, tmp_p
 
 def test_sdk_context_payload_uses_untrusted_reference_layer():
     from cli_agent.context.file_context import ContextFileCliAgent
-    from cli_agent.context.web_context_agent import WebContextCliAgent
     from cli_agent.sdk.context import add_reference_context
 
-    class DummyBase:
-        def _reference_context_payload(self, *, knowledge):
-            return {"base": "present"}
-
-    # Use the real implementation with a minimal object; no MCP startup.
-    class Stub(DummyBase):
-        _file_contexts = ()
-        _disabled_file_context_paths = set()
-
-    stub = Stub()
-    add_reference_context(stub, "irrelevant instructions", "reference")
-    # The context is incorporated as a data field by ContextFileCliAgent.
-    payload = ContextFileCliAgent._reference_context_payload(stub, knowledge=None)
+    runtime = ContextFileCliAgent.__new__(ContextFileCliAgent)
+    runtime._file_contexts = ()
+    runtime._disabled_file_context_paths = set()
+    runtime._web_contexts = []
+    runtime._disabled_web_context_urls = set()
+    runtime._server_untrusted_instructions = {}
+    runtime._active_servers = set()
+    runtime._agui_external_context = ()
+    add_reference_context(runtime, "example data", "reference")
+    payload = runtime._reference_context_payload(knowledge=None)
     assert payload["python_reference_contexts"] == [
-        {"name": "reference", "content": "irrelevant instructions"}
+        {"name": "reference", "content": "example data"}
     ]
