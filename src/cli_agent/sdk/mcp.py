@@ -2,15 +2,30 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass
 from typing import Any
 
-from cli_agent.context.agent_knowledge_support import tool_result_text
 from cli_agent.security.mcp_limits import (
     MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation,
     enforce_mcp_tool_result_limit,
 )
 from cli_agent.security.mcp_schema_guard import validate_mcp_tool_arguments
+
+
+def _result_text(result: Any) -> str:
+    """Keep MCP text content distinct from optional structured output."""
+    content = getattr(result, "content", ())
+    parts = [
+        item.text for item in content
+        if isinstance(getattr(item, "text", None), str)
+    ]
+    if parts:
+        return "\n".join(parts)
+    structured = getattr(result, "structuredContent", None)
+    if structured is not None:
+        return json.dumps(structured, ensure_ascii=False)
+    return str(content)
 
 
 @dataclass(frozen=True)
@@ -76,7 +91,7 @@ async def execute_direct_tool(runtime: Any, name: str, supplied: Any) -> DirectM
         timeout_seconds=MCP_TOOL_CALL_TIMEOUT_SECONDS,
         operation=f"MCP-Tool {name!r}",
     )
-    text = enforce_mcp_tool_result_limit(tool_result_text(result))
+    text = enforce_mcp_tool_result_limit(_result_text(result))
     return DirectMcpResult(
         name=name, text=text,
         is_error=bool(getattr(result, "isError", False)),
