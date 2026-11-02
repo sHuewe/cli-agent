@@ -118,7 +118,7 @@ def test_outline_metadata_failure_reports_section_and_field():
             }],
         }} for sid in ("s001", "s002")
     ]}
-    with pytest.raises(ValueError, match=r"s001.*tags\\[1\\]"):
+    with pytest.raises(ValueError, match=r"s001.*tags\[1\]"):
         assemble_section_outlines(
             tasks, results,
             source_path="sources/doc.md", source_slug="doc-123",
