@@ -120,6 +120,7 @@ class AgentBuilder:
         self._project: AppConfig = AppConfig()
         self._project_path: Path | None = None
         self._run_options: dict[str, Any] = {}
+        self._event_callback = None
 
     def with_admin_config(self, *, path: str | Path | None = None, **overrides: Any) -> AgentBuilder:
         if path is not None:
@@ -185,6 +186,27 @@ class AgentBuilder:
         self._run_options = {k: v for k, v in overrides.items() if k in _RUN_OPTIONS}
         return self
 
+    def with_event_callback(self, callback: Any) -> AgentBuilder:
+        """Receive safe, structured AgentEvent objects during execution."""
+        if not callable(callback):
+            raise TypeError("event callback must be callable")
+        self._event_callback = callback
+        return self
+
+    def with_default_event_callback(self, *, verbose: bool = False) -> AgentBuilder:
+        """Opt in to safe console progress output."""
+        from functools import partial
+        from .events import default_event_callback
+        self._event_callback = partial(default_event_callback, verbose=verbose)
+        return self
+
+    def with_approval_callback(self, callback: Any) -> AgentBuilder:
+        """Install a Python approval callback (True, False or 'session')."""
+        if not callable(callback):
+            raise TypeError("approval callback must be callable")
+        self._run_options["approval_callback"] = callback
+        return self
+
     def build(self) -> "Agent":
         from .agent import Agent
         # An instance is a snapshot; subsequent builder updates do not affect it.
@@ -193,4 +215,5 @@ class AgentBuilder:
             admin_config=self._admin,
             project_path=self._project_path,
             run_options=dict(self._run_options),
+            event_callback=self._event_callback,
         )
