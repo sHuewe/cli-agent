@@ -82,6 +82,7 @@ def _admin_overrides(policy: AdminConfig, overrides: dict[str, Any]) -> AdminCon
             definition["from_env"] = {
                 "authentication": {"bearer": server.bearer_token_env}
             }
+        definition["args"] = list(server.args)
         definition["env"] = dict(server.env)
         definition["headers"] = dict(server.headers)
         if _trusted_server(definition, index) != server:
