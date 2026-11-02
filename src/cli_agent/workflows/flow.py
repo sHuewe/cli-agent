@@ -1482,7 +1482,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "structure_input", "results_input", "results_step"
+                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "structure_input", "results_input", "results_step", "batches_step"
                 }
                 or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan"}
                 or not isinstance(raw_json_operation.get("input"), str)
@@ -1497,6 +1497,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
                         or ref not in {step.step_id for step in steps}):
                     raise ValueError("results_step muss ein voriger Flow-Step sein.")
+            if raw_json_operation["kind"] == "assemble_doctrine_plan":
+                ref = raw_json_operation.get("batches_step")
+                if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
+                        or ref not in {step.step_id for step in steps}):
+                    raise ValueError("batches_step muss ein voriger Flow-Step sein.")
             if raw_json_operation["kind"] == "validate_okf_plan" and raw_json_operation.get("plan_kind") not in {"doctrine", "themes"}:
                 raise ValueError("validate_okf_plan benötigt plan_kind=doctrine|themes.")
             if raw_json_operation["kind"] == "validate_okf_plan":
@@ -4939,6 +4944,7 @@ def _execute_json_step(
         transformed = assemble_doctrine_concept_plan(
             structure=source,
             results=_parse_structured_output(outputs[operation["results_step"]], step_id=step.step_id),
+            batches=_parse_structured_output(outputs[operation["batches_step"]], step_id=step.step_id),
         )
     elif operation["kind"] == "group_items":
         transformed = group_assigned_items(
