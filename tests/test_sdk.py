@@ -834,3 +834,46 @@ def test_sdk_runtime_originated_cancellation_settles_active_and_queued_requests(
         await asyncio.wait_for(agent.close(), 2)
 
     asyncio.run(scenario())
+
+
+def test_sdk_json_mode_preserves_local_command_status(monkeypatch, tmp_path):
+    from cli_agent.platform.local_commands import classify_local_command
+
+    class Runtime:
+        response_format = "json"
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            local = classify_local_command(prompt)
+            if local.is_local:
+                return "Lokaler Befehl ausgeführt."
+            return '{"ok": true}'
+
+    monkeypatch.setattr(
+        "cli_agent.sdk.agent.prepare_agent",
+        lambda *_args, **_kwargs: SimpleNamespace(agent=Runtime()),
+    )
+
+    async def scenario():
+        async with AgentBuilder().with_project_config(
+            workspace=tmp_path, response_format="json",
+        ).build() as agent:
+            for prompt in (
+                "tokens",
+                "clear_web_context",
+                "enable os",
+                "disable os",
+                "add_web_context https://example.com",
+                "add_web_context",
+                "add_web_contex https://example.com",
+            ):
+                result = await agent.ask(prompt)
+                assert result.answer == "Lokaler Befehl ausgeführt."
+                assert result.parsed is None
+            result = await agent.ask("enable this feature in JSON")
+            assert result.parsed == {"ok": True}
+            assert result.answer == '{"ok": true}'
+
+    asyncio.run(scenario())
