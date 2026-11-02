@@ -611,3 +611,225 @@ def prepare_section_outline_tasks(sections: Any, analyses: Any) -> dict[str, Any
     if set(indexed) != {x["id"] for x in tasks}:
         raise ValueError("Unerwartete Abschnittsanalyse.")
     return {"tasks": tasks}
+
+
+def build_doctrine_taxonomy_profile(outline: Any) -> dict[str, Any]:
+    """Small topic inventory; never feed all candidates to a global model."""
+    plan = _obj(outline, "outline")
+    _validate_doctrine(plan)
+    concepts = _array(plan["concepts"], "concepts")
+    counts: dict[str, int] = {}
+    for concept in concepts:
+        for tag in concept.get("tags", [])[:12]:
+            if isinstance(tag, str) and tag.strip():
+                tag = tag.strip().casefold()[:80]
+                counts[tag] = counts.get(tag, 0) + 1
+    sample = [
+        {"title": concepts[i]["title"][:110], "tags": concepts[i].get("tags", [])[:4]}
+        for i in sorted({min(len(concepts) - 1, j * len(concepts) // 16) for j in range(16)})
+    ]
+    return {
+        "candidate_count": len(concepts),
+        "tags": [
+            {"name": name, "count": count}
+            for name, count in sorted(counts.items(), key=lambda p: (-p[1], p[0]))[:40]
+        ],
+        "sample_titles": sample,
+    }
+
+
+def _doctrine_folder_scheme(
+    taxonomy: Any, *, concept_count: int,
+) -> list[dict[str, str]]:
+    raw = _obj(taxonomy, "taxonomy")
+    if raw.get("status") != "ok":
+        raise ValueError("Die Ordner-Taxonomie ist nicht vollständig.")
+    folders = _array(raw.get("folders"), "taxonomy.folders")
+    if concept_count > 15 and not 2 <= len(folders) <= 8:
+        raise ValueError("Umfangreiche Doktrinen benötigen 2 bis 8 Unterordner.")
+    if concept_count <= 15 and len(folders) not in (0, 2, 3, 4, 5, 6, 7, 8):
+        raise ValueError("Unterordner: entweder 0 oder 2 bis 8.")
+    seen: set[str] = set()
+    normalized = []
+    for entry in folders:
+        folder = _obj(entry, "taxonomy.folders[]")
+        identifier = _slug(folder.get("id"), "taxonomy.folders[].id")
+        _unique(seen, identifier, "taxonomy.folders[].id")
+        title = folder.get("title")
+        description = folder.get("description")
+        if not isinstance(title, str) or not 1 <= len(title.strip()) <= 120:
+            raise ValueError("taxonomy.folders[].title ist ungültig.")
+        if not isinstance(description, str) or not 1 <= len(description.strip()) <= 500:
+            raise ValueError("taxonomy.folders[].description ist ungültig.")
+        normalized.append({
+            "id": identifier, "title": title.strip(),
+            "description": description.strip(),
+        })
+    return normalized
+
+
+def prepare_doctrine_consolidation_batches(
+    outline: Any, taxonomy: Any, *, batch_size: int = 12,
+) -> dict[str, Any]:
+    """Cluster nearby topics into small, checkpointable semantic comparisons."""
+    plan = _obj(outline, "outline")
+    _validate_doctrine(plan)
+    if type(batch_size) is not int or not 4 <= batch_size <= 16:
+        raise ValueError("Consolidation batch_size muss 4 bis 16 sein.")
+    concepts = _array(plan["concepts"], "concepts")
+    folders = _doctrine_folder_scheme(taxonomy, concept_count=len(concepts))
+    stop = {"und", "der", "die", "das", "ein", "eine", "von", "für", "mit",
+            "bei", "des", "den", "and", "the", "for", "from", "with"}
+    def words(concept: dict[str, Any]) -> set[str]:
+        text = " ".join([
+            concept["id"].replace("-", " "), concept.get("title", ""),
+            concept.get("description", "")[:400],
+            " ".join(t for t in concept.get("tags", []) if isinstance(t, str)),
+        ]).casefold()
+        return {w for w in re.findall(r"[\w]{3,}", text) if w not in stop}
+    tokens = [words(concept) for concept in concepts]
+    remaining = list(range(len(concepts)))
+    batches = []
+    while remaining:
+        first = remaining.pop(0)
+        selected = [first]
+        while remaining and len(selected) < batch_size:
+            # Similar topics in one model call; comparisons scale with candidates,
+            # not model context length. Stable tie-breaker preserves checkpoints.
+            best = max(
+                remaining,
+                key=lambda i: (
+                    max(
+                        len(tokens[i] & tokens[j]) /
+                        max(1, len(tokens[i] | tokens[j]))
+                        for j in selected
+                    ),
+                    -i,
+                ),
+            )
+            remaining.remove(best)
+            selected.append(best)
+        candidates = []
+        for i in selected:
+            c = concepts[i]
+            candidates.append({
+                "id": c["id"], "title": c["title"][:250],
+                "description": c["description"][:500],
+                "tags": c.get("tags", [])[:10],
+            })
+        batches.append({
+            "id": f"c{len(batches) + 1:04d}",
+            "candidates": candidates,
+            "folders": folders,
+        })
+        if len(batches) > 250:
+            raise ValueError("Zu viele Konsolidierungsgruppen.")
+    return {"batches": batches, "candidate_count": len(concepts)}
+
+
+def assemble_doctrine_consolidation(
+    outline: Any, taxonomy: Any, batches: Any, results: Any,
+) -> dict[str, Any]:
+    """Reject any missing/duplicate source; preserve all sections and tags."""
+    plan = _obj(outline, "outline")
+    _validate_doctrine(plan)
+    source = _canonical_source_path(plan.get("source_path"))
+    folder_id = _slug(_obj(plan.get("folder"), "folder").get("id"), "folder.id")
+    original = {c["id"]: c for c in _array(plan["concepts"], "concepts")}
+    folders = _doctrine_folder_scheme(taxonomy, concept_count=len(original))
+    allowed_folders = {folder["id"] for folder in folders}
+    expected = {}
+    for raw in _array(_obj(batches, "batches").get("batches"), "batches.batches"):
+        group = _obj(raw, "batches[]")
+        gid = group.get("id")
+        if not isinstance(gid, str) or gid in expected:
+            raise ValueError("Ungültige oder doppelte Konsolidierungs-Batch-ID.")
+        ids = [_obj(c, "candidates[]").get("id")
+               for c in _array(group.get("candidates"), "batches.candidates")]
+        if not ids or len(ids) > 16 or len(ids) != len(set(ids)):
+            raise ValueError("Ungültige Konzepte in Konsolidierungs-Batch.")
+        expected[gid] = set(ids)
+    if set().union(*expected.values()) != set(original) or sum(
+        len(group) for group in expected.values()
+    ) != len(original):
+        raise ValueError("Konsolidierungs-Batches haben Lücken oder Duplikate.")
+    envelopes = _array(_obj(results, "results").get("iterations"), "results.iterations")
+    seen_batches: set[str] = set()
+    seen_concepts: set[str] = set()
+    consolidated = []
+    for envelope in envelopes:
+        record = _obj(envelope, "results.iterations[]")
+        bid = record.get("id")
+        if bid not in expected or bid in seen_batches:
+            raise ValueError("Unbekannte oder doppelte Konsolidierungsantwort.")
+        seen_batches.add(bid)
+        response = _obj(record.get("output"), "results.output")
+        if response.get("status") != "ok":
+            raise ValueError(f"Konsolidierung für {bid} nicht erfolgreich.")
+        local_groups = _array(response.get("groups"), "results.groups")
+        if not local_groups:
+            raise ValueError(f"Konsolidierung für {bid} ist leer.")
+        used: set[str] = set()
+        for group in local_groups:
+            value = _obj(group, "results.groups[]")
+            members = _array(value.get("member_ids"), "groups.member_ids")
+            if not members or any(
+                not isinstance(m, str) or m not in expected[bid] or m in used
+                for m in members
+            ):
+                raise ValueError(f"{bid}: unbekanntes oder doppeltes Quellkonzept.")
+            used.update(members)
+            title = value.get("title")
+            desc = value.get("description")
+            if not isinstance(title, str) or not 1 <= len(title.strip()) <= 500:
+                raise ValueError(f"{bid}: ungültiger Konzepttitel.")
+            if not isinstance(desc, str) or not 1 <= len(desc.strip()) <= 4000:
+                raise ValueError(f"{bid}: ungültige Konzeptbeschreibung.")
+            target = value.get("folder_id")
+            if (target not in allowed_folders if folders else target not in (None, "")):
+                raise ValueError(f"{bid}: unbekannter semantischer Unterordner.")
+            first = original[members[0]]
+            section_ids = list(dict.fromkeys(
+                sid for member in members
+                for sid in original[member].get("section_ids", [])
+            ))
+            source_ids = list(dict.fromkeys(
+                ref for member in members
+                for ref in original[member].get("merged_from", [member])
+            ))
+            tags = list(dict.fromkeys(
+                tag for member in members
+                for tag in original[member].get("tags", [])
+            ))[:40]
+            canonical_id = first["id"]
+            parent = f"doctrines/{folder_id}"
+            if folders:
+                parent += f"/{target}"
+            consolidated.append({
+                "id": canonical_id,
+                "path": f"{parent}/{canonical_id}.md",
+                "title": title.strip(), "description": desc.strip(),
+                "type": "concept", "tags": tags,
+                "section_ids": section_ids, "merged_from": source_ids,
+            })
+        if used != expected[bid]:
+            raise ValueError(f"{bid}: nicht alle Quellkonzepte wurden berücksichtigt.")
+        seen_concepts.update(used)
+    if seen_batches != set(expected) or seen_concepts != set(original):
+        raise ValueError("Konsolidierung ist unvollständig.")
+    output = dict(plan)
+    output["source_path"] = source
+    output["folders"] = [
+        {
+            **folder,
+            "path": f"doctrines/{folder_id}/{folder['id']}",
+        }
+        for folder in folders
+    ]
+    output["concepts"] = consolidated
+    output["summary"] = (
+        f"{len(original)} Konzeptkandidaten vollständig auf "
+        f"{len(consolidated)} Konzepte konsolidiert."
+    )
+    _validate_doctrine(output)
+    return output
