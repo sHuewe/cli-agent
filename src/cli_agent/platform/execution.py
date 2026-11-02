@@ -511,6 +511,16 @@ def prepare_agent(
 
     config = project_config if project_config is not None else deps.load_config(options.config_file)
     policy = admin_config if admin_config is not None else deps.load_admin_config()
+    if project_config is not None and options.config_file is None and config.okf is not None:
+        # An in-memory SDK project has no config-file directory. Resolve
+        # relative OKF repositories against its workspace before the runtime
+        # sees the fallback machine-local config_file path. Explicit project
+        # files retain the established config-file-relative semantics.
+        repository = Path(config.okf.repository).expanduser()
+        if not repository.is_absolute():
+            config = replace(
+                config, okf=replace(config.okf, repository=str(workspace / repository)),
+            )
     config = apply_model_override(config, model=options.model)
     config = apply_workspace_access_override(
         config,
