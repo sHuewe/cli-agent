@@ -40,7 +40,7 @@ from cli_agent.context.file_context import (
 )
 from cli_agent.workflows.flow_json_operations import transform_json
 from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest
-from cli_agent.workflows.flow_filesystem_operations import inventory_directory, MAX_INVENTORY_ENTRIES, _workspace_directory
+from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 from cli_agent.platform.logging_setup import configure_logging
@@ -1341,8 +1341,17 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
-            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss"} or op.get("kind") not in {"inventory", "checkpoint_status"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "target_chars", "max_sections"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
                 raise ValueError("filesystem_operation benötigt kind=inventory und directory.")
+            if op["kind"] == "markdown_sections":
+                if not isinstance(op.get("source_path"), str) or not op["source_path"]:
+                    raise ValueError("markdown_sections.source_path fehlt.")
+                if set(op) - {"kind", "source_path", "target_chars", "max_sections"}:
+                    raise ValueError("markdown_sections erlaubt nur source_path, target_chars, max_sections.")
+                if type(op.get("target_chars", 30000)) is not int or not 4000 <= op.get("target_chars", 30000) <= 100000:
+                    raise ValueError("markdown_sections.target_chars muss zwischen 4000 und 100000 liegen.")
+                if type(op.get("max_sections", 32)) is not int or not 1 <= op.get("max_sections", 32) <= 100:
+                    raise ValueError("markdown_sections.max_sections muss zwischen 1 und 100 liegen.")
             if op["kind"] == "checkpoint_status":
                 if (not isinstance(op.get("paths"), list) or not 1 <= len(op["paths"]) <= 16
                         or any(not isinstance(p, str) or not p.strip() for p in op["paths"])):
@@ -1390,6 +1399,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             checkpoint_templates = raw_filesystem_operation.get("paths", [])
             if raw_filesystem_operation["kind"] == "checkpoint_status":
                 checkpoint_templates = [*checkpoint_templates, raw_filesystem_operation["expected_source_path"]]
+            elif raw_filesystem_operation["kind"] == "markdown_sections":
+                checkpoint_templates = [raw_filesystem_operation["source_path"]]
             else:
                 checkpoint_templates = [directory_template]
             def replace_inventory_var(match: re.Match[str]) -> str:
@@ -1406,6 +1417,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
             if raw_filesystem_operation["kind"] == "inventory":
                 raw_filesystem_operation["directory"] = directory_template
+            elif raw_filesystem_operation["kind"] == "markdown_sections":
+                raw_filesystem_operation["source_path"] = re.sub(
+                    r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
+                    replace_inventory_var,
+                    raw_filesystem_operation["source_path"],
+                )
             else:
                 raw_filesystem_operation["paths"] = [
                     re.sub(r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}", replace_inventory_var, p)
@@ -1429,6 +1446,21 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                             or PureWindowsPath(literal).drive or ".." in Path(literal).parts
                             or ".." in PureWindowsPath(literal).parts):
                         raise ValueError("checkpoint_status.paths muss workspace-relativ sein.")
+            if raw_filesystem_operation["kind"] == "markdown_sections":
+                source_template = raw_filesystem_operation["source_path"]
+                remainder_source = _INPUT_EXPR.sub("", source_template)
+                if "${" in remainder_source:
+                    raise ValueError("markdown_sections erlaubt nur Input- und Var-Referenzen.")
+                _validate_input_references(
+                    [source_template], declared_inputs=inputs,
+                    field="markdown_sections.source_path",
+                )
+                literal_source = _INPUT_EXPR.sub("placeholder", source_template)
+                windows_source = PureWindowsPath(literal_source)
+                if (Path(literal_source).is_absolute() or windows_source.is_absolute()
+                        or windows_source.drive or ".." in Path(literal_source).parts
+                        or ".." in windows_source.parts):
+                    raise ValueError("markdown_sections.source_path muss workspace-relativ sein.")
             remainder = _INPUT_EXPR.sub("", directory_template)
             if raw_filesystem_operation["kind"] == "inventory" and "${" in remainder:
                 raise ValueError("filesystem_operation.directory unterstützt nur Input- und Var-Referenzen.")
@@ -4786,6 +4818,18 @@ def _execute_filesystem_step(
             # A miss never adds this guard, so the parent may write.
             assert context.reserved_inputs is not None
             context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
+        return answer
+    if op["kind"] == "markdown_sections":
+        source_path = _render_input_text(op["source_path"], flow_input)
+        transformed = markdown_sections(
+            workspace, source_path,
+            target_chars=op.get("target_chars", 30000),
+            max_sections=op.get("max_sections", 32),
+        )
+        answer = _json_dumps_preserving_numbers(transformed)
+        target = prepare_output_target(workspace, output, overwrite=step.overwrite_output)
+        target.write_text(answer)
+        context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
         return answer
     directory = _render_input_text(op["directory"], flow_input)
     inventory_root = _workspace_directory(workspace, directory)
