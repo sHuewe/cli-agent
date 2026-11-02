@@ -44,6 +44,14 @@ class Agent:
         self._worker_task = loop.create_task(self._worker())
         try:
             await self._ready
+        except asyncio.CancelledError:
+            # A cancelled notebook cell / wait_for timeout must interrupt
+            # initialization itself, not just the Future awaiting it.
+            # The MCP transport stack is cleaned up on its owning worker task.
+            if self._worker_task is not None and not self._worker_task.done():
+                self._worker_task.cancel()
+            await self.close()
+            raise
         except BaseException:
             await self.close()
             raise
@@ -63,7 +71,8 @@ class Agent:
             async with prepared.agent as runtime:
                 for url in opts.add_web_context:
                     await runtime.ask(f"add_web_context {url}")
-                self._ready.set_result(None)
+                if not self._ready.done():
+                    self._ready.set_result(None)
                 while True:
                     item = await self._queue.get()
                     if item is None:
@@ -103,7 +112,9 @@ class Agent:
                         self._active_future = None
         except asyncio.CancelledError:
             if not self._ready.done():
-                self._ready.set_exception(RuntimeError("Agentenstart abgebrochen."))
+                # This is an intentional startup abort, not a startup error.
+                # Cancel instead of setting an unobserved exception.
+                self._ready.cancel()
             raise
         except BaseException as exc:
             if not self._ready.done():
@@ -149,10 +160,14 @@ class Agent:
         assert self._queue is not None
         if not self._worker_task.done():
             active = self._active_future
-            if active is not None:
-                # close() must not wait for a potentially mutating tool call
-                # to finish after the caller has asked us to shut down.
-                active.cancel()
+            starting = self._ready is not None and (
+                not self._ready.done() or self._ready.cancelled()
+            )
+            if starting or active is not None:
+                # Startup and active model/tool calls must be interrupted.
+                # The worker still closes its own MCP/AnyIO scopes.
+                if active is not None:
+                    active.cancel()
                 self._worker_task.cancel()
             else:
                 await self._queue.put(None)
