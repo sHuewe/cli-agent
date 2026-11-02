@@ -11,7 +11,7 @@ from cli_agent.settings.admin_config import (
     ModelCredentialRule, TrustedMcpServer, WebProviderConfig,
 )
 from cli_agent.settings.config import (
-    AppConfig, ModelConfig, McpServerConfig, load_config,
+    AppConfig, ModelConfig, McpServerConfig, load_config, default_config_file,
     _model_config, _mcp_server_config, _agent_config,
 )
 from cli_agent.security.network_policy import NetworkConfig, LOCAL_HOSTS
@@ -139,7 +139,13 @@ class AgentBuilder:
         unknown = set(overrides) - _PROJECT_OPTIONS - _RUN_OPTIONS
         if unknown:
             raise TypeError(f"Unbekannte Projekt-Optionen: {sorted(unknown)}")
-        self._project_path = Path(path) if path is not None else None
+        # No arguments load the default project file, so its directory
+        # remains the base for relative OKF/knowledge paths. Overrides
+        # without a path instead create a genuinely configless SDK project.
+        self._project_path = (
+            Path(path) if path is not None
+            else (default_config_file() if not overrides else None)
+        )
         config = (load_config(Path(path)) if path is not None
                   else (load_config() if not overrides else AppConfig()))
         model_fields = set(ModelConfig.__dataclass_fields__)
