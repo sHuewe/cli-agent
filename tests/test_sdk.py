@@ -225,3 +225,101 @@ def test_sdk_project_file_remains_protected_in_both_builtin_servers(tmp_path):
         assert "--sdk-configless" in server.args
         args = list(server.literal_args)
         assert args[args.index("--protected-path") + 1] == str(path.resolve())
+
+
+def test_sdk_cancel_active_ask_stops_runtime_and_keeps_session(monkeypatch, tmp_path):
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    calls = []
+    class Runtime:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            calls.append(prompt)
+            if prompt == "slow":
+                started.set()
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+            return "ok"
+    monkeypatch.setattr("cli_agent.sdk.agent.prepare_agent",
+                        lambda *_args, **_kwargs: SimpleNamespace(agent=Runtime()))
+
+    async def scenario():
+        async with AgentBuilder().with_project_config(workspace=tmp_path).build() as agent:
+            task = asyncio.create_task(agent.ask("slow"))
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            await asyncio.wait_for(cancelled.wait(), timeout=2)
+            result = await asyncio.wait_for(agent.ask("next"), timeout=2)
+            assert result.answer == "ok"
+    asyncio.run(scenario())
+    assert calls == ["slow", "next"]
+
+
+def test_sdk_cancelling_queued_request_does_not_interrupt_active(monkeypatch, tmp_path):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+    class Runtime:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            calls.append(prompt)
+            if prompt == "first":
+                entered.set()
+                await release.wait()
+            return "ok"
+    monkeypatch.setattr("cli_agent.sdk.agent.prepare_agent",
+                        lambda *_args, **_kwargs: SimpleNamespace(agent=Runtime()))
+    async def scenario():
+        async with AgentBuilder().with_project_config(workspace=tmp_path).build() as agent:
+            first = asyncio.create_task(agent.ask("first"))
+            await entered.wait()
+            queued = asyncio.create_task(agent.ask("second"))
+            await asyncio.sleep(0)
+            queued.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await queued
+            release.set()
+            assert (await asyncio.wait_for(first, 2)).answer == "ok"
+            assert (await asyncio.wait_for(agent.ask("third"), 2)).answer == "ok"
+    asyncio.run(scenario())
+    assert calls == ["first", "third"]
+
+
+def test_sdk_close_interrupts_active_request(monkeypatch, tmp_path):
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    class Runtime:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, _prompt):
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+    monkeypatch.setattr("cli_agent.sdk.agent.prepare_agent",
+                        lambda *_args, **_kwargs: SimpleNamespace(agent=Runtime()))
+    async def scenario():
+        agent = AgentBuilder().with_project_config(workspace=tmp_path).build()
+        await agent.start()
+        task = asyncio.create_task(agent.ask("slow"))
+        await started.wait()
+        await asyncio.wait_for(agent.close(), 2)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert cancelled.is_set()
+    asyncio.run(scenario())
