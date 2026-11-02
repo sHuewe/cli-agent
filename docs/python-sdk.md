@@ -433,3 +433,36 @@ and `add_web_context` for explicit file/web loading.
 To avoid unbounded model-context growth the SDK limits values to 128 KiB
 each, 32 contexts, and 512 KiB combined. Strings are not truncated
 silently: oversized input raises `ValueError`.
+
+## Direct MCP tool calls (without an agent run)
+
+The SDK exposes the existing MCP sessions through `agent.mcp.call_tool`.
+These calls are serialized on the same worker that owns the MCP sessions:
+
+```python
+async with agent:
+    result = await agent.mcp.call_tool("os__read_file", "Datei.txt")
+    print(result.text)
+
+    # Explicit named arguments are also supported.
+    result = await agent.mcp.call_tool("os__read_file", {"path": "Datei.txt"})
+    # Or: await agent.mcp.call_tool("os__read_file", path="Datei.txt")
+```
+
+A positional value is accepted **only if the registered schema defines
+exactly one property**; otherwise supply an argument dictionary. The result
+is a `DirectMcpResult(name, text, is_error, structured_content)` and retains
+structured MCP output when provided. A tool-level error is returned with
+`is_error=True`; schema violations, denied approvals and transport failures
+raise Python exceptions.
+
+A direct call does **not** ask the model, append any conversation messages,
+register evidence, modify the plan, or appear as an LLM-generated tool call.
+It does not trigger SDK agent-run events. It can still affect external files,
+services or resources through the executed tool. All normal availability,
+schema validation, tool timeouts, and approval policies apply. The approval
+callback is used for tools requiring approval, including session approvals.
+
+Direct calls share the MCP-owning worker with `ask()` and cannot run
+concurrently with an agent request on that agent. Use `agent.list_tools()`
+to inspect available tool names, schemas and approval requirements.
