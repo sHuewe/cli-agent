@@ -48,7 +48,7 @@ def test_batched_plan_preserves_global_concepts_and_evidence():
             ],
         }} for batch in batches["batches"]
     ]}
-    merged = assemble_doctrine_concept_plan(plan, results)
+    merged = assemble_doctrine_concept_plan(plan, results, batches)
     assert [c["id"] for c in merged["concepts"]] == ["a", "b", "c"]
     assert "section_ids" not in merged["concepts"][0]
     assert all(c["evidence_ranges"] for c in merged["concepts"])
@@ -62,11 +62,11 @@ def test_missing_or_duplicate_concepts_rejected():
     with pytest.raises(ValueError, match="nicht alle"):
         assemble_doctrine_concept_plan(plan, {"iterations": [
             {"id": "b0001", "output": {"status": "ok", "concepts": [item]}}
-        ]})
+        ]}, prepare_doctrine_concept_batches(plan, analyses()))
     with pytest.raises(ValueError, match="mehrfach"):
         assemble_doctrine_concept_plan(plan, {"iterations": [
             {"id": "b0001", "output": {"status": "ok", "concepts": [item, item]}}
-        ]})
+        ]}, prepare_doctrine_concept_batches(plan, analyses()))
 
 
 def test_bad_section_refs_and_source_are_rejected():
