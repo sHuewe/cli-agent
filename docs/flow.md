@@ -313,6 +313,37 @@ Vorwärtsreferenzen werden bereits beim Laden der Flow-Datei abgewiesen. Bei
 `foreach` kann auch der aggregierte Step-Output mit seinem
 `iterations`-Feld auf diese Weise verwendet werden.
 
+### Deterministische Markdown-Abschnitte
+
+`filesystem_operation.kind = "markdown_sections"` ermittelt ohne Modellzugriff
+zusammenhängende, zeilenbasierte Abschnitte einer Markdown-Datei:
+
+```toml
+[[steps]]
+id = "sections"
+output = "state/sections.json"
+overwrite_output = false
+[steps.filesystem_operation]
+kind = "markdown_sections"
+source_path = "${input.source.path}"
+target_chars = 30000
+max_sections = 32
+```
+
+Bis `target_chars` Zeichen enthält das Resultat `mode = "direct"` und
+`sections = []`. Bei längeren Dateien ist `mode = "sections"`; jeder Eintrag
+hat die Felder `id`, `start_line`, `end_line` und `title`. Die Bereiche
+sind fortlaufend und lückenlos, werden bevorzugt an Markdown-Überschriften
+abgetrennt und niemals von einem LLM bestimmt. Ein nachgelagerter
+`foreach = "steps.sections.output.sections"` überspringt kurze Dokumente.
+Die Grenzen gelten für Zeichen, nicht für Tokens des Zielmodells.
+
+Sicherheitsgrenzen: `source_path` muss workspace-relativ sein und auf eine
+reguläre `.md`- oder `.markdown`-Datei ohne Symlink zeigen. Die Quelle
+ist auf 8 MB, 200.000 Zeilen und maximal `max_sections` Abschnitte beschränkt;
+für übergroße Dateien schlägt die Operation ausdrücklich fehl. Das Resultat
+enthält keine Originaltextpassagen, nur Zeilenbereiche und Überschriften.
+
 ### Deklarierte JSON-Inputs aus vorherigen Flow-Outputs
 
 Ein Modell-Step kann JSON-Outputs vorheriger Schritte, auch aus verschachtelten
