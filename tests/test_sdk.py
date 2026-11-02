@@ -728,3 +728,55 @@ def test_sdk_state_snapshot_is_non_sensitive(monkeypatch, tmp_path):
             assert state.approved_tools == ("os__write_file",)
             assert "VERY_PRIVATE" not in repr(state)
     asyncio.run(scenario())
+
+def test_sdk_add_context_is_serialized_and_stringifies_values(monkeypatch, tmp_path):
+    class Runtime:
+        def __init__(self):
+            self._sdk_reference_contexts = []
+            self.prompts = []
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            self.prompts.append((prompt, len(self._sdk_reference_contexts)))
+            return "ok"
+    runtime = Runtime()
+    monkeypatch.setattr("cli_agent.sdk.agent.prepare_agent",
+                        lambda *_a, **_k: SimpleNamespace(agent=runtime))
+
+    async def scenario():
+        async with AgentBuilder().with_project_config(workspace=tmp_path).build() as agent:
+            assert await agent.add_context({"a": [1, 2]}, name="metrics") == "sdk:0"
+            assert runtime._sdk_reference_contexts[0]["content"] == "{'a': [1, 2]}"
+            assert runtime._sdk_reference_contexts[0]["label"] == "metrics"
+            await agent.ask("use metrics")
+            assert runtime.prompts[-1] == ("use metrics", 1)
+            with pytest.raises(ValueError):
+                await agent.add_context("")
+            with pytest.raises(ValueError):
+                await agent.add_context("x" * (128 * 1024 + 1))
+    asyncio.run(scenario())
+
+
+def test_sdk_context_payload_uses_untrusted_reference_layer():
+    from cli_agent.context.file_context import ContextFileCliAgent
+    from cli_agent.context.web_context_agent import WebContextCliAgent
+    from cli_agent.sdk.context import add_reference_context
+
+    class DummyBase:
+        def _reference_context_payload(self, *, knowledge):
+            return {"base": "present"}
+
+    # Use the real implementation with a minimal object; no MCP startup.
+    class Stub(DummyBase):
+        _file_contexts = ()
+        _disabled_file_context_paths = set()
+
+    stub = Stub()
+    add_reference_context(stub, "irrelevant instructions", "reference")
+    # The context is incorporated as a data field by ContextFileCliAgent.
+    payload = ContextFileCliAgent._reference_context_payload(stub, knowledge=None)
+    assert payload["python_reference_contexts"] == [
+        {"name": "reference", "content": "irrelevant instructions"}
+    ]
