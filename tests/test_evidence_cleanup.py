@@ -144,7 +144,8 @@ def test_invalid_llm_output_is_ignored_and_not_retried(monkeypatch):
     asyncio.run(maybe_cleanup_evidences(agent))
     assert agent._evidence_state.evidences == before
     asyncio.run(maybe_cleanup_evidences(agent))
-    assert len(calls) == 1
+    assert len(calls) == 3
+    assert agent._cleanup_runs[0]["processing_result"]["repair_attempts"] == 2
 
 def test_cleanup_diagnostics_preserve_exact_model_messages_and_processing(monkeypatch):
     import cli_agent.state.evidence_cleanup as cleanup
@@ -323,3 +324,70 @@ def test_cleanup_size_pressure_trigger(monkeypatch):
     assert agent._cleanup_runs[0]["trigger"] == "size_pressure"
     asyncio.run(maybe_cleanup_evidences(agent))
     assert calls == [1]
+
+def test_cleanup_accepts_fenced_json_without_repair(monkeypatch):
+    from cli_agent.state import evidence_cleanup as cleanup
+    monkeypatch.setattr(cleanup, "MIN_EVIDENCE_BYTES", 1)
+    calls = []
+    class Model:
+        async def chat(self, messages, tools):
+            calls.append(copy.deepcopy(messages))
+            assert tools == []
+            return {"content": '```json\n{"remove":[{"id":"e3","reason":"duplicate"}],"update":[],"merge":[]}\n```'}
+    agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model())
+    reset_cleanup_tracking(agent, "Question")
+    agent._cleanup_plan_dirty = True
+    agent._evidence_state.evidences["e0"]["statement"] += " revised"
+    asyncio.run(maybe_cleanup_evidences(agent))
+    assert len(calls) == 1
+    assert "e3" not in agent._evidence_state.evidences
+    assert agent._cleanup_runs[0]["processing_result"]["status"] == "applied"
+
+
+def test_cleanup_repairs_invalid_json_and_preserves_diagnostics(monkeypatch):
+    from cli_agent.state import evidence_cleanup as cleanup
+    monkeypatch.setattr(cleanup, "MIN_EVIDENCE_BYTES", 1)
+    responses = [
+        '{"remove":[],"update":[],',
+        '{"remove":[],"update":[{"id":"e0","statement":"Short result"}],"merge":[]}'
+    ]
+    calls = []
+    class Model:
+        async def chat(self, messages, tools):
+            assert tools == []
+            calls.append(copy.deepcopy(messages))
+            return {"content": responses[len(calls) - 1]}
+    agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model())
+    reset_cleanup_tracking(agent, "Question")
+    agent._cleanup_plan_dirty = True
+    agent._evidence_state.evidences["e0"]["statement"] += " revised"
+    asyncio.run(maybe_cleanup_evidences(agent))
+    assert len(calls) == 2
+    assert calls[1][-2]["role"] == "assistant"
+    assert calls[1][-1]["role"] == "user"
+    assert "Validation error" in calls[1][-1]["content"]
+    assert agent._evidence_state.evidences["e0"]["statement"] == "Short result"
+    run = agent._cleanup_runs[0]
+    assert run["processing_result"]["repair_attempts"] == 1
+    assert run["processing_result"]["status"] == "applied"
+    assert [m["role"] for m in run["messages"]] == [
+        "system", "user", "assistant", "user", "assistant"
+    ]
+
+
+def test_cleanup_repairs_invalid_delta_schema(monkeypatch):
+    from cli_agent.state import evidence_cleanup as cleanup
+    monkeypatch.setattr(cleanup, "MIN_EVIDENCE_BYTES", 1)
+    calls = []
+    class Model:
+        async def chat(self, messages, tools):
+            calls.append(1)
+            return {"content": '{"remove":[],"update":[],"merge":[],"unexpected":[]}' if len(calls) == 1
+                    else '{"remove":[],"update":[],"merge":[]}'}
+    agent = SimpleNamespace(_evidence_state=evidence_state(), model_client=Model())
+    reset_cleanup_tracking(agent, "Question")
+    agent._cleanup_plan_dirty = True
+    agent._evidence_state.evidences["e0"]["statement"] += " revised"
+    asyncio.run(maybe_cleanup_evidences(agent))
+    assert len(calls) == 2
+    assert agent._cleanup_runs[0]["processing_result"]["status"] == "unchanged"
