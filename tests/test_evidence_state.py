@@ -66,7 +66,8 @@ def test_new_evidence_preserves_only_cited_live_artifacts_without_duplicates():
                           artifact_metadata={
                               "workspace_path": ".cli-agent/mcp-data-x/derived.json",
                               "records_path": "/rows", "row_count": 1936,
-                              "record_sets": [{"records_path": "/rows"}],
+                              "record_sets": [{"records_path": "/rows", "sample_rows": [{"value": 5}],
+                                               "column_stats": {"value": {"min": 5}}}],
                           })
     state.register_result("unused", tool_name="data__join_data",
                           artifact_metadata={"workspace_path": "unused.json",
