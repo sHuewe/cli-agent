@@ -43,6 +43,8 @@ class Agent:
         self._worker_task: asyncio.Task[None] | None = None
         self._queue: asyncio.Queue[tuple[str, Any, asyncio.Future[Any]] | None] | None = None
         self._usage_start = 0
+        self._initial_servers: frozenset[str] = frozenset()
+        self._initial_okf_enabled = False
         self._ready: asyncio.Future[None] | None = None
         self._closed = False
         # Identifies the only request currently executing on the MCP-owning
@@ -183,6 +185,8 @@ class Agent:
                 for url in opts.add_web_context:
                     await runtime.ask(f"add_web_context {url}")
                 self._usage_start = len(usage_history(getattr(runtime, "model_client", None)))
+                self._initial_servers = frozenset(getattr(runtime, "_active_servers", ()))
+                self._initial_okf_enabled = bool(getattr(runtime, "_okf_enabled", False))
                 if not self._ready.done():
                     self._ready.set_result(None)
                 while True:
@@ -208,7 +212,12 @@ class Agent:
                             runtime._session_approved_tools.clear()
                             runtime._disabled_tools.clear()
                             if getattr(runtime, "_okf_options", None) is not None:
-                                runtime.set_okf_enabled(enabled=True)
+                                runtime.set_okf_enabled(enabled=self._initial_okf_enabled)
+                            current_servers = frozenset(getattr(runtime, "_active_servers", ()))
+                            for server in sorted(current_servers - self._initial_servers):
+                                await runtime.disable_server(server)
+                            for server in sorted(self._initial_servers - current_servers):
+                                await runtime.enable_server(server)
                             self._usage_start = len(usage_history(getattr(runtime, "model_client", None)))
                             result = None
                         elif action == "list_tools":
@@ -293,7 +302,7 @@ class Agent:
         await self._request("reset_history")
 
     async def reset(self) -> None:
-        """Start a new logical session without reconnecting MCP servers."""
+        """Reset history and approvals, restoring initial server state."""
         await self._request("reset")
 
     async def list_tools(self) -> tuple[ToolInfo, ...]:
