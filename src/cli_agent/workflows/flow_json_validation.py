@@ -326,7 +326,8 @@ def prepare_doctrine_concept_batches(
         selected = set()
         for concept in chunk:
             ids = _array(concept.get("section_ids"), "concept.section_ids")
-            if not ids or any(not isinstance(sid, str) or sid not in section_by_id for sid in ids):
+            if (bool(section_by_id) != bool(ids)
+                    or any(not isinstance(sid, str) or sid not in section_by_id for sid in ids)):
                 raise ValueError("Konzept enthält ungültige Abschnittsreferenzen.")
             selected.update(ids)
         batch = {
