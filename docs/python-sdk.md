@@ -405,3 +405,31 @@ choosing functions to expose. Registration is per builder/agent instance,
 never global. The model only receives the generated JSON schema and
 description. Functions must accept named, type-annotated parameters and return
 a JSON-serializable object or text; oversized results become tool errors.
+
+## Add arbitrary Python values as reference context
+
+`await agent.add_context(value, *, name=None)` accepts **any object**
+that can be converted with `str(value)`. It returns a stable context ID,
+for example `"sdk:0"`. The conversion happens when the method is called;
+the original Python object is not retained or watched for later changes.
+
+```python
+async with agent:
+    await agent.add_context({"measurements": [3, 5, 8]}, name="sensor-data")
+    await agent.add_context(my_dataframe.to_string(), name="table")
+    result = await agent.ask("Evaluate these reference measurements.")
+```
+
+The value is included in the same **untrusted reference-context data layer**
+used by file and web context. It is not a system prompt and cannot override
+the runtime's instructions or approvals. Contexts stay active across subsequent
+`ask()` calls, including `reset_history()` and `reset()`, until the
+agent is closed. Calls are queued behind any in-progress request.
+
+An ordinary string containing a URL remains a string: `add_context`
+**does not fetch web pages or read file paths**. Use `context_files`
+and `add_web_context` for explicit file/web loading.
+
+To avoid unbounded model-context growth the SDK limits values to 128 KiB
+each, 32 contexts, and 512 KiB combined. Strings are not truncated
+silently: oversized input raises `ValueError`.
