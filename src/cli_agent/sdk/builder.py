@@ -121,6 +121,7 @@ class AgentBuilder:
         self._project_path: Path | None = None
         self._run_options: dict[str, Any] = {}
         self._event_callback = None
+        self._python_tools = []
 
     def with_admin_config(self, *, path: str | Path | None = None, **overrides: Any) -> AgentBuilder:
         if path is not None:
@@ -207,6 +208,15 @@ class AgentBuilder:
         self._run_options["approval_callback"] = callback
         return self
 
+    def register_tool(self, function: Any, *, name: str | None = None,
+                      description: str | None = None) -> AgentBuilder:
+        from .python_tools import make_python_tool
+        tool = make_python_tool(function, name=name, description=description)
+        if any(existing.name == tool.name for existing in self._python_tools):
+            raise ValueError("Duplicate Python tool")
+        self._python_tools.append(tool)
+        return self
+
     def build(self) -> "Agent":
         from .agent import Agent
         # An instance is a snapshot; subsequent builder updates do not affect it.
@@ -216,4 +226,5 @@ class AgentBuilder:
             project_path=self._project_path,
             run_options=dict(self._run_options),
             event_callback=self._event_callback,
+            python_tools=tuple(self._python_tools),
         )
