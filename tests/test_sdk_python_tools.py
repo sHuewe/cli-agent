@@ -80,3 +80,28 @@ def test_python_tools_route_through_regular_approval_and_listing():
     assert any(x.name == "python__average" and x.approval_required for x in available_tools(runtime))
     with pytest.raises(ValueError):
         register_python_tools(runtime, (make_python_tool(echo),))
+
+
+def test_python_tool_preserves_nested_pydantic_and_dataclass_instances():
+    from dataclasses import dataclass
+    from pydantic import BaseModel
+
+    class Point(BaseModel):
+        x: int
+
+    @dataclass
+    class Offset:
+        dy: int
+
+    async def calculate(point: Point, offset: Offset) -> int:
+        return point.x + offset.dy
+
+    async def scenario():
+        session = PythonToolSession((make_python_tool(calculate),))
+        result = await session.call_tool(
+            "calculate", {"point": {"x": 3}, "offset": {"dy": 4}},
+        )
+        assert not result.isError, result.content
+        assert result.content[0].text == "7"
+
+    asyncio.run(scenario())
