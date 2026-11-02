@@ -537,6 +537,16 @@ def prepare_agent(
         # Built-in subprocesses must not load an unrelated default config.toml:
         # the SDK has already resolved the effective project configuration.
         # Access and PDF limits are explicitly passed in the subprocess argv.
+        #
+        # The explicitly selected project file (when inside the workspace)
+        # must remain invisible and immutable to both built-in MCP servers
+        # even though it is no longer passed as --config-file.
+        protected_project_file: Path | None = None
+        if options.config_file is not None:
+            project_path = options.config_file.expanduser().resolve()
+            if project_path.is_relative_to(workspace):
+                protected_project_file = project_path
+
         servers = []
         for server in config.mcp_servers:
             if server.built_in and server.name in {OS_MCP_SERVER_NAME, DATA_MCP_SERVER_NAME}:
@@ -546,7 +556,10 @@ def prepare_agent(
                 args.append("--sdk-configless")
                 if server.name == OS_MCP_SERVER_NAME:
                     args.extend(("--max-pdf-pages", str(config.max_pdf_pages)))
-                server = replace(server, args=tuple(args))
+                literal_args = server.literal_args
+                if protected_project_file is not None:
+                    literal_args += ("--protected-path", str(protected_project_file))
+                server = replace(server, args=tuple(args), literal_args=literal_args)
             servers.append(server)
         config = replace(config, mcp_servers=tuple(servers))
 
@@ -595,6 +608,7 @@ def prepare_agent(
         file_contexts=file_contexts,
         response_format=response_format,
         workspace_access=effective_workspace_access,
+        **({"sdk_configless": True} if project_config is not None else {}),
     )
     return PreparedAgent(
         agent=agent,
