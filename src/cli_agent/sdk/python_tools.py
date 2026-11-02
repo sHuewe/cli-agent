@@ -13,7 +13,7 @@ from pydantic import create_model
 
 from cli_agent.state.agent_types import _RuntimeMcpServerConfig
 
-_PY_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\\Z")
+_PY_NAME = re.compile("[A-Za-z_][A-Za-z0-9_]*")
 
 
 @dataclass(frozen=True)
