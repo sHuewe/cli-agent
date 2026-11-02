@@ -118,3 +118,43 @@ Only `True` grants one call and `"session"` grants this tool for the
 session. All other values deny the call. Without an approval callback,
 approval-requiring actions are denied. The `approval_requested` and
 `approval_decided` event metadata are observable but never grant access.
+
+
+## Session reset, token usage and server controls
+
+These methods are serialized with `ask()` on the same MCP-owning worker.
+A reset queued during a request runs only after that request completes.
+
+```python
+async with agent:
+    result = await agent.ask("Analyze the data.")
+    print(result.usage.total_tokens)          # This request, if provider-reported
+    print(result.session_usage.total_tokens)  # Since start() or last reset()
+
+    for tool in await agent.list_tools():
+        print(tool.name, tool.enabled, tool.approval_required)
+
+    await agent.disable_server("os")
+    await agent.enable_server("os")
+
+    await agent.reset_history()  # Conversation, evidence, temporary artifacts
+    await agent.reset()          # Also session approvals, tool/server state, usage baseline
+```
+
+Token counts are **not estimates**. When any model response within the
+reported interval lacks usage metadata, the corresponding totals are `None`.
+`model_calls`, `reported_calls`, and `unreported_calls` indicate
+coverage. Sub-agent calls sharing the model usage log count toward the totals.
+A full reset starts a fresh logical usage interval but does not erase the
+underlying provider's historical accounting.
+
+`list_tools()` only describes currently offered tools; it does not start
+disabled external MCP servers. For each tool the SDK returns the exposed name,
+server, description, input schema, enabled flag, and whether an approval is
+required for that tool under the current session/policy.
+
+`reset_history()` preserves existing approvals and server activation;
+`reset()` clears session-only approvals, restores tool visibility and the
+initial server/OKF activation state. Servers whose activation did not change
+are not reconnected. A previously disabled server may need to reconnect
+when restored to its initial enabled state. Neither reset alters AdminConfig.
