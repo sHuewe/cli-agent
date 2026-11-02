@@ -39,7 +39,7 @@ from cli_agent.context.file_context import (
     read_existing_output_text,
 )
 from cli_agent.workflows.flow_json_operations import transform_json
-from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest, prepare_doctrine_concept_batches, assemble_doctrine_concept_plan
+from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest, prepare_doctrine_concept_batches, assemble_doctrine_concept_plan, prepare_section_outline_tasks, assemble_section_outlines
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
@@ -1484,7 +1484,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 or set(raw_json_operation) - {
                     "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
@@ -1492,16 +1492,22 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     f"steps[{index}].json_operation benötigt kind=batch|batch_routes|flatten|group_items|verify_coverage "
                     "und den Namen eines json_inputs enthalten."
                 )
-            if raw_json_operation["kind"] in {"prepare_doctrine_batches", "assemble_doctrine_plan"}:
+            if raw_json_operation["kind"] in {"prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines"}:
                 ref = raw_json_operation.get("results_step")
                 if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
                         or ref not in {step.step_id for step in steps}):
                     raise ValueError("results_step muss ein voriger Flow-Step sein.")
-            if raw_json_operation["kind"] == "assemble_doctrine_plan":
+            if raw_json_operation["kind"] in {"assemble_doctrine_plan", "assemble_section_outlines"}:
                 ref = raw_json_operation.get("batches_step")
                 if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
                         or ref not in {step.step_id for step in steps}):
                     raise ValueError("batches_step muss ein voriger Flow-Step sein.")
+            if raw_json_operation["kind"] == "assemble_section_outlines":
+                for key in ("expected_source_path", "expected_source_slug"):
+                    value = raw_json_operation.get(key)
+                    if not isinstance(value, str) or "${" in _INPUT_EXPR.sub("", value):
+                        raise ValueError(f"assemble_section_outlines.{key} benötigt einen Flow-Input.")
+                    _validate_input_references([value], declared_inputs=inputs, field=key)
             if raw_json_operation["kind"] == "validate_okf_plan" and raw_json_operation.get("plan_kind") not in {"doctrine", "themes"}:
                 raise ValueError("validate_okf_plan benötigt plan_kind=doctrine|themes.")
             if raw_json_operation["kind"] == "validate_okf_plan":
@@ -4928,7 +4934,19 @@ def _execute_json_step(
     source = _parse_structured_output(
         json_values[operation["input"]], step_id=step.step_id,
     )
-    if operation["kind"] == "prepare_doctrine_batches":
+    if operation["kind"] == "prepare_outline_tasks":
+        transformed = prepare_section_outline_tasks(
+            sections=source,
+            analyses=_parse_structured_output(outputs[operation["results_step"]], step_id=step.step_id),
+        )
+    elif operation["kind"] == "assemble_section_outlines":
+        transformed = assemble_section_outlines(
+            tasks=_parse_structured_output(outputs[operation["batches_step"]], step_id=step.step_id),
+            results=_parse_structured_output(outputs[operation["results_step"]], step_id=step.step_id),
+            source_path=_render_input_text(operation["expected_source_path"], flow_input),
+            source_slug=_render_input_text(operation["expected_source_slug"], flow_input),
+        )
+    elif operation["kind"] == "prepare_doctrine_batches":
         transformed = prepare_doctrine_concept_batches(
             structure=source,
             analyses=_parse_structured_output(outputs[operation["results_step"]], step_id=step.step_id),
