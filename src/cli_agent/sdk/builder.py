@@ -162,8 +162,19 @@ class AgentBuilder:
             for server in config.mcp_servers:
                 if server.built_in:
                     raise ValueError("built_in MCPs dürfen nicht als Projekt-Server übergeben werden.")
-                definition = asdict(server)
-                definition["args"] = list(server.args)
+                definition = (
+                    {"name": server.name}
+                    if server.transport == "stdio"
+                    else {
+                        "name": server.name,
+                        "transport": server.transport,
+                        "url": server.url,
+                        "headers": server.headers,
+                        "config": server.config,
+                        "compress_result": server.compress_result,
+                        "compress_min_chars": server.compress_min_chars,
+                    }
+                )
                 if _mcp_server_config(definition) != server:
                     raise ValueError("Ungültige MCP-Projektkonfiguration.")
         self._project = config
