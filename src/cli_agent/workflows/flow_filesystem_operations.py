@@ -215,7 +215,7 @@ def markdown_sections(
     raw = Path(source_path)
     windows = PureWindowsPath(source_path)
     if (not source_path.strip() or raw.is_absolute() or windows.is_absolute()
-            or windows.drive or ".." in raw.parts or ".." in windows.parts
+            or windows.root or windows.drive or ".." in raw.parts or ".." in windows.parts
             or raw.suffix.casefold() not in {".md", ".markdown"}):
         raise ValueError("markdown_sections.source_path ist kein sicherer Markdown-Pfad.")
     root = workspace.resolve(strict=True)
