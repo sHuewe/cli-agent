@@ -39,7 +39,7 @@ from cli_agent.context.file_context import (
     read_existing_output_text,
 )
 from cli_agent.workflows.flow_json_operations import transform_json
-from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest
+from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest, prepare_doctrine_concept_batches, assemble_doctrine_concept_plan
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
@@ -1482,9 +1482,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug"
+                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "structure_input", "results_input"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
@@ -1935,6 +1935,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             json_inputs[name] = JsonInputSpec(
                 path=path_template, iterate=iterate,
             )
+        if (
+            raw_json_operation is not None
+            and raw_json_operation.get("results_input") is not None
+            and raw_json_operation["results_input"] not in json_inputs
+        ):
+            raise ValueError("json_operation.results_input muss ein json_inputs-Name sein.")
         if (
             raw_json_operation is not None
             and raw_json_operation["input"] not in json_inputs
@@ -4917,7 +4923,18 @@ def _execute_json_step(
     source = _parse_structured_output(
         json_values[operation["input"]], step_id=step.step_id,
     )
-    if operation["kind"] == "group_items":
+    if operation["kind"] == "prepare_doctrine_batches":
+        transformed = prepare_doctrine_concept_batches(
+            structure=source,
+            analyses=_parse_structured_output(json_values[operation["results_input"]], step_id=step.step_id),
+            batch_size=operation.get("batch_size", 3),
+        )
+    elif operation["kind"] == "assemble_doctrine_plan":
+        transformed = assemble_doctrine_concept_plan(
+            structure=source,
+            results=_parse_structured_output(json_values[operation["results_input"]], step_id=step.step_id),
+        )
+    elif operation["kind"] == "group_items":
         transformed = group_assigned_items(
             routes=_parse_structured_output(json_values["routes"], step_id=step.step_id),
             assignments=_parse_structured_output(json_values["assignments"], step_id=step.step_id),
