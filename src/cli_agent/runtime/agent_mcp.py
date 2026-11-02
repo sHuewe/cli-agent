@@ -275,7 +275,27 @@ class McpLifecycleMixin:
             error = ValueError(f"Konfiguriertes OKF-Repository existiert nicht oder kein Verzeichnis: {options.repository}")
             if options.required: raise error
             logger.error("knowledge_server_disabled reason=%s", error); return
-        server_config = _RuntimeMcpServerConfig(name="okf", command="{python}", args=("-m", "cli_agent.okf_mcp_server.server", "--project-directory", str(options.repository), "--max-read-bytes", str(options.max_read_bytes), "--max-index-entries", str(options.max_index_entries), "--config-file", str(self.config_file)), compress_result=True, compress_min_chars=options.compress_min_chars)
+        # The embeddable SDK can supply its project configuration purely in
+        # Python. It must not force the OKF subprocess to load a machine-local
+        # config file; the runtime already resolved its effective options.
+        config_args = (
+            ("--sdk-configless",)
+            if getattr(self, "_sdk_configless", False)
+            else ("--config-file", str(self.config_file))
+        )
+        server_config = _RuntimeMcpServerConfig(
+            name="okf",
+            command="{python}",
+            args=(
+                "-m", "cli_agent.okf_mcp_server.server",
+                "--project-directory", str(options.repository),
+                "--max-read-bytes", str(options.max_read_bytes),
+                "--max-index-entries", str(options.max_index_entries),
+                *config_args,
+            ),
+            compress_result=True,
+            compress_min_chars=options.compress_min_chars,
+        )
         knowledge_stack = AsyncExitStack(); await knowledge_stack.__aenter__()
         try:
             session, instructions = await self._connect_server(knowledge_stack, server_config)
