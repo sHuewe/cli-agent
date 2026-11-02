@@ -18,6 +18,7 @@ from cli_agent.settings.admin_config import AdminConfig
 from .events import AgentEvent, ToolCallRecord
 from .usage import UsageSummary, summarize_usage, usage_history
 from .tools import ToolInfo, available_tools
+from .mcp import McpInterface, execute_direct_tool
 from .python_tools import register_python_tools
 from .context import add_reference_context
 from .state import SessionState, session_state
@@ -47,6 +48,7 @@ class Agent:
         self._options = dict(run_options)
         self._event_callback = event_callback
         self._python_tools = python_tools
+        self.mcp = McpInterface(self)
         self._event_queue: asyncio.Queue[AgentEvent | None] | None = None
         self._event_worker: asyncio.Task[None] | None = None
         self._worker_task: asyncio.Task[None] | None = None
@@ -270,6 +272,8 @@ class Agent:
                             result = None
                         elif action == "add_context":
                             result = add_reference_context(runtime, payload[0], payload[1])
+                        elif action == "mcp_call_tool":
+                            result = await execute_direct_tool(runtime, payload[0], payload[1])
                         elif action == "list_tools":
                             result = available_tools(runtime)
                         elif action == "get_state":
