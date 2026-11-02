@@ -184,7 +184,13 @@ class AgentBuilder:
                 if _mcp_server_config(definition) != server:
                     raise ValueError("Ungültige MCP-Projektkonfiguration.")
         self._project = config
-        self._run_options = {k: v for k, v in overrides.items() if k in _RUN_OPTIONS}
+        run_options = {k: v for k, v in overrides.items() if k in _RUN_OPTIONS}
+        # Callback configuration is independent of project configuration.
+        # Keep the existing approval callback across project updates, unless
+        # a caller explicitly replaces or clears it in this call.
+        if "approval_callback" not in run_options and "approval_callback" in self._run_options:
+            run_options["approval_callback"] = self._run_options["approval_callback"]
+        self._run_options = run_options
         return self
 
     def with_event_callback(self, callback: Any) -> AgentBuilder:
