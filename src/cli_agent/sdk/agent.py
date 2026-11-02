@@ -97,7 +97,7 @@ class Agent:
         if self._closed or self._worker_task is None or self._queue is None:
             raise RuntimeError("Agent ist nicht gestartet.")
         if self._worker_task.done():
-            raise RuntimeError("Agenten-Worker ist beendet.") from self._worker_task.exception()
+            raise RuntimeError("Agenten-Worker ist beendet.")
         future: asyncio.Future[AgentResult] = asyncio.get_running_loop().create_future()
         await self._queue.put((prompt, future))
         return await future
@@ -109,7 +109,8 @@ class Agent:
         if self._worker_task is None:
             return
         assert self._queue is not None
-        await self._queue.put(None)
+        if not self._worker_task.done():
+            await self._queue.put(None)
         try:
             await self._worker_task
         except asyncio.CancelledError:
