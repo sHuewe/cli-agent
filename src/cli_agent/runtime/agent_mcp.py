@@ -95,7 +95,9 @@ class McpLifecycleMixin:
                 # The in-process knowledge reentry adapter has no stdio/HTTP
                 # connection to restart. Its route remains registered while
                 # disabled; only the active-server flag needs to change.
-                if server_name == "knowledge_reentry":
+                if server_name == "python" and getattr(server_config, "transport", "") == "python":
+                    pass
+                elif server_name == "knowledge_reentry":
                     if (
                         server_config is None
                         or not getattr(server_config, "built_in", False)
@@ -109,6 +111,9 @@ class McpLifecycleMixin:
                 self._active_servers.add(server_name)
         elif was_enabled:
             self._active_servers.discard(server_name)
+            if server_name == "python" and getattr(self._server_configs.get(server_name), "transport", "") == "python":
+                # Local SDK tools do not own an MCP transport.
+                pass
             server_stack = self._server_stacks.pop(server_name, None)
             if server_stack is not None:
                 try:
