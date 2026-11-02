@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import inspect
 import logging
 import uuid
@@ -16,6 +17,8 @@ from cli_agent.settings.admin_config import AdminConfig
 from .events import AgentEvent, ToolCallRecord
 from .usage import UsageSummary, summarize_usage, usage_history
 from .tools import ToolInfo, available_tools
+from .state import SessionState, session_state
+from .artifacts import AgentArtifact, MAX_SDK_ARTIFACTS_PER_RUN, MAX_SDK_ARTIFACT_BYTES_PER_RUN
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,8 @@ class AgentResult:
     events: tuple[AgentEvent, ...] = ()
     usage: UsageSummary | None = None
     session_usage: UsageSummary | None = None
+    parsed: Any = None
+    artifacts: tuple[AgentArtifact, ...] = ()
 
 
 class Agent:
@@ -70,6 +75,8 @@ class Agent:
         starts: dict[str, float] = {}
         open_tools: dict[str, str] = {}
         calls: list[ToolCallRecord] = []
+        published: list[AgentArtifact] = []
+        published_bytes = 0
 
         async def emit(kind: str, payload: dict[str, Any]) -> None:
             # Never expose raw MCP results, tool arguments or model payloads.
@@ -87,6 +94,21 @@ class Agent:
                 call_id=call_id, status=payload.get("status"),
                 phase=payload.get("phase"), duration_ms=duration_ms,
             )
+            nonlocal published_bytes
+            if kind == "artifact_published":
+                if len(published) >= MAX_SDK_ARTIFACTS_PER_RUN:
+                    raise ValueError("SDK artifact count limit exceeded")
+                store = getattr(runtime, "_result_artifacts", None)
+                if store is None:
+                    raise RuntimeError("No registered artifact store")
+                data = store.read_registered(payload["path"])
+                if published_bytes + len(data) > MAX_SDK_ARTIFACT_BYTES_PER_RUN:
+                    raise ValueError("SDK artifact byte limit exceeded")
+                published_bytes += len(data)
+                published.append(AgentArtifact(
+                    name=payload["filename"], mime_type=payload["mime_type"],
+                    _content=data,
+                ))
             if len(events) < 8192:
                 events.append(event)
             if kind == "tool_started" and call_id:
@@ -137,8 +159,14 @@ class Agent:
         for call_id, name in open_tools.items():
             calls.append(ToolCallRecord(name=name, call_id=call_id, status="interrupted"))
         history = usage_history(client)
+        parsed = None
+        if getattr(runtime, "response_format", "text") == "json":
+            def reject_constant(value: str) -> None:
+                raise ValueError(f"Invalid JSON constant: {value}")
+            parsed = json.loads(answer, parse_constant=reject_constant)
         return AgentResult(
             answer=answer, tool_calls=tuple(calls), events=tuple(events),
+            parsed=parsed, artifacts=tuple(published),
             usage=summarize_usage(history[before:]),
             session_usage=summarize_usage(history[self._usage_start:]),
         )
@@ -222,6 +250,8 @@ class Agent:
                             result = None
                         elif action == "list_tools":
                             result = available_tools(runtime)
+                        elif action == "get_state":
+                            result = session_state(runtime, usage_start=self._usage_start)
                         elif action == "enable_server":
                             result = await runtime.enable_server(payload)
                         elif action == "disable_server":
@@ -308,6 +338,10 @@ class Agent:
     async def list_tools(self) -> tuple[ToolInfo, ...]:
         """Inspect currently available tools and approval requirements."""
         return await self._request("list_tools")
+
+    async def get_state(self) -> SessionState:
+        """Snapshot session metadata without exposing conversation contents."""
+        return await self._request("get_state")
 
     async def enable_server(self, server_name: str) -> bool:
         """Enable a configured MCP server via the owning worker."""
