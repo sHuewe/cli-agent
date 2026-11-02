@@ -8,7 +8,10 @@ import uuid
 from typing import Any
 
 from cli_agent.state.evidence_state import EvidenceState
-from cli_agent.state.evidence_tools import ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, REMOVE_EVIDENCE_TOOL_NAME
+from cli_agent.state.evidence_tools import (
+    ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, REMOVE_EVIDENCE_TOOL_NAME,
+    source_artifacts_from_evidences,
+)
 from cli_agent.models.model import RetryingModelClient
 
 def _isolated_sub_run_client(client: Any) -> Any:
@@ -116,22 +119,9 @@ def _delegated_evidence_context(parent: EvidenceState, ids: list[str]) -> dict[s
         for item in parent.model_snapshot()["evidences"]
         if item["id"] in selected
     ]
-    artifacts: dict[str, dict[str, Any]] = {}
-    for evidence_id in ids:
-        for source in parent.evidences[evidence_id]["tool_calls"]:
-            ref = source.get("source_ref")
-            path = source.get("workspace_path")
-            if (not isinstance(ref, str) or not isinstance(path, str)
-                    or not path or source.get("artifact_expired")):
-                continue
-            entry: dict[str, Any] = {"workspace_path": path}
-            records_path = source.get("records_path")
-            if isinstance(records_path, str):
-                entry["records_path"] = records_path
-            record_sets = source.get("record_sets")
-            if isinstance(record_sets, list):
-                entry["record_sets"] = copy.deepcopy(record_sets)
-            artifacts[ref] = entry
+    artifacts = source_artifacts_from_evidences({
+        evidence_id: parent.evidences[evidence_id] for evidence_id in ids
+    })
     return {"existing_evidences": findings, "source_artifacts": artifacts}
 
 
