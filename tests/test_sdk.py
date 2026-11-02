@@ -165,3 +165,63 @@ def test_sdk_builtin_mcp_uses_configless_mode_and_effective_pdf_limit(tmp_path):
         assert "--config-file" not in server.args
     os_args = servers["os"].args
     assert os_args[os_args.index("--max-pdf-pages") + 1] == "217"
+
+
+def test_sdk_okf_flag_on_runtime_and_effective_config(tmp_path):
+    from cli_agent.platform.execution import ExecutionDependencies, OneShotRunOptions, prepare_agent
+    from cli_agent.settings.config import AppConfig, OkfConfig
+    from dataclasses import replace
+    captured = {}
+    class FakeAgent:
+        def __init__(self, _workspace, _model_client, _servers, **kwargs):
+            captured.update(kwargs)
+
+    deps = ExecutionDependencies(
+        load_config=lambda _: (_ for _ in ()).throw(AssertionError("unexpected file load")),
+        load_admin_config=lambda: (_ for _ in ()).throw(AssertionError("unexpected admin load")),
+        configure_logging=lambda *_: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+    repo = tmp_path / "knowledge"
+    repo.mkdir()
+    config = replace(AppConfig(), okf=OkfConfig(repository=str(repo)))
+    prepare_agent(
+        OneShotRunOptions(workspace=tmp_path, prompt="test"),
+        dependencies=deps, project_config=config, admin_config=AdminConfig(),
+    )
+    assert captured["sdk_configless"] is True
+    assert captured["okf"] == config.okf
+
+
+def test_sdk_project_file_remains_protected_in_both_builtin_servers(tmp_path):
+    from cli_agent.platform.execution import ExecutionDependencies, OneShotRunOptions, prepare_agent
+    from cli_agent.settings.config import AppConfig
+    captured = {}
+    class FakeAgent:
+        def __init__(self, _workspace, _model_client, servers, **kwargs):
+            captured["servers"] = servers
+
+    deps = ExecutionDependencies(
+        load_config=lambda _: (_ for _ in ()).throw(AssertionError("unexpected file load")),
+        load_admin_config=lambda: (_ for _ in ()).throw(AssertionError("unexpected admin load")),
+        configure_logging=lambda *_: None,
+        create_model_client=lambda *_args, **_kwargs: object(),
+        agent_type=FakeAgent,
+    )
+    path = tmp_path / "project.toml"
+    path.write_text("[model]\\nmodel = 'demo'\\n")
+    prepare_agent(
+        OneShotRunOptions(
+            workspace=tmp_path, prompt="test", config_file=path,
+            workspace_access="write", with_data=True,
+        ),
+        dependencies=deps, project_config=AppConfig(), admin_config=AdminConfig(),
+    )
+    servers = {s.name: s for s in captured["servers"]}
+    for name in ("os", "data"):
+        server = servers[name]
+        assert "--config-file" not in server.args
+        assert "--sdk-configless" in server.args
+        args = list(server.literal_args)
+        assert args[args.index("--protected-path") + 1] == str(path.resolve())
