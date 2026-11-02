@@ -14,7 +14,7 @@ from mcp.types import CallToolResult
 from pydantic import Field
 
 from cli_agent.security.mcp_path_policy import read_path_policy
-from cli_agent.settings.config import McpServerConfig, default_config_file, load_config
+from cli_agent.settings.config import AppConfig, McpServerConfig, default_config_file, load_config
 from cli_agent.data.data_operations import DataOperationError, DataOperations, MAX_DATA_ROWS, MAX_SAMPLE_ROWS
 from cli_agent.data.dataframe_types import DataFrameInput, DataFrameSource, DerivedColumn, ResampleAggregation
 from cli_agent.platform.logging_setup import configure_logging
@@ -536,6 +536,11 @@ def parse_args() -> argparse.Namespace:
         help="Project workspace directory fixed for this MCP process",
     )
     parser.add_argument(
+        "--sdk-configless",
+        action="store_true",
+        help="Use in-memory SDK defaults rather than loading a user config file.",
+    )
+    parser.add_argument(
         "--config-file",
         type=Path,
         default=None,
@@ -572,7 +577,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    config = load_config(path=args.config_file)
+    if args.sdk_configless and args.config_file is not None:
+        raise ValueError("--sdk-configless und --config-file sind nicht kombinierbar.")
+    config = AppConfig() if args.sdk_configless else load_config(path=args.config_file)
     effective_config_file = (
         args.config_file.expanduser()
         if args.config_file is not None
