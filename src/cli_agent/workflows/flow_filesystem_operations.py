@@ -1,17 +1,23 @@
 """Bounded, read-only filesystem operations for deterministic Flow steps.
 
-This module is independent of OKF and never reads file contents.
+This module is independent of OKF. Only markdown_sections reads source text
+for bounded heading and line metadata; it never includes full source content.
 """
 from __future__ import annotations
 
 import os
 import hashlib
+from bisect import bisect_left, bisect_right
 import re
 import stat
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
+from cli_agent.security.filesystem_security import (
+    path_entry_is_symlink_or_reparse,
+    regular_file_has_multiple_links,
+)
+from cli_agent.platform.os_operations import Workspace
 
 
 MAX_INVENTORY_ENTRIES = 10_000
@@ -227,13 +233,27 @@ def markdown_sections(
     candidate = candidate.resolve(strict=True)
     if not candidate.is_file() or not candidate.is_relative_to(root):
         raise ValueError("markdown_sections.source_path ist keine Workspace-Datei.")
+    # Match the same secret/credential policy as explicit prompt and context
+    # files before reading any source bytes (including heading text).
+    if Workspace._is_sensitive_file(candidate, workspace=root):
+        raise ValueError(
+            "markdown_sections.source_path ist als Secret-/Credential- oder "
+            f"interner Workspace-Pfad geschützt: {candidate}"
+        )
+    if regular_file_has_multiple_links(candidate):
+        raise ValueError("markdown_sections darf keine Dateien mit Hardlinks lesen.")
     if candidate.stat().st_size > 8_000_000:
         raise ValueError("markdown_sections: Quelldokument überschreitet 8 MB.")
     with candidate.open("r", encoding="utf-8-sig", newline=None) as handle:
         lines = handle.readlines()
     if len(lines) > 200_000:
         raise ValueError("markdown_sections: zu viele Zeilen.")
-    total_chars = sum(len(line) for line in lines)
+    # Prefix sums make all char-distance checks O(1), even for documents
+    # containing tens of thousands of short Markdown headings.
+    char_offsets = [0]
+    for line in lines:
+        char_offsets.append(char_offsets[-1] + len(line))
+    total_chars = char_offsets[-1]
     if total_chars <= target_chars:
         return {
             "source_path": raw.as_posix(), "mode": "direct",
@@ -247,7 +267,7 @@ def markdown_sections(
         }
     # Markdown headings are cut candidates, not hard boundaries. A huge
     # heading-free paragraph is split deterministically at a line boundary.
-    headings = set()
+    headings: list[int] = []
     fence = None
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -260,22 +280,34 @@ def markdown_sections(
                 fence = None
             continue
         if fence is None and re.match(r"^#{1,6}\s+\S", stripped):
-            headings.add(i)
+            headings.append(i)
     boundaries = [0]
     start = 0
     while start < len(lines):
-        chars = 0
-        limit = start
-        while limit < len(lines) and chars + len(lines[limit]) <= target_chars:
-            chars += len(lines[limit])
-            limit += 1
-        if limit == len(lines):
+        # Find the last line boundary within the character budget in O(log n).
+        limit = max(
+            start + 1,
+            bisect_right(char_offsets, char_offsets[start] + target_chars) - 1,
+        )
+        if limit >= len(lines):
             end = len(lines)
         else:
-            limit = max(start + 1, limit)
-            possible = [index for index in headings if start < index <= limit and
-                        sum(len(line) for line in lines[start:index]) >= target_chars // 3]
-            end = max(possible) if possible else limit
+            # Prefer the latest Markdown heading after a minimum 1/3 budget.
+            earliest = max(
+                start + 1,
+                bisect_left(
+                    char_offsets,
+                    char_offsets[start] + target_chars // 3,
+                    lo=start + 1,
+                    hi=limit + 1,
+                ),
+            )
+            heading_index = bisect_right(headings, limit) - 1
+            end = (
+                headings[heading_index]
+                if heading_index >= 0 and headings[heading_index] >= earliest
+                else limit
+            )
         if end <= start:
             end = start + 1
         boundaries.append(end)
@@ -285,11 +317,13 @@ def markdown_sections(
                 "markdown_sections: zu viele Abschnitte; target_chars erhöhen."
             )
     sections = []
+    heading_index = 0
     for i, (first, last) in enumerate(zip(boundaries, boundaries[1:]), start=1):
-        title = next(
-            (lines[n].strip().lstrip("#").strip()[:160]
-             for n in range(first, last) if n in headings),
-            f"Abschnitt {i}",
+        heading_index = bisect_left(headings, first, lo=heading_index)
+        title = (
+            lines[headings[heading_index]].strip().lstrip("#").strip()[:160]
+            if heading_index < len(headings) and headings[heading_index] < last
+            else f"Abschnitt {i}"
         )
         sections.append({
             "id": f"s{i:03d}",
