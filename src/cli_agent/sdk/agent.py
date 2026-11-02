@@ -29,6 +29,9 @@ class Agent:
         self._queue: asyncio.Queue[tuple[str, asyncio.Future[AgentResult]] | None] | None = None
         self._ready: asyncio.Future[None] | None = None
         self._closed = False
+        # Identifies the only request currently executing on the MCP-owning
+        # worker. Cancelling a queued request must never cancel another run.
+        self._active_future: asyncio.Future[AgentResult] | None = None
 
     async def start(self) -> None:
         if self._closed:
@@ -66,16 +69,38 @@ class Agent:
                     if item is None:
                         return
                     prompt, future = item
-                    if future.cancelled():
+                    if future.cancelled() or self._closed:
+                        if not future.done():
+                            future.set_exception(RuntimeError("Agent beendet."))
                         continue
+                    self._active_future = future
                     try:
+                        # The worker owns the MCP AnyIO scopes, so the running
+                        # ask must execute and be cancelled on this same task.
                         answer = await runtime.ask(prompt)
+                    except asyncio.CancelledError:
+                        if self._closed:
+                            if not future.done():
+                                future.cancel()
+                            raise
+                        if not future.cancelled():
+                            # Unexpected worker cancellation: do not pretend
+                            # that this was a user-cancelled request.
+                            raise
+                        # Match the API worker: keep MCP sessions alive after
+                        # interrupting only this request.
+                        worker = asyncio.current_task()
+                        if worker is not None:
+                            while worker.cancelling():
+                                worker.uncancel()
                     except Exception as exc:
                         if not future.done():
                             future.set_exception(exc)
                     else:
                         if not future.done():
                             future.set_result(AgentResult(answer=answer))
+                    finally:
+                        self._active_future = None
         except asyncio.CancelledError:
             if not self._ready.done():
                 self._ready.set_exception(RuntimeError("Agentenstart abgebrochen."))
@@ -100,7 +125,20 @@ class Agent:
             raise RuntimeError("Agenten-Worker ist beendet.")
         future: asyncio.Future[AgentResult] = asyncio.get_running_loop().create_future()
         await self._queue.put((prompt, future))
-        return await future
+        try:
+            return await future
+        except asyncio.CancelledError:
+            # asyncio.wait_for() and cancelled notebook cells cancel their
+            # waiting Future, not the worker that runs the LLM/tool loop.
+            # Cancel only when this request is currently active.
+            future.cancel()
+            if (
+                self._active_future is future
+                and self._worker_task is not None
+                and not self._worker_task.done()
+            ):
+                self._worker_task.cancel()
+            raise
 
     async def close(self) -> None:
         if self._closed:
@@ -110,7 +148,14 @@ class Agent:
             return
         assert self._queue is not None
         if not self._worker_task.done():
-            await self._queue.put(None)
+            active = self._active_future
+            if active is not None:
+                # close() must not wait for a potentially mutating tool call
+                # to finish after the caller has asked us to shut down.
+                active.cancel()
+                self._worker_task.cancel()
+            else:
+                await self._queue.put(None)
         try:
             await self._worker_task
         except asyncio.CancelledError:
