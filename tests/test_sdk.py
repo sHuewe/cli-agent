@@ -776,3 +776,25 @@ def test_sdk_context_payload_uses_untrusted_reference_layer():
     assert payload["python_reference_contexts"] == [
         {"name": "reference", "content": "example data"}
     ]
+
+
+def test_sdk_project_config_preserves_explicit_approval_callback():
+    async def approve(tool, arguments):
+        return "session"
+
+    builder = AgentBuilder().with_approval_callback(approve)
+    assert builder.with_project_config(model="test").build()._options["approval_callback"] is approve
+    assert builder.with_project_config(workspace=".").build()._options["approval_callback"] is approve
+
+    # An explicitly supplied callback overrides the previous callback.
+    async def replacement(tool, arguments):
+        return False
+
+    assert builder.with_project_config(
+        approval_callback=replacement,
+    ).build()._options["approval_callback"] is replacement
+
+    # Explicit None is a deliberate removal, not an omitted parameter.
+    assert builder.with_project_config(
+        approval_callback=None,
+    ).build()._options["approval_callback"] is None
