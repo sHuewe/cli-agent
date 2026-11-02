@@ -194,3 +194,110 @@ def inventory_directory(
     }
     return _add_stable_slugs(result) if stable_slugs else result
 
+
+
+def markdown_sections(
+    workspace: Path,
+    source_path: str,
+    *,
+    target_chars: int = 30000,
+    max_sections: int = 32,
+) -> dict[str, Any]:
+    """Build exact line ranges from natural Markdown headings without an LLM.
+
+    The operation never returns document text. Large documents are split near
+    headings; the ranges are contiguous and cover every source line.
+    """
+    if type(target_chars) is not int or not 4000 <= target_chars <= 100000:
+        raise ValueError("markdown_sections.target_chars ist ungültig.")
+    if type(max_sections) is not int or not 1 <= max_sections <= 100:
+        raise ValueError("markdown_sections.max_sections ist ungültig.")
+    raw = Path(source_path)
+    windows = PureWindowsPath(source_path)
+    if (not source_path.strip() or raw.is_absolute() or windows.is_absolute()
+            or windows.drive or ".." in raw.parts or ".." in windows.parts
+            or raw.suffix.casefold() not in {".md", ".markdown"}):
+        raise ValueError("markdown_sections.source_path ist kein sicherer Markdown-Pfad.")
+    root = workspace.resolve(strict=True)
+    candidate = root
+    for part in raw.parts:
+        candidate = candidate / part
+        if path_entry_is_symlink_or_reparse(candidate):
+            raise ValueError("markdown_sections darf keine Symlinks lesen.")
+    candidate = candidate.resolve(strict=True)
+    if not candidate.is_file() or not candidate.is_relative_to(root):
+        raise ValueError("markdown_sections.source_path ist keine Workspace-Datei.")
+    if candidate.stat().st_size > 8_000_000:
+        raise ValueError("markdown_sections: Quelldokument überschreitet 8 MB.")
+    with candidate.open("r", encoding="utf-8-sig", newline=None) as handle:
+        lines = handle.readlines()
+    if len(lines) > 200_000:
+        raise ValueError("markdown_sections: zu viele Zeilen.")
+    total_chars = sum(len(line) for line in lines)
+    if total_chars <= target_chars:
+        return {
+            "source_path": raw.as_posix(), "mode": "direct",
+            "total_lines": len(lines), "total_chars": total_chars,
+            "sections": [],
+        }
+    if not lines:
+        return {
+            "source_path": raw.as_posix(), "mode": "direct",
+            "total_lines": 0, "total_chars": 0, "sections": [],
+        }
+    # Markdown headings are cut candidates, not hard boundaries. A huge
+    # heading-free paragraph is split deterministically at a line boundary.
+    headings = set()
+    fence = None
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        opening = re.match(r"^(`{3,}|~{3,})", stripped)
+        if opening:
+            token = opening.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence is None and re.match(r"^#{1,6}\s+\S", stripped):
+            headings.add(i)
+    boundaries = [0]
+    start = 0
+    while start < len(lines):
+        chars = 0
+        limit = start
+        while limit < len(lines) and chars + len(lines[limit]) <= target_chars:
+            chars += len(lines[limit])
+            limit += 1
+        if limit == len(lines):
+            end = len(lines)
+        else:
+            limit = max(start + 1, limit)
+            possible = [index for index in headings if start < index <= limit and
+                        sum(len(line) for line in lines[start:index]) >= target_chars // 3]
+            end = max(possible) if possible else limit
+        if end <= start:
+            end = start + 1
+        boundaries.append(end)
+        start = end
+        if len(boundaries) - 1 > max_sections:
+            raise ValueError(
+                "markdown_sections: zu viele Abschnitte; target_chars erhöhen."
+            )
+    sections = []
+    for i, (first, last) in enumerate(zip(boundaries, boundaries[1:]), start=1):
+        title = next(
+            (lines[n].strip().lstrip("#").strip()[:160]
+             for n in range(first, last) if n in headings),
+            f"Abschnitt {i}",
+        )
+        sections.append({
+            "id": f"s{i:03d}",
+            "start_line": first + 1, "end_line": last,
+            "title": title,
+        })
+    return {
+        "source_path": raw.as_posix(), "mode": "sections",
+        "total_lines": len(lines), "total_chars": total_chars,
+        "sections": sections,
+    }
