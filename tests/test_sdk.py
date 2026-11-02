@@ -877,3 +877,59 @@ def test_sdk_json_mode_preserves_local_command_status(monkeypatch, tmp_path):
             assert result.answer == '{"ok": true}'
 
     asyncio.run(scenario())
+
+
+def test_sdk_synchronous_event_callback_does_not_block_loop_and_preserves_order(monkeypatch, tmp_path):
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+    seen = []
+    event_loop_thread = []
+
+    class Runtime:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            await self.event_callback("tool_started", {"call_id": "1", "tool": "python__example"})
+            await self.event_callback("tool_finished", {"call_id": "1", "tool": "python__example"})
+            return prompt
+
+    def callback(event):
+        seen.append((event.type, threading.get_ident()))
+        if event.type == "run_started":
+            started.set()
+            assert release.wait(timeout=2), "callback was not released"
+
+    monkeypatch.setattr(
+        "cli_agent.sdk.agent.prepare_agent",
+        lambda *_args, **_kwargs: SimpleNamespace(agent=Runtime()),
+    )
+
+    async def scenario():
+        event_loop_thread.append(threading.get_ident())
+        async with (
+            AgentBuilder()
+            .with_project_config(workspace=tmp_path)
+            .with_event_callback(callback)
+            .build()
+        ) as agent:
+            result = await asyncio.wait_for(agent.ask("hello"), 2)
+            assert result.answer == "hello"
+            # This timer would not run if a sync callback blocked asyncio.
+            await asyncio.wait_for(asyncio.to_thread(started.wait, 2), 2)
+            await asyncio.wait_for(asyncio.sleep(0.01), 0.5)
+            release.set()
+            # Drain the event consumer before the agent's context closes.
+            for _ in range(50):
+                if len(seen) >= 4:
+                    break
+                await asyncio.sleep(0.01)
+    asyncio.run(scenario())
+
+    assert [event for event, _ in seen] == [
+        "run_started", "tool_started", "tool_finished", "run_finished",
+    ]
+    assert all(tid != event_loop_thread[0] for _, tid in seen)
