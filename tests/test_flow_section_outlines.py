@@ -84,3 +84,42 @@ def test_incomplete_analysis_blocks_outlines():
     analyses["iterations"][0]["output"]["status"] = "needs_attention"
     with pytest.raises(ValueError, match="Unvollständige"):
         prepare_section_outline_tasks(sections, analyses)
+
+
+def test_existing_outlines_with_optional_tags_and_longer_metadata():
+    tasks = prepare_section_outline_tasks(*data())
+    results = {"iterations": [
+        {"id": sid, "output": {"status": "ok", "section_id": sid,
+            "concepts": [{
+                "topic_key": "process-overview",
+                "title": "Detailed procedure",
+                "description": "A" * 1200,
+                "tags": "operations" if sid == "s001" else None,
+            }],
+        }} for sid in ("s001", "s002")
+    ]}
+    result = assemble_section_outlines(
+        tasks, results, source_path="sources/doc.md", source_slug="doc-123",
+    )
+    assert result["concepts"][0]["section_ids"] == ["s001", "s002"]
+    assert result["concepts"][0]["tags"] == ["operations"]
+    assert len(result["concepts"][0]["description"]) == 1200
+
+
+def test_outline_metadata_failure_reports_section_and_field():
+    tasks = prepare_section_outline_tasks(*data())
+    results = {"iterations": [
+        {"id": sid, "output": {"status": "ok", "section_id": sid,
+            "concepts": [{
+                "topic_key": "process-overview",
+                "title": "Process",
+                "description": "Description",
+                "tags": [42] if sid == "s001" else [],
+            }],
+        }} for sid in ("s001", "s002")
+    ]}
+    with pytest.raises(ValueError, match=r"s001.*tags\[1\]"):
+        assemble_section_outlines(
+            tasks, results,
+            source_path="sources/doc.md", source_slug="doc-123",
+        )
