@@ -436,3 +436,80 @@ def test_sdk_close_before_worker_first_runs_settles_startup(monkeypatch, tmp_pat
 
     asyncio.run(scenario())
     assert prepared == []
+
+
+def test_sdk_tool_trace_and_events_are_per_run(monkeypatch, tmp_path):
+    class Runtime:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            await self.event_callback("model_started", {"call_id": "m", "phase": "main"})
+            await self.event_callback("model_finished", {"call_id": "m", "phase": "main", "status": "success"})
+            await self.event_callback("tool_started", {"call_id": "t", "tool": "data__aggregate_data", "arguments": {"secret": "NEVER"}})
+            await self.event_callback("tool_finished", {"call_id": "t", "tool": "data__aggregate_data", "status": "success", "result": "NEVER"})
+            return prompt
+    monkeypatch.setattr("cli_agent.sdk.agent.prepare_agent", lambda *_a, **_k: SimpleNamespace(agent=Runtime()))
+    seen = []
+    async def on_event(event):
+        seen.append(event)
+    async def scenario():
+        async with AgentBuilder().with_project_config(workspace=tmp_path).with_event_callback(on_event).build() as agent:
+            a = await agent.ask("first")
+            b = await agent.ask("second")
+            assert a.answer == "first" and b.answer == "second"
+            assert len(a.tool_calls) == len(b.tool_calls) == 1
+            assert a.tool_calls[0].name == "data__aggregate_data"
+            assert a.tool_calls[0].status == "success"
+            assert a.tool_calls[0].duration_ms >= 0
+            assert a.events[0].type == "run_started"
+            assert a.events[-1].type == "run_finished"
+            assert a.events[0].run_id != b.events[0].run_id
+            assert all("NEVER" not in repr(e) for e in a.events)
+            await asyncio.sleep(0)
+        assert seen
+    asyncio.run(scenario())
+
+
+def test_sdk_default_callback_prints_metadata_only(monkeypatch, tmp_path, capsys):
+    from cli_agent.sdk.events import AgentEvent
+    from cli_agent.sdk import default_event_callback
+    default_event_callback(AgentEvent("tool_finished", "run", "os__read_file", "a", "success", duration_ms=25))
+    output = capsys.readouterr().out
+    assert "os__read_file" in output
+    assert "success" in output
+    assert "0.03 s" in output
+    agent = AgentBuilder().with_default_event_callback(verbose=True).build()
+    assert callable(agent._event_callback)
+
+
+def test_sdk_approval_callback_is_separate_from_events():
+    async def approve(tool, args):
+        return tool == "os__write_file" and args.get("path") == "ok.txt"
+    a = AgentBuilder().with_approval_callback(approve).build()
+    assert a._options["approval_callback"] is approve
+
+
+def test_runtime_rejects_non_boolean_approval_responses():
+    from cli_agent.runtime.agent import CliAgent
+    from cli_agent.settings.config import McpServerConfig
+    class Model:
+        pass
+    async def scenario():
+        agent = CliAgent(Path.cwd(), Model(), ())
+        for value in ("no", "yes", "false", 1, None, {}, []):
+            async def approval(_tool, _args, return_value=value):
+                return return_value
+            agent.approval_callback = approval
+            assert await agent._approve_tool_call("os__write_file", {"path": "x"}) is False
+        async def approved(_tool, _args):
+            return True
+        agent.approval_callback = approved
+        assert await agent._approve_tool_call("os__write_file", {}) is True
+        async def session(_tool, _args):
+            return "session"
+        agent.approval_callback = session
+        assert await agent._approve_tool_call("os__write_file", {}) is True
+        assert "os__write_file" in agent._session_approved_tools
+    asyncio.run(scenario())
