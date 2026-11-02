@@ -51,6 +51,64 @@ def test_source_artifacts_are_attached_and_reference_is_auto_compacted():
     assert [c["id"] for c in calls] == ["call-2", "evidence-call"]
     assert [m["tool_call_id"] for m in projection if m["role"] == "tool"] == ["call-2"]
     assert sum("evidence state" in str(m.get("content")) for m in projection) == 1
+    assert state.model_snapshot()["source_artifacts"] == {
+        "S1": {"workspace_path": "mcp-data-123/r-1.json",
+               "records_path": "/rows"}
+    }
+    import json
+    projected_state = json.loads(projection[-1]["content"].split("\n", 1)[1])
+    assert projected_state["source_artifacts"] == state.model_snapshot()["source_artifacts"]
+
+
+def test_new_evidence_preserves_only_cited_live_artifacts_without_duplicates():
+    state = EvidenceState()
+    state.register_result("data", tool_name="data__derive_columns",
+                          artifact_metadata={
+                              "workspace_path": ".cli-agent/mcp-data-x/derived.json",
+                              "records_path": "/rows", "row_count": 1936,
+                              "record_sets": [{"records_path": "/rows", "sample_rows": [{"value": 5}],
+                                               "column_stats": {"value": {"min": 5}}}],
+                          })
+    state.register_result("unused", tool_name="data__join_data",
+                          artifact_metadata={"workspace_path": "unused.json",
+                                             "records_path": "/rows"})
+    state.register_result("plain", tool_name="sensor__get_values")
+    state.add_evidence({"id": "diff", "type": "calculation",
+                        "statement": "1936 differences calculated.",
+                        "source_refs": ["S1", "S3"]})
+    state.add_evidence({"id": "summary", "type": "observation",
+                        "statement": "Derived data can be exported.",
+                        "source_refs": ["S1"]})
+
+    assert state.snapshot()["compacted_tool_call_ids"] == ["data", "plain"]
+    assert state.model_snapshot()["source_artifacts"] == {
+        "S1": {"workspace_path": ".cli-agent/mcp-data-x/derived.json",
+               "records_path": "/rows",
+               "record_sets": [{"records_path": "/rows"}]}
+    }
+    # Metadata comes from the trusted result registry, not the model input.
+    assert "S2" not in state.model_snapshot()["source_artifacts"]
+    assert "tool_calls" not in state.model_snapshot()["evidences"][0]
+    state.remove_evidence({"evidence_ids": ["diff", "summary"]})
+    assert "source_artifacts" not in state.model_snapshot()
+
+
+def test_expired_evidence_artifacts_are_not_projected_into_next_task():
+    state = EvidenceState()
+    state.register_result("data", tool_name="data__select_data",
+                          artifact_metadata={"workspace_path": ".cli-agent/temporary.json",
+                                             "records_path": "/rows"})
+    state.add_evidence({"id": "rows", "type": "observation",
+                        "statement": "Rows were selected.",
+                        "source_refs": ["S1"]})
+    assert state.model_snapshot()["source_artifacts"]["S1"]["records_path"] == "/rows"
+
+    state.begin_task()
+
+    assert state.model_snapshot()["evidences"][0]["id"] == "rows"
+    assert "source_artifacts" not in state.model_snapshot()
+    assert state.snapshot()["evidences"][0]["tool_calls"][0]["artifact_expired"]
+    assert state.snapshot()["compacted_tool_call_ids"] == []
 
 
 def test_discard_unreferenced_without_artifact_and_restore():

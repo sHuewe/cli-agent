@@ -48,7 +48,9 @@ def test_compact_projection_retains_internal_provenance():
     assert state.model_snapshot() == {"evidences": [{
         "id": "fact", "type": "observation",
         "statement": "Observed 17 W", "source_refs": ["S1"],
-    }]}
+    }], "source_artifacts": {
+        "S1": {"workspace_path": "mcp-data/abc.json", "records_path": "/points"}
+    }}
     assert state.snapshot() == original
     state.begin_task()
     assert state.model_snapshot()["evidences"][0]["source_refs"] == ["S1"]
