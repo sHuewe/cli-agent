@@ -28,13 +28,23 @@ def test_python_tool_registration_and_schema():
 
 
 def test_python_tool_invalid_definitions():
-    with pytest.raises(TypeError):
+    # An unnamed lambda fails name validation before type-annotation checks.
+    with pytest.raises(ValueError, match="Invalid Python tool name"):
         AgentBuilder().register_tool(lambda value: value)
+
+    def unannotated(value):
+        return value
+
+    with pytest.raises(TypeError, match="annotated"):
+        AgentBuilder().register_tool(unannotated)
+
     with pytest.raises(ValueError):
         AgentBuilder().register_tool(average, name="agent__bad-tool")
+
     def unsupported(*args: int):
         return args
-    with pytest.raises(TypeError):
+
+    with pytest.raises(TypeError, match="named arguments"):
         AgentBuilder().register_tool(unsupported)
 
 
