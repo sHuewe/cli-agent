@@ -43,7 +43,7 @@ def test_batched_plan_preserves_global_concepts_and_evidence():
             "status": "ok",
             "concepts": [
                 {"id": c["id"], "evidence_ranges": [
-                    {"doctrine": "sources/doc.md", "start_line": 1, "end_line": 2}
+                    {"doctrine": "sources/doc.md", "start_line": 21 if c["id"] == "c" else 1, "end_line": 22 if c["id"] == "c" else 2}
                 ]} for c in batch["concepts"]
             ],
         }} for batch in batches["batches"]
@@ -62,7 +62,7 @@ def test_missing_or_duplicate_concepts_rejected():
     with pytest.raises(ValueError, match="nicht alle"):
         assemble_doctrine_concept_plan(plan, {"iterations": [
             {"id": "b0001", "output": {"status": "ok", "concepts": [item]}}
-        ]}, prepare_doctrine_concept_batches(plan, analyses()))
+        ]}, prepare_doctrine_concept_batches(plan, analyses(), batch_size=2))
     with pytest.raises(ValueError, match="mehrfach"):
         assemble_doctrine_concept_plan(plan, {"iterations": [
             {"id": "b0001", "output": {"status": "ok", "concepts": [item, item]}}
