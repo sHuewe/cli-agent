@@ -391,3 +391,33 @@ def test_sdk_close_during_startup_interrupts_worker(monkeypatch, tmp_path):
         assert interrupted.is_set()
 
     asyncio.run(scenario())
+
+
+def test_sdk_close_before_worker_first_runs_settles_startup(monkeypatch, tmp_path):
+    prepared = []
+    class Runtime:
+        async def __aenter__(self):
+            prepared.append(True)
+            return self
+        async def __aexit__(self, *_):
+            pass
+    monkeypatch.setattr(
+        "cli_agent.sdk.agent.prepare_agent",
+        lambda *_args, **_kwargs: SimpleNamespace(agent=Runtime()),
+    )
+
+    async def scenario():
+        agent = AgentBuilder().with_project_config(workspace=tmp_path).build()
+        startup = asyncio.create_task(agent.start())
+        # start() creates _worker and then waits on _ready. The next scheduled
+        # callback may be close() before _worker receives any execution time.
+        await asyncio.sleep(0)
+        await asyncio.wait_for(agent.close(), timeout=2)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(startup, timeout=2)
+        assert agent._worker_task is None
+        assert agent._ready.done()
+        assert agent._closed
+
+    asyncio.run(scenario())
+    assert prepared == []
