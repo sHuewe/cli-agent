@@ -289,7 +289,10 @@ def prepare_doctrine_concept_batches(
     # Run path/identity checks before allowing a writer to consume the structure.
     _validate_doctrine(plan)
     source = _canonical_source_path(plan.get("source_path"))
-    sections = _array(analyses, "section_analyses")
+    sections = [
+        _obj(x, "section_analyses.iterations[]").get("output")
+        for x in _array(_obj(analyses, "section_analyses").get("iterations"), "section_analyses.iterations")
+    ]
     if len(sections) > 100:
         raise ValueError("Zu viele Abschnittsanalysen.")
     verified: list[dict[str, Any]] = []
@@ -309,16 +312,28 @@ def prepare_doctrine_concept_batches(
         for a, b in zip(verified, verified[1:])
     ):
         raise ValueError("Abschnittsanalysen weisen Lücken oder Überlappungen auf.")
+    section_by_id = {}
+    for section in verified:
+        sid = section.get("section_id")
+        if not isinstance(sid, str) or sid in section_by_id:
+            raise ValueError("Abschnittsanalysen haben ungültige IDs.")
+        section_by_id[sid] = section
     batches = []
     concepts = plan["concepts"]
     for offset in range(0, len(concepts), batch_size):
         chunk = concepts[offset:offset + batch_size]
         batch_id = f"b{len(batches)+1:04d}"
+        selected = set()
+        for concept in chunk:
+            ids = _array(concept.get("section_ids"), "concept.section_ids")
+            if not ids or any(not isinstance(sid, str) or sid not in section_by_id for sid in ids):
+                raise ValueError("Konzept enthält ungültige Abschnittsreferenzen.")
+            selected.update(ids)
         batch = {
             "id": batch_id,
             "source_path": source,
             "concepts": chunk,
-            "sections": verified,
+            "sections": [section_by_id[sid] for sid in section_by_id if sid in selected],
         }
         if _serialized_size(batch) > 1_000_000:
             raise ValueError("Konzeptgruppe überschreitet 1 MB Eingabedaten.")
@@ -336,12 +351,18 @@ def assemble_doctrine_concept_plan(
     if plan.get("status") != "ok":
         raise ValueError("Globale Konzeptstruktur ist nicht erfolgreich.")
     _validate_doctrine(plan)
-    records = _array(results, "detail_results")
+    records = _array(
+        _obj(results, "detail_results").get("iterations"),
+        "detail_results.iterations",
+    )
     expected = {concept["id"]: concept for concept in plan["concepts"]}
     received: dict[str, dict[str, Any]] = {}
     source = _canonical_source_path(plan.get("source_path"))
     for entry in records:
-        item = _obj(entry, "detail_results[]")
+        item = _obj(
+            _obj(entry, "detail_results.iterations[]").get("output"),
+            "detail_results.iterations[].output",
+        )
         if item.get("status") != "ok":
             raise ValueError("Unvollständige Detailplanung.")
         details = _array(item.get("concepts"), "detail_results[].concepts")
@@ -370,7 +391,10 @@ def assemble_doctrine_concept_plan(
         raise ValueError("Detailplanung enthält nicht alle Konzepte.")
     merged = dict(plan)
     merged["concepts"] = [
-        {**concept, "evidence_ranges": received[concept["id"]]["evidence_ranges"]}
+        {
+            **{key: value for key, value in concept.items() if key != "section_ids"},
+            "evidence_ranges": received[concept["id"]]["evidence_ranges"],
+        }
         for concept in plan["concepts"]
     ]
     _validate_doctrine(merged)
