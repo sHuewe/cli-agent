@@ -94,6 +94,22 @@ class Agent:
                     self._event_queue.put_nowait(event)
                 except asyncio.QueueFull:
                     pass
+            # The runtime reports a delegated run through the ordinary
+            # agent__start_sub_run tool lifecycle. Present a dedicated,
+            # correlated event as well, without adding another ToolCallRecord.
+            if event.tool == "agent__start_sub_run" and kind in {"tool_started", "tool_finished"}:
+                delegated = AgentEvent(
+                    type="sub_run_started" if kind == "tool_started" else "sub_run_finished",
+                    run_id=run_id, tool=event.tool, call_id=call_id,
+                    status=event.status, duration_ms=duration_ms,
+                )
+                if len(events) < 8192:
+                    events.append(delegated)
+                if self._event_queue is not None and self._event_callback is not None:
+                    try:
+                        self._event_queue.put_nowait(delegated)
+                    except asyncio.QueueFull:
+                        pass
 
         old_callback = getattr(runtime, "event_callback", None)
         runtime.event_callback = emit
