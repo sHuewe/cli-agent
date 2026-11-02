@@ -14,6 +14,8 @@ from cli_agent.platform.execution import OneShotRunOptions, prepare_agent
 from cli_agent.settings.config import AppConfig
 from cli_agent.settings.admin_config import AdminConfig
 from .events import AgentEvent, ToolCallRecord
+from .usage import UsageSummary, summarize_usage, usage_history
+from .tools import ToolInfo, available_tools
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,8 @@ class AgentResult:
     answer: str
     tool_calls: tuple[ToolCallRecord, ...] = ()
     events: tuple[AgentEvent, ...] = ()
+    usage: UsageSummary | None = None
+    session_usage: UsageSummary | None = None
 
 
 class Agent:
@@ -37,7 +41,8 @@ class Agent:
         self._event_queue: asyncio.Queue[AgentEvent | None] | None = None
         self._event_worker: asyncio.Task[None] | None = None
         self._worker_task: asyncio.Task[None] | None = None
-        self._queue: asyncio.Queue[tuple[str, asyncio.Future[AgentResult]] | None] | None = None
+        self._queue: asyncio.Queue[tuple[str, Any, asyncio.Future[Any]] | None] | None = None
+        self._usage_start = 0
         self._ready: asyncio.Future[None] | None = None
         self._closed = False
         # Identifies the only request currently executing on the MCP-owning
@@ -111,6 +116,8 @@ class Agent:
                     except asyncio.QueueFull:
                         pass
 
+        client = getattr(runtime, "model_client", None)
+        before = len(usage_history(client))
         old_callback = getattr(runtime, "event_callback", None)
         runtime.event_callback = emit
         runtime._sdk_event_reporting = True
@@ -127,7 +134,12 @@ class Agent:
             runtime._sdk_event_reporting = False
         for call_id, name in open_tools.items():
             calls.append(ToolCallRecord(name=name, call_id=call_id, status="interrupted"))
-        return AgentResult(answer=answer, tool_calls=tuple(calls), events=tuple(events))
+        history = usage_history(client)
+        return AgentResult(
+            answer=answer, tool_calls=tuple(calls), events=tuple(events),
+            usage=summarize_usage(history[before:]),
+            session_usage=summarize_usage(history[self._usage_start:]),
+        )
 
     async def start(self) -> None:
         if self._closed:
@@ -170,13 +182,14 @@ class Agent:
             async with prepared.agent as runtime:
                 for url in opts.add_web_context:
                     await runtime.ask(f"add_web_context {url}")
+                self._usage_start = len(usage_history(getattr(runtime, "model_client", None)))
                 if not self._ready.done():
                     self._ready.set_result(None)
                 while True:
                     item = await self._queue.get()
                     if item is None:
                         return
-                    prompt, future = item
+                    action, payload, future = item
                     if future.cancelled() or self._closed:
                         if not future.done():
                             future.set_exception(RuntimeError("Agent beendet."))
@@ -185,7 +198,27 @@ class Agent:
                     try:
                         # The worker owns the MCP AnyIO scopes, so the running
                         # ask must execute and be cancelled on this same task.
-                        result = await self._run_with_events(runtime, prompt)
+                        if action == "ask":
+                            result = await self._run_with_events(runtime, payload)
+                        elif action == "reset_history":
+                            runtime.reset_history()
+                            result = None
+                        elif action == "reset":
+                            runtime.reset_history()
+                            runtime._session_approved_tools.clear()
+                            runtime._disabled_tools.clear()
+                            if getattr(runtime, "_okf_options", None) is not None:
+                                runtime.set_okf_enabled(enabled=True)
+                            self._usage_start = len(usage_history(getattr(runtime, "model_client", None)))
+                            result = None
+                        elif action == "list_tools":
+                            result = available_tools(runtime)
+                        elif action == "enable_server":
+                            result = await runtime.enable_server(payload)
+                        elif action == "disable_server":
+                            result = await runtime.disable_server(payload)
+                        else:
+                            raise RuntimeError(f"Unknown SDK action: {action}")
                     except asyncio.CancelledError:
                         if self._closed:
                             if not future.done():
@@ -223,8 +256,8 @@ class Agent:
             if self._queue is not None:
                 while not self._queue.empty():
                     item = self._queue.get_nowait()
-                    if item is not None and not item[1].done():
-                        item[1].set_exception(RuntimeError("Agent beendet."))
+                    if item is not None and not item[2].done():
+                        item[2].set_exception(RuntimeError("Agent beendet."))
 
     async def ask(self, prompt: str) -> AgentResult:
         if not isinstance(prompt, str) or not prompt.strip():
@@ -233,8 +266,13 @@ class Agent:
             raise RuntimeError("Agent ist nicht gestartet.")
         if self._worker_task.done():
             raise RuntimeError("Agenten-Worker ist beendet.")
-        future: asyncio.Future[AgentResult] = asyncio.get_running_loop().create_future()
-        await self._queue.put((prompt, future))
+        return await self._request("ask", prompt)
+
+    async def _request(self, action: str, payload: Any = None) -> Any:
+        if self._closed or self._worker_task is None or self._queue is None or self._worker_task.done():
+            raise RuntimeError("Agent ist nicht gestartet.")
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        await self._queue.put((action, payload, future))
         try:
             return await future
         except asyncio.CancelledError:
@@ -249,6 +287,26 @@ class Agent:
             ):
                 self._worker_task.cancel()
             raise
+
+    async def reset_history(self) -> None:
+        """Forget conversation and evidence while keeping session approvals."""
+        await self._request("reset_history")
+
+    async def reset(self) -> None:
+        """Start a new logical session without reconnecting MCP servers."""
+        await self._request("reset")
+
+    async def list_tools(self) -> tuple[ToolInfo, ...]:
+        """Inspect currently available tools and approval requirements."""
+        return await self._request("list_tools")
+
+    async def enable_server(self, server_name: str) -> bool:
+        """Enable a configured MCP server via the owning worker."""
+        return await self._request("enable_server", server_name)
+
+    async def disable_server(self, server_name: str) -> bool:
+        """Disable a running MCP server via the owning worker."""
+        return await self._request("disable_server", server_name)
 
     async def close(self) -> None:
         if self._closed:
