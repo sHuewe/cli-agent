@@ -158,3 +158,34 @@ required for that tool under the current session/policy.
 initial server/OKF activation state. Servers whose activation did not change
 are not reconnected. A previously disabled server may need to reconnect
 when restored to its initial enabled state. Neither reset alters AdminConfig.
+
+## Read-only session state, JSON parsing and published artifacts
+
+```python
+async with agent:
+    state = await agent.get_state()
+    print(state.enabled_servers, state.history_length, state.approved_tools)
+
+    result = await agent.ask("Return a JSON analysis and publish the CSV.")
+    print(result.parsed)  # Parsed JSON if response_format="json"; otherwise None
+    for artifact in result.artifacts:
+        print(artifact.name, artifact.mime_type, artifact.size)
+        artifact.save("reports")  # Existing directory or explicit new file
+```
+
+`get_state()` is serialized with requests. It returns metadata about history
+length, enabled/disabled servers, approved/disabled tools, OKF and reported
+usage. It never returns raw prompts, tool outputs or credentials.
+
+`AgentResult.parsed` uses strict JSON parsing only when the session's
+`response_format` is `json`. Text-mode responses retain `parsed=None`.
+JSON object, list and scalar values are preserved without coercion.
+
+`AgentResult.artifacts` contains only explicitly published MCP result
+artifacts, never every temporary workspace file. They are validated through
+the existing registered-artifact store and immediately snapshotted as bytes.
+Consequently `read_bytes()` works even after later requests remove the
+original temporary MCP files. `path` is `None` until the caller explicitly
+uses `save(path)`, which uses exclusive creation and refuses overwriting.
+To bound memory use, at most 32 published artifacts and 64 MiB of artifact
+data may be snapshotted per request.
