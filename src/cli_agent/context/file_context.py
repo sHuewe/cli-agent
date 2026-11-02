@@ -112,6 +112,12 @@ class ContextFileCliAgent(WebContextCliAgent):
 
     def _reference_context_payload(self, *, knowledge: str | None) -> dict[str, Any]:
         payload = super()._reference_context_payload(knowledge=knowledge)
+        sdk_contexts = getattr(self, "_sdk_reference_contexts", ())
+        if sdk_contexts:
+            payload["python_reference_contexts"] = [
+                {"name": entry["label"], "content": entry["content"]}
+                for entry in sdk_contexts
+            ]
         contexts = tuple(
             context
             for context in self._file_contexts
