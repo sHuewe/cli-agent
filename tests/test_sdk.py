@@ -933,3 +933,49 @@ def test_sdk_synchronous_event_callback_does_not_block_loop_and_preserves_order(
         "run_started", "tool_started", "tool_finished", "run_finished",
     ]
     assert all(tid != event_loop_thread[0] for _, tid in seen)
+
+
+def test_sdk_in_memory_okf_relative_path_resolves_from_workspace(tmp_path):
+    from cli_agent.platform.execution import (
+        ExecutionDependencies, OneShotRunOptions, prepare_agent,
+    )
+    from cli_agent.settings.config import AppConfig, OkfConfig
+    from dataclasses import replace
+    from cli_agent.runtime.agent import CliAgent
+
+    repo = tmp_path / "knowledge"
+    repo.mkdir()
+    captured = {}
+    class FakeAgent:
+        def __init__(self, workspace, _client, _servers, **kwargs):
+            captured["workspace"] = workspace
+            captured.update(kwargs)
+
+    deps = ExecutionDependencies(
+        load_config=lambda _: (_ for _ in ()).throw(AssertionError("unexpected config load")),
+        load_admin_config=lambda: (_ for _ in ()).throw(AssertionError("unexpected admin load")),
+        configure_logging=lambda *_: None,
+        create_model_client=lambda *_a, **_k: object(),
+        agent_type=FakeAgent,
+    )
+    project = replace(AppConfig(), okf=OkfConfig(repository="knowledge"))
+    prepared = prepare_agent(
+        OneShotRunOptions(workspace=tmp_path, prompt="test"),
+        dependencies=deps, project_config=project, admin_config=AdminConfig(),
+    )
+    assert prepared.config.okf.repository == str(repo)
+    # Check the actual runtime's normalizer, not just the SDK config.
+    runtime = CliAgent(tmp_path, object(), (), okf=prepared.config.okf,
+                       config_file=captured["config_file"])
+    assert runtime._okf_options.repository == repo.resolve()
+
+    project_file = tmp_path / "config" / "project.toml"
+    project_file.parent.mkdir()
+    prepared_with_file = prepare_agent(
+        OneShotRunOptions(workspace=tmp_path, prompt="test", config_file=project_file),
+        dependencies=deps, project_config=project, admin_config=AdminConfig(),
+    )
+    assert prepared_with_file.config.okf.repository == "knowledge"
+    with_file_runtime = CliAgent(tmp_path, object(), (), okf=prepared_with_file.config.okf,
+                                 config_file=captured["config_file"])
+    assert with_file_runtime._okf_options.repository == (project_file.parent / "knowledge").resolve()
