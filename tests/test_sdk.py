@@ -798,3 +798,39 @@ def test_sdk_project_config_preserves_explicit_approval_callback():
     assert builder.with_project_config(
         approval_callback=None,
     ).build()._options["approval_callback"] is None
+
+
+def test_sdk_runtime_originated_cancellation_settles_active_and_queued_requests(monkeypatch, tmp_path):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class Runtime:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            entered.set()
+            await release.wait()
+            raise asyncio.CancelledError("tool cancelled itself")
+
+    monkeypatch.setattr(
+        "cli_agent.sdk.agent.prepare_agent",
+        lambda *_a, **_k: SimpleNamespace(agent=Runtime()),
+    )
+
+    async def scenario():
+        agent = AgentBuilder().with_project_config(workspace=tmp_path).build()
+        await agent.start()
+        active = asyncio.create_task(agent.ask("call Python tool"))
+        await asyncio.wait_for(entered.wait(), 2)
+        queued = asyncio.create_task(agent.ask("second"))
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(RuntimeError, match="unerwartet abgebrochen"):
+            await asyncio.wait_for(active, 2)
+        with pytest.raises(RuntimeError, match="Agent beendet"):
+            await asyncio.wait_for(queued, 2)
+        await asyncio.wait_for(agent.close(), 2)
+
+    asyncio.run(scenario())
