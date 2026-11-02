@@ -4742,6 +4742,34 @@ def _eligible_step_iterations(
     return items, iteration_ids
 
 
+def _reject_markdown_source_output_alias(
+    step: FlowStep,
+    *,
+    workspace: Path,
+    flow_input: dict[str, Any],
+    output: Path | None,
+) -> None:
+    """A read-only section operation must never overwrite its source."""
+    operation = step.filesystem_operation
+    if (
+        output is None
+        or operation is None
+        or operation["kind"] != "markdown_sections"
+    ):
+        return
+    source = _workspace_path(
+        workspace,
+        Path(_render_input_text(operation["source_path"], flow_input)),
+        purpose=f"Markdown-Quelldatei von Schritt {step.step_id!r}",
+        must_exist=False,
+    )
+    if _filesystem_path_key(source) == _filesystem_path_key(output):
+        raise ValueError(
+            "markdown_sections.output darf die Markdown-Quelldatei "
+            f"nicht überschreiben: {source}"
+        )
+
+
 def _execute_filesystem_step(
     step: FlowStep,
     *,
@@ -4820,6 +4848,9 @@ def _execute_filesystem_step(
             context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
         return answer
     if op["kind"] == "markdown_sections":
+        _reject_markdown_source_output_alias(
+            step, workspace=workspace, flow_input=flow_input, output=output,
+        )
         source_path = _render_input_text(op["source_path"], flow_input)
         transformed = markdown_sections(
             workspace, source_path,
@@ -5466,6 +5497,9 @@ def _prepare_iteration_checkpoint(
         iteration_id=iteration_id, output=output,
     )
     if output is not None:
+        _reject_markdown_source_output_alias(
+            step, workspace=workspace, flow_input=flow_input, output=output,
+        )
         reserved_input = reserved_inputs.get(
             _filesystem_path_key(output)
         )
