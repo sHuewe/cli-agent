@@ -323,3 +323,71 @@ def test_sdk_close_interrupts_active_request(monkeypatch, tmp_path):
             await task
         assert cancelled.is_set()
     asyncio.run(scenario())
+
+
+def test_sdk_start_cancellation_interrupts_initializing_worker(monkeypatch, tmp_path):
+    entered = asyncio.Event()
+    interrupted = asyncio.Event()
+    exited = asyncio.Event()
+
+    class Runtime:
+        async def __aenter__(self):
+            entered.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                interrupted.set()
+                raise
+        async def __aexit__(self, *_):
+            exited.set()
+
+    monkeypatch.setattr(
+        "cli_agent.sdk.agent.prepare_agent",
+        lambda *_args, **_kwargs: SimpleNamespace(agent=Runtime()),
+    )
+
+    async def scenario():
+        agent = AgentBuilder().with_project_config(workspace=tmp_path).build()
+        startup = asyncio.create_task(agent.start())
+        await asyncio.wait_for(entered.wait(), 2)
+        startup.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(startup, 2)
+        assert interrupted.is_set()
+        assert agent._worker_task is None
+        with pytest.raises(RuntimeError):
+            await agent.start()
+
+    asyncio.run(scenario())
+
+
+def test_sdk_close_during_startup_interrupts_worker(monkeypatch, tmp_path):
+    entered = asyncio.Event()
+    interrupted = asyncio.Event()
+
+    class Runtime:
+        async def __aenter__(self):
+            entered.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                interrupted.set()
+                raise
+        async def __aexit__(self, *_):
+            pass
+
+    monkeypatch.setattr(
+        "cli_agent.sdk.agent.prepare_agent",
+        lambda *_args, **_kwargs: SimpleNamespace(agent=Runtime()),
+    )
+
+    async def scenario():
+        agent = AgentBuilder().with_project_config(workspace=tmp_path).build()
+        startup = asyncio.create_task(agent.start())
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(agent.close(), 2)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(startup, 2)
+        assert interrupted.is_set()
+
+    asyncio.run(scenario())
