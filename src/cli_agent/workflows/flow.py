@@ -1482,7 +1482,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "structure_input", "results_input", "results_step", "batches_step"
+                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step"
                 }
                 or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan"}
                 or not isinstance(raw_json_operation.get("input"), str)
@@ -1945,12 +1945,6 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             json_inputs[name] = JsonInputSpec(
                 path=path_template, iterate=iterate,
             )
-        if (
-            raw_json_operation is not None
-            and raw_json_operation.get("results_input") is not None
-            and raw_json_operation["results_input"] not in json_inputs
-        ):
-            raise ValueError("json_operation.results_input muss ein json_inputs-Name sein.")
         if (
             raw_json_operation is not None
             and raw_json_operation["input"] not in json_inputs
