@@ -474,29 +474,43 @@ def apply_model_override(
     return replace(config, model=replace(config.model, model=model))
 
 
-async def _run_prompt_sequence(
+@dataclass(frozen=True)
+class PreparedAgent:
+    """Fully configured agent, not yet entered or connected to MCP servers."""
+
+    agent: Any
+    config: AppConfig
+    file_contexts: tuple[FileContext, ...]
+    output_target: OutputTarget | None
+
+
+def prepare_agent(
     options: OneShotRunOptions | ConversationRunOptions,
     *,
-    prompts: tuple[str, ...],
     dependencies: ExecutionDependencies | None = None,
-) -> OneShotRunResult:
+    project_config: AppConfig | None = None,
+    admin_config: AdminConfig | None = None,
+) -> PreparedAgent:
+    """Shared runtime factory for CLI, flow and the Python SDK.
+
+    Project/admin overrides are instance-local; the ordinary CLI always loads
+    its configured project file and the mandatory system admin policy.
+    No MCP sessions are opened until the caller enters the returned agent.
+    """
     deps = dependencies or ExecutionDependencies()
     workspace = options.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
     response_format = _validate_response_format(options.response_format)
     effective_workspace_access = normalize_workspace_access(options.workspace_access)
-    excluded_paths = resolve_excluded_paths(
-        workspace,
-        options.excluded_paths,
-    )
+    excluded_paths = resolve_excluded_paths(workspace, options.excluded_paths)
     if excluded_paths and options.workspace_access not in {"read", "write"}:
         raise ValueError(
             "excluded_paths benötigen workspace_access='read' oder 'write'."
         )
 
-    config = deps.load_config(options.config_file)
-    admin_config = deps.load_admin_config()
+    config = project_config if project_config is not None else deps.load_config(options.config_file)
+    policy = admin_config if admin_config is not None else deps.load_admin_config()
     config = apply_model_override(config, model=options.model)
     config = apply_workspace_access_override(
         config,
@@ -513,7 +527,7 @@ async def _run_prompt_sequence(
     )
     config = apply_named_mcp_overrides(
         config,
-        admin_config=admin_config,
+        admin_config=policy,
         server_names=options.with_mcp,
         workspace_access=options.workspace_access,
         workspace=workspace,
@@ -539,14 +553,11 @@ async def _run_prompt_sequence(
     deps.configure_logging(config.logging)
     model_client = deps.create_model_client(
         config.model,
-        network=admin_config.network,
-        credential_rules=admin_config.model_credentials,
+        network=policy.network,
+        credential_rules=policy.model_credentials,
     )
     if options.retry_policy is not None:
-        model_client = RetryingModelClient(
-            model_client,
-            options.retry_policy,
-        )
+        model_client = RetryingModelClient(model_client, options.retry_policy)
     agent = deps.agent_type(
         workspace,
         model_client,
@@ -556,44 +567,54 @@ async def _run_prompt_sequence(
         config_file=options.config_file or default_config_file(),
         dump_llm_context=config.dump_llm_context,
         dump_file_prefix=options.dump_file_prefix,
-        network=admin_config.network,
-        web_providers=admin_config.web.providers,
-        mcp_policy=admin_config.mcp,
+        network=policy.network,
+        web_providers=policy.web.providers,
+        mcp_policy=policy.mcp,
         approval_callback=options.approval_callback,
         user_message_callback=options.user_message_callback,
         okf=config.okf,
         knowledge_vector=config.knowledge_vector,
-        model_credential_rules=admin_config.model_credentials,
+        model_credential_rules=policy.model_credentials,
         file_contexts=file_contexts,
         response_format=response_format,
         workspace_access=effective_workspace_access,
     )
+    return PreparedAgent(
+        agent=agent,
+        config=config,
+        file_contexts=file_contexts,
+        output_target=output_target,
+    )
 
+
+async def _run_prompt_sequence(
+    options: OneShotRunOptions | ConversationRunOptions,
+    *,
+    prompts: tuple[str, ...],
+    dependencies: ExecutionDependencies | None = None,
+) -> OneShotRunResult:
+    prepared = prepare_agent(options, dependencies=dependencies)
+    agent = prepared.agent
     web_statuses: list[str] = []
     async with agent:
         for url in options.add_web_context:
-            web_statuses.append(
-                await agent.ask(f"add_web_context {url}")
-            )
+            web_statuses.append(await agent.ask(f"add_web_context {url}"))
         answer = ""
         for prompt in prompts:
             answer = await agent.ask(prompt)
         usage = await agent.ask("tokens")
 
     final_prompt = prompts[-1]
-    if (
-        output_target is not None
-        and not is_local_agent_command(final_prompt)
-    ):
-        output_target.write_text(answer)
+    if prepared.output_target is not None and not is_local_agent_command(final_prompt):
+        prepared.output_target.write_text(answer)
 
     return OneShotRunResult(
         answer=answer,
         usage=usage,
         web_context_statuses=tuple(web_statuses),
-        config=config,
-        file_contexts=file_contexts,
-        output_target=output_target,
+        config=prepared.config,
+        file_contexts=prepared.file_contexts,
+        output_target=prepared.output_target,
     )
 
 
