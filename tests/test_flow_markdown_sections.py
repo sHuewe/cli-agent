@@ -58,3 +58,29 @@ def test_flow_accepts_markdown_sections(tmp_path: Path) -> None:
     )
     flow = load_flow(flow_path, workspace=tmp_path)
     assert flow.steps[0].filesystem_operation["kind"] == "markdown_sections"
+
+
+@pytest.mark.parametrize("source, output", [
+    ("doc.md", "doc.md"),
+    ("doc.md", "folder/../doc.md"),
+])
+def test_section_output_cannot_replace_source(
+    tmp_path: Path, source: str, output: str,
+) -> None:
+    from cli_agent.workflows import flow as flow_module
+    (tmp_path / "doc.md").write_text("# Important source\n", encoding="utf-8")
+    (tmp_path / "folder").mkdir()
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "sections"\n'
+        f'output = "{output}"\noverwrite_output = true\n'
+        '[steps.filesystem_operation]\nkind = "markdown_sections"\n'
+        f'source_path = "{source}"\n',
+        encoding="utf-8",
+    )
+    step = load_flow(tmp_path / "flow.toml", workspace=tmp_path).steps[0]
+    with pytest.raises(ValueError, match="Quelldatei"):
+        flow_module._reject_markdown_source_output_alias(
+            step, workspace=tmp_path, flow_input={},
+            output=tmp_path / "doc.md",
+        )
+    assert (tmp_path / "doc.md").read_text(encoding="utf-8") == "# Important source\n"
