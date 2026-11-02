@@ -42,7 +42,14 @@ def source_artifacts_from_evidences(entries: dict) -> dict[str, dict[str, Any]]:
                 entry["records_path"] = records_path
             record_sets = source.get("record_sets")
             if isinstance(record_sets, list):
-                entry["record_sets"] = copy.deepcopy(record_sets)
+                pointers = [
+                    {"records_path": item["records_path"]}
+                    for item in record_sets
+                    if isinstance(item, dict)
+                    and isinstance(item.get("records_path"), str)
+                ]
+                if pointers:
+                    entry["record_sets"] = pointers
             artifacts[ref] = entry
     return artifacts
 
