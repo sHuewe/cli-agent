@@ -67,6 +67,7 @@ def test_python_tools_route_through_regular_approval_and_listing():
         runtime.mcp_policy = SimpleNamespace(trusted_servers=())
         runtime._sub_run_enabled = False
         runtime._agui_frontend_tools = {}
+        runtime._evidence_state = SimpleNamespace(tool_definitions=lambda: [])
         return runtime
 
     runtime = fake_runtime()
