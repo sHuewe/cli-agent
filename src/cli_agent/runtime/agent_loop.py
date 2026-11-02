@@ -463,7 +463,6 @@ async def run_model_loop(
             frontend = getattr(agent, "_agui_frontend_tools", {})
             if frontend:
                 from cli_agent.interfaces.ag_ui_frontend_tools import FrontendToolCall, FrontendToolHandoff
-                import uuid
                 for call in tool_calls:
                     function = call.get("function") or {}
                     if function.get("name") in frontend and function.get("name") not in {
