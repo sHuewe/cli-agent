@@ -577,9 +577,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.sdk_configless and args.config_file is not None:
+    sdk_configless = bool(getattr(args, "sdk_configless", False))
+    if sdk_configless and args.config_file is not None:
         raise ValueError("--sdk-configless und --config-file sind nicht kombinierbar.")
-    config = AppConfig() if args.sdk_configless else load_config(path=args.config_file)
+    config = AppConfig() if sdk_configless else load_config(path=args.config_file)
     effective_config_file = (
         args.config_file.expanduser()
         if args.config_file is not None
