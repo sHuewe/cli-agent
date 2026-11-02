@@ -158,11 +158,16 @@ class Agent:
         if self._worker_task is None:
             return
         assert self._queue is not None
+        starting = self._ready is not None and (
+            not self._ready.done() or self._ready.cancelled()
+        )
+        if starting and self._ready is not None and not self._ready.done():
+            # Cancelling a task before its first execution bypasses _worker's
+            # try/finally. Explicitly settle the startup waiter here rather
+            # than relying on the worker to report its own cancellation.
+            self._ready.cancel()
         if not self._worker_task.done():
             active = self._active_future
-            starting = self._ready is not None and (
-                not self._ready.done() or self._ready.cancelled()
-            )
             if starting or active is not None:
                 # Startup and active model/tool calls must be interrupted.
                 # The worker still closes its own MCP/AnyIO scopes.
