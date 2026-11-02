@@ -143,6 +143,11 @@ async def run_model_loop(
                     ),
                 })
         agent._dump_context(messages, phase=phase)
+        model_event = getattr(agent, "event_callback", None)
+        model_call_id = f"model_{uuid.uuid4().hex}"
+        if model_event is not None:
+            await model_event("model_started", {"call_id": model_call_id, "phase": phase})
+        model_status = "success"
         try:
             message = await agent.model_client.chat(
                 messages=(
@@ -171,7 +176,14 @@ async def run_model_loop(
             messages.append(message)
             if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None:
                 agent._evidence_state.pending_error = None
+        except BaseException:
+            model_status = "error"
+            raise
         finally:
+            if model_event is not None:
+                await model_event("model_finished", {
+                    "call_id": model_call_id, "phase": phase, "status": model_status,
+                })
             for assistant_message, tool_call, tool_message in transient_rejections:
                 agent._discard_rejected_tool_call(
                     messages,
