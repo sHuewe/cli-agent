@@ -270,8 +270,14 @@ class Agent:
                                 future.cancel()
                             raise
                         if not future.cancelled():
-                            # Unexpected worker cancellation: do not pretend
-                            # that this was a user-cancelled request.
+                            # A runtime/tool-originated CancelledError ends the
+                            # worker. Settle this active request before exiting:
+                            # the queue-drain cleanup only covers waiting
+                            # requests and the caller must never hang.
+                            future.set_exception(RuntimeError(
+                                "Agenten-Worker wurde während des Aufrufs "
+                                "unerwartet abgebrochen."
+                            ))
                             raise
                         # Match the API worker: keep MCP sessions alive after
                         # interrupting only this request.
