@@ -143,7 +143,13 @@ async def run_model_loop(
                     ),
                 })
         agent._dump_context(messages, phase=phase)
-        model_event = getattr(agent, "event_callback", None)
+        # Model lifecycle telemetry is an SDK opt-in. Existing CLI/API event
+        # consumers use a tool-only protocol and must remain unchanged.
+        model_event = (
+            getattr(agent, "event_callback", None)
+            if getattr(agent, "_sdk_event_reporting", False)
+            else None
+        )
         model_call_id = f"model_{uuid.uuid4().hex}"
         if model_event is not None:
             await model_event("model_started", {"call_id": model_call_id, "phase": phase})
