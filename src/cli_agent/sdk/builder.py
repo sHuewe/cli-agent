@@ -114,7 +114,8 @@ class AgentBuilder:
         if unknown:
             raise TypeError(f"Unbekannte Projekt-Optionen: {sorted(unknown)}")
         self._project_path = Path(path) if path is not None else None
-        config = load_config(Path(path)) if path is not None else AppConfig()
+        config = (load_config(Path(path)) if path is not None
+                  else (load_config() if not overrides else AppConfig()))
         model_fields = set(ModelConfig.__dataclass_fields__)
         model_opts = {k: overrides[k] for k in model_fields if k in overrides}
         if model_opts:
