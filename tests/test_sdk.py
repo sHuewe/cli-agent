@@ -650,3 +650,81 @@ def test_sdk_server_control_is_serialized_behind_active_ask(monkeypatch, tmp_pat
             assert await asyncio.wait_for(disable, 2)
     asyncio.run(scenario())
     assert operations == [("ask", "slow"), ("disable", "os")]
+
+
+def test_sdk_json_parsed_and_artifact_survives_cleanup(monkeypatch, tmp_path):
+    from cli_agent.sdk import AgentArtifact
+
+    class Store:
+        def __init__(self):
+            self.contents = {".cli-agent/data.csv": b"a,b\\n1,2\\n"}
+        def read_registered(self, path):
+            return self.contents[path]
+    store = Store()
+
+    class Runtime:
+        response_format = "json"
+        _result_artifacts = store
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            await self.event_callback("artifact_published", {
+                "call_id": "p1", "id": "id", "path": ".cli-agent/data.csv",
+                "filename": "data.csv", "mime_type": "text/csv",
+            })
+            return '{"ok": true, "count": 2}'
+
+    monkeypatch.setattr("cli_agent.sdk.agent.prepare_agent",
+                        lambda *_args, **_kwargs: SimpleNamespace(agent=Runtime()))
+
+    async def scenario():
+        async with AgentBuilder().with_project_config(workspace=tmp_path).build() as agent:
+            first = await agent.ask("export")
+            assert first.parsed == {"ok": True, "count": 2}
+            assert len(first.artifacts) == 1
+            artifact = first.artifacts[0]
+            assert isinstance(artifact, AgentArtifact)
+            assert artifact.name == "data.csv"
+            assert artifact.path is None
+            store.contents.clear()  # Simulate next ask removing temp MCP files
+            assert artifact.read_bytes() == b"a,b\\n1,2\\n"
+            target = artifact.save(tmp_path / "data.csv")
+            assert target.read_bytes() == b"a,b\\n1,2\\n"
+            with pytest.raises(FileExistsError):
+                artifact.save(tmp_path / "data.csv")
+    asyncio.run(scenario())
+
+
+def test_sdk_state_snapshot_is_non_sensitive(monkeypatch, tmp_path):
+    from cli_agent.sdk import SessionState
+    from cli_agent.models.model import TokenUsage
+
+    class Runtime:
+        def __init__(self):
+            self.history = [{"role": "user", "content": "VERY_PRIVATE"}]
+            self._active_servers = {"os"}
+            self._server_configs = {"os": object(), "data": object()}
+            self.mcp_servers = ()
+            self._session_approved_tools = {"os__write_file"}
+            self._disabled_tools = {"os__delete_file"}
+            self._okf_enabled = False
+            self.model_client = SimpleNamespace(usage_history=[TokenUsage(2, 1, 3)])
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+
+    monkeypatch.setattr("cli_agent.sdk.agent.prepare_agent",
+                        lambda *_a, **_k: SimpleNamespace(agent=Runtime()))
+    async def scenario():
+        async with AgentBuilder().with_project_config(workspace=tmp_path).build() as agent:
+            state = await agent.get_state()
+            assert isinstance(state, SessionState)
+            assert state.history_length == 1
+            assert state.enabled_servers == ("os",)
+            assert state.disabled_servers == ("data",)
+            assert state.approved_tools == ("os__write_file",)
+            assert "VERY_PRIVATE" not in repr(state)
+    asyncio.run(scenario())
