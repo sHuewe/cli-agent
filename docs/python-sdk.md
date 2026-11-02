@@ -189,3 +189,46 @@ original temporary MCP files. `path` is `None` until the caller explicitly
 uses `save(path)`, which uses exclusive creation and refuses overwriting.
 To bound memory use, at most 32 published artifacts and 64 MiB of artifact
 data may be snapshotted per request.
+
+## Python functions as tools
+
+Register annotated Python callables without running a separate MCP process:
+
+```python
+from cli_agent.sdk import AgentBuilder
+
+def average(values: list[float]) -> float:
+    """Calculate the arithmetic mean of numeric observations."""
+    return sum(values) / len(values)
+
+async def approve(tool: str, arguments: dict) -> bool | str:
+    return tool == "python__average"
+
+agent = (
+    AgentBuilder()
+    .with_project_config(workspace=".")
+    .register_tool(average)
+    .with_approval_callback(approve)
+    .with_default_event_callback()
+    .build()
+)
+
+async with agent:
+    result = await agent.ask("Use the average tool for [2, 4, 6].")
+    print(result.answer)
+```
+
+Registered functions appear as `python__<function_name>` and participate in
+the normal tool schema validation, approval callback, tool events, and model
+history. Without a callback or prior session approval, execution is denied.
+Both synchronous and asynchronous functions are accepted. A synchronous
+function runs in a worker thread; Python cannot forcibly interrupt a thread
+that has already begun execution.
+
+Python functions are **trusted application code running with the privileges
+of the embedding interpreter**. No sandbox or special filesystem/network
+restrictions are imposed on their bodies. The caller is responsible for
+choosing functions to expose. Registration is per builder/agent instance,
+never global. The model only receives the generated JSON schema and
+description. Functions must accept named, type-annotated parameters and return
+a JSON-serializable object or text; oversized results become tool errors.
