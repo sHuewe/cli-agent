@@ -513,3 +513,140 @@ def test_runtime_rejects_non_boolean_approval_responses():
         assert await agent._approve_tool_call("os__write_file", {}) is True
         assert "os__write_file" in agent._session_approved_tools
     asyncio.run(scenario())
+
+
+def test_sdk_usage_summary_handles_missing_provider_reports():
+    from cli_agent.sdk.usage import summarize_usage, UsageSummary
+    from cli_agent.models.model import TokenUsage
+    usage = summarize_usage([
+        TokenUsage(input_tokens=3, output_tokens=2, total_tokens=5),
+        None,
+    ])
+    assert usage == UsageSummary(
+        input_tokens=None, output_tokens=None, total_tokens=None,
+        model_calls=2, reported_calls=1, unreported_calls=1,
+    )
+    assert summarize_usage([]).total_tokens == 0
+    exact = summarize_usage([TokenUsage(4, 6, 10)])
+    assert (exact.input_tokens, exact.output_tokens, exact.total_tokens) == (4, 6, 10)
+
+
+def test_sdk_worker_commands_and_per_run_usage(monkeypatch, tmp_path):
+    from cli_agent.models.model import TokenUsage
+    from cli_agent.sdk.tools import ToolInfo
+    calls = []
+    class Model:
+        def __init__(self):
+            self.usage_history = []
+
+    class Runtime:
+        def __init__(self):
+            self.model_client = Model()
+            self.history = []
+            self._active_servers = {"os", "data"}
+            self._session_approved_tools = {"os__write_file"}
+            self._disabled_tools = {"os__read_file"}
+            self._okf_options = object()
+            self._okf_enabled = True
+            self._tool_routes = {}
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            self.history.append(prompt)
+            self.model_client.usage_history.append(TokenUsage(7, 3, 10))
+            calls.append(("ask", prompt))
+            return prompt
+        def reset_history(self):
+            self.history.clear()
+            calls.append(("reset_history",))
+        def set_okf_enabled(self, *, enabled):
+            self._okf_enabled = enabled
+            return True
+        def _model_tools(self):
+            return [{"function": {"name": "agent__update_plan", "description": "Plan", "parameters": {"type": "object"}}}]
+        async def disable_server(self, name):
+            self._active_servers.discard(name)
+            calls.append(("disable", name))
+            return True
+        async def enable_server(self, name):
+            self._active_servers.add(name)
+            calls.append(("enable", name))
+            return True
+
+    runtime = Runtime()
+    monkeypatch.setattr("cli_agent.sdk.agent.prepare_agent",
+                        lambda *_a, **_k: SimpleNamespace(agent=runtime))
+    async def scenario():
+        agent = AgentBuilder().with_project_config(workspace=tmp_path).build()
+        async with agent:
+            first = await agent.ask("one")
+            assert first.usage.total_tokens == 10
+            assert first.session_usage.total_tokens == 10
+            second = await agent.ask("two")
+            assert second.usage.total_tokens == 10
+            assert second.session_usage.total_tokens == 20
+
+            tools = await agent.list_tools()
+            assert tools == (ToolInfo(
+                "agent__update_plan", "agent", "Plan", {"type": "object"},
+                enabled=True, approval_required=False,
+            ),)
+            assert await agent.disable_server("os")
+            assert "os" not in runtime._active_servers
+
+            await agent.reset_history()
+            assert runtime.history == []
+            assert runtime._session_approved_tools == {"os__write_file"}
+            assert "os" not in runtime._active_servers
+            third = await agent.ask("three")
+            assert third.session_usage.total_tokens == 30
+
+            await agent.reset()
+            assert runtime.history == []
+            assert runtime._session_approved_tools == set()
+            assert runtime._disabled_tools == set()
+            assert runtime._active_servers == {"os", "data"}
+            fourth = await agent.ask("four")
+            assert fourth.usage.total_tokens == 10
+            assert fourth.session_usage.total_tokens == 10
+    asyncio.run(scenario())
+    assert ("disable", "os") in calls
+    assert ("enable", "os") in calls
+
+
+def test_sdk_server_control_is_serialized_behind_active_ask(monkeypatch, tmp_path):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    operations = []
+
+    class Runtime:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            operations.append(("ask", prompt))
+            started.set()
+            await release.wait()
+            return "done"
+        async def disable_server(self, name):
+            operations.append(("disable", name))
+            return True
+
+    monkeypatch.setattr("cli_agent.sdk.agent.prepare_agent",
+                        lambda *_a, **_k: SimpleNamespace(agent=Runtime()))
+
+    async def scenario():
+        async with AgentBuilder().with_project_config(workspace=tmp_path).build() as agent:
+            query = asyncio.create_task(agent.ask("slow"))
+            await asyncio.wait_for(started.wait(), 2)
+            disable = asyncio.create_task(agent.disable_server("os"))
+            await asyncio.sleep(0)
+            assert not disable.done()
+            release.set()
+            assert (await asyncio.wait_for(query, 2)).answer == "done"
+            assert await asyncio.wait_for(disable, 2)
+    asyncio.run(scenario())
+    assert operations == [("ask", "slow"), ("disable", "os")]
