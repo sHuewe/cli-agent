@@ -244,14 +244,16 @@ def test_cleanup_cancellation_records_terminal_status_and_propagates(monkeypatch
 def test_budget_uses_model_visible_state_not_source_metadata():
     state = evidence_state()
     for item in state.evidences.values():
-        item["tool_calls"][0]["workspace_path"] = "x" * 15000
+        item["tool_calls"][0]["workspace_path"] = "artifact.json"
         item["tool_calls"][0]["record_sets"] = [{"large": "y" * 12000}]
-    # Provenance stays intact internally but is excluded from the 32-kB LLM
-    # budget. This was blocking otherwise valid sub-run evidence promotion.
+    # Large provenance fields stay internal; only bounded artifact pointers
+    # are projected into the 32-kB model-visible evidence budget.
     state._check_budget(state.evidences)
     from cli_agent.state.evidence_tools import visible_evidence_state
     assert state.model_snapshot() == visible_evidence_state(state.evidences, state.plan)
     assert len(json.dumps(state.model_snapshot())) < 32000
+    assert all("large" not in str(value)
+               for value in state.model_snapshot().get("source_artifacts", {}).values())
 
 
 def test_cleanup_prompt_requests_updates_for_verbose_unique_evidence():
