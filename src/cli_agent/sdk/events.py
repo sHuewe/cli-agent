@@ -56,8 +56,11 @@ def default_event_callback(
     elif event.type == "model_finished":
         label = f"✓ Modellaufruf: {event.status or 'finished'}"
     elif event.type == "tool_started":
-        label = f"→ {event.tool or 'Tool'}"
-    elif event.type == "tool_finished":
+        if verbose or not (event.tool or "").startswith(("agent__update_", "agent__add_", "agent__remove_")):
+            label = f"→ {event.tool or 'Tool'}"
+    elif event.type == "tool_finished" and (
+        verbose or not (event.tool or "").startswith(("agent__update_", "agent__add_", "agent__remove_"))
+    ):
         duration = (
             f" ({event.duration_ms / 1000:.2f} s)"
             if event.duration_ms is not None else ""
