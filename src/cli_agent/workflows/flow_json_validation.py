@@ -428,3 +428,121 @@ def assemble_doctrine_concept_plan(
     ]
     _validate_doctrine(merged)
     return merged
+
+
+def assemble_section_outlines(
+    tasks: Any, results: Any, *, source_path: str, source_slug: str,
+) -> dict[str, Any]:
+    """Assemble local outlines without another model request.
+
+    Identical semantic keys share one concept across source sections; distinct
+    keys retain their own concept. No source evidence is fabricated.
+    """
+    source_path = _canonical_source_path(source_path)
+    source_slug = _slug(source_slug, "source_slug")
+    task_list = _array(_obj(tasks, "outline_tasks").get("tasks"), "outline_tasks.tasks")
+    iteration_list = _array(_obj(results, "outlines").get("iterations"), "outlines.iterations")
+    if not 1 <= len(task_list) <= 100 or len(iteration_list) != len(task_list):
+        raise ValueError("Abschnitts-Outlines fehlen oder sind zu zahlreich.")
+    expected = {}
+    for task in task_list:
+        task = _obj(task, "tasks[]")
+        tid = task.get("id")
+        if not isinstance(tid, str) or tid in expected:
+            raise ValueError("Doppelte oder ungültige Abschnitts-ID.")
+        expected[tid] = task
+    merged: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
+    warnings: list[str] = []
+    for iteration in iteration_list:
+        envelope = _obj(iteration, "outlines.iterations[]")
+        tid = envelope.get("id")
+        if tid not in expected or tid in seen:
+            raise ValueError("Unbekannte oder doppelte Abschnitts-Iteration.")
+        seen.add(tid)
+        output = _obj(envelope.get("output"), "outlines.iterations[].output")
+        if output.get("status") != "ok" or output.get("section_id") != tid:
+            raise ValueError("Abschnitts-Outline ist unvollständig oder inkonsistent.")
+        local = _array(output.get("concepts"), "outlines.concepts")
+        if len(local) > 100:
+            raise ValueError("Abschnitts-Outline enthält zu viele Konzepte.")
+        for entry in local:
+            concept = _obj(entry, "outlines.concepts[]")
+            key = _slug(concept.get("topic_key"), "topic_key")
+            title = concept.get("title")
+            description = concept.get("description")
+            tags = concept.get("tags")
+            if (not isinstance(title, str) or not title.strip()
+                    or not isinstance(description, str) or not description.strip()
+                    or len(title) > 200 or len(description) > 1000
+                    or not isinstance(tags, list)
+                    or len(tags) > 20
+                    or any(not isinstance(tag, str) or len(tag) > 80 for tag in tags)):
+                raise ValueError("Ungültige Konzeptmetadaten in Abschnitts-Outline.")
+            if key not in merged:
+                merged[key] = {
+                    "id": key, "path": f"doctrines/{source_slug}/{key}.md",
+                    "title": title, "description": description,
+                    "type": "concept", "tags": tags,
+                    "section_ids": [] if expected[tid]["direct"] else [tid],
+                }
+            else:
+                original = merged[key]
+                if not expected[tid]["direct"] and tid not in original["section_ids"]:
+                    original["section_ids"].append(tid)
+                original["tags"] = list(dict.fromkeys([*original["tags"], *tags]))[:20]
+        warnings.extend(str(w)[:300] for w in _array(output.get("warnings", []), "warnings")[:20])
+    if seen != set(expected) or not merged:
+        raise ValueError("Abschnitts-Outlines fehlen oder enthalten keine Konzepte.")
+    result = {
+        "status": "ok", "source_path": source_path,
+        "folder": {
+            "id": source_slug, "path": f"doctrines/{source_slug}",
+            "title": source_slug, "description": "Doktrin und ihre Konzepte",
+        },
+        "folders": [],
+        "summary": "Zusammenführung der vollständigen Abschnitts-Outlines",
+        "concepts": list(merged.values()), "warnings": warnings[:100],
+    }
+    _validate_doctrine(result)
+    return result
+
+
+def prepare_section_outline_tasks(sections: Any, analyses: Any) -> dict[str, Any]:
+    """Attach only the matching analysis to each bounded outline request."""
+    record = _obj(sections, "sections")
+    source_path = _canonical_source_path(record.get("source_path"))
+    items = _array(record.get("sections"), "sections.sections")
+    iterations = _array(_obj(analyses, "analyses").get("iterations"), "analyses.iterations")
+    direct = record.get("mode") == "direct"
+    if record.get("mode") not in {"direct", "sections"}:
+        raise ValueError("Unbekannter Abschnittsmodus.")
+    if (direct and (items or iterations)) or (
+        not direct and (not items or len(items) != len(iterations))
+    ):
+        raise ValueError("Abschnittsanalysen fehlen oder sind inkonsistent.")
+    if direct:
+        return {"tasks": [{"id": "direct", "direct": True, "source_path": source_path}]}
+    indexed = {}
+    for envelope in iterations:
+        envelope = _obj(envelope, "analyses.iterations[]")
+        aid = envelope.get("id")
+        if not isinstance(aid, str) or aid in indexed:
+            raise ValueError("Ungültige oder doppelte Analyse-ID.")
+        indexed[aid] = _obj(envelope.get("output"), "analyses.output")
+    tasks = []
+    for item in items:
+        section = _obj(item, "sections.sections[]")
+        sid = section.get("id")
+        analysis = indexed.get(sid)
+        if (analysis is None or analysis.get("status") != "ok"
+                or analysis.get("section_id") != sid
+                or analysis.get("source_path") != source_path
+                or analysis.get("start_line") != section.get("start_line")
+                or analysis.get("end_line") != section.get("end_line")):
+            raise ValueError("Unvollständige oder widersprüchliche Abschnittsanalyse.")
+        tasks.append({"id": sid, "direct": False, "source_path": source_path,
+                      "analysis": analysis})
+    if set(indexed) != {x["id"] for x in tasks}:
+        raise ValueError("Unerwartete Abschnittsanalyse.")
+    return {"tasks": tasks}
