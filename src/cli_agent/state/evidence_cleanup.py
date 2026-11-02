@@ -279,26 +279,70 @@ async def maybe_cleanup_evidences(agent: Any) -> None:
         del records[:-MAX_CLEANUP_DIAGNOSTIC_RUNS]
 
     try:
-        response = await agent.model_client.chat(messages=request_messages, tools=[])
-        raw = response.get("content") if isinstance(response, dict) else None
-        if isinstance(raw, str):
-            # Keep the actual assistant text; cap only pathological invalid
-            # responses so the diagnostics endpoint cannot grow without bound.
-            record["messages"].append({
-                "role": "assistant",
-                "content": raw[:MAX_CLEANUP_RESPONSE_CHARS],
+        # Share JSON normalization and the correction budget with output=json.
+        # Import lazily to avoid the agent_conversation -> agent_loop -> cleanup
+        # circular dependency at module load time.
+        from cli_agent.runtime.agent_conversation import (
+            MAX_RESPONSE_FORMAT_REPAIRS, _normalize_json_response,
+        )
+        for attempt in range(MAX_RESPONSE_FORMAT_REPAIRS + 1):
+            response = await agent.model_client.chat(
+                messages=request_messages, tools=[],
+            )
+            raw = response.get("content") if isinstance(response, dict) else None
+            if isinstance(raw, str):
+                assistant_message = {
+                    "role": "assistant",
+                    "content": raw[:MAX_CLEANUP_RESPONSE_CHARS],
+                }
+                # Record the exact reply when within the size limit. This is
+                # diagnostic history only, never projected into the main loop.
+                record["messages"].append(copy.deepcopy(assistant_message))
+            try:
+                if not isinstance(raw, str) or len(raw) > MAX_CLEANUP_RESPONSE_CHARS:
+                    raise ValueError("Cleanup returned missing or oversized JSON.")
+                normalized, error = _normalize_json_response(raw)
+                if error is not None:
+                    raise ValueError(error)
+                delta = json.loads(normalized)
+                changed = apply_cleanup_delta(state, delta)
+            except (ValueError, TypeError, KeyError) as exc:
+                if attempt == MAX_RESPONSE_FORMAT_REPAIRS:
+                    raise ValueError(
+                        "Cleanup also failed after "
+                        f"{MAX_RESPONSE_FORMAT_REPAIRS} correction attempts: {exc}"
+                    ) from exc
+                if isinstance(raw, str):
+                    request_messages.append(copy.deepcopy(assistant_message))
+                correction = {
+                    "role": "user",
+                    "content": (
+                        "Your previous cleanup answer did not meet the required "
+                        "JSON format or cleanup schema. Correct it now, using "
+                        "only the existing conversation and evidence data. "
+                        "Return exactly one syntactically valid JSON object "
+                        "containing the arrays remove, update and merge. "
+                        "Preserve the original cleanup requirements, evidence "
+                        "IDs, plan constraints and source provenance. "
+                        "Do not include markdown fences or surrounding prose. "
+                        f"Validation error: {str(exc)[:500]}"
+                    ),
+                }
+                request_messages.append(correction)
+                record["messages"].append(copy.deepcopy(correction))
+                result["repair_attempts"] = attempt + 1
+                continue
+            result.update({
+                "status": "applied" if changed else "unchanged",
+                "removed": len(delta["remove"]) if changed else 0,
+                "updated": len(delta["update"]) if changed else 0,
+                "merged": len(delta["merge"]) if changed else 0,
             })
-        if not isinstance(raw, str) or len(raw) > MAX_CLEANUP_RESPONSE_CHARS:
-            raise ValueError("Cleanup returned missing or oversized JSON.")
-        delta = json.loads(raw)
-        changed = apply_cleanup_delta(state, delta)
-        result.update({
-            "status": "applied" if changed else "unchanged",
-            "removed": len(delta["remove"]) if changed else 0,
-            "updated": len(delta["update"]) if changed else 0,
-            "merged": len(delta["merge"]) if changed else 0,
-        })
-        LOGGER.info("evidence_cleanup completed changed=%s entries=%d", changed, len(state.evidences))
+            LOGGER.info(
+                "evidence_cleanup completed changed=%s entries=%d",
+                changed, len(state.evidences),
+            )
+            break
     except asyncio.CancelledError:
         # Cancellation must remain observable by the caller. The diagnostic
         # entry must not stay stuck at 'running' after the model call stops.
