@@ -1,16 +1,18 @@
 """Fluent, instance-local SDK configuration. No global policy is consulted by default."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
 from cli_agent.settings.admin_config import (
     AdminConfig, McpPolicy, WebPolicy, load_admin_config,
+    _trusted_server, _model_credential_rule, _web_provider,
     ModelCredentialRule, TrustedMcpServer, WebProviderConfig,
 )
 from cli_agent.settings.config import (
     AppConfig, ModelConfig, McpServerConfig, load_config,
+    _model_config, _mcp_server_config, _agent_config,
 )
 from cli_agent.security.network_policy import NetworkConfig, LOCAL_HOSTS
 
@@ -59,13 +61,31 @@ def _admin_overrides(policy: AdminConfig, overrides: dict[str, Any]) -> AdminCon
         ):
             raise TypeError("web_providers benötigt WebProviderConfig-Objekte.")
         result = replace(result, web=WebPolicy(tuple(providers)))
-    for rule in result.model_credentials:
+    for index, rule in enumerate(result.model_credentials):
+        if _model_credential_rule(asdict(rule), index) != rule:
+            raise ValueError("Ungültige model_credentials-Konfiguration.")
         if rule.host not in result.network.model_allowed_hosts:
             raise ValueError("Credential-Host muss in model_allowed_hosts enthalten sein.")
-    for provider in result.web.providers:
+    for index, provider in enumerate(result.web.providers):
+        if _web_provider({"type": provider.provider_type, "base_url": provider.base_url,
+                          "token_env": provider.token_env}, index) != provider:
+            raise ValueError("Ungültige web_providers-Konfiguration.")
         from urllib.parse import urlsplit
         if urlsplit(provider.base_url).hostname not in result.network.web_allowed_hosts:
             raise ValueError("Web-Provider-Host muss in web_allowed_hosts enthalten sein.")
+    for index, server in enumerate(result.mcp.trusted_servers):
+        definition = asdict(server)
+        definition["auto_approve_tools"] = [
+            asdict(approval) for approval in server.auto_approve_tools
+        ]
+        if server.bearer_token_env is not None:
+            definition["from_env"] = {
+                "authentication": {"bearer": server.bearer_token_env}
+            }
+        definition["env"] = dict(server.env)
+        definition["headers"] = dict(server.headers)
+        if _trusted_server(definition, index) != server:
+            raise ValueError("Ungültige trusted_servers-Konfiguration.")
     return result
 
 
@@ -133,6 +153,19 @@ class AgentBuilder:
                         raise TypeError("mcp_servers benötigt McpServerConfig-Objekte.")
                     value = tuple(value)
                 config = replace(config, **{key: value})
+        if model_opts:
+            if _model_config(asdict(config.model)) != config.model:
+                raise ValueError("Ungültige Modell-Konfiguration.")
+        if "timezone" in overrides:
+            _agent_config({"timezone": config.agent.timezone})
+        if "mcp_servers" in overrides:
+            for server in config.mcp_servers:
+                if server.built_in:
+                    raise ValueError("built_in MCPs dürfen nicht als Projekt-Server übergeben werden.")
+                definition = asdict(server)
+                definition["args"] = list(server.args)
+                if _mcp_server_config(definition) != server:
+                    raise ValueError("Ungültige MCP-Projektkonfiguration.")
         self._project = config
         self._run_options = {k: v for k, v in overrides.items() if k in _RUN_OPTIONS}
         return self
