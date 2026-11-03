@@ -15,7 +15,7 @@ from cli_agent.context.agent_knowledge import (
     _register_chroma_results,
 )
 from cli_agent.context.chroma_knowledge import ChromaKnowledgeSession
-from cli_agent.runtime.agent import Agent
+from cli_agent.runtime.agent import CliAgent
 from cli_agent.security.network_policy import NetworkConfig
 
 
@@ -124,7 +124,7 @@ def test_only_host_issued_chroma_tokens_may_be_selected():
 
 
 def _agent_with_chroma(session):
-    agent = Agent.__new__(Agent)
+    agent = CliAgent.__new__(CliAgent)
     agent._vector_config = _config()
     agent._vector_session = session
     agent._okf_options = None
