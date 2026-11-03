@@ -139,8 +139,15 @@ def _file_paths(root: Path, *, max_files: int) -> list[str]:
     Symlinked directories are never traversed. Symlinked candidate files
     are rejected by the verified descriptor reader, not followed.
     """
+    def fail_on_walk_error(error: OSError) -> None:
+        # os.walk silently skips unreadable directories without onerror.
+        # Treat incomplete inventories as failures, never as deletions.
+        raise error
+
     sources: list[str] = []
-    for directory, dirnames, filenames in os.walk(root, followlinks=False):
+    for directory, dirnames, filenames in os.walk(
+        root, followlinks=False, onerror=fail_on_walk_error,
+    ):
         dirnames[:] = [
             name for name in dirnames
             if not name.startswith(".") and not (Path(directory) / name).is_symlink()
