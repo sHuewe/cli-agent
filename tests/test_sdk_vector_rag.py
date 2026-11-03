@@ -385,3 +385,64 @@ async def test_first_inline_record_validates_embedding_dimension_across_batches(
         assert store.metadata()["dimension"] == "0"
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_readonly_search_without_lockfile(tmp_path, monkeypatch):
+    """Search must not create a lockfile when a database is deployed read-only."""
+    from cli_agent.context import knowledge_vector
+
+    monkeypatch.setattr(knowledge_vector, "EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "document.txt").write_text("apple information", encoding="utf-8")
+    rag = (await build_vector_rag(root)).rag
+    lockfile = Path(str(rag.database) + ".lock")
+    assert lockfile.is_file()
+    lockfile.unlink()
+    assert (await rag.search("apple"))[0].path == "document.txt"
+    assert not lockfile.exists()
+
+
+@pytest.mark.asyncio
+async def test_readonly_search_when_sidecar_access_denied(tmp_path, monkeypatch):
+    """Sharing a readable index cannot require permissions on its lockfile."""
+    import errno
+    from cli_agent.context import knowledge_vector, vector_index_lock
+
+    monkeypatch.setattr(knowledge_vector, "EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "document.txt").write_text("apple information", encoding="utf-8")
+    rag = (await build_vector_rag(root)).rag
+    original_open = vector_index_lock.os.open
+
+    def denied_lock_open(path, *args, **kwargs):
+        if str(path).endswith(".sqlite.lock"):
+            raise PermissionError(errno.EACCES, "Access denied", str(path))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(vector_index_lock.os, "open", denied_lock_open)
+    assert (await rag.search("apple"))[0].path == "document.txt"
+
+
+@pytest.mark.asyncio
+async def test_shared_search_blocks_rebuild_when_lockfile_available(tmp_path, monkeypatch):
+    from cli_agent.context import knowledge_vector
+    from cli_agent.context.vector_index_lock import vector_index_lock
+
+    monkeypatch.setattr(knowledge_vector, "EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "document.txt").write_text("apple information", encoding="utf-8")
+    rag = (await build_vector_rag(root)).rag
+    task = None
+    async with vector_index_lock(rag.database, shared=True):
+        task = asyncio.create_task(build_vector_rag(root))
+        await asyncio.sleep(0.05)
+        assert not task.done()
+    assert task is not None
+    await asyncio.wait_for(task, timeout=10)
