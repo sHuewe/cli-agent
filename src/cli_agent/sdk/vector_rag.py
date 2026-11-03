@@ -182,7 +182,7 @@ def open_vector_rag(
         import chromadb
     except ImportError as exc:
         raise ImportError(
-            "Chroma support requires the optional dependency: pip install 'cli-agent[rag]'"
+            "Chroma support requires chromadb: pip install 'chromadb>=1.3,<2'"
         ) from exc
 
     # get_collection is deliberately used instead of get_or_create_collection:
