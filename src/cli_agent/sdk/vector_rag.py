@@ -1,363 +1,243 @@
-"""Standalone file-directory vector RAG for Python applications.
+"""Read-only retrieval from externally prepared Chroma collections.
 
-The index and search functions do not instantiate an LLM agent or alter its
-history. They reuse the existing bounded SQLite embedding implementation.
+Document extraction, chunking, vector insertion, update, and deletion are
+intentionally outside cli-agent. The SDK only embeds search queries using the
+existing administrator-controlled embedding provider and asks Chroma for
+stored chunk documents and provenance metadata.
 """
 from __future__ import annotations
 
-import hashlib
-from uuid import uuid4
-from dataclasses import dataclass
+import asyncio
+import math
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from cli_agent.context.vector_index_lock import vector_index_lock
 from cli_agent.context.knowledge_vector import (
     MAX_SEARCH_QUERY,
-    MAX_SOURCE_BYTES,
-    MAX_BATCH,
-    _chunks,
-    _encode,
     EmbeddingProvider,
-    SQLiteKnowledgeStore,
-    _read_source,
-    build_index,
-    update_index,
+    _encode,
 )
-from cli_agent.security.network_policy import NetworkConfig
 from cli_agent.settings.admin_config import AdminConfig
 from cli_agent.settings.config import VectorKnowledgeConfig
+
+# Metadata contract for externally managed Chroma collections. These fields
+# describe the query embedding space, not a credential or API key.
+PROVIDER_META = "cli_agent_embedding_provider"
+MODEL_META = "cli_agent_embedding_model"
+ENDPOINT_META = "cli_agent_embedding_endpoint"
 
 
 @dataclass(frozen=True)
 class VectorRagHit:
-    path: str
-    score: float
-    preview: str
-    source: str | None = None
-    record_id: str | None = None
+    """A matched chunk, not the first characters of its parent document."""
 
+    id: str
+    content: str
+    source: str | None
+    metadata: dict[str, Any]
+    distance: float
 
-@dataclass(frozen=True)
-class VectorRagBuildResult:
-    rag: VectorRag
-    total: int
-    added: int
-    changed: int
-    unchanged: int
-    removed: int
+    @property
+    def record_id(self) -> str:
+        """Convenience alias for Chroma's record ID."""
+        return self.id
 
 
 @dataclass(frozen=True)
 class VectorRag:
-    """Serializable index description, not an open SQLite connection."""
+    """Read-only SDK handle to an existing Chroma collection.
 
-    path: Path
+    External producers own all writes and must publish a stable collection
+    while cli-agent is searching. PersistentClient is not a file-level
+    read-only connection; only the public SDK operations are read-only.
+    """
+
     database: Path
-    config: VectorKnowledgeConfig
-    admin_config: AdminConfig
-    max_read_bytes: int
+    collection: str
+    config: VectorKnowledgeConfig = field(repr=False)
+    admin_config: AdminConfig = field(repr=False)
+    _client: Any = field(repr=False, compare=False)
+    _collection: Any = field(repr=False, compare=False)
 
-    def _embedder(self) -> EmbeddingProvider:
-        return EmbeddingProvider(
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        where: dict[str, Any] | None = None,
+    ) -> tuple[VectorRagHit, ...]:
+        """Return ranked Chroma chunks with their full stored texts.
+
+        Distances come directly from Chroma (smaller is better) and are
+        intentionally not transformed into misleading universal scores.
+        """
+        if not isinstance(query, str) or not query.strip() or len(query) > MAX_SEARCH_QUERY:
+            raise ValueError("query must contain 1-2000 characters")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ValueError("limit must be between 1 and 20")
+        if where is not None and not isinstance(where, dict):
+            raise TypeError("where must be a Chroma metadata filter dictionary")
+
+        embedder = EmbeddingProvider(
             self.config, self.admin_config.network, self.admin_config.model_credentials,
         )
+        vectors = await embedder.embed([query])
+        if len(vectors) != 1:
+            raise RuntimeError("Embedding provider returned an invalid query batch")
+        vector = vectors[0]
+        _encode(vector)  # Reject non-finite, empty or unbounded vectors.
 
-    def _validate_store(self, store: SQLiteKnowledgeStore, embedder: EmbeddingProvider) -> int:
-        return store.check(
-            root=self.path, mode="files", provider=self.config.provider,
-            model=self.config.model, endpoint=embedder.endpoint_identity,
-            max_read_bytes=self.max_read_bytes,
-        )
+        kwargs: dict[str, Any] = {
+            "query_embeddings": [vector],
+            "n_results": limit,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where is not None:
+            kwargs["where"] = where
+        # The local Chroma client is synchronous: never block the async agent
+        # event loop while performing its SQLite/HNSW retrieval.
+        result = await asyncio.to_thread(self._collection.query, **kwargs)
 
-    async def add_record(
-        self,
-        content: str,
-        *,
-        id: str | None = None,
-        source: str | None = None,
-    ) -> str:
-        """Upsert an inline record while excluding index replacement."""
-        async with vector_index_lock(self.database):
-            return await self._add_record_unlocked(content, id=id, source=source)
+        ids = _first_query_items(result, "ids")
+        documents = _first_query_items(result, "documents")
+        metadatas = _first_query_items(result, "metadatas")
+        distances = _first_query_items(result, "distances")
+        if not (len(ids) == len(documents) == len(metadatas) == len(distances)):
+            raise RuntimeError("Chroma returned misaligned search results")
 
-    async def _add_record_unlocked(
-        self,
-        content: str,
-        *,
-        id: str | None = None,
-        source: str | None = None,
-    ) -> str:
-        """Atomically upsert an inline record; return its stable ID.
+        hits: list[VectorRagHit] = []
+        for record_id, document, metadata, distance in zip(ids, documents, metadatas, distances):
+            if not isinstance(record_id, str):
+                raise RuntimeError("Chroma returned a non-string record ID")
+            if isinstance(distance, bool) or not isinstance(distance, (float, int)) or not math.isfinite(distance):
+                raise RuntimeError("Chroma returned an invalid vector distance")
+            if metadata is None:
+                metadata = {}
+            if not isinstance(metadata, dict):
+                raise RuntimeError("Chroma returned invalid record metadata")
+            # A producer may have inserted only embeddings. Such records
+            # cannot serve as grounding context and are not returned.
+            if not isinstance(document, str) or not document.strip():
+                continue
+            source = metadata.get("source")
+            if not isinstance(source, str) or not source.strip():
+                source = None
+            hits.append(
+                VectorRagHit(
+                    id=record_id, content=document, source=source,
+                    metadata=dict(metadata), distance=float(distance),
+                )
+            )
+        return tuple(hits)
 
-        Only the affected record is embedded. Source is optional provenance
-        metadata, independent from the record's identity.
-        """
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError("content must be a nonempty string")
-        if len(content.encode("utf-8")) > self.max_read_bytes:
-            raise ValueError("content exceeds the configured byte limit")
-        if id is None:
-            id = str(uuid4())
-        if not isinstance(id, str) or not 1 <= len(id) <= 200 or id != id.strip() or any(
-            ord(ch) < 32 or ord(ch) == 127 for ch in id
-        ):
-            raise ValueError("id must be a nonempty ID of at most 200 characters")
-        if source is not None and (
-            not isinstance(source, str) or not 1 <= len(source) <= 2000
-            or not source.strip() or any(ord(ch) < 32 or ord(ch) == 127 for ch in source)
-        ):
-            raise ValueError("source must be a nonempty string of at most 2000 characters")
-        key = f"record://{id}"
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        embedder = self._embedder()
 
-        # Read the current index without mutating it while the embedding
-        # operation runs. Do not re-embed on an identical-text upsert.
-        old_store = SQLiteKnowledgeStore(self.database)
-        try:
-            old_dimension = self._validate_store(old_store, embedder)
-            existing = old_store.sdk_record(id)
-            unchanged = existing is not None and existing["content"] == content
-        finally:
-            old_store.close()
+def _first_query_items(result: Any, key: str) -> list[Any]:
+    """Chroma query results are nested by query; SDK always submits one."""
+    if not isinstance(result, dict):
+        raise RuntimeError("Chroma returned an invalid search response")
+    groups = result.get(key)
+    if not isinstance(groups, list) or len(groups) != 1 or not isinstance(groups[0], list):
+        raise RuntimeError(f"Chroma search response lacks {key!r}")
+    return groups[0]
 
-        vectors: list[list[float]] = []
-        expected_dimension = old_dimension
-        if not unchanged:
-            parts = _chunks(content)
-            for position in range(0, len(parts), MAX_BATCH):
-                batch = await embedder.embed(parts[position:position + MAX_BATCH])
-                for vector in batch:
-                    if expected_dimension == 0:
-                        expected_dimension = len(vector)
-                    elif len(vector) != expected_dimension:
-                        raise ValueError("Embedding dimensions differ across batches or from the stored index")
-                    vectors.append(vector)
 
-        store = SQLiteKnowledgeStore(self.database, readonly=False)
-        try:
-            with store.db:
-                # SQLite serializes writers; re-check state after acquiring
-                # the write lock to avoid silently replacing concurrent edits.
-                store.db.execute("BEGIN IMMEDIATE")
-                dimension = self._validate_store(store, embedder)
-                store.create_sdk_record_table()
-                current = store.sdk_record(id)
-                if unchanged:
-                    if current is None or current["content"] != content:
-                        raise RuntimeError("Record changed during embedding; retry the operation")
-                    if current["source"] != source:
-                        store.db.execute(
-                            "UPDATE sdk_records SET source=? WHERE id=?", (source, id)
-                        )
-                else:
-                    if (current is None) != (existing is None) or (
-                        current is not None and existing is not None
-                        and (current["content"] != existing["content"] or current["source"] != existing["source"])
-                    ):
-                        raise RuntimeError("Record changed during embedding; retry the operation")
-                    if dimension != old_dimension:
-                        raise RuntimeError("Index dimensions changed during embedding")
-                    if not vectors:
-                        raise ValueError("content did not produce embeddings")
-                    if dimension == 0:
-                        dimension = len(vectors[0])
-                        store.configure(
-                            root=self.path, mode="files", provider=self.config.provider,
-                            model=self.config.model, endpoint=embedder.endpoint_identity,
-                            dim=dimension, max_read_bytes=self.max_read_bytes,
-                        )
-                    store.db.execute("DELETE FROM chunks WHERE source=?", (key,))
-                    store.db.execute("DELETE FROM sources WHERE path=?", (key,))
-                    store.db.execute(
-                        "INSERT INTO sources(path,sha256) VALUES (?,?)", (key, digest)
-                    )
-                    for vector in vectors:
-                        store.db.execute(
-                            "INSERT INTO chunks(source,vector) VALUES (?,?)", (key, _encode(vector))
-                        )
-                    store.db.execute(
-                        "INSERT INTO sdk_records(id,content,source) VALUES (?,?,?) "
-                        "ON CONFLICT(id) DO UPDATE SET content=excluded.content,source=excluded.source",
-                        (id, content, source),
-                    )
-            return id
-        finally:
-            store.close()
-
-    async def search(self, query: str, *, limit: int = 5, preview_chars: int = 500) -> tuple[VectorRagHit, ...]:
-        # Readers coordinate via a shared lock when available. A read-only
-        # deployed index remains searchable without lockfile write access.
-        async with vector_index_lock(self.database, shared=True):
-            return await self._search_unlocked(query, limit=limit, preview_chars=preview_chars)
-
-    async def _search_unlocked(self, query: str, *, limit: int = 5, preview_chars: int = 500) -> tuple[VectorRagHit, ...]:
-        """Search and verify source fingerprints before returning snippets."""
-        if not isinstance(query, str) or not query.strip() or len(query) > MAX_SEARCH_QUERY:
-            raise ValueError("Query must contain 1-2000 characters")
-        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 20:
-            raise ValueError("limit must be between 1 and 20")
-        if not isinstance(preview_chars, int) or isinstance(preview_chars, bool) or not 0 <= preview_chars <= 2000:
-            raise ValueError("preview_chars must be between 0 and 2000")
-
-        embedder = self._embedder()
-        store = SQLiteKnowledgeStore(self.database)
-        try:
-            dimension = self._validate_store(store, embedder)
-            if dimension == 0:
-                return ()
-            vector = (await embedder.embed([query]))[0]
-            if len(vector) != dimension:
-                raise ValueError("Embedding dimensions differ from the stored index")
-            hits = []
-            # Inspect a bounded number of candidates to omit stale sources.
-            for candidate in store.search(vector, limit=min(100, max(10, limit * 5))):
-                path = candidate["path"]
-                record_id: str | None = None
-                if path.startswith("record://"):
-                    record_id = path[len("record://"):]
-                    record = store.sdk_record(record_id)
-                    if record is None:
-                        continue
-                    content = record["content"]
-                    origin = record["source"]
-                else:
-                    try:
-                        content = _read_source(
-                            self.path, path, mode="files",
-                            max_read_bytes=self.max_read_bytes,
-                        )
-                    except (OSError, ValueError, UnicodeError):
-                        continue
-                    origin = path
-                checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
-                if checksum != store.source_sha(path):
-                    continue
-                hits.append(VectorRagHit(
-                    path=path, score=candidate["score"],
-                    preview=content[:preview_chars],
-                    source=origin, record_id=record_id,
-                ))
-                if len(hits) >= limit:
-                    break
-            return tuple(hits)
-        finally:
-            store.close()
+def _metadata_string(metadata: dict[str, Any], name: str) -> str | None:
+    value = metadata.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Chroma collection metadata {name!r} must be a nonempty string")
+    return value
 
 
 def open_vector_rag(
     database: str | Path,
     *,
+    collection: str = "knowledge",
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
     api_key_env: str | None = None,
     admin_config: AdminConfig | None = None,
 ) -> VectorRag:
-    """Open an existing standalone SQLite index without rebuilding it.
+    """Open an existing, externally created Chroma PersistentClient collection.
 
-    The database stores the embedding endpoint/model and source root, but
-    never API credentials. For external endpoints, callers must provide
-    an explicitly authorized credential environment variable and policy.
+    To avoid accidental use of a different embedding space, provider, model
+    and endpoint must come from collection metadata or explicit arguments.
+    Explicit values must agree with available metadata. Credentials are
+    never taken from the database; configure the key environment explicitly.
     """
     target = Path(database).expanduser().resolve()
-    if not target.is_file():
-        raise FileNotFoundError(f"Vector database not found: {target}")
-    policy = admin_config if admin_config is not None else AdminConfig()
-    store = SQLiteKnowledgeStore(target)
+    if not target.is_dir():
+        raise FileNotFoundError(f"Chroma database directory not found: {target}")
+    # Avoid PersistentClient silently initializing an empty store when the
+    # caller accidentally points to a new or wrong directory.
+    if not (target / "chroma.sqlite3").is_file():
+        raise FileNotFoundError(f"No existing Chroma database at: {target}")
+    if not isinstance(collection, str) or not collection.strip():
+        raise ValueError("collection must be a nonempty name")
+
     try:
-        meta = store.metadata()
-        required = {
-            "root", "mode", "provider", "model", "endpoint", "dimension",
-            "okf_max_read_bytes", "schema",
-        }
-        if not required.issubset(meta) or meta["mode"] != "files" or meta["schema"] != "4":
-            raise ValueError("Not a compatible standalone file-vector index")
-        root = Path(meta["root"]).resolve()
-        if not root.is_dir() or target.is_relative_to(root):
-            raise ValueError("Invalid or missing vector source directory")
-        limit = int(meta["okf_max_read_bytes"])
-        if not 1 <= limit <= MAX_SOURCE_BYTES:
-            raise ValueError("Invalid stored source read limit")
-        if meta["provider"] not in {"ollama", "openai"}:
-            raise ValueError("Unsupported stored embedding provider")
-        if meta["provider"] == "ollama" and api_key_env:
-            raise ValueError("api_key_env is only supported for OpenAI-compatible providers")
-        config = VectorKnowledgeConfig(
-            mode="files", database=str(target), provider=meta["provider"],
-            model=meta["model"], base_url=meta["endpoint"], api_key_env=api_key_env,
-        )
-        rag = VectorRag(root, target, config, policy, limit)
-        rag._validate_store(store, rag._embedder())
-        return rag
-    finally:
-        store.close()
+        import chromadb
+    except ImportError as exc:
+        raise ImportError(
+            "Chroma support requires chromadb: pip install 'chromadb>=1.3,<2'"
+        ) from exc
 
+    # get_collection is deliberately used instead of get_or_create_collection:
+    # this SDK never creates a collection or calls any mutation API.
+    client = chromadb.PersistentClient(path=str(target))
+    existing = client.get_collection(name=collection, embedding_function=None)
+    metadata = existing.metadata or {}
+    if not isinstance(metadata, dict):
+        raise ValueError("Chroma collection metadata must be a dictionary")
 
-async def build_vector_rag(
-    path: str | Path,
-    *,
-    database: str | Path | None = None,
-    provider: str = "ollama",
-    model: str = "embeddinggemma",
-    base_url: str | None = None,
-    api_key_env: str | None = None,
-    max_files: int = 10_000,
-    max_read_bytes: int = MAX_SOURCE_BYTES,
-    incremental: bool = False,
-    admin_config: AdminConfig | None = None,
-) -> VectorRagBuildResult:
-    """Build or update a vector index of ordinary .txt/.md files.
+    saved_provider = _metadata_string(metadata, PROVIDER_META)
+    saved_model = _metadata_string(metadata, MODEL_META)
+    saved_endpoint = _metadata_string(metadata, ENDPOINT_META)
+    if provider is not None and saved_provider is not None and provider != saved_provider:
+        raise ValueError("Embedding provider conflicts with Chroma collection metadata")
+    if model is not None and saved_model is not None and model != saved_model:
+        raise ValueError("Embedding model conflicts with Chroma collection metadata")
 
-    Files are recursively discovered, verified against symlinks/hardlinks,
-    chunked, embedded and persisted atomically in SQLite. Only source
-    identifiers, fingerprints and vectors are stored, not document text.
-    """
-    root = Path(path).expanduser().resolve()
-    if not root.is_dir():
-        raise ValueError(f"Source directory does not exist: {root}")
-    target = (
-        Path(database).expanduser().resolve()
-        if database is not None
-        else root.parent / (root.name + ".vectors.sqlite")
-    )
-    if target.is_relative_to(root):
-        raise ValueError("Vector database must be outside the source directory")
-    if not isinstance(max_files, int) or isinstance(max_files, bool) or not 1 <= max_files <= 100_000:
-        raise ValueError("max_files must be between 1 and 100000")
-    if not isinstance(max_read_bytes, int) or isinstance(max_read_bytes, bool) or not 1 <= max_read_bytes <= MAX_SOURCE_BYTES:
-        raise ValueError("max_read_bytes is outside supported range")
-    if provider not in {"ollama", "openai"}:
-        raise ValueError("provider must be ollama or openai")
-    if not isinstance(model, str) or not model.strip():
-        raise ValueError("model cannot be empty")
-    if provider == "openai" and not base_url:
-        raise ValueError("OpenAI-compatible provider requires base_url")
-    if provider == "ollama" and api_key_env:
-        raise ValueError("api_key_env is only supported for OpenAI-compatible providers")
-    settings = VectorKnowledgeConfig(
-        mode="files", database=str(target), provider=provider,
-        model=model.strip(),
-        base_url=base_url or "http://localhost:11434",
-        api_key_env=api_key_env, max_files=max_files,
-    )
+    actual_provider = provider or saved_provider
+    actual_model = model or saved_model
+    actual_endpoint = base_url or saved_endpoint
+    if actual_provider not in {"ollama", "openai"}:
+        raise ValueError("Specify provider='ollama' or provider='openai' or persist it in collection metadata")
+    if not actual_model or not isinstance(actual_model, str):
+        raise ValueError("Embedding model must be provided or persisted in collection metadata")
+    if not actual_endpoint or not isinstance(actual_endpoint, str):
+        raise ValueError("Embedding endpoint must be provided or persisted in collection metadata")
+
     policy = admin_config if admin_config is not None else AdminConfig()
-    kwargs = {
-        "root": root,
-        "path": target,
-        "network": policy.network,
-        "credential_rules": policy.model_credentials,
-        "okf_max_read_bytes": max_read_bytes,
-    }
-    if incremental:
-        changes = await update_index(settings, **kwargs)
-        total, added, changed, unchanged, removed = (
-            changes.total, changes.added, changes.changed,
-            changes.unchanged, changes.removed,
-        )
-    else:
-        total = await build_index(settings, **kwargs)
-        added, changed, unchanged, removed = total, 0, 0, 0
-
-    return VectorRagBuildResult(
-        rag=VectorRag(root, target, settings, policy, max_read_bytes),
-        total=total, added=added, changed=changed,
-        unchanged=unchanged, removed=removed,
+    config = VectorKnowledgeConfig(
+        mode="files", database=str(target),
+        provider=actual_provider, model=actual_model, base_url=actual_endpoint,
+        api_key_env=api_key_env,
     )
+    # Validates local/network access and approved credential names at open
+    # time; no query is sent until search() is called.
+    embedder = EmbeddingProvider(config, policy.network, policy.model_credentials)
+    if saved_endpoint is not None and embedder.endpoint_identity != _canonical_endpoint(
+        saved_endpoint, config, policy,
+    ):
+        raise ValueError("Embedding endpoint conflicts with Chroma collection metadata")
+    return VectorRag(
+        database=target, collection=collection, config=config,
+        admin_config=policy, _client=client, _collection=existing,
+    )
+
+
+def _canonical_endpoint(
+    endpoint: str, config: VectorKnowledgeConfig, policy: AdminConfig,
+) -> str:
+    """Normalize the saved endpoint using the same security validation."""
+    saved_config = VectorKnowledgeConfig(
+        mode="files", provider=config.provider, model=config.model,
+        base_url=endpoint, api_key_env=config.api_key_env,
+    )
+    return EmbeddingProvider(
+        saved_config, policy.network, policy.model_credentials,
+    ).endpoint_identity
