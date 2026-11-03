@@ -475,10 +475,10 @@ It does not extract documents, split text, build embeddings for records, index
 files, upsert chunks, or delete records. Your separate ingestion scripts
 (e.g. PyMuPDF pipelines) own the entire writing process and metadata.
 
-Install the optional Chroma reader dependency:
+Install Chroma independently alongside cli-agent (without changing cli-agent's core dependencies):
 
 ```bash
-pip install 'cli-agent[rag]'
+pip install 'chromadb>=1.3,<2'
 ```
 
 Create a Chroma collection using an external indexing script and persist
