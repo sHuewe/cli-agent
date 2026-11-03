@@ -121,9 +121,10 @@ class OkfConfig:
 
 @dataclass(frozen=True)
 class VectorKnowledgeConfig:
-    mode: str = "okf"  # OKF-only semantic candidate search
+    mode: str = "okf"  # "okf" (SQLite hybrid) or "chroma" (external read-only)
     source: str | None = None
     database: str = "knowledge.sqlite"
+    collection: str = "knowledge"  # Chroma collection name
     provider: str = "ollama"
     model: str = "embeddinggemma"
     base_url: str = "http://localhost:11434"
@@ -281,21 +282,41 @@ def _okf_config(values: dict[str, Any]) -> OkfConfig:
 
 
 def _vector_config(values: dict[str, Any], *, has_okf: bool) -> VectorKnowledgeConfig:
-    allowed = {"mode", "source", "database", "provider", "model", "base_url", "api_key_env", "search_limit", "max_files", "required"}
+    allowed = {
+        "backend", "mode", "source", "database", "collection",
+        "provider", "model", "base_url", "api_key_env",
+        "search_limit", "max_files", "required",
+    }
     if set(values) - allowed:
         raise ValueError("[knowledge.vector] enthält unbekannte Optionen.")
+    backend = values.get("backend", "sqlite")
+    if backend not in {"sqlite", "chroma"}:
+        raise ValueError("knowledge.vector.backend muss 'sqlite' oder 'chroma' sein.")
     mode = values.get("mode", "okf")
     provider = values.get("provider", "ollama")
-    if mode != "okf" or provider not in {"ollama", "openai"}:
-        raise ValueError("Nur OKF-basierte Vektorsuche mit Ollama/OpenAI wird unterstützt.")
-    if not has_okf:
-        raise ValueError("Vektor-RAG erfordert eine [okf]-Konfiguration.")
-    source = values.get("source")
-    if source is not None:
-        raise ValueError("knowledge.vector.source ist nicht erlaubt; Quelle ist [okf].repository.")
+    if provider not in {"ollama", "openai"}:
+        raise ValueError("knowledge.vector.provider muss 'ollama' oder 'openai' sein.")
+    if backend == "sqlite":
+        if mode != "okf":
+            raise ValueError("SQLite-Vektor-RAG unterstützt ausschließlich mode='okf'.")
+        if not has_okf:
+            raise ValueError("Vektor-RAG erfordert eine [okf]-Konfiguration.")
+        if "collection" in values:
+            raise ValueError("knowledge.vector.collection ist nur für Chroma zulässig.")
+    else:
+        if "mode" in values:
+            raise ValueError("Chroma verwendet backend='chroma' ohne mode.")
+        if "max_files" in values:
+            raise ValueError("knowledge.vector.max_files ist für Chroma nicht relevant.")
+        mode = "chroma"
+    if values.get("source") is not None:
+        raise ValueError("knowledge.vector.source ist nicht erlaubt.")
     for key in ("database", "model", "base_url"):
         if not isinstance(values.get(key, "x"), str) or not values.get(key, "x").strip():
             raise ValueError(f"knowledge.vector.{key} darf nicht leer sein.")
+    collection = values.get("collection", "knowledge")
+    if not isinstance(collection, str) or not collection.strip():
+        raise ValueError("knowledge.vector.collection darf nicht leer sein.")
     for key, upper in (("search_limit", 20), ("max_files", 100000)):
         value = values.get(key, 5 if key == "search_limit" else 10000)
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= upper:
@@ -304,14 +325,15 @@ def _vector_config(values: dict[str, Any], *, has_okf: bool) -> VectorKnowledgeC
     if env is not None and (not isinstance(env, str) or not env.strip()):
         raise ValueError("api_key_env muss ein nicht-leerer Variablenname sein.")
     return VectorKnowledgeConfig(
-        mode=mode, source=source, database=values.get("database", "knowledge.sqlite"),
-        provider=provider, model=values.get("model", "embeddinggemma"),
+        mode=mode, source=None,
+        database=values.get("database", "knowledge.sqlite"),
+        collection=collection, provider=provider,
+        model=values.get("model", "embeddinggemma"),
         base_url=values.get("base_url", "http://localhost:11434"),
         api_key_env=env, search_limit=values.get("search_limit", 5),
         max_files=values.get("max_files", 10000),
         required=_bool_value(values, "required", True, section="[knowledge.vector]"),
     )
-
 
 def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     name = str(values.get("name", "")).strip()
