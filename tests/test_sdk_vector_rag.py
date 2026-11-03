@@ -1,10 +1,7 @@
 """Standalone Chroma retrieval SDK contracts (external writers own all data)."""
 from __future__ import annotations
 
-import asyncio
-import errno
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
