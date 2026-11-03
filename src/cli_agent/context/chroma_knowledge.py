@@ -5,6 +5,7 @@ This adapter never exposes mutation capabilities to the retrieval model.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -59,6 +60,12 @@ class ChromaKnowledgeSession:
         for hit in hits:
             if len(hit.content) > MAX_CHROMA_CHUNK_CHARS:
                 raise ValueError("Chroma-Chunk überschreitet die maximale Kontextgröße.")
+            if not isinstance(hit.id, str) or not hit.id or len(hit.id) > 256:
+                raise ValueError("Chroma-Treffer besitzt eine ungültige ID.")
+            if hit.source is not None and len(hit.source) > 2048:
+                raise ValueError("Chroma-Quelle ist zu lang.")
+            if len(json.dumps(hit.metadata, ensure_ascii=False)) > 4096:
+                raise ValueError("Chroma-Metadaten sind zu groß.")
             size += len(hit.content)
             if size > MAX_CHROMA_RESULT_CHARS:
                 raise ValueError("Chroma-Suchergebnis überschreitet die maximale Kontextgröße.")
