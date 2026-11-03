@@ -90,6 +90,35 @@ stattdessen ein Fehler zurückgegeben. Bei aktiviertem Workspace-Zugriff
 gelangen große Ergebnisse nur als Session-Dateipfad und Metadaten in den
 LLM-Kontext.
 
+## Externer Datenexport (nur zur Bereitstellung)
+
+**Interne Analyseartefakte und externe Exportdateien haben unterschiedliche Zwecke.**
+`select_data`, `aggregate_data`, `join_data` und weitere Data-Tools erzeugen
+weiterverwendbare Session-Artefakte. Für nachfolgende Analyseschritte werden
+deren `workspace_path` und `records_path` direkt an das nächste Data-Tool
+übergeben – ohne Export und ohne erneutes Einlesen der Rohdaten durch das LLM.
+
+`export_data(path, format, records_path=...)` ist **ausschließlich ein
+Ausgabeschritt**, wenn ein fertiger Datensatz außerhalb des Agenten
+bereitgestellt werden soll, etwa als CSV-, JSON- oder Markdown-Download.
+Das Tool liefert dem LLM bewusst **keine Exportzeilen**, sondern nur Metadaten
+und den Pfad des fertigen Exportartefakts. Deshalb darf es **nicht** zur
+Analyse, Kontrolle, Zusammenfassung, Transformation, Kontextreduktion oder
+als Zwischenstufe einer Datenpipeline verwendet werden.
+
+Typischer Ablauf für eine ausdrücklich benötigte Datendatei:
+
+1. Daten mit den regulären Data-Tools fertig analysieren und aufbereiten.
+2. Das finale Ergebnis mit `export_data` im gewünschten Format exportieren.
+3. Den **vom Export zurückgegebenen** `workspace_path` an
+   `agent__publish_artifact(path=..., filename=...)` übergeben und damit
+   den Download bereitstellen.
+
+Wenn lediglich eine Frage zu Daten beantwortet werden soll und kein
+Datensatz nach außen gegeben werden muss, wird `export_data` **nicht** aufgerufen.
+`agent__publish_artifact` kann auch andere Session-Artefakte bereitstellen;
+ein Export ist ausschließlich für den entsprechenden Datenexport nötig.
+
 ## Read-/Analyse-Tools
 
 | Tool | Funktion |
