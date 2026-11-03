@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import tempfile
 from pathlib import Path
 from contextlib import AsyncExitStack
@@ -32,6 +33,23 @@ from cli_agent.platform.workspace_access import (
     is_reserved_workspace_environment_name,
     workspace_access_allows,
 )
+
+def _stdio_error_stream(stack: AsyncExitStack):
+    """Provide a real OS file descriptor for the MCP subprocess stderr.
+
+    Notebook kernels replace sys.stderr with an IPython stream whose fileno()
+    raises UnsupportedOperation. On Windows anyio passes this object through
+    subprocess.Popen, so the stdio MCP subprocess cannot be started.
+    """
+    try:
+        stream = sys.stderr
+        os.fstat(stream.fileno())
+    except (AttributeError, OSError, ValueError, TypeError):
+        # Keep the fallback alive for the entire MCP transport lifetime.
+        # TemporaryFile is removed automatically when the stack closes.
+        return stack.enter_context(tempfile.TemporaryFile(mode="w+t", encoding="utf-8"))
+    return stream
+
 
 logger = logging.getLogger("cli_agent.runtime.agent_mcp")
 
@@ -499,7 +517,9 @@ class McpLifecycleMixin:
                 ] + literal_args,
                 env=environment,
             )
-            read_stream, write_stream = await stack.enter_async_context(stdio_client(parameters))
+            read_stream, write_stream = await stack.enter_async_context(
+                stdio_client(parameters, errlog=_stdio_error_stream(stack))
+            )
         elif server_config.transport == "streamable_http":
             if server_config.url is None: raise ValueError(f"HTTP-MCP-Server {server_config.name!r} ohne URL.")
             server_url = validate_http_url(
