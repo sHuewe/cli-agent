@@ -384,7 +384,7 @@ def test_export_data_is_reserved_for_external_delivery(monkeypatch) -> None:
     result = export_tool(path="data.csv", format="csv")
     assert result.meta[ONLY_METADATA_TO_LLM_KEY] is True
     assert result.meta[METADATA_FOR_LLM_KEY]["export_format"] == "csv"
-    assert result.structuredContent["export_content"] == "x\\n1\\n2\\n"
+    assert result.structuredContent["export_content"] == "x\n1\n2\n"
 
 
 def test_inspection_tool_descriptions_separate_schema_from_rows(monkeypatch) -> None:
