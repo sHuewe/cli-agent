@@ -54,6 +54,7 @@ class _KnowledgeRunState:
     concepts: dict[str, dict[str, Any]] = field(default_factory=dict)
     selection_tokens_by_path: dict[str, str] = field(default_factory=dict)
     successful_followup_calls: int = 0
+    allow_empty_not_found: bool = False
 
     def add_allowed_calls(self, calls: dict[str, set[str]]) -> None:
         for path, tool_names in calls.items():
@@ -107,7 +108,7 @@ def _validate_knowledge_selection(answer: str, state: _KnowledgeRunState) -> tup
             return selection, "Bei `found_content: false` muss `reason_code` entweder `not_applicable` oder `not_found` sein."
         if reason_code == "not_applicable" and state.successful_followup_calls > 0:
             return selection, "`not_applicable` ist nur vor Beginn der Repository-Recherche zulässig."
-        if reason_code == "not_found" and not state.concepts:
+        if reason_code == "not_found" and not state.concepts and not state.allow_empty_not_found:
             return selection, "`not_found` ist erst zulässig, nachdem mindestens ein Concept-Dokument erfolgreich gelesen und geprüft wurde."
     return selection, None
 
@@ -163,3 +164,64 @@ def _assemble_knowledge_payload(selection: dict[str, Any], concepts: dict[str, d
             if formatted_warning not in warnings:
                 warnings.append(formatted_warning)
     return {"found_content": True, "content": content, "warnings": warnings}
+
+
+def _register_chroma_results(
+    state: _KnowledgeRunState,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Assign host-issued selection tokens to actual Chroma search hits.
+
+    Only records returned by the configured reader may enter the selection
+    set. Model-provided IDs or paths cannot manufacture source content.
+    """
+    entries = result.get("entries")
+    if not isinstance(entries, list):
+        raise ValueError("Chroma-Suche lieferte keine gültige Trefferliste.")
+    enriched: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("Chroma-Treffer hat ein ungültiges Format.")
+        record_id, content = entry.get("id"), entry.get("content")
+        if not isinstance(record_id, str) or not record_id or not isinstance(content, str) or not content.strip():
+            raise ValueError("Chroma-Treffer enthält keine gültige ID oder keinen Inhalt.")
+        document = {
+            "kind": "concept",
+            "path": f"chroma:{record_id}",
+            "record_id": record_id,
+            "content": content,
+            "source": entry.get("source"),
+            "metadata": entry.get("metadata"),
+            "distance": entry.get("distance"),
+        }
+        token = state.register_concept(document)
+        if token is None:
+            raise RuntimeError("Chroma-Treffer konnte nicht registriert werden.")
+        enriched.append({**entry, "selection_token": token})
+    return {"query": result.get("query"), "entries": enriched}
+
+
+def _assemble_chroma_payload(
+    selection: dict[str, Any],
+    state: _KnowledgeRunState,
+) -> dict[str, Any]:
+    """Return only selected, host-verified Chroma records as untrusted context."""
+    tokens = selection.get("selected_okf_tokens")
+    if not isinstance(tokens, list) or not tokens:
+        raise ValueError("Es wurden keine Chroma-Treffer ausgewählt.")
+    records: list[dict[str, Any]] = []
+    for token in dict.fromkeys(tokens):
+        document = state.concepts.get(token)
+        if document is None:
+            raise ValueError("Unbekannter Chroma-Auswahltoken.")
+        records.append({
+            "id": document["record_id"],
+            "source": document["source"],
+            "metadata": document["metadata"],
+            "distance": document["distance"],
+            "content": document["content"],
+        })
+    warnings = selection.get("warnings", [])
+    if not isinstance(warnings, list) or not all(isinstance(x, str) for x in warnings):
+        raise ValueError("Ungültige Warnungen in der Chroma-Auswahl.")
+    return {"found_content": True, "backend": "chroma", "content": records, "warnings": list(dict.fromkeys(warnings))}
