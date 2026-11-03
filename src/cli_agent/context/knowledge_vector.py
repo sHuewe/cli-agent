@@ -321,7 +321,45 @@ class SQLiteKnowledgeStore:
                 vector BLOB NOT NULL,
                 FOREIGN KEY(source) REFERENCES sources(path)
             );
+            CREATE TABLE IF NOT EXISTS sdk_records (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                source TEXT
+            );
         """)
+
+    def has_sdk_records(self) -> bool:
+        if self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sdk_records'"
+        ).fetchone() is None:
+            return False
+        return self.db.execute("SELECT 1 FROM sdk_records LIMIT 1").fetchone() is not None
+
+    def sdk_record(self, identifier: str) -> sqlite3.Row | None:
+        if self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sdk_records'"
+        ).fetchone() is None:
+            return None
+        return self.db.execute(
+            "SELECT content,source FROM sdk_records WHERE id=?", (identifier,)
+        ).fetchone()
+
+    def copy_sdk_records(self, old_store: "SQLiteKnowledgeStore", *, dimension: int) -> None:
+        """Preserve independently supplied SDK records in an atomic rebuild."""
+        if not old_store.has_sdk_records():
+            return
+        for row in old_store.db.execute("SELECT id,content,source FROM sdk_records"):
+            record_key = f"record://{row['id']}"
+            fingerprint = hashlib.sha256(row["content"].encode("utf-8")).hexdigest()
+            if old_store.source_sha(record_key) != fingerprint:
+                raise ValueError("SDK record text does not match its indexed fingerprint")
+            self.db.execute(
+                "INSERT INTO sdk_records(id,content,source) VALUES (?,?,?)",
+                (row["id"], row["content"], row["source"]),
+            )
+            self.copy_unchanged_source(
+                old_store, path=record_key, sha256=fingerprint, dimension=dimension,
+            )
 
     def metadata(self) -> dict[str, str]:
         return {r["key"]: r["value"] for r in self.db.execute("SELECT key,value FROM metadata")}
@@ -344,7 +382,7 @@ class SQLiteKnowledgeStore:
                 "bitte mit init-vector-db neu indexieren."
             )
         dim = int(meta["dimension"])
-        if not 1 <= dim <= 8192:
+        if not (1 <= dim <= 8192 or (mode == "files" and dim == 0)):
             raise ValueError("Ungültige Vektordimension im Index.")
         return dim
 
@@ -465,8 +503,28 @@ async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, 
                             (relative, _encode(vector)),
                         )
                 indexed += 1
+            if config.mode == "files" and path.is_file():
+                old = SQLiteKnowledgeStore(path)
+                try:
+                    if old.has_sdk_records():
+                        # Reuse inlined records, but fail closed if the old
+                        # index belongs to a different provider or model.
+                        old_dim = old.check(
+                            root=root, mode=config.mode, provider=config.provider,
+                            model=config.model, endpoint=provider.endpoint_identity,
+                            max_read_bytes=okf_max_read_bytes,
+                        )
+                        if dim is not None and dim != old_dim:
+                            raise ValueError("Embedding-Dimension hat sich geändert.")
+                        dim = old_dim
+                        store.copy_sdk_records(old, dimension=old_dim)
+                finally:
+                    old.close()
             if dim is None:
-                raise ValueError("Knowledge-Quelle enthält keine indexierbaren Texte.")
+                if config.mode != "files":
+                    raise ValueError("Knowledge-Quelle enthält keine indexierbaren Texte.")
+                # An empty file index may be filled via the SDK add_record API.
+                dim = 0
             store.configure(
                 root=root, mode=config.mode, provider=config.provider,
                 model=config.model, endpoint=provider.endpoint_identity, dim=dim,
@@ -519,6 +577,7 @@ async def update_index(
         existing = {
             row["path"]: row["sha256"]
             for row in old.db.execute("SELECT path,sha256 FROM sources")
+            if config.mode != "files" or not row["path"].startswith("record://")
         }
         paths = _index_paths(config, root, max_read_bytes=okf_max_read_bytes)
 
@@ -562,10 +621,13 @@ async def update_index(
                     model=config.model, endpoint=provider.endpoint_identity,
                     dim=dimension, max_read_bytes=okf_max_read_bytes,
                 )
+                if config.mode == "files":
+                    new_store.copy_sdk_records(old, dimension=dimension)
                 for relative, fingerprint in unchanged_records:
                     new_store.copy_unchanged_source(
                         old, path=relative, sha256=fingerprint, dimension=dimension
                     )
+                next_dimension = dimension
                 for relative, fingerprint in changed_records:
                     # Re-read one source at a time; nothing but its fingerprint
                     # was retained from the initial change-detection pass.
@@ -583,7 +645,9 @@ async def update_index(
                     for pos in range(0, len(chunks), MAX_BATCH):
                         batch = await provider.embed(chunks[pos:pos + MAX_BATCH])
                         for vector in batch:
-                            if len(vector) != dimension:
+                            if next_dimension == 0:
+                                next_dimension = len(vector)
+                            elif len(vector) != next_dimension:
                                 raise ValueError(
                                     "Embedding-Dimension hat sich geändert; "
                                     "bitte mit init-vector-db neu indexieren."
@@ -592,6 +656,12 @@ async def update_index(
                                 "INSERT INTO chunks(source,vector) VALUES (?,?)",
                                 (relative, _encode(vector)),
                             )
+                if next_dimension != dimension:
+                    new_store.configure(
+                        root=root, mode=config.mode, provider=config.provider,
+                        model=config.model, endpoint=provider.endpoint_identity,
+                        dim=next_dimension, max_read_bytes=okf_max_read_bytes,
+                    )
                 new_store.db.commit()
             finally:
                 new_store.close()
