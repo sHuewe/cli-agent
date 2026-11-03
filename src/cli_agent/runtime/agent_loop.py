@@ -670,18 +670,26 @@ async def run_model_loop(
                 token: document["path"]
                 for token, document in knowledge_state.concepts.items()
             }
+            if getattr(knowledge_state, "chroma_budget_exhausted", False):
+                notice = (
+                    "Das kumulative Chroma-Kontextbudget ist erreicht. "
+                    "Rufe keine weiteren Tools auf. Wähle ausschließlich "
+                    "die relevanten, bereits registrierten Chunk-Tokens: "
+                )
+            else:
+                notice = (
+                    "Das konfigurierte Limit von "
+                    f"{max_concept_reads} gelesenen Concepts ist erreicht. "
+                    "Rufe keine weiteren Tools auf. Wähle ausschließlich "
+                    "die materiell hilfreichen Agent-Tokens: "
+                )
             messages.append(
                 {
                     "role": "user",
                     "content": (
-                        "Das konfigurierte Limit von "
-                        f"{max_concept_reads} gelesenen Concepts ist "
-                        "erreicht. Rufe keine weiteren Tools auf. Wähle "
-                        "jetzt nur die materiell hilfreichen Concepts "
-                        "aus diesen Agent-Tokens aus: "
+                        notice
                         + json.dumps(valid_tokens, ensure_ascii=False)
-                        + ". Liefere ausschließlich das verlangte finale "
-                        "JSON-Objekt."
+                        + ". Liefere ausschließlich das verlangte finale JSON-Objekt."
                     ),
                 }
             )
