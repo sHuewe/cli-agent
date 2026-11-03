@@ -21,8 +21,19 @@ def test_combined_context(tmp_path):
 
 def test_large_markdown(tmp_path):
     text = "# Heading\n" + "Information.\n" * 10000
-    (tmp_path / "large.md").write_text(text, encoding="utf-8")
-    assert vision_analysis._read_markdown_context(_workspace(tmp_path), "large.md") == text
+    source = tmp_path / "large.md"
+    source.write_text(text, encoding="utf-8")
+    # Verify faithful transmission of file contents, including platform-specific
+    # line endings: write_text translates LF to CRLF on Windows.
+    expected = source.read_bytes().decode("utf-8")
+    assert vision_analysis._read_markdown_context(_workspace(tmp_path), "large.md") == expected
+
+
+def test_markdown_preserves_explicit_crlf(tmp_path):
+    source = tmp_path / "windows.md"
+    data = b"# Title\r\nA second line.\r\n"
+    source.write_bytes(data)
+    assert vision_analysis._read_markdown_context(_workspace(tmp_path), "windows.md") == data.decode("utf-8")
 
 
 def test_context_path_guards(tmp_path):
