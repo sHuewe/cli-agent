@@ -153,7 +153,8 @@ def test_connect_server_times_out_during_initialize(
             return SimpleNamespace(instructions=None)
 
     @asynccontextmanager
-    async def fake_stdio_client(_parameters):
+    async def fake_stdio_client(_parameters, *, errlog):
+        assert errlog.fileno() >= 0
         yield object(), object()
 
     @asynccontextmanager
@@ -510,7 +511,8 @@ def test_external_stdio_receives_core_owned_workspace_access_environment(
             return SimpleNamespace(instructions=None)
 
     @asynccontextmanager
-    async def fake_stdio_client(parameters):
+    async def fake_stdio_client(parameters, *, errlog):
+        assert errlog.fileno() >= 0
         captured["environment"] = parameters.env
         yield object(), object()
 
@@ -591,7 +593,8 @@ def test_external_stdio_receives_core_owned_workspace_directory_environment(
             return SimpleNamespace(instructions=None)
 
     @asynccontextmanager
-    async def fake_stdio_client(parameters):
+    async def fake_stdio_client(parameters, *, errlog):
+        assert errlog.fileno() >= 0
         captured["environment"] = parameters.env
         yield object(), object()
 
@@ -646,7 +649,8 @@ def test_external_stdio_omits_workspace_directory_without_workspace_access(
             return SimpleNamespace(instructions=None)
 
     @asynccontextmanager
-    async def fake_stdio_client(parameters):
+    async def fake_stdio_client(parameters, *, errlog):
+        assert errlog.fileno() >= 0
         captured["environment"] = parameters.env
         yield object(), object()
 

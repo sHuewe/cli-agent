@@ -794,7 +794,8 @@ def test_stdio_literal_args_bypass_runtime_placeholder_expansion(
         async def initialize(self):
             return SimpleNamespace(instructions=None)
 
-    def fake_stdio_client(parameters):
+    def fake_stdio_client(parameters, *, errlog):
+        assert errlog.fileno() >= 0
         captured["parameters"] = parameters
         from cli_agent.security.mcp_path_policy import read_path_policy
         captured["policy"] = read_path_policy(Path(parameters.args[-1]))
