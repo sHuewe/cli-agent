@@ -405,3 +405,88 @@ def test_start_server_rejects_collision_with_internal_evidence_tool(
     assert "agent" not in agent._server_tools
     assert "agent" not in agent._sessions
     assert resource.closed is True
+
+
+def test_stdio_error_stream_reuses_valid_stderr(monkeypatch):
+    import sys
+    from cli_agent.runtime.agent_mcp import _stdio_error_stream
+
+    async def scenario():
+        with open(__file__, encoding="utf-8") as real_stream:
+            monkeypatch.setattr(sys, "stderr", real_stream)
+            async with AsyncExitStack() as stack:
+                assert _stdio_error_stream(stack) is real_stream
+
+    asyncio.run(scenario())
+
+
+def test_stdio_error_stream_falls_back_for_jupyter_and_closes(monkeypatch):
+    import io
+    import sys
+    from cli_agent.runtime.agent_mcp import _stdio_error_stream
+
+    class NotebookStream:
+        def fileno(self):
+            raise io.UnsupportedOperation("fileno")
+
+    monkeypatch.setattr(sys, "stderr", NotebookStream())
+
+    async def scenario():
+        async with AsyncExitStack() as stack:
+            stream = _stdio_error_stream(stack)
+            assert stream.fileno() >= 0
+            stream.write("stderr from MCP process")
+            stream.flush()
+            assert not stream.closed
+        assert stream.closed
+
+    asyncio.run(scenario())
+
+
+def test_stdio_mcp_connector_passes_valid_errlog_in_notebook(monkeypatch, tmp_path):
+    import io
+    import sys
+    from contextlib import asynccontextmanager
+    from cli_agent.runtime import agent_mcp
+
+    class NotebookStream:
+        def fileno(self):
+            raise io.UnsupportedOperation("fileno")
+
+    monkeypatch.setattr(sys, "stderr", NotebookStream())
+    seen = []
+
+    @asynccontextmanager
+    async def fake_stdio(_parameters, *, errlog):
+        seen.append(errlog)
+        assert errlog.fileno() >= 0
+        yield object(), object()
+
+    class FakeSession:
+        def __init__(self, *_args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def initialize(self):
+            return SimpleNamespace(instructions=None)
+
+    monkeypatch.setattr(agent_mcp, "stdio_client", fake_stdio)
+    monkeypatch.setattr(agent_mcp, "CancellableClientSession", FakeSession)
+
+    async def scenario():
+        agent = _agent(tmp_path)
+        async with AsyncExitStack() as stack:
+            result, instructions = await agent._connect_server(
+                stack, McpServerConfig(name="os", command="unused", built_in=True),
+            )
+            assert isinstance(result, FakeSession)
+            assert instructions is None
+            assert not seen[0].closed
+        assert seen[0].closed
+
+    asyncio.run(scenario())
