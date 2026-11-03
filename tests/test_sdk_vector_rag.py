@@ -302,3 +302,86 @@ async def test_add_record_to_existing_index_without_sdk_records_table(tmp_path, 
     hits = await open_vector_rag(rag.database).search("apple")
     assert hits[0].record_id == "legacy"
     assert hits[0].source == "import"
+
+
+
+@pytest.mark.asyncio
+async def test_inline_write_waits_for_incremental_index_publication(tmp_path, monkeypatch):
+    """An inline upsert must never race with replacing the live SQLite file."""
+    import hashlib
+    from cli_agent.context import knowledge_vector
+    from cli_agent.sdk import open_vector_rag
+
+    monkeypatch.setattr(knowledge_vector, "EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "docs"
+    root.mkdir()
+    document = root / "doc.md"
+    document.write_text("apple initial", encoding="utf-8")
+    first = await build_vector_rag(root)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_embed = FakeEmbeddingProvider.embed
+
+    async def slow_embed(self, texts):
+        if "river updated" in texts[0]:
+            started.set()
+            await release.wait()
+        return await original_embed(self, texts)
+
+    monkeypatch.setattr(FakeEmbeddingProvider, "embed", slow_embed)
+    document.write_text("river updated", encoding="utf-8")
+    update_task = asyncio.create_task(build_vector_rag(root, incremental=True))
+    writer_task = None
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        writer_task = asyncio.create_task(first.rag.add_record("apple inline", id="manual", source="crm"))
+        await asyncio.sleep(0.05)
+        assert not writer_task.done(), "Writer must wait for index replacement"
+    finally:
+        release.set()
+
+    await asyncio.wait_for(update_task, timeout=10)
+    assert writer_task is not None
+    assert await asyncio.wait_for(writer_task, timeout=10) == "manual"
+
+    store = SQLiteKnowledgeStore(first.rag.database)
+    try:
+        assert store.source_sha("doc.md") == hashlib.sha256(b"river updated").hexdigest()
+        assert store.sdk_record("manual")["source"] == "crm"
+    finally:
+        store.close()
+    rag = open_vector_rag(first.rag.database)
+    assert any(hit.path == "doc.md" for hit in await rag.search("river"))
+
+
+@pytest.mark.asyncio
+async def test_first_inline_record_validates_embedding_dimension_across_batches(tmp_path, monkeypatch):
+    from cli_agent.context import knowledge_vector
+
+    monkeypatch.setattr(knowledge_vector, "EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "docs"
+    root.mkdir()
+    rag = (await build_vector_rag(root)).rag
+    calls = 0
+
+    async def incompatible_batches(self, texts):
+        nonlocal calls
+        calls += 1
+        return [[1.0, 0.0] if calls == 1 else [1.0, 0.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(FakeEmbeddingProvider, "embed", incompatible_batches)
+    # More than MAX_BATCH chunks makes multiple embedding requests.
+    with pytest.raises(ValueError, match="dimensions differ"):
+        await rag.add_record("apple " * 12000, id="first", source="imported")
+    assert calls >= 2
+
+    store = SQLiteKnowledgeStore(rag.database)
+    try:
+        assert store.sdk_record("first") is None
+        assert store.source_sha("record://first") is None
+        assert store.metadata()["dimension"] == "0"
+    finally:
+        store.close()
