@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from cli_agent.context.vector_index_lock import vector_index_lock
 from cli_agent.settings.config import VectorKnowledgeConfig
 from cli_agent.security.filesystem_security import regular_file_has_multiple_links
 from cli_agent.models.model_factory import _validate_api_key_env
@@ -480,6 +481,16 @@ class SQLiteKnowledgeStore:
 
 async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig,
                       credential_rules: tuple[Any, ...] = (), okf_max_read_bytes: int = MAX_SOURCE_BYTES) -> int:
+    # Hold the lock across enumeration, embedding calls and os.replace.
+    async with vector_index_lock(path):
+        return await _build_index_unlocked(
+            config, root=root, path=path, network=network,
+            credential_rules=credential_rules, okf_max_read_bytes=okf_max_read_bytes,
+        )
+
+
+async def _build_index_unlocked(config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig,
+                               credential_rules: tuple[Any, ...] = (), okf_max_read_bytes: int = MAX_SOURCE_BYTES) -> int:
     provider = EmbeddingProvider(config, network, credential_rules)
     paths = _index_paths(config, root, max_read_bytes=okf_max_read_bytes)
     # Persist each completed batch directly to a *temporary* database.
@@ -552,6 +563,24 @@ async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, 
 
 
 async def update_index(
+    config: VectorKnowledgeConfig,
+    *,
+    root: Path,
+    path: Path,
+    network: NetworkConfig,
+    credential_rules: tuple[Any, ...] = (),
+    okf_max_read_bytes: int = MAX_SOURCE_BYTES,
+) -> IndexUpdateResult:
+    # The entire read/modify/publish transaction must be serialized with
+    # SDK add_record. SQLite's per-file locks do not cover os.replace.
+    async with vector_index_lock(path):
+        return await _update_index_unlocked(
+            config, root=root, path=path, network=network,
+            credential_rules=credential_rules, okf_max_read_bytes=okf_max_read_bytes,
+        )
+
+
+async def _update_index_unlocked(
     config: VectorKnowledgeConfig,
     *,
     root: Path,
