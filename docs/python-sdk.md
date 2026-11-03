@@ -468,144 +468,119 @@ concurrently with an agent request on that agent. Use `agent.list_tools()`
 to inspect available tool names, schemas and approval requirements.
 
 
-## Standalone vector RAG (without Agent or API endpoint)
+## Read-only Chroma RAG (without Agent or API endpoint)
 
-Import `build_vector_rag` directly from the SDK. This utility does not
-create an agent, require `AgentBuilder`, or modify the existing API endpoint.
+The standalone Python SDK **only reads externally prepared Chroma collections**.
+It does not extract documents, split text, build embeddings for records, index
+files, upsert chunks, or delete records. Your separate ingestion scripts
+(e.g. PyMuPDF pipelines) own the entire writing process and metadata.
 
-```python
-import asyncio
-from cli_agent.sdk import build_vector_rag
+Install the optional Chroma reader dependency:
 
-async def main():
-    built = await build_vector_rag(
-        path="./knowledge",
-        model="embeddinggemma",
-        provider="ollama",
-    )
-    print("Indexed:", built.total, "documents")
-    for hit in await built.rag.search("Where is the API documented?", limit=5):
-        print(hit.path, hit.score, hit.preview)
-
-asyncio.run(main())
+```bash
+pip install 'cli-agent[rag]'
 ```
 
-The path must identify an existing directory. The SDK recursively indexes
-UTF-8 `.txt` and `.md` files and stores vectors plus path/fingerprint metadata
-in SQLite (not the full source text). The default database path is
-`<source-parent>/<source-name>.vectors.sqlite`, outside the indexed directory;
-`database=...` can override it. A database inside the source directory is
-rejected. The index is atomically replaced after a successful build.
+Create a Chroma collection using an external indexing script and persist
+these collection metadata keys to identify its embedding space:
+
+| Collection metadata | Value example |
+|---|---|
+| `cli_agent_embedding_provider` | `ollama` |
+| `cli_agent_embedding_model` | `embeddinggemma` |
+| `cli_agent_embedding_endpoint` | `http://localhost:11434` |
+
+Your indexing process supplies one **complete text chunk** as Chroma's
+`document` with its precomputed embedding. Put the origin in each record's
+metadata as `source`; other metadata (page, section, document ID, etc.)
+is preserved.
+
+For example, a separate ingestion program can use Chroma directly:
 
 ```python
-updated = await build_vector_rag(
-    path="./knowledge",
-    database="./knowledge.vectors.sqlite",
-    incremental=True,
+import chromadb
+
+client = chromadb.PersistentClient(path="./chroma_db")
+collection = client.get_or_create_collection(
+    "knowledge",
+    metadata={
+        "cli_agent_embedding_provider": "ollama",
+        "cli_agent_embedding_model": "embeddinggemma",
+        "cli_agent_embedding_endpoint": "http://localhost:11434",
+    },
 )
-print(updated.added, updated.changed, updated.unchanged, updated.removed)
+
+# Use your ingest pipeline's real embedding for this text.
+collection.upsert(
+    ids=["handbook.pdf:page-17:chunk-0"],
+    documents=["OAuth2 is used for service authentication."],
+    embeddings=[embedding_from_your_ingestion_pipeline],
+    metadatas=[{"source": "handbook.pdf", "page": 17}],
+)
 ```
 
-An incremental run requires an existing, compatible database. It reuses
-unchanged embeddings and reindexes changed files. Rebuilding the index is
-the default when `incremental=False`.
-
-`build_vector_rag` is an **async function** with these arguments:
-
-```python
-async def build_vector_rag(
-    path: str | Path,
-    *,
-    database: str | Path | None = None,
-    provider: str = "ollama",
-    model: str = "embeddinggemma",
-    base_url: str | None = None,
-    api_key_env: str | None = None,
-    max_files: int = 10_000,
-    max_read_bytes: int = 2_560_000,
-    incremental: bool = False,
-    admin_config: AdminConfig | None = None,
-) -> VectorRagBuildResult: ...
-```
-
-For an OpenAI-compatible embedding endpoint, pass `provider="openai"`,
-`base_url="https://.../v1"`, an authorized `api_key_env`, and an
-`AdminConfig` containing the corresponding allowed model host and credential
-rule. The default `AdminConfig()` allows only local model hosts and does not
-read the system-wide policy. The embedding provider is independently selected
-from the chat model.
-
-`VectorRagBuildResult` contains `rag`, `total`, `added`, `changed`,
-`unchanged`, and `removed`. `rag.search(query, limit=5, preview_chars=500)`
-returns ranked `VectorRagHit(path, score, preview)` objects. The preview
-is the **start of the current source document**, not a matched chunk.
-Modified, deleted or otherwise invalid sources are excluded from results
-until reindexing. Query embeddings use the same provider and model as indexing.
-
-The initial standalone implementation supports plain UTF-8 text and Markdown.
-It does not yet parse PDF, Office files or other formats. Source reading uses
-bounded, verified paths and rejects symlinked/hardlinked source files.
-
-
-### Open a vector RAG index without rebuilding
-
-`open_vector_rag(database=...)` reads the saved SQLite metadata to recover
-the source root, embedding provider, model, endpoint and per-file size limit.
-It opens the index without creating an agent or re-embedding any documents:
+The SDK reads the same collection independently:
 
 ```python
 from cli_agent.sdk import open_vector_rag
 
-rag = open_vector_rag(database="./rag/knowledge.sqlite")
-hits = await rag.search("How do I authenticate?", limit=5)
+rag = open_vector_rag(
+    database="./chroma_db",
+    collection="knowledge",
+)
+
+hits = await rag.search("How does authentication work?", limit=5)
+
+for hit in hits:
+    print(hit.id, hit.source, hit.distance)
+    print(hit.content)      # The entire matched chunk, NOT a document preview
+    print(hit.metadata)     # All Chroma metadata, including page, section, etc.
 ```
 
-The original source directory must still exist. For an external OpenAI-compatible
-embedding endpoint, pass `api_key_env="EMBEDDING_KEY"` and an explicit,
-authorized `admin_config` when reopening; API keys are never stored in
-the database. The index must have been created by the standalone file-based SDK.
-
-### Add or update individual records
-
-`rag.add_record(content, *, id=None, source=None)` adds one record directly
-without indexing the document directory:
+`open_vector_rag()` does not create a database or collection. It requires
+an existing Chroma PersistentClient database (`chroma.sqlite3`).
+If the ingest pipeline did not write the three embedding metadata fields,
+supply them explicitly:
 
 ```python
-record_id = await rag.add_record(
-    content="The customer uses PostgreSQL.",
-    source="crm/customer/123",
-)
-
-# Explicit ID gives upsert semantics.
-await rag.add_record(
-    content="The customer now uses PostgreSQL 18.",
-    id="customer-123",
-    source="crm/customer/123",
+rag = open_vector_rag(
+    database="./chroma_db",
+    collection="knowledge",
+    provider="ollama",
+    model="embeddinggemma",
+    base_url="http://localhost:11434",
 )
 ```
 
-The `id` parameter is optional. When omitted, a new UUID is generated and
-returned. When supplied, the ID uniquely identifies the record within the index:
-reusing it replaces the record text and vectors. An unchanged text reuses its
-existing embeddings; changing only `source` updates provenance metadata.
+When persisted metadata exists, explicit settings must agree with it. The
+embedding provider is only used for **query embeddings**. The actual vector
+search is `collection.query(query_embeddings=...)`; cli-agent never asks
+Chroma to embed or persist source chunks. Query embeddings must be generated
+using the same model, endpoint and embedding space as ingestion. Same vector
+dimension alone does not guarantee compatibility.
 
-The optional `source` is a caller-supplied provenance label, **not the
-internal record ID**, and can be omitted. For example, a CRM reference, URL,
-or external document identifier is suitable. It is stored separately from
-the internal key `record://<id>`.
+`rag.search(query, limit=5, where=None)` returns a tuple of `VectorRagHit`
+instances with `id`, `record_id` (alias for `id`), `content`, `source`,
+`metadata`, and `distance`. Chroma distances are returned unchanged:
+smaller means closer; they are **not** normalized similarity percentages.
+The optional `where` is passed as a Chroma metadata filter.
 
-`rag.search()` now returns `VectorRagHit` with `path`, `score`,
-`preview`, `source`, and `record_id` (non-null only for inline records).
-For indexed files, `source` is the relative file path; for inline records,
-it is the explicit provenance label or `None`.
+For an OpenAI-compatible remote embedding endpoint, pass
+`api_key_env="MY_EMBEDDING_KEY"` and an explicit `admin_config`
+authorizing the provider, host and credential environment variable. Default
+`AdminConfig()` allows only local model endpoints. No API key is stored
+in Chroma's collection metadata.
 
-Inline records persist both their original text and their vectors in SQLite.
-Unlike file-backed documents, the original text must be stored to make the
-record retrievable after reopening. Records remain intact across
-`build_vector_rag(..., incremental=True)` and full rebuilds of compatible
-indexes. An embedding failure occurs before the SQLite transaction, so an
-existing record remains unchanged.
+**Read-only semantics:** The SDK does not expose write methods, but Chroma
+`PersistentClient` is not a physical read-only database handle. Chroma may
+need file-system write permissions at initialization. Use a stable database
+snapshot while the SDK reads it, with no concurrent ingestion writes into
+that same persistent directory. For truly read-only mounts or simultaneous
+writers from independent processes, consider a separate Chroma server and
+a dedicated read-only client/access-control boundary.
 
-The standalone API does not delete individual records yet. Rebuilding with
-different embedding settings while inline records exist is rejected rather
-than silently dropping or mixing existing vectors.
+This new SDK replaces the earlier standalone SQLite file-indexer API:
+`build_vector_rag`, `VectorRagBuildResult`, `rag.add_record()`,
+and `preview` are no longer available through `cli_agent.sdk`.
+The existing internal OKF vector retrieval subsystem and its CLI remain
+separate and unchanged.
