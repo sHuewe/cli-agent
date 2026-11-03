@@ -32,9 +32,6 @@ async def vector_index_lock(database: Path) -> AsyncIterator[None]:
     fd = os.open(str(database) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     acquired = False
     try:
-        if os.name == "nt" and os.fstat(fd).st_size == 0:
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, b"\0")
         while True:
             try:
                 if os.name == "nt":
