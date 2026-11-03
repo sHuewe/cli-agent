@@ -124,3 +124,22 @@ timeout = 120
 # base_url = "http://localhost:11434"
 # model = "embeddinggemma"
 # required = true
+
+
+# Standalone read-only ChromaDB retrieval (no [okf] required):
+# The Chroma collection and chunk embeddings are managed externally, e.g.
+# by a PyMuPDF ingestion script. cli-agent only creates query embeddings.
+# Install separately: pip install 'chromadb>=1.3,<2'
+#
+# [knowledge.vector]
+# backend = "chroma"
+# database = "C:/knowledge/chroma"
+# collection = "knowledge"
+# provider = "ollama"
+# model = "embeddinggemma"
+# base_url = "http://localhost:11434"
+# search_limit = 5
+# required = false
+#
+# The provider/model/endpoint must match the external Chroma index's
+# embedding space. Admin host and credential allowlists still apply.
