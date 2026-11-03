@@ -138,7 +138,7 @@ Only write, move or delete a file when the user requested a file change.
     if vision_config is not None:
 
         @mcp.tool()
-        def analyze_image(path: str, question: str) -> str:
+        def analyze_image(path: str, question: str, context: str | None = None, context_path: str | None = None) -> str:
             """Analyze one PNG/JPEG/WebP workspace image with a concrete question.
 
             This sends the image and question to an external Vision model and
@@ -149,8 +149,10 @@ Only write, move or delete a file when the user requested a file change.
             Args:
                 path: Workspace-relative image path (no absolute path or '..').
                 question: Specific question for the Vision model.
+                context: Optional short text context (up to 64 KB).
+                context_path: Optional relative workspace Markdown path (up to 2 MB). Both options may be used together.
             """
-            return analyze_workspace_image(workspace, path, question, vision_config)
+            return analyze_workspace_image(workspace, path, question, vision_config, context=context, context_path=context_path)
 
     if mcp_config.allow_write_files():
 

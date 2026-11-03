@@ -88,7 +88,7 @@ Nur bei Schreibzugriff:
 
 ## Optionale Bildanalyse (Vision)
 
-Der eingebaute OS-MCP kann zusätzlich `analyze_image(path, question) -> str`
+Der eingebaute OS-MCP kann zusätzlich `analyze_image(path, question, context=None, context_path=None) -> str`
 anbieten. Der Agent wählt die Frage selbst; das Tool liefert die textuelle
 Antwort eines multimodalen Modells. Das Tool ist **nur** verfügbar, wenn
 `VISION_MODEL` in der Umgebung des gestarteten cli-agent-Prozesses gesetzt ist.
@@ -126,6 +126,41 @@ Die Frage ist auf 4.000 Zeichen, die Antwort auf 32.000 Zeichen begrenzt.
 HTTP-Redirects und Proxy-Umgebungsvariablen werden beim Vision-Aufruf
 nicht verwendet. Antwortinhalte sind **nicht vertrauenswürdig** und
 können trotz der Bildanalyse falsch oder unvollständig sein.
+
+### Bildanalyse mit Kontext
+
+Die Vision-Abfrage kann zusätzlich einen kurzen direkten Textkontext und/oder
+eine größere Markdown-Datei verwenden. Beide Eingaben sind optional:
+
+```json
+{
+  "path": "bilder/architektur.png",
+  "question": "Welche Probleme zeigt das Architekturdiagramm?",
+  "context": "L1 bezeichnet die Hauslast, L2 die Batterie.",
+  "context_path": "docs/systemarchitektur.md"
+}
+```
+
+`context` akzeptiert maximal 64.000 UTF-8-Bytes. `context_path` muss
+workspace-relativ auf eine UTF-8-kodierte Markdown-Datei mit der Endung
+`.md` oder `.markdown` verweisen (maximal 2.000.000 Bytes).
+Der kombinierte Kontext ist auf 2.000.000 Bytes begrenzt.
+Bei Überschreitung erfolgt ein Fehler, keine automatische Trunkierung,
+Zusammenfassung oder Aufteilung. Das Kontextfenster des Vision-Modells
+muss für die vollständige Eingabe ausreichen.
+
+Der OS-MCP liest die Datei direkt, sodass ihr vollständiger Inhalt nicht
+vorher in den Hauptagentenkontext geladen werden muss. Für `context_path`
+gelten dieselben Workspace-Lesegrenzen wie für andere OS-Dateizugriffe.
+Absolute Pfade, `..`, geschützte oder sensitive Pfade, Symlinks und
+Hardlinks werden zurückgewiesen.
+
+Die externe Toolfreigabe gilt ausdrücklich für **Bild, Frage, direkten Kontext
+und den vollständigen Inhalt der angegebenen Markdown-Datei**. Der Approval-
+Dialog zeigt den Dateipfad, nicht zwingend deren gesamten Inhalt.
+Der Kontext wird als nicht vertrauenswürdiger Referenztext behandelt.
+Nur Dateien angeben, deren Inhalt an den konfigurierten Vision-Endpunkt
+übermittelt werden darf.
 
 ## Textsuche
 
