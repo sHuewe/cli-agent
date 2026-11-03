@@ -7,11 +7,13 @@ collection is created and populated externally; cli-agent does **not** ingest,
 split, embed, modify or delete document chunks. Only query embeddings are
 computed at retrieval time.
 
-Install the optional client in the **same Python environment as cli-agent**:
+Install the optional `rag` extra in the **same Python environment as cli-agent**. For a complete local CLI/API installation with the Web UI and ChromaDB:
 
 ```shell
-pip install 'chromadb>=1.3,<2'
+pipx install '.[web,rag]'
 ```
+
+Alternatively, when using an existing Python environment, install `cli-agent[rag]` with pip or `uv sync --extra rag` in the project checkout.
 
 Configure `config.toml`:
 
