@@ -428,7 +428,7 @@ class ConversationMixin:
         if instructions:
             payload["mcp_server_instructions"] = instructions
         if knowledge is not None:
-            if getattr(self._vector_config, "mode", None) == "chroma":
+            if getattr(getattr(self, "_vector_config", None), "mode", None) == "chroma":
                 payload["retrieved_chroma_knowledge"] = knowledge
             else:
                 payload["retrieved_okf_knowledge"] = knowledge
