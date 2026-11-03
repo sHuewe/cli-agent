@@ -101,7 +101,10 @@ async def test_raw_file_index_rejects_symlinks_and_limits(monkeypatch, tmp_path)
 
     target = tmp_path / "outside.txt"
     target.write_text("secret", encoding="utf-8")
-    (root / "link.txt").symlink_to(target)
+    try:
+        (root / "link.txt").symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks not supported on this test platform")
     with pytest.raises(ValueError):
         _read_source(root, "link.txt", mode="files", max_read_bytes=1024)
 
