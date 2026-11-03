@@ -10,6 +10,7 @@ from uuid import uuid4
 from dataclasses import dataclass
 from pathlib import Path
 
+from cli_agent.context.vector_index_lock import vector_index_lock
 from cli_agent.context.knowledge_vector import (
     MAX_SEARCH_QUERY,
     MAX_SOURCE_BYTES,
@@ -75,6 +76,17 @@ class VectorRag:
         id: str | None = None,
         source: str | None = None,
     ) -> str:
+        """Upsert an inline record while excluding index replacement."""
+        async with vector_index_lock(self.database):
+            return await self._add_record_unlocked(content, id=id, source=source)
+
+    async def _add_record_unlocked(
+        self,
+        content: str,
+        *,
+        id: str | None = None,
+        source: str | None = None,
+    ) -> str:
         """Atomically upsert an inline record; return its stable ID.
 
         Only the affected record is embedded. Source is optional provenance
@@ -110,13 +122,16 @@ class VectorRag:
             old_store.close()
 
         vectors: list[list[float]] = []
+        expected_dimension = old_dimension
         if not unchanged:
             parts = _chunks(content)
             for position in range(0, len(parts), MAX_BATCH):
                 batch = await embedder.embed(parts[position:position + MAX_BATCH])
                 for vector in batch:
-                    if old_dimension and len(vector) != old_dimension:
-                        raise ValueError("Embedding dimensions differ from the stored index")
+                    if expected_dimension == 0:
+                        expected_dimension = len(vector)
+                    elif len(vector) != expected_dimension:
+                        raise ValueError("Embedding dimensions differ across batches or from the stored index")
                     vectors.append(vector)
 
         store = SQLiteKnowledgeStore(self.database, readonly=False)
@@ -171,6 +186,12 @@ class VectorRag:
             store.close()
 
     async def search(self, query: str, *, limit: int = 5, preview_chars: int = 500) -> tuple[VectorRagHit, ...]:
+        # Protect readers too: on Windows an open SQLite connection prevents
+        # safe atomic replacement, while stale WAL sidecars can outlive rename.
+        async with vector_index_lock(self.database):
+            return await self._search_unlocked(query, limit=limit, preview_chars=preview_chars)
+
+    async def _search_unlocked(self, query: str, *, limit: int = 5, preview_chars: int = 500) -> tuple[VectorRagHit, ...]:
         """Search and verify source fingerprints before returning snippets."""
         if not isinstance(query, str) or not query.strip() or len(query) > MAX_SEARCH_QUERY:
             raise ValueError("Query must contain 1-2000 characters")
