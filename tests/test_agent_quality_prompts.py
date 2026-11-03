@@ -538,7 +538,7 @@ def test_sub_run_soft_limit_returns_partial_without_executing_large_batch() -> N
 
 def test_prompt_changes_remain_compact() -> None:
     assert len(BASE_SYSTEM_PROMPT) + len(MCP_TOOL_SYSTEM_RULE) <= 850
-    assert len(_server_instructions("read")) <= 1_743
+    assert len(_server_instructions("read")) <= 2_300  # Includes delivery-only export guidance.
 
 
 def test_eval_fixture_has_two_comparable_events_and_distinct_dst_instants() -> None:
