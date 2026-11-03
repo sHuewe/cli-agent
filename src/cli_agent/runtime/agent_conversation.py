@@ -488,6 +488,17 @@ class ConversationMixin:
             and self._vector_session is not None
             and not hybrid_okf_disabled
         )
+        if vector_config is not None and vector_config.mode == "chroma":
+            # Chroma is a standalone Knowledge source: any simultaneous OKF
+            # configuration must not make Chroma optionality/selection depend
+            # on the OKF server's state or required flag.
+            if not active_vector:
+                if vector_config.required:
+                    raise RuntimeError("Die konfigurierte ChromaDB ist nicht verfügbar.")
+                return None
+            return await self._collect_chroma_knowledge(
+                prompt, required=bool(vector_config.required),
+            )
         if not active_okf and not active_vector:
             return None
         okf_required = bool(options and active_okf and options.required)
@@ -499,11 +510,6 @@ class ConversationMixin:
             return None
         if vector_config is not None and not active_vector and vector_required:
             raise RuntimeError("Der konfigurierte Vektorindex ist nicht verfügbar.")
-
-        if vector_config is not None and vector_config.mode == "chroma":
-            return await self._collect_chroma_knowledge(
-                prompt, required=required,
-            )
 
         try:
             seen_calls = set()
