@@ -475,11 +475,13 @@ It does not extract documents, split text, build embeddings for records, index
 files, upsert chunks, or delete records. Your separate ingestion scripts
 (e.g. PyMuPDF pipelines) own the entire writing process and metadata.
 
-Install Chroma independently alongside cli-agent (without changing cli-agent's core dependencies):
+Install the optional `rag` extra (this does not change the default core dependencies):
 
 ```bash
-pip install 'chromadb>=1.3,<2'
+pip install 'cli-agent[rag]'
 ```
+
+For the full CLI installation from a source checkout, including Web UI and ChromaDB, use `pipx install '.[web,rag]'`.
 
 Create a Chroma collection using an external indexing script and persist
 these collection metadata keys to identify its embedding space:

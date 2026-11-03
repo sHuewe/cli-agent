@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from cli_agent.context.agent_knowledge import (
+    _register_chroma_results,
     KnowledgeCallKey,
     _KnowledgeRunState,
     _knowledge_allowed_calls,
@@ -357,6 +358,29 @@ async def process_tool_calls(
             and knowledge_call_key is not None
         ):
             knowledge_state.add_allowed_calls(_knowledge_allowed_calls(result))
+            if (
+                original_name == "knowledge_search"
+                and getattr(getattr(agent, "_vector_config", None), "mode", None) == "chroma"
+            ):
+                raw_chroma = getattr(result, "structuredContent", None)
+                if not isinstance(raw_chroma, dict):
+                    raise RuntimeError("Chroma-Suche lieferte kein strukturiertes Ergebnis.")
+                # The host, not the LLM, assigns tokens to newly discovered
+                # chunks. Return the tokens together with the original text.
+                result.structuredContent = _register_chroma_results(
+                    knowledge_state, raw_chroma,
+                )
+                if (
+                    knowledge_state.chroma_budget_exhausted
+                    or (
+                        max_concept_reads is not None
+                        and len(knowledge_state.concepts) >= max_concept_reads
+                    )
+                ):
+                    # Stop further retrieval once either cumulative budget is
+                    # reached. The next LLM turn can select known tokens only.
+                    knowledge_selection_only_mode = True
+                    knowledge_concept_limit_notice_pending = True
             if original_name == "knowledge_read":
                 document = _knowledge_document(result)
                 knowledge_selection_token = knowledge_state.register_concept(document)

@@ -354,22 +354,35 @@ class McpLifecycleMixin:
         try:
             if config.mode == "okf" and self._knowledge_session is None:
                 raise RuntimeError("Hybrid-RAG erfordert einen verfügbaren OKF-Server.")
-            root = source_root(
-                config,
-                okf_root=self._okf_options.repository if self._okf_options else None,
-                config_file=self.config_file,
-            )
-            path = db_path(config, config_file=self.config_file)
-            session = VectorKnowledgeSession(
-                config, root=root, path=path,
-                network=self.network, credential_rules=self._model_credential_rules,
-                okf_max_read_bytes=self._okf_options.max_read_bytes,
-            )
+            if config.mode == "chroma":
+                from cli_agent.context.chroma_knowledge import ChromaKnowledgeSession
+                from cli_agent.settings.admin_config import AdminConfig
+
+                session = ChromaKnowledgeSession.open(
+                    config,
+                    config_file=self.config_file,
+                    admin_config=AdminConfig(
+                        network=self.network,
+                        model_credentials=self._model_credential_rules,
+                    ),
+                )
+            else:
+                root = source_root(
+                    config,
+                    okf_root=self._okf_options.repository if self._okf_options else None,
+                    config_file=self.config_file,
+                )
+                path = db_path(config, config_file=self.config_file)
+                session = VectorKnowledgeSession(
+                    config, root=root, path=path,
+                    network=self.network, credential_rules=self._model_credential_rules,
+                    okf_max_read_bytes=self._okf_options.max_read_bytes,
+                )
             self._vector_session = session
             runtime = _RuntimeMcpServerConfig(name="vector", built_in=True)
             search_tool = {"type": "function", "function": {
                 "name": "vector__knowledge_search",
-                "description": "Search the indexed knowledge source for relevant document candidates. Read returned paths before selecting them.",
+                "description": ("Search the externally created Chroma collection for full text chunks and sources." if config.mode == "chroma" else "Search the indexed OKF knowledge source for relevant document candidates. Read returned paths before selecting them."),
                 "parameters": {"type": "object", "properties": {
                     "query": {"type": "string", "minLength": 1, "maxLength": 2000}
                 }, "required": ["query"], "additionalProperties": False},

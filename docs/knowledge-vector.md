@@ -1,4 +1,72 @@
-# Optional OKF vector retrieval
+# Optional OKF and Chroma knowledge retrieval
+
+## Externally managed ChromaDB in the agent's Knowledge phase
+
+The agent can search an existing ChromaDB without configuring OKF. The
+collection is created and populated externally; cli-agent does **not** ingest,
+split, embed, modify or delete document chunks. Only query embeddings are
+computed at retrieval time.
+
+Install the optional `rag` extra in the **same Python environment as cli-agent**. For a complete local CLI/API installation with the Web UI and ChromaDB:
+
+```shell
+pipx install '.[web,rag]'
+```
+
+Alternatively, when using an existing Python environment, install `cli-agent[rag]` with pip or `uv sync --extra rag` in the project checkout.
+
+Configure `config.toml`:
+
+```toml
+[knowledge.vector]
+backend = "chroma"
+database = "/data/knowledge/chroma"
+collection = "knowledge"
+provider = "ollama"
+model = "embeddinggemma"
+base_url = "http://localhost:11434"
+search_limit = 5
+required = false
+```
+
+`database` is a Chroma PersistentClient **directory**, not a SQLite file.
+Relative database paths resolve relative to the config file. The collection
+must already exist and contain precomputed embeddings, full chunk texts and
+optional `source`/page/section metadata. Externally managed collection metadata
+may declare `cli_agent_embedding_provider`,
+`cli_agent_embedding_model`, `cli_agent_embedding_endpoint`; these are
+validated against the configured query embedding provider/model/endpoint.
+Different embedding spaces with identical dimensions are **not** interchangeable.
+
+For authenticated remote embedding services, set `provider = "openai"`,
+`base_url`, `api_key_env`, and explicitly allow the host and key variable in
+the admin policy. Credentials are never loaded from Chroma metadata.
+
+At agent startup, Chroma is opened for retrieval. In the Knowledge phase,
+the agent receives a bounded initial semantic search containing **complete
+chunks** with IDs, source, metadata and distance. A separate retrieval-model
+step selects useful hits through host-generated selection tokens and may
+issue further `vector__knowledge_search` queries. Only host-verified selected
+chunks are passed to the main agent as **untrusted reference data**. The
+usual `knowledge_reentry__request_additional_knowledge` path also works.
+No OKF files or navigation tools are required.
+
+If `required = true`, missing indexes or retrieval errors block the run.
+With `required = false`, failures disable the optional knowledge source.
+The backend is read-only at the **cli-agent API level**, but Chroma
+`PersistentClient` itself is not a physical read-only handle; publish
+stable externally written snapshots rather than writing to the same database
+while an agent reads it.
+
+The original SQLite/OKF hybrid configuration remains available and unchanged:
+`[okf]` plus `[knowledge.vector]` with `mode = "okf"` and no `backend`
+(or `backend = "sqlite"`). If both OKF and Chroma are configured, Chroma is
+used as the configured vector Knowledge source; OKF is not used for the Chroma
+selection subloop.
+
+---
+
+
 
 The existing OKF-only mode remains unchanged if `[knowledge.vector]` is absent:
 no embedding service, index or additional Python dependency is required.
