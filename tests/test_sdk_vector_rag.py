@@ -45,7 +45,6 @@ async def test_build_search_update_is_independent_of_agent(tmp_path, monkeypatch
     assert isinstance(first, VectorRagBuildResult)
     assert first.total == 2
     assert first.added == 2
-    assert first.database if hasattr(first, "database") else first.rag.database.is_file()
     assert first.rag.database.is_file()
     assert not first.rag.database.is_relative_to(root)
 
@@ -66,8 +65,11 @@ async def test_build_search_update_is_independent_of_agent(tmp_path, monkeypatch
     assert (third.added, third.changed, third.unchanged, third.removed) == (0, 1, 0, 1)
     assert len(FakeEmbeddingProvider.calls) == 1
 
-    with SQLiteKnowledgeStore(third.rag.database) as store:
+    store = SQLiteKnowledgeStore(third.rag.database)
+    try:
         assert store.metadata()["mode"] == "files"
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio
