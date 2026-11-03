@@ -545,3 +545,67 @@ until reindexing. Query embeddings use the same provider and model as indexing.
 The initial standalone implementation supports plain UTF-8 text and Markdown.
 It does not yet parse PDF, Office files or other formats. Source reading uses
 bounded, verified paths and rejects symlinked/hardlinked source files.
+
+
+### Open a vector RAG index without rebuilding
+
+`open_vector_rag(database=...)` reads the saved SQLite metadata to recover
+the source root, embedding provider, model, endpoint and per-file size limit.
+It opens the index without creating an agent or re-embedding any documents:
+
+```python
+from cli_agent.sdk import open_vector_rag
+
+rag = open_vector_rag(database="./rag/knowledge.sqlite")
+hits = await rag.search("How do I authenticate?", limit=5)
+```
+
+The original source directory must still exist. For an external OpenAI-compatible
+embedding endpoint, pass `api_key_env="EMBEDDING_KEY"` and an explicit,
+authorized `admin_config` when reopening; API keys are never stored in
+the database. The index must have been created by the standalone file-based SDK.
+
+### Add or update individual records
+
+`rag.add_record(content, *, id=None, source=None)` adds one record directly
+without indexing the document directory:
+
+```python
+record_id = await rag.add_record(
+    content="The customer uses PostgreSQL.",
+    source="crm/customer/123",
+)
+
+# Explicit ID gives upsert semantics.
+await rag.add_record(
+    content="The customer now uses PostgreSQL 18.",
+    id="customer-123",
+    source="crm/customer/123",
+)
+```
+
+The `id` parameter is optional. When omitted, a new UUID is generated and
+returned. When supplied, the ID uniquely identifies the record within the index:
+reusing it replaces the record text and vectors. An unchanged text reuses its
+existing embeddings; changing only `source` updates provenance metadata.
+
+The optional `source` is a caller-supplied provenance label, **not the
+internal record ID**, and can be omitted. For example, a CRM reference, URL,
+or external document identifier is suitable. It is stored separately from
+the internal key `record://<id>`.
+
+`rag.search()` now returns `VectorRagHit` with `path`, `score`,
+`preview`, `source`, and `record_id` (non-null only for inline records).
+For indexed files, `source` is the relative file path; for inline records,
+it is the explicit provenance label or `None`.
+
+Inline records persist both their original text and their vectors in SQLite.
+Unlike file-backed documents, the original text must be stored to make the
+record retrievable after reopening. Records remain intact across
+`build_vector_rag(..., incremental=True)` and full rebuilds of compatible
+indexes. An embedding failure occurs before the SQLite transaction, so an
+existing record remains unchanged.
+
+The standalone API does not delete individual records yet. Rebuilding with
+different embedding settings while inline records exist is rejected rather
+than silently dropping or mixing existing vectors.
