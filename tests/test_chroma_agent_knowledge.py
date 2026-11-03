@@ -211,3 +211,71 @@ async def test_chroma_session_starts_without_okf(tmp_path, monkeypatch):
     assert len(opened) == 1
     assert agent._knowledge_tools[1]["function"]["name"] == "vector__knowledge_search"
     assert "vector__knowledge_search" in agent._knowledge_routes
+
+
+
+def test_chroma_cumulative_budget_is_enforced_across_searches():
+    state = _KnowledgeRunState(allow_empty_not_found=True)
+    for index in range(4):
+        result = _register_chroma_results(state, {
+            "query": f"search-{index}",
+            "entries": [{
+                "id": f"chunk-{index}-{j}",
+                "source": "handbook.pdf",
+                "content": f"chunk text {index}-{j} " + ("x" * 14_000),
+                "metadata": {"page": j}, "distance": 0.1,
+            } for j in range(5)],
+        })
+        if result["budget_exhausted"]:
+            break
+    assert state.chroma_budget_exhausted
+    assert len(state.concepts) <= 40
+    assert state.chroma_chars <= 128_000
+    assert all(
+        item["selection_token"] in state.concepts
+        for item in result["entries"]
+    )
+    assert not any("chunk-3" in item["path"] for item in state.concepts.values())
+
+
+def test_chroma_duplicate_hits_keep_first_verified_snapshot():
+    state = _KnowledgeRunState(allow_empty_not_found=True)
+    one = _register_chroma_results(state, {
+        "query": "first", "entries": [{
+            "id": "same", "source": "first.pdf",
+            "content": "First verified text", "metadata": {"page": 1},
+            "distance": 0.1,
+        }],
+    })
+    two = _register_chroma_results(state, {
+        "query": "second", "entries": [{
+            "id": "same", "source": "changed.pdf",
+            "content": "Changed text", "metadata": {"page": 99},
+            "distance": 0.9,
+        }],
+    })
+    assert len(state.concepts) == 1
+    assert two["entries"][0]["selection_token"] == one["entries"][0]["selection_token"]
+    assert two["entries"][0]["content"] == "First verified text"
+    assert state.chroma_chars == len("First verified text")
+
+
+@pytest.mark.asyncio
+async def test_chroma_retrieval_is_independent_of_unavailable_optional_okf():
+    session = ChromaKnowledgeSession(config=_config(), rag=StubReader([_hit()]))
+    agent = _agent_with_chroma(session)
+    agent._okf_options = SimpleNamespace(required=False)
+    agent._okf_enabled = True
+    agent._knowledge_session = None  # unrelated optional OKF failed startup
+
+    async def model_select(**kwargs):
+        request = json.loads(kwargs["messages"][-1]["content"])
+        token = request["initial_search"]["entries"][0]["selection_token"]
+        return json.dumps({
+            "found_content": True, "selected_okf_tokens": [token], "warnings": [],
+        })
+
+    agent._run_model_loop = AsyncMock(side_effect=model_select)
+    payload = json.loads(await agent._collect_knowledge("Wie funktioniert OAuth2?"))
+    assert payload["backend"] == "chroma"
+    assert payload["content"][0]["source"] == "handbuch.pdf"
