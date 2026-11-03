@@ -328,6 +328,16 @@ class SQLiteKnowledgeStore:
             );
         """)
 
+    def create_sdk_record_table(self) -> None:
+        """Allow SDK records on existing schema-v4 indexes predating this feature."""
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS sdk_records (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                source TEXT
+            )
+        """)
+
     def has_sdk_records(self) -> bool:
         if self.db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sdk_records'"
