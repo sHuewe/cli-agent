@@ -244,8 +244,6 @@ async def test_inline_records_survive_file_update_and_full_rebuild(tmp_path, mon
 
 @pytest.mark.asyncio
 async def test_failed_record_embedding_does_not_change_old_record(tmp_path, monkeypatch):
-    from cli_agent.sdk.vector_rag import EmbeddingProvider
-
     monkeypatch.setattr("cli_agent.context.knowledge_vector.EmbeddingProvider", FakeEmbeddingProvider)
     monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
     root = tmp_path / "docs"
@@ -284,3 +282,23 @@ async def test_record_input_rejection_and_invalid_open(tmp_path, monkeypatch):
         await rag.add_record("a" * (rag.max_read_bytes + 1))
     with pytest.raises(FileNotFoundError):
         open_vector_rag(tmp_path / "missing.sqlite")
+
+
+
+@pytest.mark.asyncio
+async def test_add_record_to_existing_index_without_sdk_records_table(tmp_path, monkeypatch):
+    # Standalone indexes created by the initial version of PR #281 do not
+    # contain sdk_records; the first upsert should migrate them in place.
+    monkeypatch.setattr("cli_agent.context.knowledge_vector.EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "docs"
+    root.mkdir()
+    rag = (await build_vector_rag(root)).rag
+    import sqlite3
+    with sqlite3.connect(rag.database) as db:
+        db.execute("DROP TABLE sdk_records")
+    opened = open_vector_rag(rag.database)
+    assert await opened.add_record("apple", id="legacy", source="import") == "legacy"
+    hits = await open_vector_rag(rag.database).search("apple")
+    assert hits[0].record_id == "legacy"
+    assert hits[0].source == "import"
