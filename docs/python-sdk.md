@@ -466,3 +466,82 @@ callback is used for tools requiring approval, including session approvals.
 Direct calls share the MCP-owning worker with `ask()` and cannot run
 concurrently with an agent request on that agent. Use `agent.list_tools()`
 to inspect available tool names, schemas and approval requirements.
+
+
+## Standalone vector RAG (without Agent or API endpoint)
+
+Import `build_vector_rag` directly from the SDK. This utility does not
+create an agent, require `AgentBuilder`, or modify the existing API endpoint.
+
+```python
+import asyncio
+from cli_agent.sdk import build_vector_rag
+
+async def main():
+    built = await build_vector_rag(
+        path="./knowledge",
+        model="embeddinggemma",
+        provider="ollama",
+    )
+    print("Indexed:", built.total, "documents")
+    for hit in await built.rag.search("Where is the API documented?", limit=5):
+        print(hit.path, hit.score, hit.preview)
+
+asyncio.run(main())
+```
+
+The path must identify an existing directory. The SDK recursively indexes
+UTF-8 `.txt` and `.md` files and stores vectors plus path/fingerprint metadata
+in SQLite (not the full source text). The default database path is
+`<source-parent>/<source-name>.vectors.sqlite`, outside the indexed directory;
+`database=...` can override it. A database inside the source directory is
+rejected. The index is atomically replaced after a successful build.
+
+```python
+updated = await build_vector_rag(
+    path="./knowledge",
+    database="./knowledge.vectors.sqlite",
+    incremental=True,
+)
+print(updated.added, updated.changed, updated.unchanged, updated.removed)
+```
+
+An incremental run requires an existing, compatible database. It reuses
+unchanged embeddings and reindexes changed files. Rebuilding the index is
+the default when `incremental=False`.
+
+`build_vector_rag` is an **async function** with these arguments:
+
+```python
+async def build_vector_rag(
+    path: str | Path,
+    *,
+    database: str | Path | None = None,
+    provider: str = "ollama",
+    model: str = "embeddinggemma",
+    base_url: str | None = None,
+    api_key_env: str | None = None,
+    max_files: int = 10_000,
+    max_read_bytes: int = 2_560_000,
+    incremental: bool = False,
+    admin_config: AdminConfig | None = None,
+) -> VectorRagBuildResult: ...
+```
+
+For an OpenAI-compatible embedding endpoint, pass `provider="openai"`,
+`base_url="https://.../v1"`, an authorized `api_key_env`, and an
+`AdminConfig` containing the corresponding allowed model host and credential
+rule. The default `AdminConfig()` allows only local model hosts and does not
+read the system-wide policy. The embedding provider is independently selected
+from the chat model.
+
+`VectorRagBuildResult` contains `rag`, `total`, `added`, `changed`,
+`unchanged`, and `removed`. `rag.search(query, limit=5, preview_chars=500)`
+returns ranked `VectorRagHit(path, score, preview)` objects. The preview
+is the **start of the current source document**, not a matched chunk.
+Modified, deleted or otherwise invalid sources are excluded from results
+until reindexing. Query embeddings use the same provider and model as indexing.
+
+The initial standalone implementation supports plain UTF-8 text and Markdown.
+It does not yet parse PDF, Office files or other formats. Source reading uses
+bounded, verified paths and rejects symlinked/hardlinked source files.
