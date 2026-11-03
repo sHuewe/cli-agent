@@ -84,8 +84,14 @@ def _read_source(
     root: Path, relative: str, *, mode: str,
     max_read_bytes: int = MAX_SOURCE_BYTES,
 ) -> str:
+    if mode == "files":
+        if Path(relative).suffix.lower() not in {".md", ".txt"}:
+            raise ValueError("Nur UTF-8 Text- und Markdown-Dateien können indexiert werden.")
+        return _read_verified_okf_bytes(
+            root, relative, max_read_bytes=max_read_bytes,
+        ).decode("utf-8")
     if mode != "okf":
-        raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
+        raise ValueError("Unbekannter Vektorindex-Modus.")
     if Path(relative).name in {"index.md", "log.md"} or Path(relative).suffix.lower() != ".md":
         raise ValueError("Nur OKF-Concepts können indexiert werden.")
     content = _read_verified_okf_bytes(root, relative, max_read_bytes=max_read_bytes).decode("utf-8")
@@ -125,6 +131,36 @@ def _okf_paths(root: Path, *, max_files: int, max_read_bytes: int = MAX_SOURCE_B
             if next_tool in {"knowledge_index", "knowledge_read"} and isinstance(next_path, str):
                 queue.append((next_path, next_tool))
     return sorted(concepts)
+
+
+def _file_paths(root: Path, *, max_files: int) -> list[str]:
+    """Bounded inventory of ordinary UTF-8 document files.
+
+    Symlinked directories are never traversed. Symlinked candidate files
+    are rejected by the verified descriptor reader, not followed.
+    """
+    sources: list[str] = []
+    for directory, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [
+            name for name in dirnames
+            if not name.startswith(".") and not (Path(directory) / name).is_symlink()
+        ]
+        for filename in filenames:
+            if filename.startswith(".") or Path(filename).suffix.lower() not in {".md", ".txt"}:
+                continue
+            relative = (Path(directory) / filename).relative_to(root).as_posix()
+            sources.append(relative)
+            if len(sources) > max_files:
+                raise ValueError("Zu viele Dateien für die Vektorindexierung.")
+    return sorted(sources)
+
+
+def _index_paths(config: VectorKnowledgeConfig, root: Path, *, max_read_bytes: int) -> list[str]:
+    if config.mode == "okf":
+        return _okf_paths(root, max_files=config.max_files, max_read_bytes=max_read_bytes)
+    if config.mode == "files":
+        return _file_paths(root, max_files=config.max_files)
+    raise ValueError("Unbekannter Vektorindex-Modus.")
 
 
 def _chunks(text: str, *, size: int = 1800, overlap: int = 200) -> list[str]:
@@ -390,9 +426,7 @@ class SQLiteKnowledgeStore:
 async def build_index(config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig,
                       credential_rules: tuple[Any, ...] = (), okf_max_read_bytes: int = MAX_SOURCE_BYTES) -> int:
     provider = EmbeddingProvider(config, network, credential_rules)
-    if config.mode != "okf":
-        raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
-    paths = _okf_paths(root, max_files=config.max_files, max_read_bytes=okf_max_read_bytes)
+    paths = _index_paths(config, root, max_read_bytes=okf_max_read_bytes)
     # Persist each completed batch directly to a *temporary* database.
     # The live index is replaced only after every embedding request succeeds.
     import tempfile
@@ -479,9 +513,7 @@ async def update_index(
             row["path"]: row["sha256"]
             for row in old.db.execute("SELECT path,sha256 FROM sources")
         }
-        if config.mode != "okf":
-            raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
-        paths = _okf_paths(root, max_files=config.max_files, max_read_bytes=okf_max_read_bytes)
+        paths = _index_paths(config, root, max_read_bytes=okf_max_read_bytes)
 
         # Only retain identifiers and checksums for changed files. Holding
         # pre-split contents for the whole corpus can exhaust memory.
