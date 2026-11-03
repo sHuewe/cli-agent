@@ -191,3 +191,33 @@ def test_no_mutation_api_is_exported(tmp_path, monkeypatch):
     assert not hasattr(rag, "add_chunks")
     assert not hasattr(rag, "delete_source")
     assert not hasattr(rag, "build")
+
+
+@pytest.mark.asyncio
+async def test_real_chroma_persistent_client_roundtrip_when_installed(tmp_path, monkeypatch):
+    """Optional integration smoke-test; executed when chromadb is installed."""
+    chromadb = pytest.importorskip("chromadb")
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    db = tmp_path / "real_chroma"
+    client = chromadb.PersistentClient(path=str(db))
+    collection = client.create_collection(
+        name="knowledge",
+        metadata={
+            PROVIDER_META: "ollama",
+            MODEL_META: "embeddinggemma",
+            ENDPOINT_META: "http://localhost:11434",
+        },
+    )
+    collection.add(
+        ids=["pdf:page-17:chunk-0"],
+        documents=["A complete paragraph extracted from a PDF, not a document prefix."],
+        embeddings=[[1.0, 0.0]],
+        metadatas=[{"source": "handbook.pdf", "page": 17}],
+    )
+    rag = open_vector_rag(database=db, collection="knowledge")
+    hits = await rag.search("What does the PDF say?", limit=5)
+    assert len(hits) == 1
+    assert hits[0].id == "pdf:page-17:chunk-0"
+    assert hits[0].content == "A complete paragraph extracted from a PDF, not a document prefix."
+    assert hits[0].metadata["page"] == 17
+    assert hits[0].source == "handbook.pdf"
