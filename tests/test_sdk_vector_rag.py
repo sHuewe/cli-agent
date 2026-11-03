@@ -124,3 +124,48 @@ async def test_search_omits_stale_sources_and_limits_preview(tmp_path, monkeypat
         await index.rag.search("apple", limit=0)
     with pytest.raises(ValueError):
         await index.rag.search("apple", preview_chars=2001)
+
+
+def test_rag_file_inventory_propagates_walk_errors(monkeypatch, tmp_path):
+    from cli_agent.context.knowledge_vector import _file_paths
+    from cli_agent.context import knowledge_vector
+
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "present.md").write_text("content", encoding="utf-8")
+    original_walk = knowledge_vector.os.walk
+
+    def interrupted_walk(*args, **kwargs):
+        yield from original_walk(*args, **kwargs)
+        error = PermissionError("access denied")
+        assert kwargs.get("onerror") is not None
+        kwargs["onerror"](error)
+
+    monkeypatch.setattr(knowledge_vector.os, "walk", interrupted_walk)
+    with pytest.raises(PermissionError, match="access denied"):
+        _file_paths(root, max_files=10)
+
+
+@pytest.mark.asyncio
+async def test_rag_incremental_walk_failure_preserves_existing_database(tmp_path, monkeypatch):
+    from cli_agent.context import knowledge_vector
+
+    monkeypatch.setattr(knowledge_vector, "EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "first.txt").write_text("apple", encoding="utf-8")
+    build = await build_vector_rag(root)
+    database = build.rag.database
+    before = database.read_bytes()
+    original_walk = knowledge_vector.os.walk
+
+    def interrupted_walk(*args, **kwargs):
+        iterator = original_walk(*args, **kwargs)
+        yield next(iterator)
+        kwargs["onerror"](PermissionError("subdirectory inaccessible"))
+
+    monkeypatch.setattr(knowledge_vector.os, "walk", interrupted_walk)
+    with pytest.raises(PermissionError, match="subdirectory inaccessible"):
+        await build_vector_rag(root, incremental=True)
+    assert database.read_bytes() == before
