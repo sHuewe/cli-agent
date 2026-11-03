@@ -12,7 +12,14 @@ PUBLISH_TOOL = {
     "type": "function",
     "function": {
         "name": PUBLISH_TOOL_NAME,
-        "description": "Offer a previously produced session MCP artifact as a downloadable document. Only paths from tool-result workspace_path are accepted. The published file remains available until the next question or session close.",
+        "description": (
+            "Offer a previously produced session MCP artifact as a downloadable document. "
+            "For downloadable datasets, complete analysis with Data MCP tools first; "
+            "use export_data only for final CSV/JSON/Markdown delivery, then publish "
+            "its returned workspace_path. Publishing is not a data-analysis step. "
+            "Only paths from tool-result workspace_path are accepted. The published "
+            "file remains available until the next question or session close."
+        ),
         "parameters": {
             "type": "object",
             "properties": {

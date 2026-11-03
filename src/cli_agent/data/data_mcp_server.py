@@ -77,7 +77,15 @@ def _server_instructions(access: str) -> str:
         )
     return """\
 Use calculate for arithmetic. Tabular tools use workspace files;
-no normal tabular tool accepts inline data.\nUse export_data(path, format) for file-only exports (no rows in LLM metadata).
+no normal tabular tool accepts inline data.
+Use export_data(path, format) ONLY to deliver a finished dataset outside the
+agent, e.g. a downloadable CSV/JSON/Markdown file. It is an output-only step:
+exported rows are not returned to the LLM. NEVER use it for analysis,
+inspection, validation, summarization, transformations, context reduction or
+intermediate processing. For further analysis, reuse normal Data-tool
+artifacts via workspace_path and records_path. To deliver a dataset, finish
+analysis first, then export and publish the export's workspace_path with
+agent__publish_artifact.
 For new Markdown, JSON, CSV, TSV, JSONL or NDJSON text, call
 wrap_data(content) once. For existing files, pass their path directly.
 The first wrap_data result supplies verified workspace_path and records_path
@@ -179,10 +187,20 @@ def create_server(
         records_path: str | None = None,
         table_index: int = 0,
     ) -> CallToolResult:
-        """Export a workspace dataset without exposing any raw rows to the LLM.
+        """Prepare a final workspace dataset for delivery outside the agent.
 
-        The complete export is saved as a session artifact; the model only
-        receives path, row count, column names and format.
+        Use ONLY when data must be provided externally, for example as a
+        user-downloadable CSV, JSON or Markdown file. Finish any analysis first,
+        then publish the export's workspace_path using agent__publish_artifact.
+
+        NOT an analysis or intermediate processing tool: exported rows are
+        deliberately not returned to the LLM. Never use this tool to inspect,
+        analyze, validate, summarize, transform, reduce context or prepare
+        inputs for other data operations. Instead use the appropriate Data MCP
+        tools and their reusable workspace_path and records_path.
+
+        The full export is stored as a session artifact. The model receives
+        only its path, row count, column names and format.
         """
         columns, rows = operations._read_records(
             path=path, records_path=records_path, table_index=table_index,

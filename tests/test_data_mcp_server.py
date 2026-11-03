@@ -364,6 +364,29 @@ def test_wrap_tool_description_covers_all_formats(monkeypatch) -> None:
     ]
 
 
+def test_export_data_is_reserved_for_external_delivery(monkeypatch) -> None:
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(_operations([]), access="read")
+
+    instructions = server.instructions
+    assert "ONLY to deliver a finished dataset outside the" in instructions
+    assert "NEVER use it for analysis" in instructions
+    assert "intermediate processing" in instructions
+    assert "workspace_path and records_path" in instructions
+    assert "agent__publish_artifact" in instructions
+
+    export_tool = server.tools["export_data"]
+    description = Tool.from_function(export_tool).description.lower()
+    assert "delivery outside the agent" in description
+    assert "not an analysis or intermediate processing tool" in description
+    assert "agent__publish_artifact" in description
+
+    result = export_tool(path="data.csv", format="csv")
+    assert result.meta[ONLY_METADATA_TO_LLM_KEY] is True
+    assert result.meta[METADATA_FOR_LLM_KEY]["export_format"] == "csv"
+    assert result.structuredContent["export_content"] == "x\n1\n2\n"
+
+
 def test_inspection_tool_descriptions_separate_schema_from_rows(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
