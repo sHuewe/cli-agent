@@ -370,6 +370,17 @@ async def process_tool_calls(
                 result.structuredContent = _register_chroma_results(
                     knowledge_state, raw_chroma,
                 )
+                if (
+                    knowledge_state.chroma_budget_exhausted
+                    or (
+                        max_concept_reads is not None
+                        and len(knowledge_state.concepts) >= max_concept_reads
+                    )
+                ):
+                    # Stop further retrieval once either cumulative budget is
+                    # reached. The next LLM turn can select known tokens only.
+                    knowledge_selection_only_mode = True
+                    knowledge_concept_limit_notice_pending = True
             if original_name == "knowledge_read":
                 document = _knowledge_document(result)
                 knowledge_selection_token = knowledge_state.register_concept(document)
