@@ -694,7 +694,7 @@ class ConversationMixin:
             answer = await self._run_model_loop(
                 messages=messages, tools=run_tools, routes=run_routes,
                 enabled_server_names=None, max_tool_calls=30,
-                max_concept_reads=80, phase="knowledge",
+                max_concept_reads=40, phase="knowledge",
                 knowledge_state=state,
             )
             selection = json.loads(answer.strip())
