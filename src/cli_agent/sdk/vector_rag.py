@@ -126,6 +126,7 @@ class VectorRag:
                 # the write lock to avoid silently replacing concurrent edits.
                 store.db.execute("BEGIN IMMEDIATE")
                 dimension = self._validate_store(store, embedder)
+                store.create_sdk_record_table()
                 current = store.sdk_record(id)
                 if unchanged:
                     if current is None or current["content"] != content:
