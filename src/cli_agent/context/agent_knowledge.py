@@ -55,6 +55,8 @@ class _KnowledgeRunState:
     selection_tokens_by_path: dict[str, str] = field(default_factory=dict)
     successful_followup_calls: int = 0
     allow_empty_not_found: bool = False
+    chroma_chars: int = 0
+    chroma_budget_exhausted: bool = False
 
     def add_allowed_calls(self, calls: dict[str, set[str]]) -> None:
         for path, tool_names in calls.items():
@@ -166,14 +168,19 @@ def _assemble_knowledge_payload(selection: dict[str, Any], concepts: dict[str, d
     return {"found_content": True, "content": content, "warnings": warnings}
 
 
+# Hard upper bounds for cumulative Chroma references in one Knowledge run.
+MAX_CHROMA_SELECTED_CHUNKS = 40
+MAX_CHROMA_SELECTED_CHARS = 128_000
+
+
 def _register_chroma_results(
     state: _KnowledgeRunState,
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Assign host-issued selection tokens to actual Chroma search hits.
+    """Register only bounded, host-issued Chroma hits across *all* searches.
 
-    Only records returned by the configured reader may enter the selection
-    set. Model-provided IDs or paths cannot manufacture source content.
+    Duplicate IDs keep their original text from the first verified result.
+    Never return a selection token for a hit not registered in state.
     """
     entries = result.get("entries")
     if not isinstance(entries, list):
@@ -185,20 +192,38 @@ def _register_chroma_results(
         record_id, content = entry.get("id"), entry.get("content")
         if not isinstance(record_id, str) or not record_id or not isinstance(content, str) or not content.strip():
             raise ValueError("Chroma-Treffer enthält keine gültige ID oder keinen Inhalt.")
+        path = f"chroma:{record_id}"
+        known_token = state.selection_tokens_by_path.get(path)
+        if known_token is not None:
+            # Keep the first snapshot stable throughout the Knowledge run.
+            known = state.concepts[known_token]
+            enriched.append({
+                "id": known["record_id"], "source": known["source"],
+                "content": known["content"], "metadata": known["metadata"],
+                "distance": known["distance"], "selection_token": known_token,
+            })
+            continue
+        if (
+            len(state.concepts) >= MAX_CHROMA_SELECTED_CHUNKS
+            or state.chroma_chars + len(content) > MAX_CHROMA_SELECTED_CHARS
+        ):
+            state.chroma_budget_exhausted = True
+            break
         document = {
-            "kind": "concept",
-            "path": f"chroma:{record_id}",
-            "record_id": record_id,
-            "content": content,
-            "source": entry.get("source"),
+            "kind": "concept", "path": path, "record_id": record_id,
+            "content": content, "source": entry.get("source"),
             "metadata": entry.get("metadata"),
             "distance": entry.get("distance"),
         }
         token = state.register_concept(document)
         if token is None:
             raise RuntimeError("Chroma-Treffer konnte nicht registriert werden.")
+        state.chroma_chars += len(content)
         enriched.append({**entry, "selection_token": token})
-    return {"query": result.get("query"), "entries": enriched}
+    return {
+        "query": result.get("query"), "entries": enriched,
+        "budget_exhausted": state.chroma_budget_exhausted,
+    }
 
 
 def _assemble_chroma_payload(
