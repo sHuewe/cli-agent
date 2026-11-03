@@ -91,7 +91,7 @@ def _read_source(
             root, relative, max_read_bytes=max_read_bytes,
         ).decode("utf-8")
     if mode != "okf":
-        raise ValueError("Unbekannter Vektorindex-Modus.")
+        raise ValueError("Nur OKF- oder Datei-basierte Vektorsuche wird unterstützt.")
     if Path(relative).name in {"index.md", "log.md"} or Path(relative).suffix.lower() != ".md":
         raise ValueError("Nur OKF-Concepts können indexiert werden.")
     content = _read_verified_okf_bytes(root, relative, max_read_bytes=max_read_bytes).decode("utf-8")
@@ -160,7 +160,7 @@ def _index_paths(config: VectorKnowledgeConfig, root: Path, *, max_read_bytes: i
         return _okf_paths(root, max_files=config.max_files, max_read_bytes=max_read_bytes)
     if config.mode == "files":
         return _file_paths(root, max_files=config.max_files)
-    raise ValueError("Unbekannter Vektorindex-Modus.")
+    raise ValueError("Nur OKF- oder Datei-basierte Vektorsuche wird unterstützt.")
 
 
 def _chunks(text: str, *, size: int = 1800, overlap: int = 200) -> list[str]:
