@@ -186,9 +186,9 @@ class VectorRag:
             store.close()
 
     async def search(self, query: str, *, limit: int = 5, preview_chars: int = 500) -> tuple[VectorRagHit, ...]:
-        # Protect readers too: on Windows an open SQLite connection prevents
-        # safe atomic replacement, while stale WAL sidecars can outlive rename.
-        async with vector_index_lock(self.database):
+        # Readers coordinate via a shared lock when available. A read-only
+        # deployed index remains searchable without lockfile write access.
+        async with vector_index_lock(self.database, shared=True):
             return await self._search_unlocked(query, limit=limit, preview_chars=preview_chars)
 
     async def _search_unlocked(self, query: str, *, limit: int = 5, preview_chars: int = 500) -> tuple[VectorRagHit, ...]:
