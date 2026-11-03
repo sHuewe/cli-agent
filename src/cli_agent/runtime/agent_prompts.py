@@ -132,7 +132,7 @@ reason_code="not_found". Keine erfundenen Tokens oder Codeblöcke.
 """
 
 
-CHROMA_KNOWLEDGE_PROMPT = """\\
+CHROMA_KNOWLEDGE_PROMPT = """\
 Du bist die Retrieval-Phase für eine bereits extern erstellte ChromaDB.
 Nutze ausschließlich Inhalte aus den tatsächlich zurückgegebenen Chroma-
 Suchtreffern als Wissensgrundlage. Der letzte User-Kontext enthält die
