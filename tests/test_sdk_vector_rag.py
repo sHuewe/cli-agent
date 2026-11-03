@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+from uuid import UUID
 from pathlib import Path
 
 import pytest
 
-from cli_agent.sdk import build_vector_rag, VectorRagBuildResult
+from cli_agent.sdk import build_vector_rag, open_vector_rag, VectorRagBuildResult
 from cli_agent.context.knowledge_vector import SQLiteKnowledgeStore
 
 
@@ -169,3 +170,117 @@ async def test_rag_incremental_walk_failure_preserves_existing_database(tmp_path
     with pytest.raises(PermissionError, match="subdirectory inaccessible"):
         await build_vector_rag(root, incremental=True)
     assert database.read_bytes() == before
+
+
+
+@pytest.mark.asyncio
+async def test_open_index_add_record_with_optional_id_and_source(tmp_path, monkeypatch):
+    monkeypatch.setattr("cli_agent.context.knowledge_vector.EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "documents"
+    root.mkdir()
+    built = await build_vector_rag(root)
+    assert built.total == 0
+    rag = open_vector_rag(built.rag.database)
+    assert await rag.search("apple") == ()
+
+    auto_id = await rag.add_record("apple information", source="crm/customer/17")
+    UUID(auto_id)  # No ID supplied: a valid UUID was generated.
+    assert auto_id != await rag.add_record("river information")
+    hits = await open_vector_rag(built.rag.database).search("apple")
+    assert hits[0].record_id == auto_id
+    assert hits[0].path == f"record://{auto_id}"
+    assert hits[0].source == "crm/customer/17"
+    assert hits[0].preview == "apple information"
+
+
+@pytest.mark.asyncio
+async def test_upsert_reuses_vectors_if_text_unchanged_and_updates_source(tmp_path, monkeypatch):
+    monkeypatch.setattr("cli_agent.context.knowledge_vector.EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    FakeEmbeddingProvider.calls = []
+    root = tmp_path / "documents"
+    root.mkdir()
+    rag = (await build_vector_rag(root)).rag
+    assert await rag.add_record(content="apple", id="item-a", source="one") == "item-a"
+    assert len(FakeEmbeddingProvider.calls) == 1
+    assert await rag.add_record(content="apple", id="item-a", source="two") == "item-a"
+    assert len(FakeEmbeddingProvider.calls) == 1
+    assert (await rag.search("apple"))[0].source == "two"
+    assert await rag.add_record(content="river", id="item-a") == "item-a"
+    assert len(FakeEmbeddingProvider.calls) == 3  # initial embedding, query, updated embedding
+    assert (await rag.search("river"))[0].source is None
+    assert (await rag.search("river"))[0].preview == "river"
+
+
+@pytest.mark.asyncio
+async def test_inline_records_survive_file_update_and_full_rebuild(tmp_path, monkeypatch):
+    monkeypatch.setattr("cli_agent.context.knowledge_vector.EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "documents"
+    root.mkdir()
+    (root / "old.md").write_text("river flows", encoding="utf-8")
+    built = await build_vector_rag(root)
+    await built.rag.add_record("apple data", id="record-one", source="external-feed")
+    (root / "old.md").unlink()
+    (root / "new.txt").write_text("new river", encoding="utf-8")
+
+    updated = await build_vector_rag(root, incremental=True)
+    assert (updated.added, updated.changed, updated.removed) == (1, 0, 1)
+    hits = await open_vector_rag(built.rag.database).search("apple")
+    assert hits[0].record_id == "record-one"
+    assert hits[0].source == "external-feed"
+
+    rebuilt = await build_vector_rag(root, incremental=False)
+    reopened = open_vector_rag(rebuilt.rag.database)
+    hits = await reopened.search("apple")
+    assert hits[0].record_id == "record-one"
+    assert hits[0].source == "external-feed"
+
+    (root / "new.txt").unlink()
+    await build_vector_rag(root)
+    assert (await open_vector_rag(rebuilt.rag.database).search("apple"))[0].record_id == "record-one"
+
+
+@pytest.mark.asyncio
+async def test_failed_record_embedding_does_not_change_old_record(tmp_path, monkeypatch):
+    from cli_agent.sdk.vector_rag import EmbeddingProvider
+
+    monkeypatch.setattr("cli_agent.context.knowledge_vector.EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "docs"
+    root.mkdir()
+    rag = (await build_vector_rag(root)).rag
+    await rag.add_record("apple existing", id="customer")
+
+    async def fail_embedding(self, _texts):
+        raise RuntimeError("embedding service unavailable")
+
+    monkeypatch.setattr(FakeEmbeddingProvider, "embed", fail_embedding)
+    with pytest.raises(RuntimeError, match="embedding service unavailable"):
+        await rag.add_record("different content", id="customer", source="other")
+    store = SQLiteKnowledgeStore(rag.database)
+    try:
+        assert store.sdk_record("customer")["content"] == "apple existing"
+        assert store.sdk_record("customer")["source"] is None
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_record_input_rejection_and_invalid_open(tmp_path, monkeypatch):
+    monkeypatch.setattr("cli_agent.context.knowledge_vector.EmbeddingProvider", FakeEmbeddingProvider)
+    monkeypatch.setattr("cli_agent.sdk.vector_rag.EmbeddingProvider", FakeEmbeddingProvider)
+    root = tmp_path / "docs"
+    root.mkdir()
+    rag = (await build_vector_rag(root)).rag
+    with pytest.raises(ValueError, match="content"):
+        await rag.add_record(" ")
+    with pytest.raises(ValueError, match="source"):
+        await rag.add_record("apple", source="")
+    with pytest.raises(ValueError, match="id"):
+        await rag.add_record("apple", id="\n")
+    with pytest.raises(ValueError, match="content"):
+        await rag.add_record("a" * (rag.max_read_bytes + 1))
+    with pytest.raises(FileNotFoundError):
+        open_vector_rag(tmp_path / "missing.sqlite")
