@@ -41,7 +41,8 @@ async def vector_index_lock(
     try:
         fd = os.open(
             lock_path,
-            os.O_RDONLY if shared else os.O_CREAT | os.O_RDWR,
+            (os.O_RDWR if os.name == "nt" else os.O_RDONLY) if shared
+            else os.O_CREAT | os.O_RDWR,
             0o600,
         )
     except OSError as exc:
