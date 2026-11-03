@@ -110,16 +110,16 @@ class VectorRag:
         for record_id, document, metadata, distance in zip(ids, documents, metadatas, distances):
             if not isinstance(record_id, str):
                 raise RuntimeError("Chroma returned a non-string record ID")
-            # A producer may have inserted only embeddings. Such records
-            # cannot serve as grounding context and are not returned.
-            if not isinstance(document, str) or not document.strip():
-                continue
+            if isinstance(distance, bool) or not isinstance(distance, (float, int)) or not math.isfinite(distance):
+                raise RuntimeError("Chroma returned an invalid vector distance")
             if metadata is None:
                 metadata = {}
             if not isinstance(metadata, dict):
                 raise RuntimeError("Chroma returned invalid record metadata")
-            if isinstance(distance, bool) or not isinstance(distance, (float, int)) or not math.isfinite(distance):
-                raise RuntimeError("Chroma returned an invalid vector distance")
+            # A producer may have inserted only embeddings. Such records
+            # cannot serve as grounding context and are not returned.
+            if not isinstance(document, str) or not document.strip():
+                continue
             source = metadata.get("source")
             if not isinstance(source, str) or not source.strip():
                 source = None
