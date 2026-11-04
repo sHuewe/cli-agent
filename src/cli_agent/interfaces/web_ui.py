@@ -578,7 +578,7 @@ INDEX_HTML = """<!doctype html>
         <div id="session-meta" class="meta" data-i18n="connection.establishing">Connecting …</div>
       </div>
       <div class="header-actions">
-        <label class="language-picker" for="language-select"><span data-i18n="language.label">Language</span><select id="language-select" aria-label="Language"><option value="en">English</option><option value="de">Deutsch</option></select></label>
+        <label class="language-picker" for="language-select"><span data-i18n="language.label">Language</span><select id="language-select"><option value="en">English</option><option value="de">Deutsch</option></select></label>
         <button id="new-session" class="secondary" type="button" data-i18n="session.new">New session in new tab</button>
         <button id="list-sessions" class="secondary" type="button" data-i18n="session.list">Sessions</button>
         <button id="reset-history" class="secondary" type="button" data-i18n="history.reset">Reset history</button>
