@@ -919,6 +919,56 @@ async def test_fastmcp_schema_and_result_meta_roundtrip(frames):
     assert result.structuredContent["rows"][1]["L3"] == -1000
 
 
+def test_resample_daily_buckets_use_utc_not_local_midnight(frames, tmp_path):
+    _write_json(tmp_path, "local_midnight.json", [
+        {"time": "2026-06-29T23:45:00+02:00", "value": 10},
+        {"time": "2026-06-30T00:15:00+02:00", "value": 20},
+        {"time": "2026-06-30T02:15:00+02:00", "value": 30},
+    ])
+    result = frames.resample_data(
+        "local_midnight.json", "1d",
+        [ResampleAggregation("value", "sum", "total")],
+        time_column="time", records_path="/measurements",
+    )
+    rows = result.structuredContent["rows"]
+    assert [row["total"] for row in rows] == [30, 30]
+    assert [row["timestamp"][:10] for row in rows] == ["2026-06-29", "2026-06-30"]
+    assert all(row["timestamp"].endswith("Z") for row in rows)
+    assert result.meta[METADATA_FOR_LLM_KEY]["timestamp_timezone"] == "UTC"
+
+
+def test_resample_count_requires_numeric_column(frames, tmp_path):
+    _write_json(tmp_path, "text_values.json", [
+        {"time": "2026-06-29T10:00:00Z", "label": "on"},
+        {"time": "2026-06-29T10:00:30Z", "label": "off"},
+    ])
+    with pytest.raises(DataOperationError, match="contains nonnumeric values"):
+        frames.resample_data(
+            "text_values.json", "1min",
+            [ResampleAggregation("label", "count", "samples")],
+            time_column="time", records_path="/measurements",
+        )
+
+
+def test_resample_validation_messages_are_english(frames, tmp_path):
+    _write_json(tmp_path, "two_times.json", [
+        {"time": "2026-06-29T10:00:00Z", "timestamp": "2026-06-29T10:00:00Z", "value": 1},
+    ])
+    specs = [ResampleAggregation("value", "mean", "average")]
+    with pytest.raises(DataOperationError, match="specify time_column explicitly"):
+        frames.resample_data("two_times.json", "1min", specs, records_path="/measurements")
+    with pytest.raises(DataOperationError, match="frequency must be"):
+        frames.resample_data(
+            "two_times.json", "1D", specs, time_column="time", records_path="/measurements",
+        )
+    with pytest.raises(DataOperationError, match="Aggregation aliases must be unique"):
+        frames.resample_data(
+            "two_times.json", "1min",
+            [ResampleAggregation("value", "mean", "timestamp")],
+            time_column="time", records_path="/measurements",
+        )
+
+
 def test_resample_auto_detects_time_column(frames, tmp_path):
     _write_json(tmp_path, "signal_time.json", [
         {"time": "2026-06-24T07:00:00+01:00", "power": 10},
