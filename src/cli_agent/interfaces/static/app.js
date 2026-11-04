@@ -11,7 +11,7 @@
   const stopRun = document.getElementById("stop-run");
   const quit = document.getElementById("quit");
   // The API-backed UI supports multiple sessions; this only closes this tab's agent.
-  quit.textContent = "Session beenden";
+  quit.textContent = t("session.end");
   const newSessionButton = document.getElementById("new-session");
   const listSessionsButton = document.getElementById("list-sessions");
   const sessionsDialog = document.getElementById("sessions-dialog");
@@ -113,7 +113,7 @@
       argument: true,
       display: "disable",
       question: "commands.disableQuestion",
-      placeholder: "Name des MCP-Servers"
+      placeholder: t("commands.serverPlaceholder")
     }
   };
 
@@ -159,7 +159,7 @@
     status.className = "tool-call-status";
     status.dataset.state = "running";
     status.dataset.toolName = String(event.toolCallName || "");
-    status.textContent = "Läuft …";
+    status.textContent = t("tools.running");
     row.append(name, status);
     group.list.appendChild(row);
     group.calls.set(id, status);
@@ -170,8 +170,8 @@
     const status = activeToolGroup?.calls.get(String(id || ""));
     if (!status) return;
     const labels = {
-      running: "Läuft …", success: "Erfolgreich", error: "Fehler", denied: "Abgelehnt",
-      approval: "Freigabe nötig", finished: "Beendet"
+      running: t("tools.running"), success: t("tools.success"), error: t("tools.error"), denied: t("tools.denied"),
+      approval: t("tools.approval"), finished: t("tools.finished")
     };
     const normalized = Object.hasOwn(labels, state) ? state : "finished";
     status.dataset.state = normalized;
@@ -303,7 +303,7 @@
 
   function resetPendingCommand() {
     pendingCommand = null;
-    prompt.placeholder = "Nachricht an cli-agent";
+    prompt.placeholder = t("composer.placeholder");
     cancelCommand.classList.add("hidden");
   }
 
@@ -371,7 +371,7 @@
     if (!tools.length) {
       const empty = document.createElement("div");
       empty.className = "meta";
-      empty.textContent = "Keine MCP-Tools verfügbar.";
+      empty.textContent = t("context.noTools");
       workingToolsList.appendChild(empty);
       return;
     }
@@ -397,7 +397,7 @@
         !serverEnabled
       );
       if (!serverEnabled) {
-        button.title = "MCP-Server ist deaktiviert.";
+        button.title = t("toggle.mcpDisabled");
       }
       row.append(name, description, button);
       workingToolsList.appendChild(row);
@@ -417,8 +417,8 @@
       const description = document.createElement("div");
       description.className = "state-description";
       description.textContent = okf.available
-        ? "Konfigurierter Knowledge-Lauf vor der Hauptanfrage."
-        : "Konfiguriert, aber aktuell nicht verfügbar.";
+        ? t("context.okfReady")
+        : t("context.okfUnavailable");
       const enabled = Boolean(okf.enabled);
       const button = stateToggleButton(
         "OKF Knowledge",
@@ -435,7 +435,7 @@
     if (!contexts.length) {
       const empty = document.createElement("div");
       empty.className = "meta";
-      empty.textContent = "Keine Datei- oder Web-Kontexte vorhanden.";
+      empty.textContent = t("context.noContexts");
       workingContextsList.appendChild(empty);
       return;
     }
@@ -477,7 +477,7 @@
 
   function requestWorkingContext() {
     if (!sessionId) {
-      const message = "Web-UI-Verbindung ist nicht aktiv.";
+      const message = t("context.inactive");
       workingMessagesJson.textContent = message;
       workingToolsList.textContent = message;
       workingContextsList.textContent = message;
@@ -498,7 +498,7 @@
   const entryTicket = new URLSearchParams(window.location.hash.slice(1)).get("ticket");
   const token = tokenFromFragment();
   if (!token) {
-    meta.textContent = "Ungültiger Start-Link: Session-Token fehlt.";
+    meta.textContent = t("error.invalidLink");
     prompt.disabled = true;
     send.disabled = true;
     return;
@@ -635,7 +635,7 @@
                 emit({
                   type: "approval_required",
                   id: item.id,
-                  tool: item.message || "Tool-Freigabe",
+                  tool: item.message || t("approval.fallback"),
                   ...extra,
                   toolCallId: item.toolCallId
                 });
@@ -651,7 +651,7 @@
         aguiMessages.push({id: crypto.randomUUID(), role: "assistant", content: answer});
         emit({type: "answer", content: answer, html: await renderAnswer(answer)});
       }
-      if (!finished) throw new Error("Agenten-Eventstream vorzeitig beendet.");
+      if (!finished) throw new Error(t("error.streamEnded"));
     } catch (error) {
       finishPendingTools("error");
       throw error;
@@ -720,7 +720,7 @@
     // The latest user message cannot be discarded: the agent must either
     // receive the whole request or return a clear size error.
     if (start >= aguiMessages.length) {
-      throw new Error("Letzte Nachricht überschreitet das AG-UI-Limit.");
+      throw new Error(t("error.lastMessageTooLarge"));
     }
     aguiMessages = aguiMessages.slice(start);
     // Avoid sending an orphaned tool result or assistant reply as the
@@ -758,7 +758,7 @@
       return;
     }
     if (msg.type === "message") {
-      if (typeof msg.content !== "string") throw new Error("Ungültiger Prompt.");
+      if (typeof msg.content !== "string") throw new Error(t("error.invalidPrompt"));
       if (["exit", "quit"].includes(msg.content.trim().toLowerCase())) {
         await deleteUnusedSession(sessionId);
         if (sessionId) setBusy(false);
@@ -786,7 +786,7 @@
       const spec = COMMANDS[msg.command];
       if (!spec || (spec.argument && typeof msg.argument !== "string") ||
           (!spec.argument && msg.argument != null && msg.argument !== "")) {
-        throw new Error("Ungültiger lokaler Befehl.");
+        throw new Error(t("error.invalidCommand"));
       }
       const result = await (await api("/ui/command", "POST", {
         session_id: sessionId, command: msg.command,
@@ -859,7 +859,7 @@
     try {
       payload = JSON.parse(event.data);
     } catch (_error) {
-      addMessage("error", "Ungültige Antwort vom lokalen Web-UI-Server.");
+      addMessage("error", t("error.invalidServerResponse"));
       return;
     }
 
@@ -888,7 +888,7 @@
       return;
     }
     if (payload.type === "error") {
-      addMessage("error", String(payload.content || "Unbekannter Fehler."));
+      addMessage("error", String(payload.content || t("error.unknown")));
       return;
     }
     if (payload.type === "mcp_user_message") {
@@ -925,7 +925,7 @@
       resetPendingCommand();
       chat.replaceChildren();
       activeToolGroup = null;
-      addMessage("system", "History wurde zurückgesetzt.");
+      addMessage("system", t("history.wasReset"));
       return;
     }
     if (payload.type === "approval_required") {
@@ -969,7 +969,7 @@
     // might reject it after waiting for the API response.
     const tab = window.open("about:blank", "_blank");
     if (!tab) {
-      addMessage("error", "Browser hat das Öffnen eines neuen Tabs blockiert.");
+      addMessage("error", t("error.popupBlocked"));
       return;
     }
     try {
@@ -985,7 +985,7 @@
   async function openExistingSession(sid) {
     const tab = window.open("about:blank", "_blank");
     if (!tab) {
-      addMessage("error", "Browser hat das Öffnen eines neuen Tabs blockiert.");
+      addMessage("error", t("error.popupBlocked"));
       return;
     }
     try {
@@ -1001,7 +1001,7 @@
   }
 
   async function deleteUnusedSession(sid) {
-    if (!window.confirm("Diese Session dauerhaft beenden? Andere Sessions bleiben geöffnet.")) return;
+    if (!window.confirm(t("session.confirmEnd"))) return;
     await api("/ui/sessions/" + encodeURIComponent(sid), "DELETE");
     if (sid === sessionId) {
       // Only the current agent worker was removed, not the API server.
@@ -1019,7 +1019,7 @@
       try { window.sessionStorage.removeItem("cli-agent-session-id"); }
       catch (_error) {}
       chat.replaceChildren();
-      meta.textContent = "Session beendet. Andere Sessions laufen weiter. Neue Session in neuem Tab öffnen.";
+      meta.textContent = t("session.ended");
       setBusy(true);
     }
     await refreshSessions();
@@ -1041,13 +1041,13 @@
       const open = document.createElement("button");
       open.type = "button";
       open.className = "secondary";
-      open.textContent = "Öffnen";
+      open.textContent = t("session.open");
       open.disabled = item.occupied || executing;
       open.addEventListener("click", () => { void openExistingSession(item.session_id); });
       const close = document.createElement("button");
       close.type = "button";
       close.className = "secondary";
-      close.textContent = "Beenden";
+      close.textContent = t("session.close");
       close.disabled = (item.occupied && !current) || executing;
       close.addEventListener("click", () => {
         void deleteUnusedSession(item.session_id).catch(showApiError);
@@ -1069,7 +1069,7 @@
         leaseToken = null;
         sessionId = null;
         setBusy(true);
-        meta.textContent = "Session-Bindung verloren. Tab erneut öffnen.";
+        meta.textContent = t("session.bindingLost");
       }
     }, 8000);
   }
@@ -1136,7 +1136,7 @@
         setToolStatus(item.toolCallId, "approval");
         emit({
           type: "approval_required", id: item.id,
-          tool: item.message || "Tool-Freigabe",
+          tool: item.message || t("approval.fallback"),
           ...(item.metadata?.["cli-agent"] || {}),
           toolCallId: item.toolCallId
         });
@@ -1150,7 +1150,7 @@
       }
       startHeartbeat();
     } catch (error) {
-      meta.textContent = "Session konnte nicht geöffnet werden.";
+      meta.textContent = t("session.openFailed");
       showApiError(error);
     }
   }
@@ -1168,9 +1168,9 @@
   });
 
   showWorkingContext.addEventListener("click", () => {
-    workingMessagesJson.textContent = "Wird geladen …";
-    workingToolsList.textContent = "Wird geladen …";
-    workingContextsList.textContent = "Wird geladen …";
+    workingMessagesJson.textContent = t("loading");
+    workingToolsList.textContent = t("loading");
+    workingContextsList.textContent = t("loading");
     okfState.replaceChildren();
     setContextTab("messages");
     if (!workingContextDialog.open) {
@@ -1180,9 +1180,9 @@
   });
 
   refreshWorkingContext.addEventListener("click", () => {
-    workingMessagesJson.textContent = "Wird geladen …";
-    workingToolsList.textContent = "Wird geladen …";
-    workingContextsList.textContent = "Wird geladen …";
+    workingMessagesJson.textContent = t("loading");
+    workingToolsList.textContent = t("loading");
+    workingContextsList.textContent = t("loading");
     okfState.replaceChildren();
     requestWorkingContext();
   });
@@ -1199,7 +1199,7 @@
     if (busy || !sessionId) {
       return;
     }
-    if (!window.confirm("Conversation-History wirklich zurücksetzen?")) {
+    if (!window.confirm(t("history.confirmReset"))) {
       return;
     }
     socket.send(JSON.stringify({ type: "reset_history" }));
@@ -1253,7 +1253,7 @@
 
   cancelCommand.addEventListener("click", () => {
     if (pendingCommand) {
-      addMessage("system", "Befehl abgebrochen.");
+      addMessage("system", t("commands.cancelled"));
     }
     resetPendingCommand();
     prompt.focus();
