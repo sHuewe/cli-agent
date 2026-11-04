@@ -575,7 +575,7 @@ INDEX_HTML = """<!doctype html>
     <header>
       <div>
         <h1>cli-agent</h1>
-        <div id="session-meta" class="meta" data-i18n="connection.establishing">Connecting …</div>
+        <div id="session-meta" class="meta">Connecting …</div>
       </div>
       <div class="header-actions">
         <label class="language-picker" for="language-select"><span data-i18n="language.label">Language</span><select id="language-select"><option value="en">English</option><option value="de">Deutsch</option></select></label>
