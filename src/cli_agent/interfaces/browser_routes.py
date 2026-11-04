@@ -28,6 +28,10 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         from cli_agent.interfaces.web_ui_api import API_APP_JS
         return browser_security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
 
+    async def ui_i18n(_request: Request) -> Response:
+        from cli_agent.interfaces.web_ui_api import API_I18N_JS
+        return browser_security_headers(PlainTextResponse(API_I18N_JS, media_type="application/javascript"))
+
     async def ui_bootstrap(request: Request) -> Response:
         assert ui is not None
         from cli_agent.interfaces.web_ui_sessions import SessionOccupiedError
