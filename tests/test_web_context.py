@@ -400,7 +400,7 @@ def test_tokens_command_marks_mixed_usage_as_incomplete(tmp_path: Path) -> None:
     assert "Model requests: 3" in text
     assert "Usage available: 2/3" in text
     assert "Total input: at least 3.000 Tokens" in text
-    assert "Last input: unavailable" in text
+    assert "Input of last request: unavailable" in text
     assert "usage data are incomplete" in text
 
 

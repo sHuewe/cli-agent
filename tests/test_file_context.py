@@ -278,7 +278,7 @@ def test_prompt_file_rejects_empty_file(tmp_path: Path) -> None:
     prompt = tmp_path / "prompt.md"
     prompt.write_text(" \n\t", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="darf nicht leer sein"):
+    with pytest.raises(ValueError, match="must not be empty"):
         prepare_prompt_file(tmp_path, Path("prompt.md"))
 
 

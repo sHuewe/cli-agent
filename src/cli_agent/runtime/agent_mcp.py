@@ -252,7 +252,7 @@ class McpLifecycleMixin:
             tool_names: list[str] = []; server_tools: list[dict[str, Any]] = []; routes: dict[str, ToolRoute] = {}; identities: dict[str, tuple[str, str]] = {}
             for tool in listed.tools:
                 if tool.name in native_names:
-                    raise RuntimeError(f"MCP-Server {server_config.name!r} bietet Tool {tool.name!r} mehrfach an.")
+                    raise RuntimeError(f"MCP server {server_config.name!r} offers duplicate tool name {tool.name!r}.")
                 native_names.add(tool.name)
                 exposed_name = f"{server_config.name}__{tool.name}"
                 # This name is handled inside the main model loop, not by

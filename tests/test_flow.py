@@ -2144,7 +2144,7 @@ prompt_file = "prompt.md"
         workspace=tmp_path,
     )
 
-    with pytest.raises(ValueError, match="Prompt file could not be resolved"):
+    with pytest.raises(ValueError, match="Prompt file.*could not be resolved"):
         validate_flow(definition, workspace=tmp_path)
 
 

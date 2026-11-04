@@ -41,7 +41,7 @@ def normalize_frontend_tools(
     an application cannot redirect or shadow backend tool execution.
     """
     if len(offered) > MAX_FRONTEND_TOOLS:
-        raise ValueError("Zu viele AG-UI-Frontend-Tools.")
+        raise ValueError("Too many AG-UI frontend tools.")
     normalized: dict[str, dict[str, Any]] = {}
     for item in offered:
         name = item["name"]
@@ -92,7 +92,7 @@ def checked_frontend_results(
     required = {call.id for call in expected}
     originals = {call.id: call for call in expected}
     if len(required) != len(expected):
-        raise ValueError("Doppelte Frontend-Tool-Call-ID.")
+        raise ValueError("Duplicate frontend tool call ID.")
     if not required:
         raise ValueError("No pending frontend tools.")
     results: dict[str, dict[str, Any]] = {}
@@ -130,13 +130,13 @@ def checked_frontend_results(
             if error is not None:
                 if not isinstance(error, str):
                     raise ValueError("Frontend tool error must be text.")
-                content = "FEHLER: " + error[:4096] + "\n" + content
+                content = "ERROR: " + error[:4096] + "\n" + content
             results[call_id] = {
                 "role": "tool", "tool_call_id": call_id, "content": content,
                 **({"_meta": {FRONTEND_FAILURE_META_KEY: True}} if error is not None else {}),
             }
     if not assistant_found:
-        raise ValueError("Assistenten-Nachricht mit den ausstehenden Tool-Aufrufen fehlt.")
+        raise ValueError("Pending assistant message containing the frontend tool calls is missing.")
     if set(results) != required:
         raise ValueError("Not all frontend tool results were submitted.")
     return [results[call.id] for call in expected]
@@ -185,6 +185,6 @@ def history_for_model(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     and isinstance(part.get("text"), str)
                 )
             if isinstance(message.get("error"), str):
-                content = "FEHLER: " + message["error"][:4096] + "\n" + content
+                content = "ERROR: " + message["error"][:4096] + "\n" + content
             history.append({"role": "tool", "tool_call_id": message["toolCallId"], "content": content})
     return history

@@ -111,7 +111,7 @@ def test_frontend_results_error_and_content_part_reduction():
     ]
     messages[-1]["error"] = "permission denied"
     result = checked_frontend_results(messages, pending)[0]
-    assert result["content"] == "FEHLER: permission denied\nopened\nsuccess"
+    assert result["content"] == "ERROR: permission denied\nopened\nsuccess"
     assert result["_meta"]["io.github.shuewe.cli-agent/frontend_tool_failed"] is True
     from cli_agent.state.message_visibility import messages_for_model
     assert "_meta" not in messages_for_model([result])[0]
@@ -558,7 +558,7 @@ def test_frontend_history_reduces_result_content_parts_and_error():
     ])
     assert value == [{
         "role": "tool", "tool_call_id": "call",
-        "content": "FEHLER: denied\ndone",
+        "content": "ERROR: denied\ndone",
     }]
 
 
@@ -1098,7 +1098,7 @@ async def test_failed_frontend_result_cannot_be_used_as_evidence():
 
         async def _run_model_loop(self, **kwargs):
             assert "front-fail" not in self._evidence_state.tool_results
-            assert "FEHLER: denied" in kwargs["messages"][-1]["content"]
+            assert "ERROR: denied" in kwargs["messages"][-1]["content"]
             assert "_meta" not in messages_for_model(kwargs["messages"])[-1]
             with pytest.raises(EvidenceError, match="Unknown"):
                 self._evidence_state.update({
@@ -1185,7 +1185,7 @@ async def test_resumed_frontend_results_expose_verified_short_source_refs():
         {"role": "tool", "tool_call_id": "one", "content": "view opened"},
         {"role": "tool", "tool_call_id": "two",
          "content": '{"value": 7}'},
-        {"role": "tool", "tool_call_id": "failed", "content": "FEHLER: denied",
+        {"role": "tool", "tool_call_id": "failed", "content": "ERROR: denied",
          "_meta": {FRONTEND_FAILURE_META_KEY: True}},
     ]
     assert await agent.continue_after_frontend_tools(results) == "Done"
@@ -1194,4 +1194,4 @@ async def test_resumed_frontend_results_expose_verified_short_source_refs():
     assert "failed" not in agent._evidence_state.tool_results
     assert agent.received[-3]["content"].startswith("[Quelle S1: show_view]")
     assert json.loads(agent.received[-2]["content"])["source_ref"] == "S2"
-    assert agent.received[-1]["content"] == "FEHLER: denied"
+    assert agent.received[-1]["content"] == "ERROR: denied"
