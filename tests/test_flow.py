@@ -5619,7 +5619,7 @@ flow = "a.toml"
 
     definition = load_flow(tmp_path / "a.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="Zyklischer Subflow"):
+    with pytest.raises(ValueError, match="Cyclic subflow invocation detected"):
         validate_flow(definition, workspace=tmp_path)
 
 
