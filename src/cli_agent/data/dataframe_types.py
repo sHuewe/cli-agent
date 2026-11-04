@@ -42,6 +42,15 @@ class DerivedColumn:
 
 @dataclass(frozen=True)
 class ResampleAggregation:
-    column: str
-    method: Literal["mean", "min", "max", "sum", "count"]
-    alias: str
+    """One numeric column aggregation in each time bucket."""
+
+    column: Annotated[
+        str, Field(min_length=1, description="Existing numeric input column; do not aggregate the timestamp column.")
+    ]
+    method: Annotated[
+        Literal["mean", "min", "max", "sum", "count"],
+        Field(description="Resampling operation. Use 'method' (not 'function'); count counts non-null numeric values."),
+    ]
+    alias: Annotated[
+        str, Field(min_length=1, description="Required unique output column name; cannot equal 'timestamp'.")
+    ]
