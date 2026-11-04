@@ -86,7 +86,7 @@ def test_confluence_pat_is_never_forwarded_to_redirect_target(
     _RecordingClient.redirect_location = redirect_location
     monkeypatch.setattr(web_context_module.httpx, "AsyncClient", _RecordingClient)
 
-    with pytest.raises(ValueError, match="Redirect.*abgelehnt") as exc_info:
+    with pytest.raises(ValueError, match="Confluence REST redirect was rejected to protect credentials; the PAT is no") as exc_info:
         asyncio.run(
             _confluence_get_json(
                 "https://confluence.internal/wiki/rest/api/content/123",

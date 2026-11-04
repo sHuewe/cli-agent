@@ -159,7 +159,7 @@ def test_start_server_closes_transport_on_exposed_tool_collision(
         parent = AsyncExitStack()
         await parent.__aenter__()
         try:
-            with pytest.raises(RuntimeError, match="Doppelter Toolname"):
+            with pytest.raises(RuntimeError, match="Duplicate tool name: os__read_file"):
                 await agent._start_server(server, parent)
         finally:
             await parent.aclose()
@@ -208,7 +208,7 @@ def test_exposed_tool_identity_cannot_move_to_different_server_tool(
             agent._active_servers.add(first.name)
             await agent.disable_server(first.name)
 
-            with pytest.raises(RuntimeError, match="bereits für"):
+            with pytest.raises(RuntimeError, match="MCP tool name 'a__b__c' was already used for 'a'/'b__c' and cannot be reuse"):
                 await agent._start_server(second, parent)
         finally:
             await parent.aclose()
@@ -394,7 +394,7 @@ def test_start_server_rejects_collision_with_internal_evidence_tool(
         parent = AsyncExitStack()
         await parent.__aenter__()
         try:
-            with pytest.raises(RuntimeError, match="reserviert"):
+            with pytest.raises(RuntimeError, match="is reserved for a"):
                 await agent._start_server(server, parent)
         finally:
             await parent.aclose()

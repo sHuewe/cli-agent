@@ -120,7 +120,7 @@ def test_existing_http_server_with_different_header_value_is_rejected() -> None:
         url="https://mcp.internal/mcp",
         headers={"x-company": "TRUSTED"},
     )
-    with pytest.raises(ValueError, match="anderen Serveridentität"):
+    with pytest.raises(ValueError, match="is already configured with a different server identity\\."):
         _select(
             AppConfig(mcp_servers=(existing,)),
             names=("fachsoftware",),
@@ -178,7 +178,7 @@ def test_existing_identical_http_server_is_not_duplicated() -> None:
     ],
 )
 def test_conflicting_stdio_identity_is_rejected(server: McpServerConfig) -> None:
-    with pytest.raises(ValueError, match="anderen Serveridentität"):
+    with pytest.raises(ValueError, match="is already configured with a different server identity\\."):
         _select(AppConfig(mcp_servers=(server,)))
 
 
@@ -191,7 +191,7 @@ def test_conflicting_stdio_identity_is_rejected(server: McpServerConfig) -> None
     ],
 )
 def test_conflicting_http_identity_is_rejected(server: McpServerConfig) -> None:
-    with pytest.raises(ValueError, match="anderen Serveridentität"):
+    with pytest.raises(ValueError, match="is already configured with a different server identity\\."):
         _select(
             AppConfig(mcp_servers=(server,)),
             names=("fachsoftware",),
@@ -201,13 +201,13 @@ def test_conflicting_http_identity_is_rejected(server: McpServerConfig) -> None:
 
 @pytest.mark.parametrize("name", ["missing", "validator-typo"])
 def test_unknown_servers_fail_closed(name: str) -> None:
-    with pytest.raises(ValueError, match="nicht in"):
+    with pytest.raises(ValueError, match="is not defined in \\[\\[mcp\\.trusted_servers\\]\\] of machine-wide admin policy\\."):
         _select(names=(name,))
 
 
 @pytest.mark.parametrize("name", ["os", "OS", "data", "DATA"])
 def test_builtin_names_cannot_be_selected(name: str) -> None:
-    with pytest.raises(ValueError, match="reserviert"):
+    with pytest.raises(ValueError, match="is reserved for a"):
         _select(names=(name,), admin=_policy(_stdio(name)))
 
 
@@ -215,13 +215,13 @@ def test_okf_name_is_reserved_when_knowledge_server_is_configured() -> None:
     from cli_agent.settings.config import OkfConfig
 
     config = AppConfig(okf=OkfConfig(repository=Path("/knowledge")))
-    with pytest.raises(ValueError, match="reserviert"):
+    with pytest.raises(ValueError, match="is reserved for a"):
         _select(config, names=("okf",), admin=_policy(_stdio("okf")))
 
 
 @pytest.mark.parametrize("name", ["", " ", "\t"])
 def test_empty_server_names_are_rejected(name: str) -> None:
-    with pytest.raises(ValueError, match="nicht-leeren"):
+    with pytest.raises(ValueError, match="--with-mcp requires a nonempty MCP server name\\."):
         _select(names=(name,))
 
 

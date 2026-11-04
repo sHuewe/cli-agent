@@ -229,7 +229,7 @@ def test_api_start_rejects_invalid_static_start_options(tmp_path):
     excluded = build_parser().parse_args([
         "--workspace", str(tmp_path), "--exclude-path", "secret"
     ])
-    with pytest.raises(ValueError, match="OS-Zugriff"):
+    with pytest.raises(ValueError, match="--exclude-path requires OS access\\."):
         build_service(excluded)
 
 

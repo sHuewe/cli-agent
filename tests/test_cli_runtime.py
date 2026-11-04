@@ -156,7 +156,7 @@ def test_print_error_emits_traceback_in_debug_mode(capsys) -> None:
 
 def test_inspection_rejects_built_in_mcp_tools_before_starting_agent(tmp_path) -> None:
     server = McpServerConfig(name="os", command="ignored", built_in=True)
-    with pytest.raises(ValueError, match="Built-in MCP-Tools"):
+    with pytest.raises(ValueError, match="Built-in MCP tools cannot be granted permanent admin auto-approvals\\."):
         asyncio.run(
             cli_module._inspect_mcp_tool(
                 server=server,
@@ -202,7 +202,7 @@ def test_inspection_reports_missing_tool_and_available_names(tmp_path, monkeypat
 
     monkeypatch.setattr(cli_module, "CliAgent", FakeAgent)
 
-    with pytest.raises(ValueError, match="Verfügbare Tools: fachsoftware__search, fachsoftware__status"):
+    with pytest.raises(ValueError, match="MCP server 'fachsoftware' does not offer tool 'delete'\\. Available tools: fa"):
         asyncio.run(
             cli_module._inspect_mcp_tool(
                 server=server,
