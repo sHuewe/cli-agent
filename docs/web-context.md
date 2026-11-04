@@ -1,45 +1,39 @@
-# Web-Kontext und authentifizierte Provider
+# Web context and authenticated providers
 
-`add_web_context <url>` bleibt die einzige Benutzerfunktion zum Laden von Web-Inhalten. Der Benutzer muss nicht unterscheiden, ob eine URL öffentlich per normalem HTTP-Abruf oder über einen administrativ konfigurierten Provider geladen wird.
+The user-facing command `add_web_context <url>` loads web content. Users need not distinguish a public HTTP request from an administratively configured provider.
 
-## Normale Web-URLs
+## Ordinary web URLs
 
-Ohne passenden Provider gilt das bisherige Verhalten. Der Host muss in der maschinenweiten Admin-Policy unter `network.web_allowed_hosts` freigegeben sein. Redirect-Ziele werden erneut gegen dieselbe Allowlist geprüft.
+Without a matching provider, the host must be included in the machine-wide `network.web_allowed_hosts` allowlist. Redirect destinations are checked against the same policy.
 
-## Confluence Data Center mit Personal Access Token
+## Confluence Data Center with a personal access token
 
-Für interne Confluence-Instanzen kann ein Administrator einen Provider definieren:
+An administrator can configure a provider for an internal Confluence service:
 
 ```toml
 [network]
-web_allowed_hosts = ["confluence.intern.firma.de"]
+web_allowed_hosts = ["confluence.internal.example.org"]
 
 [[web.providers]]
 type = "confluence"
-base_url = "https://confluence.intern.firma.de/wiki"
+base_url = "https://confluence.internal.example.org/wiki"
 token_env = "CLI_AGENT_CONFLUENCE_PAT"
 ```
 
-`base_url` muss HTTPS verwenden. Der Host muss zusätzlich in `network.web_allowed_hosts` enthalten sein. Ein optionaler Confluence-Context-Path wie `/wiki` oder `/confluence` ist Bestandteil der Provider-Identität. Das Matching erfolgt auf exaktem Origin und Pfadgrenze; ähnlich aussehende Hosts oder Pfade erhalten keinen Zugriff auf den Provider.
+The base URL must use HTTPS; its host must also be allowed by the network policy. Optional context paths such as `/wiki` or `/confluence` are part of the provider identity. Provider matching requires the exact origin and path boundary.
 
-Der eigentliche PAT steht **nicht** in der Admin- oder Benutzerkonfiguration. Der Benutzer stellt ihn ausschließlich über die administrativ benannte Umgebungsvariable bereit, zum Beispiel unter PowerShell für den aktuellen Prozessbaum:
+The PAT is **not** stored in admin or user configuration. Only its environment-variable name is configured. For the current PowerShell process tree:
 
 ```powershell
 $env:CLI_AGENT_CONFLUENCE_PAT = "<PAT>"
 cli-agent
 ```
 
-Für eine passende Confluence-URL verwendet `cli-agent` die Confluence REST API mit
+Matching Confluence requests use the REST API with `Authorization: Bearer <PAT>`. The PAT is never forwarded to an LLM, stored as web context or logged. Authenticated requests **never follow redirects**; each redirect response is rejected to prevent token disclosure. Request paths are strictly validated before sending: dot segments, backslashes and percent-encoded components are disallowed to prevent inconsistent URL normalization across clients, proxies and servers.
 
-```text
-Authorization: Bearer <PAT>
-```
+External stdio MCP subprocesses receive only their explicitly allowed environment variables; the PAT is not inherited automatically. Provider HTTP requests use `trust_env = false`, preventing environment-configured proxies from silently changing the route.
 
-Der PAT wird nicht an das LLM übergeben, nicht als Web-Kontext gespeichert und nicht geloggt. Credential-behaftete Confluence-REST-Aufrufe folgen **keinen Redirects**. Jede Redirect-Antwort wird fail-closed abgelehnt, sodass der PAT niemals an ein vom Server geliefertes Redirect-Ziel weitergegeben wird. Zusätzlich werden die tatsächlich mit PAT gesendeten Request-Pfade vor dem Senden streng validiert; Dot-Segmente, Backslashes und percent-encoded Pfadbestandteile werden für diese credential-behafteten Requests abgelehnt, um unterschiedliche URL-Normalisierung durch Client, Proxy oder Server nicht zu einer Credential-Grenzen-Umgehung werden zu lassen.
-
-Die bestehenden stdio-MCP-Prozesse erhalten nur eine explizite kleine Environment-Allowlist. Eine zusätzliche Variable wie `CLI_AGENT_CONFLUENCE_PAT` wird deshalb nicht implizit an MCP-Kindprozesse vererbt. HTTP-Aufrufe des Web-Providers verwenden außerdem `trust_env = false`, sodass Proxy-Umgebungsvariablen nicht stillschweigend den Transportweg verändern.
-
-Unterstützte Seiten-URL-Formen sind derzeit insbesondere:
+Supported Confluence page URLs include:
 
 ```text
 .../pages/viewpage.action?pageId=12345
@@ -47,12 +41,12 @@ Unterstützte Seiten-URL-Formen sind derzeit insbesondere:
 .../display/SPACE/Page+Title
 ```
 
-Bei einer Page-ID wird `/rest/api/content/{id}` verwendet. Legacy-`/display/...`-URLs werden über Space-Key und Titel aufgelöst. Der Abruf fordert `body.view` und `body.storage` an; bevorzugt wird die gerenderte `body.view`-Darstellung und anschließend wie bei normalem HTML auf Text reduziert. Falls die gerenderte Darstellung keinen verwertbaren Text ergibt, wird innerhalb derselben REST-Antwort die Storage-Darstellung versucht.
+A page ID resolves via `/rest/api/content/{id}`. Legacy display URLs are resolved with space key and page title. The API requests `body.view` and `body.storage`; rendered `body.view` is preferred and reduced to text. If it contains no usable text, `body.storage` from the same REST response is considered.
 
-Wenn eine URL zu einem konfigurierten Confluence-Provider gehört, ist diese Zuordnung verbindlich. Fehlt der PAT, schlägt die REST-API fehl oder kann die URL nicht eindeutig auf eine Seite abgebildet werden, gibt `add_web_context` einen Fehler zurück. Es gibt **keinen** stillen Fallback auf den normalen unauthentifizierten HTML-Abruf.
+A URL assigned to a configured provider must use that provider. If the PAT is missing, a REST call fails, or the URL cannot be resolved unambiguously, `add_web_context` returns an error. There is **no silent fallback** to unauthenticated HTML retrieval.
 
-## Sicherheitsgrenze
+## Security boundary
 
-Die Provider-Konfiguration ist ausschließlich Bestandteil der maschinenweiten `admin_config.toml`. Eine normale Benutzer-/Projektkonfiguration kann weder einen authentifizierten Provider noch den Namen der verwendeten Credential-Umgebungsvariable definieren oder umbiegen.
+Only machine-wide `admin_config.toml` may define authenticated providers and their credential variable names. User/project configuration cannot override them.
 
-Der geladene Confluence-Inhalt bleibt unabhängig von der Authentifizierung nicht vertrauenswürdiger Referenzkontext. Darin enthaltene Anweisungen erhalten keine zusätzlichen Berechtigungen und dürfen keine weiteren Netzwerk- oder Tool-Aufrufe auslösen.
+Retrieved content remains untrusted reference data even when authentication succeeds. Embedded instructions never gain permissions or trigger further network or tool calls.
