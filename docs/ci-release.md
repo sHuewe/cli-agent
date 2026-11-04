@@ -1,127 +1,121 @@
-# CI, Paketbau, SBOM und Veröffentlichung
+# CI, package builds, SBOM and publishing
 
-Die GitHub-Actions-Pipeline testet `cli-agent` und erzeugt nach erfolgreicher Testmatrix installierbare Python-Artefakte sowie eine CycloneDX-SBOM.
+The GitHub Actions pipeline tests `cli-agent` and, after a successful test matrix, builds installable Python artifacts and a CycloneDX SBOM.
 
-## Testmatrix
+## Test matrix
 
-Die Tests laufen auf Windows und Ubuntu mit Python 3.11. Vor dem Testlauf wird geprüft, dass `uv.lock` aktuell ist; anschließend wird die Testumgebung mit
+Tests run on Windows and Ubuntu using Python 3.11. Before tests, CI verifies that `uv.lock` is up to date. The test environment is then created exactly from that lockfile:
 
 ```text
 uv sync --frozen --extra dev
 ```
 
-exakt aus dem Lockfile aufgebaut.
+## Package build
 
-## Paketbau
+After the test matrix passes, the Windows job `Build distributions and SBOM`:
 
-Nach erfolgreicher Testmatrix läuft auf Windows der Job `Build distributions and SBOM`.
+1. Checks `uv.lock` again.
+2. Creates a runtime environment without development extras via `uv sync --frozen`.
+3. Builds wheel and source distribution with `uv build --no-sources`.
+4. Test-installs the produced wheel.
+5. Additionally installs the wheel in isolation with optional `web` extras and verifies startup of Web UI dependencies.
+6. Confirms that a source distribution was produced.
+7. Creates a CycloneDX SBOM from the locked runtime environment.
+8. Generates SHA-256 checksums.
+9. Uploads these files as a GitHub Actions artifact.
 
-Er:
-
-1. prüft erneut `uv.lock`,
-2. erzeugt mit `uv sync --frozen` eine Runtime-Umgebung ohne Dev-Extras,
-3. baut mit `uv build --no-sources` Wheel und Source Distribution,
-4. installiert das erzeugte Wheel testweise,
-5. installiert das erzeugte Wheel zusätzlich isoliert mit dem optionalen `web`-Extra und prüft den Start der Web-UI-Abhängigkeiten,
-6. prüft, dass eine Source Distribution erzeugt wurde,
-7. erzeugt eine CycloneDX-SBOM aus der gelockten Runtime-Umgebung,
-8. erzeugt SHA-256-Prüfsummen und
-9. lädt die Dateien als GitHub-Actions-Artefakt hoch.
-
-Das Build-Backend `hatchling` ist im `pyproject.toml` auf eine exakte Version gepinnt. Damit wird auch dieser Teil des Paketbaus nicht bei jedem Lauf auf eine andere kompatible Version aufgelöst.
-
-`uv build --no-sources` verhindert, dass lokale `tool.uv.sources`-Overrides unbemerkt in einen veröffentlichbaren Build einfließen.
+The build backend `hatchling` is pinned to an exact version in `pyproject.toml`. This prevents the build environment from resolving a different compatible version on every run. `uv build --no-sources` prevents local `tool.uv.sources` overrides from silently entering a releasable build.
 
 ## SBOM
 
-Die SBOM wird mit einer fest gepinnten Version von `cyclonedx-bom` im CycloneDX-JSON-Format erzeugt. Der Generator läuft als separates `uv tool` und wird nicht als Runtime-Abhängigkeit von `cli-agent` installiert.
+The SBOM uses a pinned `cyclonedx-bom` version to generate CycloneDX JSON. The generator executes as a separate `uv tool`, not as a `cli-agent` runtime dependency.
 
-Als Quelle dient die zuvor mit `uv sync --frozen` erzeugte Runtime-Umgebung. Die SBOM beschreibt damit die tatsächlich aufgelösten Python-Pakete für die Referenzumgebung Python 3.11 auf Windows und nicht nur die Versionsbereiche aus `pyproject.toml`.
+It uses the runtime environment previously created with `uv sync --frozen`, describing the actually resolved Python packages for the Windows / Python 3.11 reference environment, not merely version ranges from `pyproject.toml`.
 
-Die Datei heißt:
+Filename:
 
 ```text
 dist/cli-agent-python311-windows.cdx.json
 ```
 
-Der plattformbezogene Name ist bewusst gewählt: Environment Marker können dazu führen, dass sich der Dependency-Graph auf anderen Betriebssystemen oder Python-Versionen unterscheidet.
+The platform-specific name is intentional: environment markers can produce different dependency graphs across operating systems and Python versions.
 
-Zusätzlich wird erzeugt:
+The build also creates:
 
 ```text
 dist/SHA256SUMS.txt
 ```
 
-Die Prüfsummen erfassen Wheel, Source Distribution und SBOM.
+Checksums cover wheel, source distribution and SBOM.
 
-## Wo liegen die Artefakte?
+## Artifact location
 
-`actions/upload-artifact` speichert die Dateien beim jeweiligen GitHub-Actions-Workflow-Run:
+`actions/upload-artifact` stores files in the corresponding GitHub Actions workflow run:
 
 ```text
 Actions
-  -> konkreter Workflow-Run
+  -> workflow run
   -> Artifacts
 ```
 
-Der Artefaktname enthält den Commit-SHA:
+The artifact name includes the commit SHA:
 
 ```text
 cli-agent-package-<commit-sha>
 ```
 
-Die Retention ist derzeit auf 30 Tage gesetzt. Ein Actions-Artefakt ist deshalb kein dauerhaftes Release und kein Python-Paket-Repository.
+Retention is currently 30 days. An Actions artifact is therefore neither a permanent release nor a Python package repository.
 
-Ein späterer öffentlicher Release-Prozess kann dieselben geprüften Artefakte zusätzlich dauerhaft als GitHub-Release-Artefakte bereitstellen und Wheel sowie Source Distribution auf einem Python Package Index veröffentlichen.
+A future public release process may publish the same verified files permanently as GitHub Release assets, while uploading wheel and source distribution to a Python Package Index.
 
-## Manuelles Publishing
+## Manual publishing
 
-Der Workflow kann über `workflow_dispatch` manuell gestartet werden. Dabei gibt es den Boolean-Parameter `publish`, der standardmäßig `false` ist.
+The workflow may be started manually through `workflow_dispatch`, with a boolean `publish` parameter defaulting to `false`.
 
-Nur wenn `publish = true` gewählt wird, der Workflow explizit auf dem Branch `main` gestartet wurde und Test- sowie Package-Job erfolgreich sind, läuft der Publish-Job. Ein manueller Lauf von einem Feature-Branch oder Tag kann daher keine Produktionspakete veröffentlichen.
+The publish job executes only when `publish = true`, the workflow was explicitly started from the `main` branch, and test/package jobs passed. A manual run from a feature branch or tag cannot publish production packages.
 
-Der Publish-Job verwendet zusätzlich das GitHub Environment `package-publish`. Für produktive Nutzung sollte dieses Environment in den Repository-Einstellungen mit den gewünschten Schutzregeln versehen werden, zum Beispiel Required Reviewers und einer Beschränkung auf den Branch `main`.
+Publishing additionally uses the GitHub Environment `package-publish`. For production it should be protected in repository settings, e.g. with required reviewers and restrictions to `main`.
 
-Der Job lädt exakt die im selben Workflow erzeugten Python-Distributionen herunter und veröffentlicht Wheel und Source Distribution mit `uv publish`.
+The job downloads exactly the Python distributions built in the same workflow and uploads wheel and source distribution using `uv publish`.
 
-Dafür müssen zwei Repository-Variablen konfiguriert sein:
+Two repository variables are required:
 
 ```text
 PYTHON_PUBLISH_URL
 PYTHON_PUBLISH_CHECK_URL
 ```
 
-`PYTHON_PUBLISH_URL` ist die Upload-URL des Package-Repositories. `PYTHON_PUBLISH_CHECK_URL` ist die zugehörige Index-/Check-URL, über die `uv publish --check-url` vor dem Upload prüfen kann, ob ein konkretes Distributionsartefakt bereits vorhanden ist. Dadurch kann ein nach einem Teilfehler erneut gestarteter Publish-Lauf bereits erfolgreich hochgeladene Dateien überspringen, statt an einem Duplicate-Upload zu scheitern.
+`PYTHON_PUBLISH_URL` is the package repository upload URL. `PYTHON_PUBLISH_CHECK_URL` is the corresponding index/check URL. `uv publish --check-url` can use it to identify already existing distribution artifacts before upload, allowing a restarted partially successful run to skip uploaded files instead of failing on duplicates.
 
-Für die Authentisierung unterstützt der Workflow genau eine der beiden Varianten:
+Authentication supports exactly one of the following alternatives:
 
 ```text
 Token:
 PYTHON_PUBLISH_TOKEN
 
-oder Benutzername/Passwort:
+or username/password:
 PYTHON_PUBLISH_USERNAME
 PYTHON_PUBLISH_PASSWORD
 ```
 
-Token-Authentisierung und Benutzername/Passwort dürfen nicht gleichzeitig konfiguriert sein. Der Workflow prüft diese Bedingung vor dem Upload und exportiert an `uv publish` nur die tatsächlich gewählte Variante.
+Token authentication and username/password must **not** both be configured. The workflow enforces this before upload and exports only the selected credentials to `uv publish`.
 
-Ein normaler Push oder Pull Request veröffentlicht keine Pakete.
+Normal pushes and pull requests do not publish packages.
 
-## Abgrenzung zum vorgesehenen Release-Prozess
+## Relationship to the planned release process
 
-Die aktuelle CI erzeugt und prüft die Release-Kandidaten bereits reproduzierbar, legt sie aber nur als kurzlebige Actions-Artefakte ab. Ein dauerhaftes GitHub Release, tag-basiertes Publishing, Trusted Publishing zu PyPI, Signing und ein automatisierter Vulnerability-Scan sind noch keine Bestandteile dieses Workflows.
+Current CI reproducibly builds and checks release candidates, but stores them only as short-lived Actions artifacts. A permanent GitHub Release, tag-based publishing, PyPI Trusted Publishing, signing and automated vulnerability scanning are not yet part of this workflow.
 
-Die übergeordnete Deploymentstrategie ist in [deployment.md](deployment.md) beschrieben. Für einen produktiven Release-Prozess bietet sich langfristig folgende Kette an:
+The overall deployment strategy is documented in [deployment.md](deployment.md). A future release chain could follow:
 
 ```text
-Git-Tag
+Git tag
   -> Tests
   -> Wheel + sdist
-  -> CycloneDX-SBOM
+  -> CycloneDX SBOM
   -> Checksums
-  -> Vulnerability Scan / Freigabe
+  -> Vulnerability scan / approval
   -> GitHub Release
-  -> Publish auf Python Package Index
-  -> optional organisationsspezifisches MSI / Softwarepaket
+  -> Publish to Python Package Index
+  -> optional organization-specific MSI / software package
 ```
