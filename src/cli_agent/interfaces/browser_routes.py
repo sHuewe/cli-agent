@@ -32,6 +32,17 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         from cli_agent.interfaces.web_ui_api import API_I18N_JS
         return browser_security_headers(PlainTextResponse(API_I18N_JS, media_type="application/javascript"))
 
+    async def ui_locales(_request: Request) -> Response:
+        from cli_agent.interfaces.web_ui_locales import available_locales
+        return browser_security_headers(JSONResponse(available_locales()))
+
+    async def ui_locale(request: Request) -> Response:
+        from cli_agent.interfaces.web_ui_locales import get_locale
+        catalog = get_locale(request.path_params["locale"])
+        if catalog is None:
+            return browser_security_headers(JSONResponse({"error": "Unknown locale."}, status_code=404))
+        return browser_security_headers(JSONResponse(catalog))
+
     async def ui_bootstrap(request: Request) -> Response:
         assert ui is not None
         from cli_agent.interfaces.web_ui_sessions import SessionOccupiedError
@@ -205,6 +216,8 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         ("ui_css", ui_css),
         ("ui_js", ui_js),
         ("ui_i18n", ui_i18n),
+        ("ui_locales", ui_locales),
+        ("ui_locale", ui_locale),
         ("ui_bootstrap", ui_bootstrap),
         ("ui_sessions", ui_sessions),
         ("ui_session_new", ui_session_new),
