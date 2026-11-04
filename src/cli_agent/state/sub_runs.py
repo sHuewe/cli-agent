@@ -218,14 +218,14 @@ async def execute_sub_run(
         raise ValueError("evidence_ids expects no more than 16 stored evidence IDs.")
     unknown_ids = [i for i in ids if i not in parent.evidences]
     if unknown_ids:
-        available = ", ".join(list(parent.evidences)[:16]) or "keine"
+        available = ", ".join(list(parent.evidences)[:16]) or "none"
         raise ValueError(
-            "Unbekannte Evidence-ID(s): " + ", ".join(repr(i) for i in unknown_ids)
-            + ". evidence_ids akzeptiert nur IDs bereits mit agent__add_evidence "
-            "gespeicherter Evidences. S1/S2/... aus Toolantworten sind source_refs, "
-            "no evidence IDs. Save a relevant finding first with "
-            "agent__add_evidence und dessen source_refs oder lasse evidence_ids weg; "
-            "the sub-run can query data independently. Available evidence IDs: "
+            "Unknown evidence IDs: " + ", ".join(repr(i) for i in unknown_ids)
+            + ". evidence_ids accepts only IDs previously saved using "
+            "agent__add_evidence. S1/S2/... from tool results are source_refs, "
+            "not evidence IDs. First save a relevant finding using "
+            "agent__add_evidence and its source_refs, or omit evidence_ids; "
+            "the sub-run can query data itself. Available evidence IDs: "
             + available
         )
     run_id = "sub-" + uuid.uuid4().hex[:12]
