@@ -561,7 +561,7 @@ def _has_checkpoint_status_descendant(
 ) -> bool:
     key = _filesystem_path_key(flow.source)
     if key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
-        raise ValueError("Zyklischer oder zu tief verschachtelter Subflow.")
+        raise ValueError("Zyklischer othe zu tief verschachtelter Subflow.")
     next_stack = (*stack, key)
     for step in flow.steps:
         if (step.filesystem_operation is not None
@@ -608,7 +608,7 @@ def _reserve_future_child_checkpoint_inputs(
     scan_budget.consume(purpose="Checkpoint-Eingabereservierung")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
-        raise ValueError("Zyklischer oder zu tief verschachtelter Subflow.")
+        raise ValueError("Zyklischer othe zu tief verschachtelter Subflow.")
     next_stack = (*stack, flow_key)
     for step in flow.steps:
         if step.flow is None or statuses.get(step.step_id) in {"completed", "skipped"}:
@@ -1123,7 +1123,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             raise ValueError(
                 f"Invalid flow input {name!r}; allowed characters are ASCII letters, "
                 "digits, '_' and '-', and the name must begin with a letter "
-                "oder '_' beginnen."
+                "othe '_' beginnen."
             )
 
     result_value = values.get("result")
@@ -1436,7 +1436,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             # step/item expressions cannot be resolved by _render_input_text.
             if raw_filesystem_operation["kind"] == "checkpoint_status":
                 for template in [*raw_filesystem_operation["paths"], raw_filesystem_operation["expected_source_path"]]:
-                    remainder = _INPUT_EXPR.sub("", template)
+                    remainthe = _INPUT_EXPR.sub("", template)
                     if "${" in remainder:
                         raise ValueError("checkpoint_status allows only input references.")
                     _validate_input_references([template], declared_inputs=inputs, field="checkpoint_status")
@@ -1461,7 +1461,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                         or windows_source.drive or ".." in Path(literal_source).parts
                         or ".." in windows_source.parts):
                     raise ValueError("markdown_sections.source_path must be workspace-relative.")
-            remainder = _INPUT_EXPR.sub("", directory_template)
+            remainthe = _INPUT_EXPR.sub("", directory_template)
             if raw_filesystem_operation["kind"] == "inventory" and "${" in remainder:
                 raise ValueError("filesystem_operation.directory supports only input and variable references.")
             literal_directory = _INPUT_EXPR.sub("placeholder", directory_template)
@@ -1618,7 +1618,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
         elif raw_flow_input:
             raise ValueError(
-                f"steps[{index}].input ist nur zusammen mit flow allowed."
+                f"steps[{index}].input is allowed only together with flow."
             )
 
         context_value = raw.get("context_file")
@@ -1651,7 +1651,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 for value in raw_contexts
             ):
                 raise ValueError(
-                    f"{context_field} muss ein nichtleerer String oder "
+                    f"{context_field} must be a nonempty string or "
                     "a list of nonempty strings."
                 )
             context_strings = tuple(value.strip() for value in raw_contexts)
@@ -1739,7 +1739,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         ):
             raise ValueError(
                 f"steps[{index}].output must not be parameterized from conversation or "
-                "previous_output data parametrisiert werden."
+                "previous_output data."
             )
         overwrite_output = raw.get("overwrite_output", False)
         if not isinstance(overwrite_output, bool):
@@ -1750,8 +1750,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         workspace_access_value = raw.get("workspace_access", "none")
         if workspace_access_value not in {"none", "read", "write"}:
             raise ValueError(
-                f"steps[{index}].workspace_access muss "
-                "'none', 'read' oder 'write' sein."
+                f"steps[{index}].workspace_access must be "
+                "'none', 'read' or 'write'."
             )
         workspace_access = str(workspace_access_value)
 
@@ -1787,7 +1787,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if step_excluded_paths and workspace_access == "none":
             raise ValueError(
                 f"steps[{index}].exclude_paths requires workspace_access='read' "
-                "oder 'write'."
+                "othe 'write'."
             )
 
         response_format_value = raw.get(
@@ -1956,7 +1956,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             and raw_json_operation["input"] not in json_inputs
         ):
             raise ValueError(
-                f"steps[{index}].json_operation.input muss ein json_inputs-Name sein."
+                f"steps[{index}].json_operation.input must be a json_inputs name."
             )
 
         input_reference_values = list(variables.values())
@@ -2018,7 +2018,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             conversation_items = conversation_items_value.strip()
         else:
             raise ValueError(
-                f"steps[{index}].conversation_items must be a list oder "
+                f"steps[{index}].conversation_items must be a list othe "
                 "a nonempty string."
             )
 
@@ -2051,14 +2051,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 source_id = source_match.group(1)
                 if source_id == step_id or source_id not in known_ids:
                     raise ValueError(
-                        f"steps[{index}].conversation_items may contain only auf einen "
+                        f"steps[{index}].conversation_items may only reference a "
                         f"previous step: {source_id!r}."
                     )
             else:
                 raise ValueError(
                     f"steps[{index}].conversation_items must be either a "
-                    "statische Liste, ${item...} oder "
-                    "steps.<id>.output[.<pfad>] sein."
+                    "static list, ${item...} or "
+                    "steps.<id>.output[.<path>]."
                 )
         if (
             isinstance(conversation_items, tuple)
@@ -3307,7 +3307,7 @@ def _snapshot_dynamic_checkpoint_candidates(
                 (_filesystem_path_key(flow.source), step.step_id)
             )
 
-    # A busy flow can have many dynamic templates under the same state
+    # A busy flow can have many dynamic templates unthe the same state
     # directory. Walking that directory once per template repeatedly counts
     # unrelated files and exhausts the candidate limit even for a modest
     # number of real checkpoint files. Group templates by their search root.
@@ -3361,11 +3361,11 @@ def _snapshot_dynamic_checkpoint_candidates(
         for directory, subdirectories, filenames in os.walk(
             search_root, followlinks=False
         ):
-            folder = Path(directory)
+            folthe = Path(directory)
             for entry in (
                 folder,
-                *(folder / dirname for dirname in subdirectories),
-                *(folder / filename for filename in filenames),
+                *(folthe / dirname for dirname in subdirectories),
+                *(folthe / filename for filename in filenames),
             ):
                 # Count directory ENTRIES, not resolved targets: many
                 # symlinks to a single file must still consume the budget.
@@ -3385,14 +3385,14 @@ def _snapshot_dynamic_checkpoint_candidates(
             safe_subdirectories = []
             for dirname in subdirectories:
                 try:
-                    if not path_entry_is_symlink_or_reparse(folder / dirname):
+                    if not path_entry_is_symlink_or_reparse(folthe / dirname):
                         safe_subdirectories.append(dirname)
                 except OSError:
                     continue
             subdirectories[:] = safe_subdirectories
 
             for filename in filenames:
-                candidate = folder / filename
+                candidate = folthe / filename
                 relative = candidate.relative_to(workspace).as_posix()
                 declaring_steps: list[tuple[str, str]] = []
                 for matcher, owners in patterns:
@@ -3685,7 +3685,7 @@ def _render_json_input_path(
             )
         if not isinstance(value, (str, int)) or isinstance(value, bool):
             raise ValueError(
-                "json_inputs.path may contain only Strings oder Ganzzahlen einsetzen."
+                "json_inputs.path may contain only Strings othe Ganzzahlen einsetzen."
             )
         return str(value)
 
@@ -3803,7 +3803,7 @@ def _render_prompt_file(
             )
         if final_prompt and _CONVERSATION_ITEM_EXPR.search(raw):
             raise ValueError(
-                f"Finaler Conversation-Prompt for step {step.step_id!r} "
+                f"Final conversation prompt for step {step.step_id!r} "
                 f"kann Variable {name!r} with ${{conversation.item...}} "
                 "."
             )
@@ -3916,7 +3916,7 @@ def _contexts_for_step(
         _workspace_path(
             workspace,
             context_file,
-            purpose=f"Context-Datei for step {step.step_id!r}",
+            purpose=f"Context file for step {step.step_id!r}",
             must_exist=True,
         )
         for context_file in step.context_files
@@ -4214,7 +4214,7 @@ def validate_flow(
         if step.json_operation is not None or step.filesystem_operation is not None:
             if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
                 if os.name not in {"posix", "nt"} or (os.name == "posix" and (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"))):
-                    raise ValueError("Sichere Verzeichnisinventur requires POSIX oder Windows.")
+                    raise ValueError("Sichere Verzeichnisinventur requires POSIX othe Windows.")
                 directory_template = step.filesystem_operation["directory"]
                 if _INPUT_EXPR.search(directory_template) is None:
                     inventory_root = _workspace_directory(workspace, directory_template)
@@ -4292,9 +4292,9 @@ def validate_flow(
                 raw = step.variables.get(name, step.global_variables.get(name))
                 if raw is not None and _CONVERSATION_ITEM_EXPR.search(raw):
                     raise ValueError(
-                        f"Finaler Conversation-Prompt for step "
-                        f"{step.step_id!r} cannot use variable {name!r} mit "
-                        "${conversation.item...} ."
+                        f"Final conversation prompt for step "
+                        f"{step.step_id!r} cannot use variable {name!r} with "
+                        "${conversation.item...}."
                     )
 
         supplied = set(step.variables)
@@ -5377,9 +5377,9 @@ def _preflight_foreach_output_batch(
                 iteration_id=iteration_id,
             )
             raise ValueError(
-                f"Output file {output} wird in diesem Flow-Lauf bereits "
-                f"von {previous_owner}; {owner} darf denselben "
-                "Output ."
+                f"Output file {output} is already claimed in this flow run "
+                f"by {previous_owner}; {owner} must not reuse the same "
+                "output."
             )
 
     for output, iteration_id in zip(
