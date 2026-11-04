@@ -118,6 +118,6 @@ assert.equal(document.documentElement.lang, "de");
 """
     result = subprocess.run(
         [node, "-e", script], input=API_I18N_JS, text=True,
-        capture_output=True, timeout=20, check=False,
+        encoding="utf-8", capture_output=True, timeout=20, check=False,
     )
     assert result.returncode == 0, result.stderr
