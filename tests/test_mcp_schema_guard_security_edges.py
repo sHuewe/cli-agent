@@ -25,7 +25,7 @@ def tool(name="read", *, description="", schema=None):
 @pytest.mark.parametrize(
     ("limit_name", "limit", "instructions", "tools", "message"),
     [
-        ("MAX_MCP_INSTRUCTIONS_CHARS", 2, "abc", [], "Instructions"),
+        ("MAX_MCP_INSTRUCTIONS_CHARS", 2, "abc", [], "instructions"),
         ("MAX_MCP_TOOLS_PER_SERVER", 1, None, [tool("one"), tool("two")], "zu viele Tools"),
         ("MAX_MCP_TOOL_NAME_CHARS", 2, None, [tool("long")], "Toolnamen"),
         ("MAX_MCP_TOOL_SCHEMA_CHARS", 2, None, [tool()], "oversized schema"),

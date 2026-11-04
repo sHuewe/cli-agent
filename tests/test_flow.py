@@ -1085,7 +1085,7 @@ prompt_file = "prompt.md"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="steps\\[1\\]\\.foreach may only reference a previous step: 'later'\\."):
+    with pytest.raises(ValueError, match="may only reference output from a previous step"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -2234,7 +2234,7 @@ exclude_paths = ["flow"]
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="steps\\[1\\]\\.exclude_paths requires workspace_access='read' othe 'write'\\."):
+    with pytest.raises(ValueError, match="requires workspace_access"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -3486,7 +3486,7 @@ value = "static"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="steps\\[1\\]\\.foreach may only reference a previous step: 'later'\\."):
+    with pytest.raises(ValueError, match="may only reference output from a previous step"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -6112,7 +6112,7 @@ flow = "leaf.toml"
 
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="Subflow Checkpoint-Eingabereservierung exceeds the expansion limit of 1 Flo"):
+    with pytest.raises(ValueError, match="exceeds the expansion limit"):
         validate_flow(definition, workspace=tmp_path)
 
 

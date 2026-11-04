@@ -117,7 +117,7 @@ def test_synthesized_subdirectory_index_classifies_entries_and_respects_limit(
     assert result["entries"][0]["next_tool"] == "knowledge_index"
     assert result["entries"][1]["title"] == "B"
     assert result["warnings"] == [
-        "Index-Prüfung wurde nach 2 Kandidaten abgeschnitten."
+        "Index inspection was truncated after 2 candidates."
     ]
 
 
@@ -140,7 +140,7 @@ def test_synthesized_index_bounds_invalid_markdown_inspection(tmp_path: Path) ->
 
     assert result["entries"] == []
     assert result["warnings"] == [
-        "Index-Prüfung wurde nach 3 Kandidaten abgeschnitten."
+        "Index inspection was truncated after 3 candidates."
     ]
 
 
@@ -301,9 +301,9 @@ def test_explicit_index_bounds_and_deduplicates_link_validation(
     ]
     assert result["content"] is None
     assert result["warnings"] == [
-        "Index enthält mehr als 3 interne Links. "
-        "Der freie Index-Inhalt wird ausgeblendet, damit nur tatsächlich "
-        "angebotene Folgepfade sichtbar sind."
+        "Index contains more than 3 internal links. "
+        "The full index content is hidden so that only actually offered "
+        "follow-up paths remain visible."
     ]
     assert calls == [target.resolve()]
 
@@ -387,7 +387,7 @@ def test_synthesized_index_skips_symlink_escape_with_warning(tmp_path: Path) -> 
 
     assert result["entries"] == []
     assert result["warnings"] == [
-        "Unsicherer oder nach außen führender Link wurde ausgelassen."
+        "Unsafe or escaping link was omitted."
     ]
 
 
