@@ -9,8 +9,8 @@ class DataReadMixin:
             raise DataOperationError("markdown muss ein String sein.")
         if len(markdown) > MAX_DATA_PAYLOAD_CHARS:
             raise DataOperationError(
-                "Markdown überschreitet das Limit von "
-                f"{MAX_DATA_PAYLOAD_CHARS} Zeichen."
+                "Markdown exceeds the limit of "
+                f"{MAX_DATA_PAYLOAD_CHARS} characters."
             )
         try:
             tables = extract_markdown_tables(
@@ -63,19 +63,19 @@ class DataReadMixin:
             raise DataOperationError("table.rows muss eine Liste sein.")
         if len(raw_rows) > MAX_DATA_ROWS:
             raise DataOperationError(
-                "Tabellendaten überschreiten das Zeilenlimit von "
+                "Tabular data exceed the row limit of "
                 f"{MAX_DATA_ROWS}."
             )
         rows: list[Record] = []
         for index, raw_row in enumerate(raw_rows, start=1):
             if not isinstance(raw_row, dict):
                 raise DataOperationError(
-                    f"table.rows Eintrag {index} muss ein Objekt sein."
+                    f"table.rows entry {index} muss ein Objekt sein."
                 )
             extras = set(raw_row) - set(columns)
             if extras:
                 raise DataOperationError(
-                    f"table.rows Eintrag {index} enthält unbekannte Spalten: "
+                    f"table.rows entry {index} contains unknown columns: "
                     + ", ".join(sorted(str(value) for value in extras))
                 )
             rows.append(
@@ -110,8 +110,8 @@ class DataReadMixin:
             raise DataOperationError(str(exc)) from exc
         if table_index >= len(tables):
             raise DataOperationError(
-                f"Markdown enthält keine Tabelle mit Index {table_index}; "
-                f"gefunden: {len(tables)}."
+                f"Markdown contains no table with index {table_index}; "
+                f"found: {len(tables)}."
             )
         return cls._read_markdown_table(tables[table_index])
 
@@ -145,7 +145,7 @@ class DataReadMixin:
         if not isinstance(content, str):
             raise DataOperationError("content muss ein String sein.")
         if len(content) > MAX_DATA_PAYLOAD_CHARS or len(content.encode("utf-8")) > MAX_DATA_PAYLOAD_CHARS:
-            raise DataOperationError("Inline-Daten überschreiten das Größenlimit.")
+            raise DataOperationError("Inline data exceed the size limit.")
         normalized = content.lstrip("\ufeff")
         stripped = normalized.lstrip(" \t\r\n")
         if not stripped:
@@ -167,7 +167,7 @@ class DataReadMixin:
                     else:
                         if all(isinstance(value, dict) for value in objects):
                             return [cls._normalize_json_records(objects)]
-                raise DataOperationError(f"Ungültiges JSON/JSONL: {exc.msg}") from exc
+                raise DataOperationError(f"Invalid JSON/JSONL: {exc.msg}") from exc
             return cls._discover_inline_json(parsed)
 
         try:
@@ -185,7 +185,7 @@ class DataReadMixin:
                 return [cls._read_delimited_text(stripped, delimiter="\t")]
             if "," in first_line:
                 return [cls._read_delimited_text(stripped, delimiter=",")]
-        raise DataOperationError("Kein unterstütztes Markdown-, JSON-, CSV- oder TSV-Datenformat erkannt.")
+        raise DataOperationError("No supported Markdown, JSON, CSV or TSV data format was recognized.")
 
     @classmethod
     def _discover_inline_json(cls, raw: Any) -> list[tuple[list[str], list[Record]]]:
@@ -197,7 +197,7 @@ class DataReadMixin:
             nonlocal visited
             visited += 1
             if visited > 10_000 or depth > 16:
-                raise DataOperationError("JSON-Struktur ist für die Tabellenerkennung zu komplex.")
+                raise DataOperationError("JSON structure is too complex for table discovery.")
             if isinstance(value, list):
                 if value and all(isinstance(row, dict) for row in value):
                     try:
@@ -229,9 +229,9 @@ class DataReadMixin:
             else:
                 found.append((columns, rows))
         if not found:
-            raise DataOperationError("JSON enthält keine eindeutigen tabellarischen Objekt-Arrays.")
+            raise DataOperationError("JSON contains no unambiguous arrays of tabular objects.")
         if len(found) > 20:
-            raise DataOperationError("JSON enthält zu viele Tabellen (maximal 20).")
+            raise DataOperationError("JSON contains too many tables (maximum 20).")
         return found
 
     def _read_records(
@@ -254,33 +254,33 @@ class DataReadMixin:
                 raise DataOperationError("data muss ein String sein.")
             if len(data) > MAX_DATA_PAYLOAD_CHARS:
                 raise DataOperationError(
-                    "Inline-Daten überschreiten das Limit von "
-                    f"{MAX_DATA_PAYLOAD_CHARS} Zeichen."
+                    "Inline data exceed the limit of "
+                    f"{MAX_DATA_PAYLOAD_CHARS} characters."
                 )
             if not isinstance(data_format, str):
                 raise DataOperationError(
-                    "Für Inline-Daten muss data_format angegeben werden."
+                    "data_format is required for inline data."
                 )
             normalized_format = data_format.casefold()
             if normalized_format not in DATA_FORMATS:
                 raise DataOperationError(
-                    "Nicht unterstütztes Inline-Datenformat. Erlaubt sind "
-                    "csv, tsv, json, jsonl, ndjson und markdown."
+                    "Unsupported inline data format. Allowed formats: "
+                    "csv, tsv, json, jsonl, ndjson and markdown."
                 )
             if normalized_format == "markdown":
                 if records_path is not None:
-                    raise DataOperationError("records_path ist nur für JSON zulässig.")
+                    raise DataOperationError("records_path is allowed only for JSON.")
                 return self._read_markdown_text(
                     data,
                     table_index=table_index,
                 )
             if table_index != 0:
                 raise DataOperationError(
-                    "table_index ist nur für Markdown-Daten zulässig."
+                    "table_index is allowed only for Markdown data."
                 )
             if normalized_format in {"csv", "tsv"}:
                 if records_path is not None:
-                    raise DataOperationError("records_path ist nur für JSON zulässig.")
+                    raise DataOperationError("records_path is allowed only for JSON.")
                 return self._read_delimited_text(
                     data,
                     delimiter="," if normalized_format == "csv" else "\t",
@@ -288,7 +288,7 @@ class DataReadMixin:
             if normalized_format == "json":
                 return self._read_json_array(data, records_path=records_path)
             if records_path is not None:
-                raise DataOperationError("records_path ist nur für JSON zulässig.")
+                raise DataOperationError("records_path is allowed only for JSON.")
             return self._read_json_lines_text(data)
 
         if data_format is not None:
@@ -297,24 +297,24 @@ class DataReadMixin:
             )
         if self.workspace is None:
             raise DataOperationError(
-                "Dateizugriff ist für den Data-MCP nicht aktiviert. "
-                "Verwende Inline-Daten oder starte cli-agent zusätzlich mit "
-                "--with-os-read bzw. --with-os-write."
+                "File access is not enabled for Data MCP. "
+                "Use inline data or start cli-agent with "
+                "--with-os-read or --with-os-write."
             )
 
         file_path = self.workspace.resolve_readable_file(path, direct=True)
         suffix = self._validate_suffix(file_path)
         if records_path is not None and suffix != ".json":
-            raise DataOperationError("records_path ist nur für JSON zulässig.")
+            raise DataOperationError("records_path is allowed only for JSON.")
         try:
             size = file_path.stat().st_size
         except OSError as exc:
             raise DataOperationError(
-                f"Dateigröße konnte nicht gelesen werden: {path!r}: {exc}"
+                f"Could not read file size: {path!r}: {exc}"
             ) from exc
         if size > MAX_DATA_FILE_BYTES:
             raise DataOperationError(
-                "Datendatei überschreitet das Limit von "
+                "Data file exceeds the limit of "
                 f"{MAX_DATA_FILE_BYTES} Bytes: {path!r}"
             )
 
@@ -337,7 +337,7 @@ class DataReadMixin:
 
         if table_index != 0:
             raise DataOperationError(
-                "table_index ist nur für Markdown-Daten zulässig."
+                "table_index is allowed only for Markdown data."
             )
         if suffix == ".json":
             try:
@@ -372,18 +372,18 @@ class DataReadMixin:
                 ]
                 if len(columns) != len(set(columns)):
                     raise DataOperationError(
-                        "CSV/TSV benötigt eindeutige, nicht-leere Spaltennamen."
+                        "CSV/TSV requires unique, nonempty column names."
                     )
                 rows: list[Record] = []
                 for index, raw in enumerate(reader, start=1):
                     if index > MAX_DATA_ROWS:
                         raise DataOperationError(
-                            "Datendatei überschreitet das Zeilenlimit von "
+                            "Data file exceeds the row limit of "
                             f"{MAX_DATA_ROWS}."
                         )
                     if None in raw:
                         raise DataOperationError(
-                            "CSV/TSV enthält mehr Felder als die Kopfzeile definiert."
+                            "CSV/TSV contains more fields than the header defines."
                         )
                     rows.append(
                         {
@@ -422,18 +422,18 @@ class DataReadMixin:
             ]
             if len(columns) != len(set(columns)):
                 raise DataOperationError(
-                    "CSV/TSV benötigt eindeutige, nicht-leere Spaltennamen."
+                    "CSV/TSV requires unique, nonempty column names."
                 )
             rows: list[Record] = []
             for index, raw in enumerate(reader, start=1):
                 if index > MAX_DATA_ROWS:
                     raise DataOperationError(
-                        "Datendaten überschreiten das Zeilenlimit von "
+                        "Dataset exceeds the row limit of "
                         f"{MAX_DATA_ROWS}."
                     )
                 if None in raw:
                     raise DataOperationError(
-                        "CSV/TSV enthält mehr Felder als die Kopfzeile definiert."
+                        "CSV/TSV contains more fields than the header defines."
                     )
                 rows.append(
                     {
@@ -451,11 +451,11 @@ class DataReadMixin:
     def _normalize_json_records(raw_rows: Any) -> tuple[list[str], list[Record]]:
         if not isinstance(raw_rows, list):
             raise DataOperationError(
-                "JSON-Daten müssen am ausgewählten records_path ein Array von Objekten enthalten."
+                "JSON data at the selected records_path must be an array of objects."
             )
         if len(raw_rows) > MAX_DATA_ROWS:
             raise DataOperationError(
-                "Datendaten überschreiten das Zeilenlimit von "
+                "Dataset exceeds the row limit of "
                 f"{MAX_DATA_ROWS}."
             )
         columns: list[str] = []
@@ -487,7 +487,7 @@ class DataReadMixin:
             raw = json.loads(data, parse_float=Decimal, parse_constant=_reject_json_constant)
         except json.JSONDecodeError as exc:
             raise DataOperationError(
-                f"Ungültiges JSON: {exc.msg}"
+                f"Invalid JSON: {exc.msg}"
             ) from exc
         if isinstance(raw, dict) and raw.get("scalar_encoding") == SCALAR_ENCODING:
             # Generated artifacts encode genuine Decimal values explicitly;
@@ -513,13 +513,13 @@ class DataReadMixin:
             if isinstance(parent, dict) and "columns" in parent:
                 declared = parent["columns"]
                 if not isinstance(declared, list) or len(declared) > 100:
-                    raise DataOperationError("JSON-DataFrame benötigt eine Liste mit maximal 100 Spaltennamen.")
+                    raise DataOperationError("JSON DataFrame requires a list of at most 100 column names.")
                 columns = [
                     _validate_column_name(name, source="JSON-DataFrame-Schema")
                     for name in declared
                 ]
                 if len(columns) != len(set(columns)):
-                    raise DataOperationError("JSON-DataFrame-Schema benötigt eindeutige Spaltennamen.")
+                    raise DataOperationError("JSON DataFrame schema requires unique column names.")
         return columns, rows
 
     @staticmethod
@@ -527,11 +527,11 @@ class DataReadMixin:
         if isinstance(value, dict) and set(value) == {DECIMAL_SCALAR_KEY}:
             encoded = value[DECIMAL_SCALAR_KEY]
             if not isinstance(encoded, str):
-                raise DataOperationError("Ungültige Dezimalwert-Kodierung.")
+                raise DataOperationError("Invalid decimal-value encoding.")
             try:
                 return _json_scalar(Decimal(encoded))
             except (DecimalException, ValueError) as exc:
-                raise DataOperationError("Ungültige Dezimalwert-Kodierung.") from exc
+                raise DataOperationError("Invalid decimal-value encoding.") from exc
         return value
 
     @staticmethod
@@ -548,7 +548,7 @@ class DataReadMixin:
         for part in parts:
             if "~" in part:
                 if any(part[i:i+2] not in {"~0", "~1"} for i, c in enumerate(part) if c == "~"):
-                    raise DataOperationError("Ungültige JSON-Pointer-Escape-Sequenz.")
+                    raise DataOperationError("Invalid JSON Pointer escape sequence.")
                 part = part.replace("~1", "/").replace("~0", "~")
             if isinstance(current, dict) and part in current:
                 current = current[part]
@@ -566,7 +566,7 @@ class DataReadMixin:
         if file_path.suffix.casefold() != ".json":
             raise DataOperationError("inspect_json erwartet eine .json-Datei.")
         if file_path.stat().st_size > MAX_DATA_FILE_BYTES:
-            raise DataOperationError("JSON-Datei überschreitet das Größenlimit.")
+            raise DataOperationError("JSON file exceeds the size limit.")
         try:
             raw = json.loads(file_path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant)
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -616,14 +616,14 @@ class DataReadMixin:
                 continue
             if len(raw_rows) >= MAX_DATA_ROWS:
                 raise DataOperationError(
-                    "Datendaten überschreiten das Zeilenlimit von "
+                    "Dataset exceeds the row limit of "
                     f"{MAX_DATA_ROWS}."
                 )
             try:
                 raw_rows.append(json.loads(line, parse_float=Decimal, parse_constant=_reject_json_constant))
             except json.JSONDecodeError as exc:
                 raise DataOperationError(
-                    f"Ungültiges JSON in Zeile {line_number}: {exc.msg}"
+                    f"Invalid JSON on line {line_number}: {exc.msg}"
                 ) from exc
         return cls._normalize_json_records(raw_rows)
 
@@ -639,14 +639,14 @@ class DataReadMixin:
                         continue
                     if len(rows) >= MAX_DATA_ROWS:
                         raise DataOperationError(
-                            "Datendatei überschreitet das Zeilenlimit von "
+                            "Data file exceeds the row limit of "
                             f"{MAX_DATA_ROWS}."
                         )
                     try:
                         raw = json.loads(line, parse_float=Decimal, parse_constant=_reject_json_constant)
                     except json.JSONDecodeError as exc:
                         raise DataOperationError(
-                            f"Ungültiges JSON in Zeile {line_number}: {exc.msg}"
+                            f"Invalid JSON on line {line_number}: {exc.msg}"
                         ) from exc
                     if not isinstance(raw, dict):
                         raise DataOperationError(

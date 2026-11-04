@@ -20,7 +20,7 @@ class DataQueryMixin:
                     "columns darf nur nicht-leere Strings enthalten."
                 )
             if value not in columns:
-                raise DataOperationError(f"Unbekannte Spalte: {value!r}")
+                raise DataOperationError(f"Unbekannte column: {value!r}")
             if value in seen:
                 raise DataOperationError(
                     f"Spalte mehrfach angegeben: {value!r}"
@@ -51,21 +51,21 @@ class DataQueryMixin:
             )
         if not isinstance(operator, str) or operator not in FILTER_OPERATORS:
             raise DataOperationError(
-                f"Nicht unterstützter Filteroperator: {operator!r}. "
-                f"Erlaubt: {', '.join(sorted(FILTER_OPERATORS))}."
+                f"Unsupported filter operator: {operator!r}. "
+                f"Allowed: {', '.join(sorted(FILTER_OPERATORS))}."
             )
         if operator in {"is_null", "not_null"}:
             return column, operator, None
         if operator in {"in", "not_in"}:
             if not isinstance(value, list) or not value:
                 raise DataOperationError(
-                    f"{operator} benötigt value als nicht-leere Liste."
+                    f"{operator} requires value to be a nonempty list."
                 )
             return column, operator, [_json_scalar(item) for item in value]
         if operator == "contains":
             if not isinstance(value, str):
                 raise DataOperationError(
-                    "contains benötigt einen String als value."
+                    "contains requires a string value."
                 )
             return column, operator, value
         return column, operator, _json_scalar(value)
@@ -134,9 +134,9 @@ class DataQueryMixin:
                         return False
                 except TypeError as exc:
                     raise DataOperationError(
-                        "Filtervergleich für Spalte "
-                        f"{column!r} ist für die vorhandenen Datentypen "
-                        "nicht möglich."
+                        "Filter comparison for column "
+                        f"{column!r} is not supported for the existing data types "
+                        "cannot be performed."
                     ) from exc
             return True
 
@@ -174,7 +174,7 @@ class DataQueryMixin:
             return ordered
         except TypeError as exc:
             raise DataOperationError(
-                "Sortierung ist wegen gemischter Datentypen nicht möglich."
+                "Sortierung is unavailable due to mixed data types cannot be performed."
             ) from exc
 
     @staticmethod
@@ -201,8 +201,8 @@ class DataQueryMixin:
         result = prefix + "\n\n" + table
         if len(result.encode("utf-8")) > MAX_FULL_RESULT_BYTES:
             raise DataOperationError(
-                "Vollständiges Datenergebnis ist zu groß für einen MCP-Aufruf. "
-                "Bitte Zeitraum oder Spalten eingrenzen."
+                "Complete data result is too large for one MCP call. "
+                "Narrow the time range or selected columns."
             )
         return result
 
@@ -559,8 +559,8 @@ class DataQueryMixin:
                 for value in present
             ):
                 raise DataOperationError(
-                    f"Aggregation {function!r} benötigt eine numerische "
-                    f"Spalte: {column!r}"
+                    f"Aggregation {function!r} requires a numeric "
+                    f"column: {column!r}"
                 )
 
             if not present:
@@ -597,8 +597,8 @@ class DataQueryMixin:
                         )
                 except (ArithmeticError, ValueError) as exc:
                     raise DataOperationError(
-                        f"Aggregation {function!r} konnte für Spalte "
-                        f"{column!r} nicht berechnet werden."
+                        f"Aggregation {function!r} could not be calculated for column "
+                        f"{column!r}."
                     ) from exc
 
                 if result is None:
@@ -634,8 +634,8 @@ class DataQueryMixin:
                 OverflowError,
             ) as exc:
                 raise DataOperationError(
-                    f"Aggregation {function!r} konnte für Spalte "
-                    f"{column!r} nicht präzise berechnet werden."
+                    f"Aggregation {function!r} could not be calculated for column "
+                    f"{column!r} with sufficient precision."
                 ) from exc
         if not present:
             return None
@@ -643,8 +643,8 @@ class DataQueryMixin:
             return min(present) if function == "min" else max(present)
         except TypeError as exc:
             raise DataOperationError(
-                f"Aggregation {function!r} ist wegen gemischter Datentypen "
-                f"für Spalte {column!r} nicht möglich."
+                f"Aggregation {function!r} is unavailable due to mixed data types "
+                f"for column {column!r} cannot be performed."
             ) from exc
 
     @staticmethod
@@ -684,8 +684,8 @@ class DataQueryMixin:
                 or function not in AGGREGATION_FUNCTIONS
             ):
                 raise DataOperationError(
-                    f"Nicht unterstützte Aggregation: {function!r}. "
-                    f"Erlaubt: {', '.join(sorted(AGGREGATION_FUNCTIONS))}."
+                    f"Unsupported aggregation: {function!r}. "
+                    f"Allowed: {', '.join(sorted(AGGREGATION_FUNCTIONS))}."
                 )
             if alias is None:
                 alias = f"{column}_{function}"
@@ -857,7 +857,7 @@ class DataQueryMixin:
         )
         if column not in columns:
             raise DataOperationError(
-                f"Unbekannte Spalte: {column!r}"
+                f"Unbekannte column: {column!r}"
             )
         filtered = self._apply_filters(rows, columns, filters)
         counts: dict[

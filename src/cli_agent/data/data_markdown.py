@@ -47,7 +47,7 @@ def _inline_text(token: Token) -> str:
 def _normalize_headers(source_headers: list[str]) -> list[str]:
     if len(source_headers) > MAX_MARKDOWN_COLUMNS:
         raise MarkdownTableError(
-            "Markdown-Tabelle überschreitet das Spaltenlimit von "
+            "Markdown table exceeds the column limit of "
             f"{MAX_MARKDOWN_COLUMNS}."
         )
 
@@ -200,7 +200,7 @@ def _enforce_markdown_row_limit(
                 total_rows += 1
                 if total_rows > max_rows:
                     raise MarkdownTableError(
-                        "Markdown-Tabellen überschreiten das Zeilenlimit von "
+                        "Markdown tables exceed the row limit of "
                         f"{max_rows}."
                     )
                 previous_line = line
@@ -457,7 +457,7 @@ def _markdown_scalar(
     if preserve_scalar_type and isinstance(value, Decimal):
         if not value.is_finite():
             raise MarkdownTableError(
-                "Dezimalwerte in Markdown-Tabellen müssen endlich sein."
+                "Decimal values in Markdown tables must be finite."
             )
         return _encode_typed_cell("d", str(value))
 
@@ -485,10 +485,10 @@ def render_markdown_table(
     """
 
     if not columns:
-        raise MarkdownTableError("Markdown-Tabelle benötigt mindestens eine Spalte.")
+        raise MarkdownTableError("Markdown table must contain at least one column.")
     if len(columns) > MAX_MARKDOWN_COLUMNS:
         raise MarkdownTableError(
-            "Markdown-Tabelle überschreitet das Spaltenlimit von "
+            "Markdown table exceeds the column limit of "
             f"{MAX_MARKDOWN_COLUMNS}."
         )
     if len(columns) != len(set(columns)) or any(
@@ -496,7 +496,7 @@ def render_markdown_table(
         for column in columns
     ):
         raise MarkdownTableError(
-            "Markdown-Tabelle benötigt eindeutige, nicht-leere Spaltennamen."
+            "Markdown table requires unique, nonempty column names."
         )
 
     lines = [
@@ -541,8 +541,8 @@ def extract_markdown_tables(
 
         if len(tables) >= MAX_MARKDOWN_TABLES:
             raise MarkdownTableError(
-                "Markdown-Dokument enthält mehr als "
-                f"{MAX_MARKDOWN_TABLES} Tabellen."
+                "Markdown document contains more than "
+                f"{MAX_MARKDOWN_TABLES} tables."
             )
 
         start_line = token.map[0] if token.map is not None else 0
@@ -615,7 +615,7 @@ def extract_markdown_tables(
 
         if source_headers is None:
             raise MarkdownTableError(
-                "Markdown-Tabelle enthält keine auswertbare Kopfzeile."
+                "Markdown table contains no usable header row."
             )
 
         columns = _normalize_headers(source_headers)

@@ -35,8 +35,8 @@ class DataOperations(DataReadMixin, DataQueryMixin):
         suffix = path.suffix.casefold()
         if suffix not in DATA_SUFFIXES:
             raise DataOperationError(
-                "Nicht unterstütztes Datenformat. Erlaubt sind .csv, .tsv, "
-                ".json, .jsonl, .ndjson, .md und .markdown."
+                "Unsupported data format. Allowed formats: .csv, .tsv, "
+                ".json, .jsonl, .ndjson, .md and .markdown."
             )
         return suffix
 
