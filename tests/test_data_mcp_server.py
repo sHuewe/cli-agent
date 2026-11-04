@@ -370,6 +370,7 @@ def test_aggregate_tool_exposes_typed_function_contract(monkeypatch) -> None:
         "count", "sum", "mean", "min", "max", "median", "nunique", "std",
     }
     assert "function" in schema["properties"]["aggregations"]["items"]["$ref"]
+    assert schema["properties"]["aggregations"]["minItems"] == 1
 
     valid = tool.fn_metadata.arg_model.model_validate({
         "path": "measurements.csv",
@@ -388,6 +389,16 @@ def test_aggregate_tool_exposes_typed_function_contract(monkeypatch) -> None:
         tool.fn_metadata.arg_model.model_validate({
             "path": "measurements.csv",
             "aggregations": [{"column": "value", "function": "average"}],
+        })
+    with pytest.raises(ValueError):
+        tool.fn_metadata.arg_model.model_validate({
+            "path": "measurements.csv",
+            "aggregations": [],
+        })
+    with pytest.raises(ValueError):
+        tool.fn_metadata.arg_model.model_validate({
+            "path": "measurements.csv",
+            "aggregations": [{"column": "value", "function": "mean", "agg": "mean"}],
         })
 
 
