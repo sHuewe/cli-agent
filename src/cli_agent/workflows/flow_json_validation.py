@@ -196,7 +196,7 @@ def validate_okf_plan(
                 if missing:
                     raise ValueError("Thema referenziert veraltete Concepts: " + ", ".join(sorted(missing)))
     else:
-        raise ValueError(f"Unbekannte OKF-Planart: {plan_kind!r}.")
+        raise ValueError(f"Unknown OKF plan type: {plan_kind!r}.")
     return plan
 
 
@@ -401,7 +401,7 @@ def assemble_doctrine_concept_plan(
             for evidence in ranges:
                 ref = _obj(evidence, "evidence_ranges[]")
                 if ref.get("doctrine") != source:
-                    raise ValueError("Beleg verweist auf falsche Doktrin.")
+                    raise ValueError("Evidence references the wrong doctrine.")
                 begin, end = ref.get("start_line"), ref.get("end_line")
                 if (type(begin) is not int or type(end) is not int
                         or begin < 1 or end < begin):
@@ -534,7 +534,7 @@ def assemble_section_outlines(
             raise ValueError("Section outline is incomplete or inconsistent.")
         local = _array(output.get("concepts"), "outlines.concepts")
         if len(local) > 100:
-            raise ValueError("Abschnitts-Outline contains zu viele Konzepte.")
+            raise ValueError("Section outline contains too many concepts.")
         for concept_index, entry in enumerate(local, start=1):
             concept = _obj(entry, f"outlines[{tid}].concepts[{concept_index}]")
             key = _slug(
@@ -563,7 +563,7 @@ def assemble_section_outlines(
         "status": "ok", "source_path": source_path,
         "folder": {
             "id": source_slug, "path": f"doctrines/{source_slug}",
-            "title": source_slug, "description": "Doktrin und ihre Konzepte",
+            "title": source_slug, "description": "Doctrine and its concepts",
         },
         "folders": [],
         "summary": "Merge of complete section outlines",
