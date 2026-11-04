@@ -529,4 +529,4 @@ def test_context_snapshot_bounds_file_preview(tmp_path: Path) -> None:
 
     assert state["content_chars"] == len(content)
     assert len(state["content"]) < len(content)
-    assert "gekürzt" in state["content"]
+    assert "truncated" in state["content"]

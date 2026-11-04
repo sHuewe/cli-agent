@@ -275,6 +275,6 @@ def test_agent_forwards_admin_providers_to_web_fetch(
         )
     )
 
-    assert "Web-Kontext hinzugefügt" in answer
+    assert "Web context added" in answer
     assert captured["allowed_hosts"] == ("confluence.internal",)
     assert captured["providers"] == (configured,)

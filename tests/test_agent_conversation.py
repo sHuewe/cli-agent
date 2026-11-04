@@ -296,7 +296,7 @@ def test_optional_knowledge_bootstrap_timeout_returns_none(
 
     assert result is None
     assert agent.dumped[-1][0] == "knowledge_result.json"
-    assert "Timeout" in agent.dumped[-1][1]["error"]
+    assert "timeout" in agent.dumped[-1][1]["error"]
 
 
 def test_required_knowledge_bootstrap_timeout_fails_closed(

@@ -249,8 +249,8 @@ def test_prompt_template_prompts_for_missing_variables_in_occurrence_order(
     )
 
     assert prompts == [
-        "Wert für Prompt-Variable first: ",
-        "Wert für Prompt-Variable second: ",
+        "Value for prompt variable first: ",
+        "Value for prompt variable second: ",
     ]
     assert captured["prompts"][0] == "ONE / TWO / ONE"
 

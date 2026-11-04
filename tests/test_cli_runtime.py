@@ -87,7 +87,7 @@ def test_approve_tool_call_supports_session_approval(monkeypatch, capsys) -> Non
     result = asyncio.run(cli_module.approve_tool_call("os__write_file", {"path": "a.txt"}))
 
     assert result == "session"
-    assert "Explizite Freigabe erforderlich" in capsys.readouterr().out
+    assert "Explicit approval required" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(("answer", "expected"), [("ja", True), ("yes", True), ("n", False), ("", False)])
@@ -374,7 +374,7 @@ def test_run_admin_update_warns_when_contract_changed(tmp_path, monkeypatch, cap
     )
 
     output = capsys.readouterr().out
-    assert "Bisheriger Contract: old-contract" in output
+    assert "Previous contract: old-contract" in output
     assert "tool contract has changed" in output
     assert "admin configuration was NOT modified" in output
     assert "contract_sha256 = \"new-contract\"" in output
@@ -436,7 +436,7 @@ def test_interactive_mode_ignores_empty_input_runs_prompt_and_quits(tmp_path, mo
 
     assert captured["prompts"] == ["hello"]
     output = capsys.readouterr().out
-    assert "Interaktiver Modus" in output
+    assert "Interactive mode" in output
     assert "answer:hello" in output
 
 

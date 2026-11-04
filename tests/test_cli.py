@@ -53,7 +53,7 @@ def test_approval_summary_truncates_long_payload_with_head_and_tail() -> None:
     summary = _approval_arguments({"content": content})
     assert "A" * 100 in summary
     assert "Z" * 100 in summary
-    assert "Zeichen gekürzt" in summary
+    assert "characters truncated" in summary
     assert len(summary) < len(content)
 
 

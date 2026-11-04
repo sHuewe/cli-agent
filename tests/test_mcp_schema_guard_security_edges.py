@@ -154,7 +154,7 @@ def test_oversized_worker_response_is_replaced_with_bounded_error(monkeypatch):
     payload = guard._encode_worker_response({"ok": True, "result": "secret" * 100})
     response = json.loads(payload)
     assert response["ok"] is False
-    assert "Limit" in response["error"]
+    assert "limit" in response["error"]
     assert "secret" not in payload.decode()
 
 

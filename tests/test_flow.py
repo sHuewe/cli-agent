@@ -59,7 +59,7 @@ prompt_file = "prompt.md"
 
     output = capsys.readouterr().out
     assert "Flow valid:" in output
-    assert "1 Schritte" in output
+    assert "1 steps" in output
 
 
 def test_flow_cli_validate_sanitizes_dynamic_status(
@@ -7391,7 +7391,7 @@ def test_logging_discovery_rejects_excessive_subflow_depth(
     with pytest.raises(SystemExit):
         flow_module.main()
     error = capsys.readouterr().err
-    assert "Maximale Subflow-Tiefe" in error
+    assert "Maximum subflow depth" in error
     assert "level-8.toml" not in error
 
 

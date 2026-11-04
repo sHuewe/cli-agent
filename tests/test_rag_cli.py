@@ -123,4 +123,4 @@ async def test_update_vector_db_routes_to_incremental_indexer(tmp_path, monkeypa
     assert await init_vector_db(args, incremental=True) == 6
     update.assert_awaited_once()
     build.assert_not_awaited()
-    assert "unverändert: 3" in capsys.readouterr().out
+    assert "unchanged: 3" in capsys.readouterr().out

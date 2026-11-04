@@ -344,7 +344,7 @@ async def test_browser_run_without_sse_times_out_and_releases_session(monkeypatc
                 break
             await asyncio.sleep(0.005)
         assert waiting.status == "failed"
-        assert "SSE-Client" in (waiting.error or "")
+        assert "SSE client" in (waiting.error or "")
         assert not agents[0].history
         assert not session._busy
         # Headless clients continue to be able to run without an SSE listener.
