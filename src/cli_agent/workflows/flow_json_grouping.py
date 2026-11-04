@@ -63,9 +63,9 @@ def group_assigned_items(
         or not re.fullmatch(rf"{folder_segment}(?:/{folder_segment})*", folder_path)
         or any(segment in _WINDOWS_RESERVED_NAMES for segment in folder_path.split("/"))
     ):
-        raise ValueError("Ungültiger semantischer Ordnerpfad.")
+        raise ValueError("Invalid semantic folder path.")
     if type(max_concept_bytes) is not int or not 1024 <= max_concept_bytes <= 10_000_000:
-        raise ValueError("Ungültiges Konzept-Bytelimit.")
+        raise ValueError("Invalid concept byte limit.")
 
     # Optional single semantic level beneath a doctrine/module folder.
     # Existing single-folder registries without "folders" remain valid.
@@ -87,7 +87,7 @@ def group_assigned_items(
             or child_id in child_ids
             or len(child_path) > 512
         ):
-            raise ValueError(f"Ungültiger semantischer Unterordner: {child_path!r}.")
+            raise ValueError(f"Invalid semantic subfolder: {child_path!r}.")
         child_paths.add(child_path.casefold())
         child_ids.add(child_id)
 
@@ -98,11 +98,11 @@ def group_assigned_items(
         topic_id = _string(topic.get("id"), "topic.id")
         path = _string(topic.get("path"), "topic.path")
         if not re.fullmatch(r"[a-z][a-z0-9_-]*", topic_id):
-            raise ValueError(f"Ungültige Topic-ID {topic_id!r}.")
+            raise ValueError(f"Invalid topic ID {topic_id!r}.")
         # A doctrine may either keep a flat layout or declare a set of
         # semantic subfolders. No arbitrary depth and no undeclared folders.
         if "/" not in path:
-            raise ValueError(f"Topic-Pfad außerhalb des Ordners: {path!r}.")
+            raise ValueError(f"Topic path outside folder: {path!r}.")
         parent, filename = path.rsplit("/", 1)
         if (
             not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*\.md", filename)
@@ -112,16 +112,16 @@ def group_assigned_items(
                 else parent != folder_path
             )
         ):
-            raise ValueError(f"Topic-Pfad außerhalb des Ordners: {path!r}.")
+            raise ValueError(f"Topic path outside folder: {path!r}.")
         if filename[:-3] in _WINDOWS_RESERVED_NAMES:
-            raise ValueError(f"Reservierter Windows-Gerätename im Topic-Pfad: {path!r}.")
+            raise ValueError(f"Reserved Windows device name in topic path: {path!r}.")
         if topic_id in topic_map or path.casefold() in paths:
-            raise ValueError("Topic-IDs und Dateipfade müssen eindeutig sein.")
+            raise ValueError("Topic IDs and file paths must be unique.")
         for name in ("title", "description", "type"):
             _string(topic.get(name), f"topic.{name}")
         tags = _list(topic.get("tags", []), "topic.tags")
         if not all(isinstance(tag, str) for tag in tags):
-            raise ValueError("Topic-Tags müssen Strings sein.")
+            raise ValueError("Topic tags must be strings.")
         paths.add(path.casefold())
         topic_map[topic_id] = topic
     if len(topic_map) > MAX_CONCEPTS:
@@ -134,7 +134,7 @@ def group_assigned_items(
         document_id = _string(route.get("document_id"), "route.document_id")
         _string(route.get("chunk_id"), "route.chunk_id")
         if route.get("folder_id") != folder_id:
-            raise ValueError("Routing-Eintrag gehört zum falschen Ordner.")
+            raise ValueError("Routing entry belongs to the wrong folder.")
         for raw_item in _list(route.get("knowledge_items"), "route.knowledge_items"):
             item = _object(raw_item, "knowledge_item")
             local_id = _string(item.get("id"), "knowledge_item.id")
@@ -143,7 +143,7 @@ def group_assigned_items(
                 raise ValueError(f"Doppelte globale Knowledge-Item-ID: {global_id}")
             evidence = _list(item.get("evidence_ranges"), "knowledge_item.evidence_ranges")
             if not all(isinstance(entry, dict) for entry in evidence):
-                raise ValueError("Evidence-Ranges müssen JSON-Objekte sein.")
+                raise ValueError("Evidence ranges must be JSON objects.")
             for field in ("kind", "name", "description"):
                 _string(item.get(field), f"knowledge_item.{field}")
             if type(item.get("normative")) is not bool:
@@ -237,9 +237,9 @@ def group_assigned_items(
         # One final serialization per complete concept validates the running
         # byte counter; it does not re-serialize the growing prefix per item.
         if measured_size != byte_count(concept):
-            raise ValueError("Inkonsistente JSON-Konzept-Größenberechnung.")
+            raise ValueError("Inconsistent JSON concept size calculation.")
         if measured_size > max_concept_bytes:
-            raise ValueError("Konzept überschreitet das Byte-Limit.")
+            raise ValueError("Concept exceeds the byte limit.")
         used_ids.add(concept_id)
         used_paths.add(path_key)
         concepts.append(concept)
@@ -293,7 +293,7 @@ def group_assigned_items(
             if not add_item(item, item_size, evidence_parts):
                 if not current["coverage_items"]:
                     raise ValueError(
-                        f"Knowledge Item {item['id']} überschreitet max_concept_bytes."
+                        f"Knowledge Item {item['id']} exceeds max_concept_bytes."
                     )
                 append_concept(current, current_size)
                 current, part = new_concept(topic, part + 1)
@@ -301,7 +301,7 @@ def group_assigned_items(
                 evidence_seen.clear()
                 if not add_item(item, item_size, evidence_parts):
                     raise ValueError(
-                        f"Knowledge Item {item['id']} überschreitet max_concept_bytes."
+                        f"Knowledge Item {item['id']} exceeds max_concept_bytes."
                     )
         append_concept(current, current_size)
 
@@ -347,7 +347,7 @@ def verify_assigned_coverage(*, plan: Any, results: Any) -> dict[str, Any]:
         result = _object(raw_result, "concept result")
         concept_id = _string(result.get("concept_id"), "concept result.concept_id")
         if concept_id not in concept_ids or concept_id in seen_results:
-            raise ValueError(f"Ungültiges oder doppeltes Konzeptergebnis: {concept_id}")
+            raise ValueError(f"Invalid or duplicate concept result: {concept_id}")
         seen_results.add(concept_id)
         if result.get("status") not in {"ok", "repaired"}:
             warnings.append(f"Konzept {concept_id}: Reparatur nicht abgeschlossen.")

@@ -64,7 +64,7 @@ def _workspace_directory(workspace: Path, directory: str) -> Path:
     try:
         resolved.relative_to(root)
     except ValueError as exc:
-        raise ValueError("filesystem_operation.directory verlässt den Workspace.") from exc
+        raise ValueError("filesystem_operation.directory escapes the workspace.") from exc
     if not resolved.is_dir():
         raise ValueError(f"filesystem_operation.directory ist kein Ordner: {directory}")
     return resolved
@@ -102,7 +102,7 @@ def inventory_directory(
         or "\\" in ext
         for ext in extensions
     ):
-        raise ValueError("filesystem_operation.extensions enthält ungültige Endungen.")
+        raise ValueError("filesystem_operation.extensions contains invalid extensions.")
     if any(
         not isinstance(name, str)
         or not name
@@ -111,7 +111,7 @@ def inventory_directory(
         or "\\" in name
         for name in exclude_names
     ):
-        raise ValueError("filesystem_operation.exclude_names enthält ungültige Namen.")
+        raise ValueError("filesystem_operation.exclude_names contains invalid names.")
     suffixes = tuple(ext.casefold() for ext in extensions)
     excluded = {name.casefold() for name in exclude_names}
     root = workspace.resolve(strict=True)
@@ -133,7 +133,7 @@ def inventory_directory(
     if os.name != "posix" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
         # Windows lacks portable openat-style directory descriptors in Python.
         # Fail closed for now rather than silently weakening the security contract.
-        raise ValueError("Sichere Verzeichnisinventur benötigt POSIX dir_fd/O_NOFOLLOW.")
+        raise ValueError("Secure directory inventory requires POSIX dir_fd/O_NOFOLLOW.")
 
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -159,7 +159,7 @@ def inventory_directory(
                         examined += 1
                         if examined > max_entries:
                             raise ValueError(
-                                f"filesystem_operation.inventory überschreitet max_entries={max_entries}."
+                                f"filesystem_operation.inventory exceeds max_entries={max_entries}."
                             )
                         entries.append(entry.name)
                 entries.sort(key=lambda name: (name.casefold(), name))
@@ -171,7 +171,7 @@ def inventory_directory(
                     if stat.S_ISLNK(mode):
                         raise ValueError(f"Symlink/Reparse Point bei Inventur: {rel}")
                     if not stat.S_ISDIR(mode) and not stat.S_ISREG(mode):
-                        raise ValueError(f"Nicht unterstützter Dateityp bei Inventur: {rel}")
+                        raise ValueError(f"Unsupported file type during inventory: {rel}")
                     if name.casefold() in excluded:
                         continue
                     if stat.S_ISDIR(mode):
@@ -183,7 +183,7 @@ def inventory_directory(
                             continue
                         files.append({"name": name, "path": rel, "size_bytes": metadata.st_size})
                     else:
-                        raise ValueError(f"Nicht unterstützter Dateityp bei Inventur: {rel}")
+                        raise ValueError(f"Unsupported file type during inventory: {rel}")
             finally:
                 os.close(fd)
     finally:
@@ -215,9 +215,9 @@ def markdown_sections(
     headings; the ranges are contiguous and cover every source line.
     """
     if type(target_chars) is not int or not 4000 <= target_chars <= 100000:
-        raise ValueError("markdown_sections.target_chars ist ungültig.")
+        raise ValueError("markdown_sections.target_chars is invalid.")
     if type(max_sections) is not int or not 1 <= max_sections <= 100:
-        raise ValueError("markdown_sections.max_sections ist ungültig.")
+        raise ValueError("markdown_sections.max_sections is invalid.")
     raw = Path(source_path)
     windows = PureWindowsPath(source_path)
     if (not source_path.strip() or raw.is_absolute() or windows.is_absolute()
@@ -238,12 +238,12 @@ def markdown_sections(
     if Workspace._is_sensitive_file(candidate, workspace=root):
         raise ValueError(
             "markdown_sections.source_path ist als Secret-/Credential- oder "
-            f"interner Workspace-Pfad geschützt: {candidate}"
+            f"protected internal workspace path: {candidate}"
         )
     if regular_file_has_multiple_links(candidate):
         raise ValueError("markdown_sections darf keine Dateien mit Hardlinks lesen.")
     if candidate.stat().st_size > 8_000_000:
-        raise ValueError("markdown_sections: Quelldokument überschreitet 8 MB.")
+        raise ValueError("markdown_sections: source document exceeds 8 MB.")
     with candidate.open("r", encoding="utf-8-sig", newline=None) as handle:
         lines = handle.readlines()
     if len(lines) > 200_000:
@@ -314,7 +314,7 @@ def markdown_sections(
         start = end
         if len(boundaries) - 1 > max_sections:
             raise ValueError(
-                "markdown_sections: zu viele Abschnitte; target_chars erhöhen."
+                "markdown_sections: too many sections; increase target_chars."
             )
     sections = []
     heading_index = 0

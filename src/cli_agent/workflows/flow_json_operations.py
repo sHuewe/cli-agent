@@ -52,26 +52,26 @@ def _split_route_records(
     def emit(fragment: dict[str, Any], fragment_size: int) -> None:
         nonlocal result_bytes
         if len(fragments) >= MAX_ROUTE_FRAGMENTS:
-            raise ValueError("batch_routes überschreitet das Fragment-Anzahllimit.")
+            raise ValueError("batch_routes exceeds the fragment count limit.")
         result_bytes += fragment_size + (1 if fragments else 0)
         if result_bytes > MAX_RESULT_BYTES:
-            raise ValueError("batch_routes überschreitet das JSON-Ergebnislimit.")
+            raise ValueError("batch_routes exceeds the JSON result limit.")
         fragments.append(fragment)
 
     for route_index, raw in enumerate(routes):
         if not isinstance(raw, dict):
             raise ValueError(
-                f"batch_routes erwartet Routing-Objekte; Eintrag {route_index} ist ungültig."
+                f"batch_routes expects routing objects; entry {route_index} is invalid."
             )
         for field in ("document_id", "chunk_id", "folder_id"):
             if not isinstance(raw.get(field), str) or not raw[field]:
                 raise ValueError(
-                    f"batch_routes benötigt {field!r} in Route {route_index}."
+                    f"batch_routes requires {field!r} in route {route_index}."
                 )
         for field in parts:
             if field in raw and not isinstance(raw[field], list):
                 raise ValueError(
-                    f"batch_routes erwartet eine Liste für {field!r} "
+                    f"batch_routes expects a list for {field!r} "
                     f"in Route {route_index}."
                 )
         # Keep any additional route-level metadata (never discard unknown fields).
@@ -84,7 +84,7 @@ def _split_route_records(
         fragment_size = size(fragment)
         if fragment_size > fragment_limit:
             raise ValueError(
-                f"Routing-Metadaten von Route {route_index} überschreiten "
+                f"Routing metadata for route {route_index} exceed "
                 "max_batch_bytes."
             )
         has_entries = False
@@ -101,7 +101,7 @@ def _split_route_records(
                 if fragment_size + increment > fragment_limit:
                     raise ValueError(
                         f"Ein einzelner Eintrag {field}[{item_index}] aus "
-                        f"Route {route_index} überschreitet max_batch_bytes."
+                        f"Route {route_index} exceeds max_batch_bytes."
                     )
                 fragment[field].append(item)
                 fragment_size += increment
@@ -123,17 +123,17 @@ def transform_json(
         return _serialized_size(item, serializer=serializer)
 
     if not isinstance(value, list):
-        raise ValueError("JSON-Operation benötigt eine JSON-Liste.")
+        raise ValueError("JSON-Operation requires eine JSON-Liste.")
     if kind == "flatten":
         result: list[Any] = []
         for entry in value:
             if not isinstance(entry, list):
-                raise ValueError("flatten erwartet ausschließlich Listen.")
+                raise ValueError("flatten expects only lists.")
             if len(result) + len(entry) > 1_000_000:
-                raise ValueError("flatten überschreitet das Elementlimit.")
+                raise ValueError("flatten exceeds the element limit.")
             result.extend(entry)
         if size({"items": result}) > MAX_RESULT_BYTES:
-            raise ValueError("flatten überschreitet das JSON-Ergebnislimit.")
+            raise ValueError("flatten exceeds the JSON result limit.")
         return {"items": result}
     if kind not in {"batch", "batch_routes"}:
         raise ValueError(f"Unbekannte JSON-Operation: {kind!r}")
@@ -162,10 +162,10 @@ def transform_json(
         if not current:
             return
         if len(batches) >= MAX_BATCHES:
-            raise ValueError("batch überschreitet das Batch-Anzahllimit.")
+            raise ValueError("batch exceeds the batch count limit.")
         increment = current_size + (1 if batches else 0)
         if result_size + increment > MAX_RESULT_BYTES:
-            raise ValueError("batch überschreitet das JSON-Ergebnislimit.")
+            raise ValueError("batch exceeds the JSON result limit.")
         result_size += increment
         batches.append({"id": next_id, "items": current})
         current = []
@@ -182,11 +182,11 @@ def transform_json(
             count = 0
             required = entry_size
         if current_size + required > max_batch_bytes:
-            raise ValueError("Ein JSON-Eintrag überschreitet max_batch_bytes.")
+            raise ValueError("Ein JSON-Eintrag exceeds max_batch_bytes.")
         if len(batches) >= MAX_BATCHES:
-            raise ValueError("batch überschreitet das Batch-Anzahllimit.")
+            raise ValueError("batch exceeds the batch count limit.")
         if result_size + current_size + required > MAX_RESULT_BYTES:
-            raise ValueError("batch überschreitet das JSON-Ergebnislimit.")
+            raise ValueError("batch exceeds the JSON result limit.")
         current.append(entry)
         current_size += required
         count += 1
@@ -232,7 +232,7 @@ def _json_dumps_preserving_numbers(value: Any) -> str:
             )
         except ValueError as exc:
             raise TypeError(
-                "Nicht unterstützter JSON-Wert: nicht-endlicher float"
+                "Unsupported JSON value: nonfinite float"
             ) from exc
     if isinstance(value, list):
         return "[" + ",".join(
@@ -243,7 +243,7 @@ def _json_dumps_preserving_numbers(value: Any) -> str:
         parts: list[str] = []
         for key, item in value.items():
             if not isinstance(key, str):
-                raise TypeError("JSON-Objektschlüssel müssen Strings sein.")
+                raise TypeError("JSON object keys must be strings.")
             parts.append(
                 _json_dump_string(key)
                 + ":"
@@ -251,7 +251,7 @@ def _json_dumps_preserving_numbers(value: Any) -> str:
             )
         return "{" + ",".join(parts) + "}"
     raise TypeError(
-        f"Nicht unterstützter JSON-Wert: {type(value).__name__}"
+        f"Unsupported JSON value: {type(value).__name__}"
     )
 
 
