@@ -364,7 +364,10 @@ def create_server(
 
     @mcp.tool(structured_output=False)
     def aggregate_data(
-        aggregations: list[DataAggregation],
+        aggregations: Annotated[
+            list[DataAggregation],
+            Field(min_length=1, description="Nonempty list of typed column/function/alias specifications."),
+        ],
         path: str,
         table_index: int = 0,
         group_by: list[str] | None = None,
