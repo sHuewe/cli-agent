@@ -41,7 +41,7 @@ class Workspace(WorkspaceIoMixin):
         checked_allowed: list[AllowedPath] = []
         for item in allowed_paths:
             if not isinstance(item, AllowedPath) or item.access not in {"read", "write"}:
-                raise WorkspaceError("allowed_paths benötigt AllowedPath mit access='read' oder 'write'.")
+                raise WorkspaceError("allowed_paths requires AllowedPath with access='read' or 'write'.")
             raw = item.path.expanduser()
             if ".." in raw.parts or ".." in PureWindowsPath(str(raw)).parts:
                 raise WorkspaceError("allowed_paths darf '..' nicht enthalten.")
@@ -56,7 +56,7 @@ class Workspace(WorkspaceIoMixin):
             try:
                 canonical = candidate.resolve(strict=False)
             except (OSError, RuntimeError) as exc:
-                raise WorkspaceError("allowed_paths konnte nicht sicher aufgelöst werden.") from exc
+                raise WorkspaceError("allowed_paths could not be safely resolved.") from exc
             if os.path.normcase(str(lexical)) != os.path.normcase(str(canonical)):
                 raise WorkspaceError("Symlinks oder Junctions in allowed_paths sind nicht erlaubt.")
             checked_allowed.append(AllowedPath(canonical, item.access))
@@ -97,7 +97,7 @@ class Workspace(WorkspaceIoMixin):
         except ValueError as exc:
             # Also blocks symlinks that point outside the workspace.
             raise WorkspaceError(
-                "Der Pfad verweist außerhalb des Projekt-Workspaces."
+                "The path points outside the project workspace."
             ) from exc
 
         return resolved
@@ -114,7 +114,7 @@ class Workspace(WorkspaceIoMixin):
         lexical = (self.directory / Path(path.strip())).absolute()
         if os.path.normcase(str(lexical)) != os.path.normcase(str(resolved)):
             raise WorkspaceError(
-                "Symlinks oder Junctions sind für diese Dateioperation nicht erlaubt."
+                "Symlinks or junctions are not allowed for this file operation."
             )
         return resolved
 
@@ -193,8 +193,8 @@ class Workspace(WorkspaceIoMixin):
     def _reject_protected_read(self, path: Path) -> None:
         if self._is_protected_path(path):
             raise WorkspaceError(
-                "Das Lesen von Secret-/Credential- oder geschützten "
-                "Agent-Dateien ist über den Workspace-Dateizugriff nicht erlaubt."
+                "Reading secret, credential or protected "
+                "agent files is not allowed through workspace file access."
             )
 
     def _is_mutation_protected_path(self, path: Path) -> bool:
@@ -217,8 +217,8 @@ class Workspace(WorkspaceIoMixin):
     def _reject_protected_mutation(self, path: Path) -> None:
         if self._is_mutation_protected_path(path):
             raise WorkspaceError(
-                "Das Ändern von Secret-/Credential- oder geschützten "
-                "Workspace-Dateien ist über den Workspace-Dateizugriff nicht erlaubt."
+                "Modifying secret, credential or protected "
+                "workspace files is not allowed through workspace file access."
             )
 
     @staticmethod
@@ -227,12 +227,12 @@ class Workspace(WorkspaceIoMixin):
             hardlinked = regular_file_has_multiple_links(path)
         except OSError as exc:
             raise WorkspaceError(
-                f"Dateimetadaten konnten nicht sicher geprüft werden: {path.name!r}"
+                f"File metadata could not be safely verified: {path.name!r}"
             ) from exc
         if hardlinked:
             raise WorkspaceError(
-                "Dateien mit mehreren Hardlinks werden vom Workspace-Dateizugriff "
-                "aus Sicherheitsgründen nicht verarbeitet."
+                "Files with multiple hardlinks are not processed by workspace file access "
+                "for security reasons."
             )
 
     @staticmethod

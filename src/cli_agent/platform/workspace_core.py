@@ -207,12 +207,12 @@ MAX_FIND_SCAN_FILES = 10_000
 def _validate_latin1_bytes(data: bytes) -> None:
     """Reject recognizable binary formats before the permissive Latin-1 fallback."""
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        raise UnicodeError("UTF-16-Dateien werden nicht unterstützt.")
+        raise UnicodeError("UTF-16 files are not supported.")
     if any(
         byte < 32 and byte not in (9, 10, 13) or 127 <= byte <= 159
         for byte in data
     ):
-        raise UnicodeError("Datei enthält Steuerzeichen oder Binärdaten.")
+        raise UnicodeError("File contains control characters or binary data.")
 
 
 def _decode_workspace_text(data: bytes) -> tuple[str, str]:

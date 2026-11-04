@@ -328,7 +328,7 @@ def main() -> None:
     max_pdf_pages = getattr(args, "max_pdf_pages", None)
     if max_pdf_pages is not None:
         if not sdk_configless or not 1 <= max_pdf_pages <= 2000:
-            raise ValueError("--max-pdf-pages ist nur für SDK-Modus (1-2000) erlaubt.")
+            raise ValueError("--max-pdf-pages is only allowed in SDK mode (1-2000).")
         config = replace(config, max_pdf_pages=max_pdf_pages)
     effective_config_file = (
         args.config_file.expanduser()

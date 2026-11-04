@@ -24,7 +24,7 @@ class WorkspaceRoot:
             resolved = directory.expanduser().resolve(strict=True)
         except (OSError, RuntimeError) as exc:
             raise WorkspacePathError(
-                f"Workspace konnte nicht aufgelöst werden: {directory}"
+                f"Workspace could not be resolved: {directory}"
             ) from exc
         if not resolved.is_dir():
             raise WorkspacePathError(
@@ -52,7 +52,7 @@ class WorkspaceRoot:
             resolved = (self.directory / candidate).resolve(strict=must_exist)
         except (OSError, RuntimeError, ValueError) as exc:
             raise WorkspacePathError(
-                f"Pfad konnte nicht aufgelöst werden: {path!r}"
+                f"Path could not be resolved: {path!r}"
             ) from exc
 
         try:
@@ -60,7 +60,7 @@ class WorkspaceRoot:
         except ValueError as exc:
             # This also blocks symlinks that point outside the workspace.
             raise WorkspacePathError(
-                "Der Pfad verweist außerhalb des konfigurierten Workspaces."
+                "The path points outside the configured workspace."
             ) from exc
         return resolved
 
@@ -69,5 +69,5 @@ class WorkspaceRoot:
             return path.relative_to(self.directory).as_posix() or "."
         except ValueError as exc:
             raise WorkspacePathError(
-                "Der Pfad verweist außerhalb des konfigurierten Workspaces."
+                "The path points outside the configured workspace."
             ) from exc

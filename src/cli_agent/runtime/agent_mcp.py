@@ -121,7 +121,7 @@ class McpLifecycleMixin:
                         or not getattr(server_config, "built_in", False)
                         or "knowledge_reentry__request_additional_knowledge" not in self._tool_routes
                     ):
-                        raise RuntimeError("Interner Knowledge-Reentry-Adapter ist nicht verfügbar.")
+                        raise RuntimeError("Internal Knowledge reentry adapter is unavailable.")
                 elif server_config is not None and self._exit_stack is not None:
                     started = await self._start_server(server_config, self._exit_stack)
                     if started is False:
@@ -260,20 +260,20 @@ class McpLifecycleMixin:
                 # before committing routes, tool definitions or identity state.
                 if exposed_name in {PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, REMOVE_EVIDENCE_TOOL_NAME, PUBLISH_TOOL_NAME}:
                     raise RuntimeError(
-                        f"MCP-Toolname {exposed_name!r} ist für ein "
-                        "internes Agent-Tool reserviert."
+                        f"MCP tool name {exposed_name!r} is reserved for an "
+                        "internal agent tool."
                     )
                 identity = (server_config.name, tool.name)
                 known_identity = self._tool_identities.get(exposed_name)
                 if known_identity is not None and known_identity != identity:
                     raise RuntimeError(
-                        f"MCP-Toolname {exposed_name!r} wurde in diesem Agent-Lauf "
-                        f"bereits für {known_identity[0]!r}/{known_identity[1]!r} "
-                        f"verwendet und darf nicht für {identity[0]!r}/{identity[1]!r} "
-                        "wiederverwendet werden."
+                        f"MCP tool name {exposed_name!r} was already "
+                        f"used for {known_identity[0]!r}/{known_identity[1]!r} "
+                        f"and cannot be reused for {identity[0]!r}/{identity[1]!r} "
+                        "."
                     )
                 if exposed_name in self._tool_routes:
-                    raise RuntimeError(f"Doppelter Toolname: {exposed_name}")
+                    raise RuntimeError(f"Duplicate tool name: {exposed_name}")
                 identities[exposed_name] = identity
                 routes[exposed_name] = (session, tool.name, server_config)
                 server_tools.append({"type": "function", "function": {"name": exposed_name, "description": f"MCP-Server {server_config.name}: {tool.description or ''}", "parameters": tool.inputSchema}})
@@ -353,7 +353,7 @@ class McpLifecycleMixin:
             return
         try:
             if config.mode == "okf" and self._knowledge_session is None:
-                raise RuntimeError("Hybrid-RAG erfordert einen verfügbaren OKF-Server.")
+                raise RuntimeError("Hybrid RAG requires an available OKF server.")
             if config.mode == "chroma":
                 from cli_agent.context.chroma_knowledge import ChromaKnowledgeSession
                 from cli_agent.settings.admin_config import AdminConfig
@@ -434,9 +434,9 @@ class McpLifecycleMixin:
     def _http_headers(self, server_config: ServerConfig) -> dict[str, str]:
         if any(key.strip().casefold() == "authorization" for key in server_config.headers):
             raise ValueError(
-                f"HTTP-MCP-Server {server_config.name!r} darf Authorization nicht "
-                "statisch konfigurieren. Bearer-Authentifizierung wird "
-                "ausschließlich aus der Admin-Policy materialisiert."
+                f"HTTP-MCP-Server {server_config.name!r} must not configure Authorization "
+                "statically. Bearer authentication is "
+                "materialized exclusively from admin policy."
             )
         headers = {
             key: self._resolve_http_value(value)
@@ -449,8 +449,8 @@ class McpLifecycleMixin:
         token = os.environ.get(bearer_token_env)
         if not token:
             raise ValueError(
-                f"Für HTTP-MCP-Server {server_config.name!r} fehlt die "
-                f"konfigurierte Bearer-Token-Umgebungsvariable {bearer_token_env!r}."
+                f"HTTP MCP server {server_config.name!r} is missing the "
+                f"configured bearer token environment variable {bearer_token_env!r}."
             )
         headers["Authorization"] = f"Bearer {token}"
         return headers
@@ -477,7 +477,7 @@ class McpLifecycleMixin:
                         environment[name] = os.environ[name]
                 credential_name = os.getenv("VISION_API_KEY_ENV", "VISION_API_KEY")
                 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", credential_name):
-                    raise ValueError("VISION_API_KEY_ENV ist ungültig.")
+                    raise ValueError("VISION_API_KEY_ENV is invalid.")
                 if credential_name in os.environ:
                     environment[credential_name] = os.environ[credential_name]
             if not built_in:
@@ -499,7 +499,7 @@ class McpLifecycleMixin:
                     argument = literal_args[index]
                     if argument in {"--protected-path", "--mutation-protected-path"}:
                         if index + 1 >= len(literal_args):
-                            raise ValueError("Fehlender Wert für MCP-Schutzpfad.")
+                            raise ValueError("Missing value for protected MCP path.")
                         key = (
                             "protected_paths" if argument == "--protected-path"
                             else "mutation_protected_paths"
@@ -549,7 +549,7 @@ class McpLifecycleMixin:
                 )
             )
             connection = await stack.enter_async_context(streamable_http_client(server_url, http_client=http_client)); read_stream, write_stream, _ = connection
-        else: raise ValueError(f"Nicht unterstützter MCP-Transport: {server_config.transport!r}")
+        else: raise ValueError(f"Unsupported MCP transport: {server_config.transport!r}")
         session = await stack.enter_async_context(CancellableClientSession(read_stream, write_stream))
         initialize_result = await await_mcp_operation(
             session.initialize(),
