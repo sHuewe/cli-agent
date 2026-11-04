@@ -84,10 +84,10 @@ async def process_tool_calls(
                 messages,
                 tool_call,
                 exposed_name,
-                "Im Knowledge-Lauf ist pro Modellantwort genau ein "
-                "Knowledge-Tool-Aufruf zulässig. Werte zunächst das Ergebnis "
-                "des ersten Aufrufs aus und entscheide danach, ob ein "
-                "weiterer Aufruf erforderlich ist.",
+                "The Knowledge run permits exactly one "
+                "Knowledge tool call per model response. First evaluate the result "
+                "of the first call, then determine whether "
+                "another call is necessary.",
             )
             transient_rejections.append((assistant_message, tool_call, tool_message))
             logger.info(
@@ -113,7 +113,7 @@ async def process_tool_calls(
                     messages,
                     tool_call,
                     exposed_name,
-                    "Der Tool-Aufruf enthält keine gültigen JSON-Argumente.",
+                    "The tool call has no valid JSON arguments.",
                 )
                 transient_rejections.append(
                     (assistant_message, tool_call, tool_message)
@@ -124,7 +124,7 @@ async def process_tool_calls(
                     messages,
                     tool_call,
                     exposed_name,
-                    "Die Tool-Argumente müssen ein JSON-Objekt sein.",
+                    "Tool arguments must be a JSON object.",
                 )
                 transient_rejections.append(
                     (assistant_message, tool_call, tool_message)
@@ -141,9 +141,9 @@ async def process_tool_calls(
                 messages,
                 tool_call,
                 exposed_name,
-                f"Das MCP-Tool {exposed_name!r} ist in dieser Session deaktiviert. "
-                "Rufe es nicht erneut auf und verwende ausschließlich ein "
-                "aktiviertes Tool aus der aktuellen Toolliste.",
+                f"MCP tool {exposed_name!r} is disabled for this session. "
+                "Do not call it again. Use only an "
+                "enabled tool from the current tool list.",
             )
             transient_rejections.append((assistant_message, tool_call, tool_message))
             continue
@@ -154,9 +154,9 @@ async def process_tool_calls(
                 messages,
                 tool_call,
                 exposed_name,
-                f"Das MCP-Tool {exposed_name!r} existiert nicht oder ist "
-                "aktuell nicht verfügbar. Verwende ausschließlich ein "
-                "Tool aus der aktuellen Toolliste.",
+                f"MCP tool {exposed_name!r} does not exist or is "
+                "currently unavailable. Use only a "
+                "tool from the current tool list.",
             )
             transient_rejections.append((assistant_message, tool_call, tool_message))
             continue
@@ -169,10 +169,10 @@ async def process_tool_calls(
                 messages,
                 tool_call,
                 exposed_name,
-                f"Das MCP-Tool {exposed_name!r} ist nicht verfügbar, weil "
-                f"der MCP-Server {server_config.name!r} deaktiviert ist. "
-                "Rufe es nicht erneut auf und verwende ausschließlich ein "
-                "Tool aus der aktuellen Toolliste.",
+                f"MCP tool {exposed_name!r} is unavailable because "
+                f"MCP server {server_config.name!r} is disabled. "
+                "Do not call it again. Use only an "
+                "tool from the current tool list.",
             )
             transient_rejections.append((assistant_message, tool_call, tool_message))
             continue
@@ -185,7 +185,7 @@ async def process_tool_calls(
                 exposed_name,
             )
             raise RuntimeError(
-                f"Für das MCP-Tool {exposed_name!r} ist kein registriertes Input-Schema verfügbar."
+                f"No registered input schema is available for MCP tool {exposed_name!r}."
             )
         validation_error = validate_mcp_tool_arguments(
             tool_name=str(exposed_name),
@@ -197,8 +197,8 @@ async def process_tool_calls(
                 messages,
                 tool_call,
                 exposed_name,
-                "Die Tool-Argumente entsprechen nicht dem vom MCP-Server "
-                f"angebotenen Input-Schema: {validation_error}",
+                "Tool arguments do not match the input schema provided "
+                f"by the MCP server: {validation_error}",
             )
             transient_rejections.append((assistant_message, tool_call, tool_message))
             logger.info(

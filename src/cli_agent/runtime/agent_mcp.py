@@ -407,14 +407,14 @@ class McpLifecycleMixin:
 
             async def call_tool(self, name, arguments):
                 if name != "request_additional_knowledge":
-                    return SimpleNamespace(structuredContent={"error": "Unbekanntes Tool"}, content=[], isError=True)
+                    return SimpleNamespace(structuredContent={"error": "Unknown tool"}, content=[], isError=True)
                 return await self.agent._request_additional_knowledge(arguments["question"])
 
         server = _RuntimeMcpServerConfig(name="knowledge_reentry", built_in=True)
         exposed = "knowledge_reentry__request_additional_knowledge"
         tool = {"type": "function", "function": {
             "name": exposed,
-            "description": "Nur wenn während der Hauptaufgabe wirklich neue, erforderliche Wissenslücken auftreten: ergänzendes projektspezifisches Knowledge recherchieren. Nicht zur Bestätigung bereits bekannter Fakten oder für wiederholte Fragen verwenden. Maximal zweimal pro Benutzeranfrage.",
+            "description": "Use only when genuinely new, necessary knowledge gaps arise during the main task: retrieve additional project-specific knowledge. Do not use to reconfirm known facts or repeat queries. At most twice per user request.",
             "parameters": {"type": "object", "properties": {
                 "question": {"type": "string", "minLength": 1, "maxLength": 2000}
             }, "required": ["question"], "additionalProperties": False},
