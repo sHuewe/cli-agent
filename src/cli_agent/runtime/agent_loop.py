@@ -341,7 +341,7 @@ async def run_model_loop(
                                     )
                                     + ". "
                                     + correction_action
-                                    + "Return only the required final JSON object."
+                                    + " Return only the required final JSON object."
                                 ),
                             }
                         )
