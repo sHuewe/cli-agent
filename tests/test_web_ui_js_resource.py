@@ -50,3 +50,74 @@ def test_browser_scripts_have_valid_javascript_syntax():
             capture_output=True, text=True, check=False, timeout=20,
         )
         assert result.returncode == 0, result.stderr
+
+
+def test_i18n_language_detection_switch_and_persistence_with_node():
+    import shutil
+    import subprocess
+    import pytest
+    from cli_agent.interfaces.web_ui_api import API_I18N_JS
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    script = r"""
+const vm = require("node:vm");
+const fs = require("node:fs");
+const assert = require("node:assert/strict");
+const elements = {
+  label: {dataset: {i18n: "session.new"}, textContent: ""},
+  placeholder: {dataset: {i18nPlaceholder: "composer.placeholder"},
+    setAttribute(name, value) { this[name] = value; }},
+  aria: {dataset: {i18nAriaLabel: "commands.label"},
+    setAttribute(name, value) { this[name] = value; }},
+  select: {value: "", addEventListener(name, callback) { this.onChange = callback; }}
+};
+const document = {
+  documentElement: {lang: ""},
+  querySelectorAll(selector) {
+    if (selector === "[data-i18n]") return [elements.label];
+    if (selector === "[data-i18n-placeholder]") return [elements.placeholder];
+    if (selector === "[data-i18n-aria-label]") return [elements.aria];
+    return [];
+  },
+  getElementById(name) { return name === "language-select" ? elements.select : null; }
+};
+const events = {};
+const store = {};
+const window = {
+  localStorage: {
+    getItem(key) { return store[key] ?? null; },
+    setItem(key, value) { store[key] = value; }
+  },
+  addEventListener(type, callback) { events[type] = callback; },
+  dispatchEvent(event) { this.lastEvent = event; }
+};
+const sandbox = {
+  window, document,
+  navigator: {languages: ["fr-FR", "de-DE", "en-US"]},
+  CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } }
+};
+vm.runInNewContext(fs.readFileSync(0, "utf8"), sandbox);
+assert.equal(document.documentElement.lang, "de");
+assert.equal(elements.label.textContent, "Neue Session in neuem Tab");
+assert.equal(elements.select.value, "de");
+assert.equal(elements.placeholder.placeholder, "Nachricht an cli-agent");
+elements.select.onChange({target: {value: "en"}});
+assert.equal(document.documentElement.lang, "en");
+assert.equal(elements.label.textContent, "New session in new tab");
+assert.equal(elements.aria["aria-label"], "Local commands");
+assert.equal(store["cli-agent-ui-language"], "en");
+assert.equal(window.lastEvent.type, "cli-agent-language-change");
+assert.equal(window.cliAgentI18n.t("tools.group", {count: 3}), "Tool calls (3)");
+events.storage({key: "cli-agent-ui-language", newValue: "de"});
+assert.equal(document.documentElement.lang, "de");
+assert.equal(store["cli-agent-ui-language"], "en");
+window.cliAgentI18n.setLocale("unsupported");
+assert.equal(document.documentElement.lang, "de");
+"""
+    result = subprocess.run(
+        [node, "-e", script], input=API_I18N_JS, text=True,
+        capture_output=True, timeout=20, check=False,
+    )
+    assert result.returncode == 0, result.stderr
