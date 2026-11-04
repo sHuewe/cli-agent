@@ -343,7 +343,7 @@ def _prepare_llm_input_file(
                     f"safety limit of {MAX_LLM_CONTEXT_TOTAL_BYTES} Bytes."
                 )
             raise ValueError(
-                f"{purpose} überschreitet das großzügige safety limit of "
+                f"{purpose} exceeds the generous safety limit of "
                 f"{MAX_LLM_INPUT_FILE_BYTES} Bytes: {resolved}"
             )
         # Match Path.read_text()/text-mode universal-newline semantics on all

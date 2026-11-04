@@ -286,13 +286,13 @@ class WorkspaceIoMixin:
         try:
             if file_path.stat().st_size > MAX_READ_FILE_BYTES:
                 raise WorkspaceError(
-                    f"Datei überschreitet the read limit of "
+                    f"File exceeds the read limit of "
                     f"{MAX_READ_FILE_BYTES} Bytes: {path!r}"
                 )
             data = file_path.read_bytes()
             if len(data) > MAX_READ_FILE_BYTES:
                 raise WorkspaceError(
-                    f"Datei überschreitet the read limit of "
+                    f"File exceeds the read limit of "
                     f"{MAX_READ_FILE_BYTES} Bytes: {path!r}"
                 )
             res, _encoding = _decode_workspace_text(data)
