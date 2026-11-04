@@ -46,14 +46,14 @@ def test_read_file_pdf_mixed_pages_and_unchanged_source(tmp_path):
     path.write_bytes(data)
     text = _workspace(tmp_path).read_file(path.name)
     assert isinstance(text, str)
-    assert "--- Seite 1 von 3 ---\nHello PDF" in text
-    assert "--- Seite 2 von 3 ---\n[No extractable text" in text
-    assert "--- Seite 3 von 3 ---\nFinal page" in text
+    assert "--- Page 1 of 3 ---\nHello PDF" in text
+    assert "--- Page 2 of 3 ---\n[No extractable text" in text
+    assert "--- Page 3 of 3 ---\nFinal page" in text
     assert path.read_bytes() == data
 
 
 @pytest.mark.parametrize("data, message", [
-    (b"not a PDF", "not fully"),
+    (b"not a PDF", "could not be fully"),
     (_pdf("secret", encrypted=True), "Encrypted"),
 ])
 def test_read_file_pdf_errors(tmp_path, data, message):
@@ -69,7 +69,7 @@ def test_empty_pdf_and_blank_page():
 
 def test_page_limit(monkeypatch):
     monkeypatch.setattr(pdf_text, "MAX_PDF_PAGES", 1)
-    with pytest.raises(pdf_text.PdfTextError, match="Seiten"):
+    with pytest.raises(pdf_text.PdfTextError, match="pages"):
         pdf_text._extract_text(_pdf("first", "second"))
 
 
@@ -155,7 +155,7 @@ def test_pdf_keeps_path_and_hardlink_protection(tmp_path):
 
 
 @pytest.mark.parametrize("data,message", [
-    (b"invalid PDF", "not fully"),
+    (b"invalid PDF", "could not be fully"),
     (_pdf("secret", encrypted=True), "Encrypted"),
 ])
 def test_parser_errors_are_sanitized(data, message):
@@ -198,7 +198,7 @@ def test_pdf_worker_and_file_failures(tmp_path, monkeypatch, failure):
 
 
 @pytest.mark.parametrize("data,status,expected", [
-    (_pdf("hello"), 0, "--- Seite 1 von 1 ---\nhello"),
+    (_pdf("hello"), 0, "--- Page 1 von 1 ---\nhello"),
     (b"broken", 2, "PDF could not be fully extracted as text."),
 ])
 def test_worker_stdio_protocol(monkeypatch, data, status, expected):
@@ -224,13 +224,13 @@ def test_pdf_page_range_preserves_original_page_numbers(tmp_path):
     workspace = Workspace.from_directory(
         tmp_path, McpServerConfig(name="os", config={"max_pdf_pages": 2})
     )
-    with pytest.raises(WorkspaceError, match="Seiten"):
+    with pytest.raises(WorkspaceError, match="pages"):
         workspace.read_file("long.pdf")
     result = workspace.read_file("long.pdf", start_page=2, end_page=3)
-    assert "--- Seite 2 von 4 ---\ntwo" in result
-    assert "--- Seite 3 von 4 ---\nthree" in result
-    assert "Seite 1" not in result
-    assert "Seite 4" not in result
+    assert "--- Page 2 of 4 ---\ntwo" in result
+    assert "--- Page 3 of 4 ---\nthree" in result
+    assert "Page 1" not in result
+    assert "Page 4" not in result
     assert workspace.read_file("long.pdf", end_page=2).count("--- Seite") == 2
     assert workspace.read_file("long.pdf", start_page=4).count("--- Seite") == 1
 
@@ -255,7 +255,7 @@ def test_pdf_page_limit_caps_selected_range(tmp_path):
     workspace = Workspace.from_directory(
         tmp_path, McpServerConfig(name="os", config={"max_pdf_pages": 2})
     )
-    with pytest.raises(WorkspaceError, match="Seiten"):
+    with pytest.raises(WorkspaceError, match="pages"):
         workspace.read_file("long.pdf", start_page=1, end_page=3)
 
 
@@ -274,8 +274,8 @@ def test_worker_page_options_round_trip(monkeypatch):
             patch.setattr(pdf_text.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(_pdf("one", "two", "three"))))
             patch.setattr(pdf_text.sys, "stdout", SimpleNamespace(buffer=output))
             assert pdf_text._main(["--max-pages", "2", "--start-page", "2", "--end-page", "3"]) == 0
-        assert "Seite 2 von 3" in output.getvalue().decode("utf-8")
-        assert "Seite 1 von 3" not in output.getvalue().decode("utf-8")
+        assert "Page 2 von 3" in output.getvalue().decode("utf-8")
+        assert "Page 1 von 3" not in output.getvalue().decode("utf-8")
     finally:
         __import__("logging").disable(old_disable)
 

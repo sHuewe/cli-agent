@@ -119,7 +119,7 @@ def _validate_page_options(
         or not 1 <= max_pages <= MAX_CONFIGURABLE_PDF_PAGES
     ):
         raise PdfTextError(
-            f"max_pdf_pages muss zwischen 1 und {MAX_CONFIGURABLE_PDF_PAGES} liegen."
+            f"max_pdf_pages must be between 1 and {MAX_CONFIGURABLE_PDF_PAGES}."
         )
     for name, number in (("start_page", start_page), ("end_page", end_page)):
         if number is not None and (
@@ -160,7 +160,7 @@ def _extract_text(
         if first > page_count or last > page_count:
             raise PdfTextError(
                 f"Requested page range is outside the PDF "
-                f"mit {page_count} pages."
+                f"with {page_count} pages."
             )
         selected_pages = last - first + 1
         if selected_pages > page_limit:
@@ -174,7 +174,7 @@ def _extract_text(
             text = (page.extract_text() or "").strip()
             if not text:
                 text = "[No extractable text on this page; OCR is not available.]"
-            section = f"--- Seite {number} von {page_count} ---\n{text}"
+            section = f"--- Page {number} of {page_count} ---\n{text}"
             total_chars += len(section) + (2 if sections else 0)
             if total_chars > MAX_PDF_TEXT_CHARS:
                 raise PdfTextError(
