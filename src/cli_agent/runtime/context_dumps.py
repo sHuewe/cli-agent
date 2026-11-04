@@ -78,7 +78,7 @@ class ContextDumpMixin:
         if path_entry_is_symlink_or_reparse(gitignore):
             raise RuntimeError(
                 "LLM context dump refused: .cli-agent/.gitignore must not be a "
-                "Symlink oder Reparse Point sein."
+                "symlink or reparse point."
             )
 
         if gitignore.exists():
@@ -124,7 +124,7 @@ class ContextDumpMixin:
             ContextDumpMixin._ensure_dump_gitignore(dump_directory)
         except OSError as exc:
             raise RuntimeError(
-                "LLM-Context-Dump konnte .cli-agent/.gitignore nicht anlegen."
+                "LLM context dump could not create .cli-agent/.gitignore."
             ) from exc
 
     def _safe_dump_path(self, filename: str) -> Path:
@@ -134,19 +134,19 @@ class ContextDumpMixin:
         dump_directory = self.workspace_directory / ".cli-agent"
         if dump_directory.exists() and path_entry_is_symlink_or_reparse(dump_directory):
             raise RuntimeError(
-                "LLM context dump refused: .cli-agent must not be a Symlink oder Reparse Point sein."
+                "LLM context dump refused: .cli-agent must not be a symlink or reparse point."
             )
         dump_directory.mkdir(parents=True, exist_ok=True)
         if path_entry_is_symlink_or_reparse(dump_directory):
             raise RuntimeError(
-                "LLM context dump refused: .cli-agent must not be a Symlink oder Reparse Point sein."
+                "LLM context dump refused: .cli-agent must not be a symlink or reparse point."
             )
         self._ensure_dump_gitignore(dump_directory)
         try:
             dump_directory.resolve(strict=True).relative_to(self.workspace_directory)
         except (OSError, RuntimeError, ValueError) as exc:
             raise RuntimeError(
-                "LLM context dump refused: .cli-agent liegt nicht sicher im Workspace."
+                "LLM context dump refused: .cli-agent is not safely contained within the workspace."
             ) from exc
         dump_file = dump_directory / filename
         if dump_file.exists():
@@ -161,7 +161,7 @@ class ContextDumpMixin:
                 ) from exc
         if path_entry_is_symlink_or_reparse(dump_file):
             raise RuntimeError(
-                f"LLM context dump refused: {filename!r} must not be a Symlink oder Reparse Point sein."
+                f"LLM context dump refused: {filename!r} must not be a symlink or reparse point."
             )
         return dump_file
 
