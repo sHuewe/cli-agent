@@ -51,10 +51,10 @@ def normalize_frontend_tools(
         ):
             raise ValueError("Invalid frontend tool name.")
         if name in normalized or name in server_names:
-            raise ValueError("Doppelter oder mit MCP kollidierender Tool-Name.")
+            raise ValueError("Duplicate or MCP-colliding tool name.")
         description = item["description"]
         if len(description) > 4096:
-            raise ValueError("Frontend-Tool-Beschreibung ist zu lang.")
+            raise ValueError("Frontend tool description is too long.")
         schema = item.get("parameters", {"type": "object", "properties": {}})
         if not isinstance(schema, dict):
             raise ValueError("Frontend tool parameters must be a JSON schema object.")
@@ -94,7 +94,7 @@ def checked_frontend_results(
     if len(required) != len(expected):
         raise ValueError("Doppelte Frontend-Tool-Call-ID.")
     if not required:
-        raise ValueError("Keine offenen Frontend-Tools.")
+        raise ValueError("No pending frontend tools.")
     results: dict[str, dict[str, Any]] = {}
     assistant_found = False
     for message in messages:
@@ -123,13 +123,13 @@ def checked_frontend_results(
                     and isinstance(part.get("text"), str)
                 )
             if not isinstance(content, str):
-                raise ValueError("Frontend-Tool-Ergebnis muss Text oder ContentParts sein.")
+                raise ValueError("Frontend tool result must be text or content parts.")
             if len(content.encode("utf-8")) > MAX_FRONTEND_RESULTS_BYTES:
                 raise ValueError("Frontend tool result is too large.")
             error = message.get("error")
             if error is not None:
                 if not isinstance(error, str):
-                    raise ValueError("Frontend-Tool-Fehler muss Text sein.")
+                    raise ValueError("Frontend tool error must be text.")
                 content = "FEHLER: " + error[:4096] + "\n" + content
             results[call_id] = {
                 "role": "tool", "tool_call_id": call_id, "content": content,

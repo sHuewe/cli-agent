@@ -58,7 +58,7 @@ class OkfRepository(RepositoryMetadataMixin):
         """Read or synthesize the progressive index for one OKF directory."""
         directory = self._resolve(path)
         if not directory.is_dir():
-            raise OkfRepositoryError(f"Pfad ist kein OKF-Ordner: {path!r}")
+            raise OkfRepositoryError(f"Path is not an OKF directory: {path!r}")
 
         relative_directory = self.workspace.relative(directory)
         unresolved_index_path = directory / "index.md"
@@ -277,7 +277,7 @@ class OkfRepository(RepositoryMetadataMixin):
             )
         except (OSError, ValueError) as exc:
             raise OkfRepositoryError(
-                f"OKF-Datei konnte nicht sicher gelesen werden: {relative}: {exc}"
+                f"OKF file could not be read safely: {relative}: {exc}"
             ) from exc
         try:
             return data.decode("utf-8")

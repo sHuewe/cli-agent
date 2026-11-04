@@ -556,7 +556,7 @@ def validate_mcp_server_metadata(
         )
     if len(tools) > MAX_MCP_TOOLS_PER_SERVER:
         raise RuntimeError(
-            f"MCP-Server {server_name!r} bietet zu viele Tools an "
+            f"MCP-Server {server_name!r} offers too many tools "
             f"({len(tools)} > {MAX_MCP_TOOLS_PER_SERVER})."
         )
 
@@ -571,12 +571,12 @@ def validate_mcp_server_metadata(
             )
         if len(tool_name) > MAX_MCP_TOOL_NAME_CHARS:
             raise RuntimeError(
-                f"MCP-Server {server_name!r} liefert einen zu langen Toolnamen "
+                f"MCP-Server {server_name!r} returns an excessively long tool name "
                 f"({len(tool_name)} > {MAX_MCP_TOOL_NAME_CHARS} characters)."
             )
         if tool_name in seen_tool_names:
             raise RuntimeError(
-                f"MCP-Server {server_name!r} bietet den Toolnamen {tool_name!r} mehrfach an."
+                f"MCP-Server {server_name!r} provides duplicate tool name {tool_name!r}."
             )
         seen_tool_names.add(tool_name)
 
@@ -589,7 +589,7 @@ def validate_mcp_server_metadata(
         schema = getattr(tool, "inputSchema", {})
         if not isinstance(schema, dict):
             raise RuntimeError(
-                f"MCP-Tool {server_name}__{tool_name} liefert kein JSON-Objekt als Input-Schema."
+                f"MCP-Tool {server_name}__{tool_name} does not provide a JSON object as input schema."
             )
         try:
             schema_text = json.dumps(
@@ -610,7 +610,7 @@ def validate_mcp_server_metadata(
         total_metadata_chars += len(description) + len(schema_text)
         if total_metadata_chars > MAX_MCP_TOTAL_TOOL_METADATA_CHARS:
             raise RuntimeError(
-                f"MCP-Server {server_name!r} liefert insgesamt zu viele Tool-Metadaten "
+                f"MCP-Server {server_name!r} provides too much total tool metadata "
                 f"({total_metadata_chars} > {MAX_MCP_TOTAL_TOOL_METADATA_CHARS} characters)."
             )
 

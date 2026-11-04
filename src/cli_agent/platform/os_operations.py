@@ -23,7 +23,7 @@ class Workspace(WorkspaceIoMixin):
     ) -> Workspace:
         resolved = directory.resolve()
         if not resolved.is_dir():
-            raise WorkspaceError(f"Projekt-Workspace existiert nicht: {resolved}")
+            raise WorkspaceError(f"Project workspace does not exist: {resolved}")
 
         def collect_workspace_paths(paths: tuple[Path, ...]) -> frozenset[Path]:
             collected: set[Path] = set()
@@ -44,21 +44,21 @@ class Workspace(WorkspaceIoMixin):
                 raise WorkspaceError("allowed_paths requires AllowedPath with access='read' or 'write'.")
             raw = item.path.expanduser()
             if ".." in raw.parts or ".." in PureWindowsPath(str(raw)).parts:
-                raise WorkspaceError("allowed_paths darf '..' nicht enthalten.")
+                raise WorkspaceError("allowed_paths must not contain '..'.")
             candidate = raw if raw.is_absolute() else resolved / raw
             lexical = candidate.absolute()
             try:
                 relative = lexical.relative_to(resolved)
             except ValueError as exc:
-                raise WorkspaceError("allowed_paths muss innerhalb des Workspace liegen.") from exc
+                raise WorkspaceError("allowed_paths must be inside the workspace.") from exc
             if not relative.parts:
-                raise WorkspaceError("Der gesamte Workspace darf nicht freigegeben werden.")
+                raise WorkspaceError("The entire workspace must not be granted.")
             try:
                 canonical = candidate.resolve(strict=False)
             except (OSError, RuntimeError) as exc:
                 raise WorkspaceError("allowed_paths could not be safely resolved.") from exc
             if os.path.normcase(str(lexical)) != os.path.normcase(str(canonical)):
-                raise WorkspaceError("Symlinks oder Junctions in allowed_paths sind nicht erlaubt.")
+                raise WorkspaceError("Symlinks or junctions are not allowed in allowed_paths.")
             checked_allowed.append(AllowedPath(canonical, item.access))
 
         return cls(
@@ -73,7 +73,7 @@ class Workspace(WorkspaceIoMixin):
 
     def resolve_path(self, path: str, *, must_exist: bool = True) -> Path:
         if not isinstance(path, str) or not path.strip():
-            raise WorkspaceError("Der Pfad darf nicht leer sein.")
+            raise WorkspaceError("The path must not be empty.")
 
         raw_path = path.strip()
         candidate = Path(raw_path)
@@ -84,12 +84,12 @@ class Workspace(WorkspaceIoMixin):
             or windows_path.drive
             or windows_path.root
         ):
-            raise WorkspaceError("Der Pfad muss relativ zum Projekt-Workspace sein.")
+            raise WorkspaceError("The path must be relative to the project workspace.")
 
         # Check the lexical path before resolving it. Resolving first would
         # normalize ".." away and make the explicit prohibition ineffective.
         if ".." in PurePath(raw_path).parts or ".." in windows_path.parts:
-            raise WorkspaceError("Der Pfad darf '..' nicht enthalten.")
+            raise WorkspaceError("The path must not contain '..'.")
 
         resolved = (self.directory / candidate).resolve(strict=must_exist)
         try:
@@ -238,7 +238,7 @@ class Workspace(WorkspaceIoMixin):
     @staticmethod
     def _limit(value: int, *, name: str, maximum: int) -> int:
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
-            raise WorkspaceError(f"{name} muss zwischen 1 und {maximum} liegen.")
+            raise WorkspaceError(f"{name} must be between 1 and {maximum}.")
         return value
 
     @staticmethod
