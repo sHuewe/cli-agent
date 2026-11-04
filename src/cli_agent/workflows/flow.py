@@ -790,7 +790,7 @@ def _expand_global_input_vars(
             name = match.group(1)
             if name not in variables:
                 raise ValueError(
-                    f"{field} referenziert unbekannte globale Variable {name!r}."
+                    f"{field} referenziert unknowne globale Variable {name!r}."
                 )
             return variables[name]
 
@@ -940,7 +940,7 @@ def _validate_when(
     if match.group("step") and match.group("step") not in prior_ids:
         raise ValueError(f"{label} may only reference previous steps.")
     if match.group("input") and match.group("input").split(".")[1] not in inputs:
-        raise ValueError(f"{label} verweist auf einen unbekannten Flow-Input.")
+        raise ValueError(f"{label} verweist auf einen unknownen Flow-Input.")
     if (match.group("item") or match.group("iteration")) and not foreach:
         raise ValueError(f"{label} requires foreach for item/iteration.id.")
     op = ops[0]
@@ -1203,7 +1203,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
         if _DYNAMIC_VALUE_EXPR.search(value):
             raise ValueError(
                 f"Global variable {name!r} must not contain dynamic "
-                "Flow-Platzhalter verwenden."
+                "flow placeholders."
             )
         global_variables[name] = value
 
@@ -1315,10 +1315,10 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if not _STEP_ID.fullmatch(step_id):
             raise ValueError(
                 f"Invalid step ID {step_id!r}; allowed characters are "
-                "ASCII-Buchstaben, Ziffern, '_' und '-'."
+                "ASCII letters, digits, '_' and '-'."
             )
         if step_id in known_ids:
-            raise ValueError(f"Doppelte Step-ID: {step_id!r}.")
+            raise ValueError(f"Duplicate step ID: {step_id!r}.")
         known_ids.add(step_id)
         when = _validate_when(
             raw.get("when"), prior_ids=known_ids - {step_id},
@@ -1618,7 +1618,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
         elif raw_flow_input:
             raise ValueError(
-                f"steps[{index}].input ist nur zusammen mit flow erlaubt."
+                f"steps[{index}].input ist nur zusammen mit flow allowed."
             )
 
         context_value = raw.get("context_file")
@@ -1739,7 +1739,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         ):
             raise ValueError(
                 f"steps[{index}].output must not be parameterized from conversation or "
-                "previous_output-Daten parametrisiert werden."
+                "previous_output data parametrisiert werden."
             )
         overwrite_output = raw.get("overwrite_output", False)
         if not isinstance(overwrite_output, bool):
@@ -1946,7 +1946,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if root_name not in inputs:
                     raise ValueError(
                         f"steps[{index}].json_inputs.{name}.iterate "
-                        f"verweist auf unbekannten Input {root_name!r}."
+                        f"verweist auf unknownen Input {root_name!r}."
                     )
             json_inputs[name] = JsonInputSpec(
                 path=path_template, iterate=iterate,
@@ -2052,7 +2052,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if source_id == step_id or source_id not in known_ids:
                     raise ValueError(
                         f"steps[{index}].conversation_items may contain only auf einen "
-                        f"vorherigen Step verweisen: {source_id!r}."
+                        f"previous step: {source_id!r}."
                     )
             else:
                 raise ValueError(
@@ -2107,13 +2107,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if match is None:
                     raise ValueError(
                         f"steps[{index}].foreach must reference "
-                        "steps.<id>.output[.<pfad>] oder input.<pfad> verweisen."
+                        "steps.<id>.output[.<path>] or input.<path>."
                     )
                 source_id = match.group(1)
                 if source_id not in known_ids:
                     raise ValueError(
-                        f"steps[{index}].foreach may contain only auf einen "
-                        f"vorherigen Step verweisen: {source_id!r}."
+                        f"steps[{index}].foreach may only reference a "
+                        f"previous step: {source_id!r}."
                     )
         else:
             dynamic_values = [*variables.values(), *flow_input_strings]
@@ -2497,7 +2497,7 @@ def _conversation_items_for_iteration(
     if not values and step.conversation_final_prompt_file is None:
         raise ValueError(
             f"conversation_items for step {step.step_id!r} is empty and "
-            "es gibt keinen conversation_final_prompt_file."
+            "there is no conversation_final_prompt_file."
         )
     return values
 
@@ -3550,7 +3550,7 @@ def _append_foreach_iteration(
     if total_bytes > MAX_STRUCTURED_OUTPUT_BYTES:
         raise ValueError(
             f"Aggregated output of step {step.step_id!r} exceeds "
-            f"das JSON limit of {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
+            f"the JSON limit of {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
         )
     parts.append(fragment)
     return next_payload_bytes
@@ -3737,8 +3737,8 @@ def _resolve_json_inputs(
             expected = completed_json_outputs.get(_filesystem_path_key(path))
             if expected is None:
                 raise ValueError(
-                    f"JSON input {name!r} may contain only einen bereits abgeschlossenen "
-                    f"Flow-JSON-Output referenzieren: {path}"
+                    f"JSON input {name!r} may reference only a completed "
+                    f"flow JSON output: {path}"
                 )
             raw = read_existing_output_text(
                 workspace,
@@ -3979,7 +3979,7 @@ def _validate_subflow_interface(
     if child.result is None:
         raise ValueError(
             f"Subflow {child.source} requires a root-level result, "
-            f"weil er for step {step.step_id!r} aufgerufen wird."
+            f"because it is invoked by step {step.step_id!r}."
         )
     expected = set(child.inputs)
     provided = set(step.flow_input)
@@ -4313,7 +4313,7 @@ def validate_flow(
         missing = sorted(required - available)
         if unknown:
             raise ValueError(
-                f"Step {step.step_id!r} setzt unbekannte "
+                f"Step {step.step_id!r} setzt unknowne "
                 "Prompt-Variable(n): "
                 + ", ".join(unknown)
             )
@@ -4344,12 +4344,12 @@ def validate_flow(
         if step.config is not None:
             if not config.exists():
                 raise ValueError(
-                    f"Konfiguration for step {step.step_id!r} "
+                    f"Configuration for step {step.step_id!r} "
                     f"does not exist: {config}"
                 )
             if not config.is_file():
                 raise ValueError(
-                    f"Konfiguration for step {step.step_id!r} "
+                    f"Configuration for step {step.step_id!r} "
                     f"is not a file: {config}"
                 )
             config_argument = config
@@ -4357,7 +4357,7 @@ def validate_flow(
             config = config_loader(config_argument)
         except Exception as exc:
             raise ValueError(
-                f"Konfiguration for step {step.step_id!r} "
+                f"Configuration for step {step.step_id!r} "
                 f"is invalid: {exc}"
             ) from exc
 
@@ -4374,7 +4374,7 @@ def validate_flow(
                 )
             except (ValueError, PermissionError) as exc:
                 raise type(exc)(
-                    f"MCP-Auswahl for step {step.step_id!r} "
+                    f"MCP selection for step {step.step_id!r} "
                     f"is invalid: {exc}"
                 ) from exc
 
@@ -4776,7 +4776,7 @@ def _reject_markdown_source_output_alias(
     source = _workspace_path(
         workspace,
         Path(_render_input_text(operation["source_path"], flow_input)),
-        purpose=f"Markdown-Quelldatei for step {step.step_id!r}",
+        purpose=f"Markdown-sourcedatei for step {step.step_id!r}",
         must_exist=False,
     )
     if _filesystem_path_key(source) == _filesystem_path_key(output):
@@ -4818,7 +4818,7 @@ def _execute_filesystem_step(
         ]
         source_path = _workspace_path(
             workspace, Path(expected_source),
-            purpose="Checkpoint-Quelldatei", must_exist=False,
+            purpose="Checkpoint-sourcedatei", must_exist=False,
         )
         protected_inputs = [*candidates, source_path]
         if any(_filesystem_path_key(candidate) == _filesystem_path_key(output)
@@ -5508,7 +5508,7 @@ async def _execute_subflow_iteration(
     )
     if child_result is None:
         raise ValueError(
-            f"Subflow {child.source} besitzt kein Ergebnis."
+            f"Subflow {child.source} besitzt no Ergebnis."
         )
     _set_flow_diagnostic(
         phase="aggregate-subflow-result", flow=flow.source,
@@ -6191,19 +6191,19 @@ def main() -> None:
             )
             if not config_path.exists():
                 raise ValueError(
-                    f"Konfiguration for step {config_step!r} "
+                    f"Configuration for step {config_step!r} "
                     f"does not exist: {config_path}"
                 )
             if not config_path.is_file():
                 raise ValueError(
-                    f"Konfiguration for step {config_step!r} "
+                    f"Configuration for step {config_step!r} "
                     f"is not a file: {config_path}"
                 )
             try:
                 config = load_config(config_path)
             except Exception as exc:
                 raise ValueError(
-                    f"Konfiguration for step {config_step!r} "
+                    f"Configuration for step {config_step!r} "
                     f"is invalid: {exc}"
                 ) from exc
         configure_logging(config.logging)
