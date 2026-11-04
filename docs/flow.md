@@ -224,6 +224,31 @@ Checkpoint reads use ordinary workspace/file safety checks and strict JSON parsi
 
 `overwrite_output=true` disables checkpoint reuse and always runs the step. For JSON outputs, it may intentionally load the **run-start state of its own output** as a prompt variable for updating/replacing that file. The runner never treats files created or changed after run startup as old state.
 
+### Load and update a previous JSON output
+
+A step can load the JSON content of its own output file as **initial state**, run the agent again, and write an updated result to the same file. This requires `response_format = "json"`, a declared `output`, and `overwrite_output = true`. The initial state is available in prompt variables as `${previous_output}`, including nested field access such as `${previous_output.count}`:
+
+```toml
+[[steps]]
+id = "update_state"
+prompt_file = "prompts/update-state.md"
+response_format = "json"
+output = "state/result.json"
+overwrite_output = true
+
+[steps.vars]
+previous = "${previous_output}"
+count = "${previous_output.count}"
+```
+
+The full `${previous_output}` value is serialized as JSON. Nested object fields are accessed like `${item...}`. If the output file did **not** exist at flow run startup, the full `${previous_output}` expression evaluates to JSON `null`; accessing a field such as `${previous_output.count}` without existing state is an error.
+
+Initial state is frozen by the **run-start snapshot**. Files created or modified later in the same run are never silently adopted as previous output. Existing files are integrity-checked before their state is used. For `conversation_items`, every turn within the same outer iteration sees the same initial `previous_output`; only the final assistant reply becomes the new output.
+
+For `foreach`, `previous_output` is determined **per iteration's output file**, so each iteration can update its own stored state. The iteration set must be derivable from checkpoints already present at run startup. If the `foreach` source only becomes known through model execution during the current run, the flow fails rather than treating a subsequently discovered file as initial state.
+
+Unlike resume mode, `overwrite_output = false` treats valid existing JSON as a checkpoint and skips model execution; with `overwrite_output = true`, an existing JSON file provides initial state while the step still executes. Missing previous state is permitted with the full `${previous_output}` expression, allowing initialization with `null`.
+
 ### Stable foreach iteration IDs
 
 Stable IDs may be configured via `iteration_id`, derived from each item. They ensure deterministic output filenames and checkpoint ownership across repetitions. The runner checks uniqueness, path safety and output claims before execution. Details and edge conditions remain in [flow.de.md](flow.de.md).
