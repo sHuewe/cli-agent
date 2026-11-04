@@ -34,7 +34,7 @@ def test_valid_and_noop_theme_plan():
 
 
 def test_invalid_plan_status_blocks_writing():
-    with pytest.raises(ValueError,match="nicht erfolgreich"):
+    with pytest.raises(ValueError,match="not successful"):
         validate_okf_plan({"status":"needs_attention","themes":[]},plan_kind="themes")
 
 
