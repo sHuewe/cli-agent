@@ -39,7 +39,7 @@ def test_frontend_tools_validate_schema_names_bounds_and_collisions():
             normalize_frontend_tools([definition(bad)], server_names=set())
     with pytest.raises(ValueError, match="Zu viele"):
         normalize_frontend_tools([definition(str(n)) for n in range(33)], server_names=set())
-    with pytest.raises(ValueError, match="lang"):
+    with pytest.raises(ValueError, match="too long"):
         normalize_frontend_tools([{"name": "a", "description": "x" * 4097}], server_names=set())
     with pytest.raises(ValueError, match="Objekt"):
         normalize_frontend_tools([{"name": "a", "description": "x", "parameters": []}], server_names=set())
@@ -89,7 +89,7 @@ def test_frontend_results_require_exactly_once_and_original_call():
         checked_frontend_results(completed_messages(repeat=True), pending)
     with pytest.raises(ValueError, match="Doppelte"):
         checked_frontend_results(completed_messages(), pending * 2)
-    with pytest.raises(ValueError, match="Keine offenen"):
+    with pytest.raises(ValueError, match="No pending frontend tools"):
         checked_frontend_results([], ())
     long = completed_messages()
     long[-1]["content"] = "a" * 270000
@@ -116,7 +116,7 @@ def test_frontend_results_error_and_content_part_reduction():
     from cli_agent.state.message_visibility import messages_for_model
     assert "_meta" not in messages_for_model([result])[0]
     messages[-1]["error"] = 14
-    with pytest.raises(ValueError, match="Fehler"):
+    with pytest.raises(ValueError, match="error must be text"):
         checked_frontend_results(messages, pending)
     tampered = completed_messages()
     tampered[1]["toolCalls"][0]["function"]["name"] = "os__write_file"

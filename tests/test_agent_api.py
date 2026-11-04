@@ -468,7 +468,7 @@ async def test_agui_rejects_frontend_tools_shadowing_internal_tools(internal_too
                 headers={**headers(service), "Accept": "text/event-stream"},
             )
             assert response.status_code == 400
-            assert "kollidierender Tool-Name" in response.text
+            assert "MCP-colliding tool name" in response.text
             assert len(agents) == 1
             assert agents[0].history == []
             assert not next(iter(service.sessions.values()))._busy

@@ -64,7 +64,7 @@ def test_metadata_within_generous_defaults_is_accepted() -> None:
 def test_tool_count_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_TOOLS_PER_SERVER", 2)
 
-    with pytest.raises(RuntimeError, match="zu viele Tools"):
+    with pytest.raises(RuntimeError, match="too many tools"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -109,7 +109,7 @@ def test_tool_name_length_limit_is_enforced() -> None:
         tools=[tool(name="t" * limits.MAX_MCP_TOOL_NAME_CHARS)],
     )
 
-    with pytest.raises(RuntimeError, match="zu langen Toolnamen"):
+    with pytest.raises(RuntimeError, match="excessively long tool name"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -602,7 +602,7 @@ def test_draft2019_unevaluated_properties_tracks_dependent_and_conditionals() ->
 
 
 def test_metadata_rejects_non_object_and_non_serializable_schemas() -> None:
-    with pytest.raises(RuntimeError, match="not a JSON object"):
+    with pytest.raises(RuntimeError, match="JSON object as input schema"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,

@@ -313,7 +313,7 @@ def test_knowledge_index_rejects_file_path(tmp_path: Path) -> None:
     (tmp_path / "concept.md").write_text(_concept(), encoding="utf-8")
     repository = OkfRepository.from_directory(tmp_path)
 
-    with pytest.raises(OkfRepositoryError, match="kein OKF-Ordner"):
+    with pytest.raises(OkfRepositoryError, match="not an OKF directory"):
         repository.knowledge_index("concept.md")
 
 

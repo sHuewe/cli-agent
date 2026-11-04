@@ -1085,7 +1085,7 @@ prompt_file = "prompt.md"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="may only reference output from a previous step"):
+    with pytest.raises(ValueError, match="may only reference a previous step"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -3486,7 +3486,7 @@ value = "static"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="may only reference output from a previous step"):
+    with pytest.raises(ValueError, match="may only reference a previous step"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 

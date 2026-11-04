@@ -91,12 +91,12 @@ def test_file_mutations_require_existing_parent(tmp_path, operation, args):
 
 @pytest.mark.parametrize("path", ["", "  ", None])
 def test_workspace_rejects_empty_paths(tmp_path, path):
-    with pytest.raises(WorkspaceError, match="leer"):
+    with pytest.raises(WorkspaceError, match="empty"):
         _workspace(tmp_path).resolve_path(path)
 
 
 def test_missing_workspace_is_rejected(tmp_path):
-    with pytest.raises(WorkspaceError, match="Workspace existiert nicht"):
+    with pytest.raises(WorkspaceError, match="workspace does not exist"):
         _workspace(tmp_path / "missing")
 
 
