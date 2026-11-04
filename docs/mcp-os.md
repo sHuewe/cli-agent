@@ -1,99 +1,65 @@
 # Workspace OS MCP Server
 
-Der Workspace-OS-MCP-Server stellt Dateioperationen innerhalb des beim
-Agentenstart festgelegten Workspaces bereit. Pfade müssen relativ zum Workspace
-sein; absolute Pfade und `..` werden abgewiesen. Symlinks, die außerhalb des
-Workspaces auflösen, sind ebenfalls nicht zulässig.
+The built-in Workspace OS MCP server provides file operations inside the workspace fixed at agent startup. Tool paths must be workspace-relative; absolute paths and `..` are rejected. Symlinks resolving outside the workspace are also prohibited.
 
-## Aktivierung per CLI
+## Enabling from CLI
 
-Read-only:
+Read-only access:
 
 ```powershell
 cli-agent --with-os-read
 ```
 
-Lesen und Schreiben:
+Read/write access:
 
 ```powershell
 cli-agent --with-os-write
 ```
 
-Die CLI-Varianten ersetzen einen eventuell vorhandenen MCP-Server namens `os`
-aus der Konfigurationsdatei durch die eingebaute OS-MCP-Konfiguration. Die
-ausgewählte Konfigurationsdatei wird weiterhin an den MCP-Prozess übergeben.
+Either flag replaces an MCP server named `os` from configuration with the built-in OS MCP configuration. The selected configuration file is still passed to the MCP process.
 
-Der eingebaute Workspace-OS-MCP wird bewusst **nicht** über einen vollständigen
-`[[mcp_servers]]`-Block in der normalen Benutzerkonfiguration definiert. Die
-Launchparameter des Built-ins werden vom Agenten selbst erzeugt; insbesondere
-wird der aktuelle Workspace über `{workspace_directory}` außerhalb der
-Modellkontrolle gebunden.
+The built-in Workspace OS MCP is intentionally **not** defined with a complete `[[mcp_servers]]` entry in ordinary user configuration. The agent constructs its launch arguments and binds the current workspace using `{workspace_directory}` outside model control.
 
-Ein `[[mcp_servers]]`-Eintrag mit nur `name = "os"` würde dagegen wie jeder andere
-name-only stdio-Eintrag einen **externen**, administrativ definierten
-`[[mcp.trusted_servers]]`-Server dieses Namens referenzieren. Für den eingebauten
-Workspace-OS-MCP sollen deshalb die CLI-Schalter `--with-os-read` beziehungsweise
-`--with-os-write` verwendet werden.
+An entry containing only `name = "os"` in `[[mcp_servers]]` instead references an **external** administratively defined `[[mcp.trusted_servers]]` profile, like every other name-only stdio entry. Use `--with-os-read` or `--with-os-write` for the built-in server.
 
-Es gibt keinen globalen `allow_untrusted_stdio`-Schalter mehr. Externe
-stdio-MCPs benötigen immer ein einzelnes administratives Launchprofil; dies ist
-vom eingebauten OS-MCP getrennt.
+The former global `allow_untrusted_stdio` switch no longer exists. External stdio MCPs always require an individual administrator-controlled launch profile, separately from the built-in OS MCP.
 
-## Freigaben bei Schreibzugriff
+## Approvals for write access
 
-Mit `--with-os-read` stehen ausschließlich die eingebauten Read-only-Tools zur
-Verfügung und benötigen keine interaktive Tool-Freigabe.
+With `--with-os-read`, only built-in read-only tools are available and no interactive tool approval is needed.
 
-Mit `--with-os-write` werden zusätzlich die mutierenden Tools registriert. Diese
-benötigen standardmäßig eine explizite Benutzerfreigabe. Ein konkretes Tool kann
-für die laufende Session oder mit `--approve-tool <exposed_name>` für genau den
-aktuellen Prozesslauf freigegeben werden. Administrative Auto-Approvals für
-externe MCPs können die Built-in-Write-Regel nicht umgehen.
+With `--with-os-write`, mutating tools are also registered and require explicit user approval by default. An exact tool may be approved for the current session or preapproved for the current process using `--approve-tool <exposed_name>`. Administrative auto-approvals for external MCPs cannot bypass built-in write approval.
 
-Der Web-UI-Approval-Dialog zeigt für eingebautes `os__write_file` zusätzlich einen begrenzten Unified Diff vor der Freigabe. Nicht darstellbare, nicht dekodierbare oder zu große Änderungen sind im Dialog nicht genehmigungsfähig. Wird die Zieldatei während der Anzeige geändert, wird die Freigabe abgelehnt. Die Momentaufnahmeprüfung erfolgt beim Bestätigen, nicht atomar beim Schreiben; parallele externe Dateiveränderungen im anschließenden Zeitfenster können dadurch nicht vollständig ausgeschlossen werden. Session- und vorab freigegebene Aufrufe umgehen diesen Dialog.
+For built-in `os__write_file`, the Web UI approval dialog additionally shows a bounded unified diff before approval. Changes that are too large, undecodable or impossible to render cannot be approved through that dialog. Approval is rejected if the target file changes while the preview is displayed. Snapshot verification occurs on confirmation, not atomically during the write; external concurrent file modifications in the subsequent window cannot be completely excluded. Session-scoped and preapproved calls bypass the dialog.
 
-Der Approval-Dialog zeigt eine begrenzte Vorschau der Toolargumente. Die
-Argumentnamen eines MCP-Servers gelten dabei nicht als vertrauenswürdige
-Redaction-Policy: Auch Namen wie `token`, `password`, `authorization` oder
-`api_key` verbergen den zu sendenden Wert nicht. Dadurch bleibt für den Benutzer
-sichtbar, welche Nutzdaten den Host tatsächlich verlassen sollen. Lange Strings
-und große Collections werden weiterhin begrenzt beziehungsweise gekürzt. Bei
-`write_file` kann die Anzeige daher auch einen Ausschnitt des zu schreibenden
-Inhalts enthalten; der Dialog ist als potenziell vertrauliche lokale Anzeige zu
-behandeln.
+The approval dialog shows a bounded preview of tool arguments. Server-provided argument names are not treated as trusted redaction policy: even names such as `token`, `password`, `authorization` and `api_key` do **not** hide the value to be sent. This lets users see the actual data leaving the host. Long strings and large collections are still limited/truncated. For `write_file`, the preview may include part of the content being written; treat the dialog as a potentially confidential local display.
 
-Transport-Credentials für MCP-Verbindungen werden separat aus administrativ
-kontrollierter Konfiguration beziehungsweise Environment-Variablen eingespeist
-und sind keine modellgenerierten Toolargumente. Sie erscheinen daher regulär
-nicht in dieser Vorschau.
+MCP transport credentials are provided separately through administratively controlled configuration/environment variables, not model-generated tool arguments, and therefore ordinarily do not appear in previews.
 
 ## Tools
 
-Immer verfügbar:
+Always available:
 
-| Tool | Funktion |
+| Tool | Purpose |
 | --- | --- |
-| `list_files(path)` | Listet Dateien und Verzeichnisse direkt unter einem relativen Workspace-Pfad. |
-| `read_file(path, start_line=None, end_line=None, start_page=None, end_page=None)` | Liest eine unterstützte UTF-8-/ISO-8859-1-Textdatei oder extrahiert PDF-Text mit Seitenmarkierungen. Für Textdateien können optional 1-basierte inklusive Zeilengrenzen angegeben werden. Rückgabe bleibt `str`. |
-| `search_text(path, text, max_results=50)` | Sucht literalen Text rekursiv in freigegebenen Textdateien und liefert höchstens 200 Treffer. |
+| `list_files(path)` | List immediate files and directories under a relative workspace path. |
+| `read_file(path, start_line=None, end_line=None, start_page=None, end_page=None)` | Read supported UTF-8/ISO-8859-1 text or extract PDF text with page markers. Inclusive one-based line ranges are optional for text. Returns `str`. |
+| `search_text(path, text, max_results=50)` | Search recursively for literal text in permitted text files, returning at most 200 matches. |
 
-Nur bei Schreibzugriff:
+Available only with write access:
 
-| Tool | Funktion |
+| Tool | Purpose |
 | --- | --- |
-| `write_file(path, content)` | Erstellt eine UTF-8-Textdatei oder überschreibt eine bestehende Textdatei unter Erhalt ihrer erkannten Kodierung (UTF-8/ISO-8859-1). |
-| `delete_file(path)` | Löscht eine Datei. |
-| `make_directory(path)` | Erstellt ein Verzeichnis im Workspace. |
-| `copy_file(path_src, path_dst)` | Kopiert eine Datei innerhalb des Workspaces. |
+| `write_file(path, content)` | Create UTF-8 text or overwrite an existing text file while preserving detected UTF-8/ISO-8859-1 encoding. |
+| `delete_file(path)` | Delete a file. |
+| `make_directory(path)` | Create a directory in the workspace. |
+| `copy_file(path_src, path_dst)` | Copy a file inside the workspace. |
 
-## Optionale Bildanalyse (Vision)
+## Optional image analysis (Vision)
 
-Der eingebaute OS-MCP kann zusätzlich `analyze_image(path, question, context=None, context_path=None) -> str`
-anbieten. Der Agent wählt die Frage selbst; das Tool liefert die textuelle
-Antwort eines multimodalen Modells. Das Tool ist **nur** verfügbar, wenn
-`VISION_MODEL` in der Umgebung des gestarteten cli-agent-Prozesses gesetzt ist.
+The built-in OS MCP may also offer `analyze_image(path, question, context=None, context_path=None) -> str`. The agent chooses the question and receives a text answer from a multimodal model. The tool is available **only if** `VISION_MODEL` is defined in the environment of the started cli-agent process.
 
-Beispiel für OpenRouter (PowerShell):
+Example using OpenRouter (PowerShell):
 
 ```powershell
 $env:VISION_MODEL = "z-ai/glm-5.3-flash"
@@ -103,179 +69,92 @@ $env:OPENROUTER_API_KEY = "<TOKEN>"
 cli-agent --with-os-read
 ```
 
-Die Variable `VISION_API_KEY_ENV` bezeichnet lediglich den Namen der
-Credential-Umgebungsvariable (Standard: `VISION_API_KEY`). Für OpenRouter
-müssen `openrouter.ai` in `network.model_allowed_hosts` und diese
-Credential-Variable für den Host/Provider `openai` in
-`[[model.credentials]].allowed_api_key_envs` der **Admin-Konfiguration**
-freigegeben sein. Ohne `VISION_BASE_URL` gilt die OpenRouter-API als
-Default. Für lokale OpenAI-kompatible Dienste ist auch eine Konfiguration
-ohne Credential möglich.
+`VISION_API_KEY_ENV` names the credential environment variable (default `VISION_API_KEY`). For OpenRouter, `openrouter.ai` must be permitted in `network.model_allowed_hosts`, and this credential variable must be allowed for the host and `openai` provider by `[[model.credentials]].allowed_api_key_envs` in **admin configuration**. Without `VISION_BASE_URL`, the OpenRouter API is the default. Local OpenAI-compatible endpoints may be configured without credentials.
 
-**Der Aufruf benötigt auch mit `--with-os-read` immer eine gesonderte
-Tool-Freigabe.** Eine Freigabe erlaubt, dass der Bildinhalt und die frei
-formulierte Frage an den konfigurierten Modellserver übertragen werden.
-Anders als bei `read_file` bleiben die Bildbytes außerhalb des
-Textkontexts des Hauptagenten. Mit `--approve-tool os__analyze_image` lässt
-sich die Freigabe für den Prozesslauf ausdrücklich vorab erteilen.
+**The call always requires separate tool approval, even with `--with-os-read`.** Approving permits the image content and freely formulated question to be sent to the configured model server. Unlike `read_file`, image bytes do not enter the main agent's textual context. `--approve-tool os__analyze_image` explicitly preapproves it for the current process.
 
-Unterstützt werden reguläre PNG-, JPEG- und WebP-Dateien (maximal
-8.000.000 Bytes), keine PDFs. Workspace-Pfadschutz, Secret- und
-Credential-Sperren und Hardlink-/Symlink-Prüfungen gelten ebenfalls.
-Die Frage ist auf 4.000 Zeichen, die Antwort auf 32.000 Zeichen begrenzt.
-HTTP-Redirects und Proxy-Umgebungsvariablen werden beim Vision-Aufruf
-nicht verwendet. Antwortinhalte sind **nicht vertrauenswürdig** und
-können trotz der Bildanalyse falsch oder unvollständig sein.
+Only regular PNG, JPEG and WebP files up to 8,000,000 bytes are supported, not PDF. Workspace path protections, secret/credential exclusions and hardlink/symlink checks also apply. The question is bounded to 4,000 characters; the answer to 32,000 characters. Vision calls do not follow HTTP redirects or proxy environment variables. Responses are **untrusted** and may still be wrong or incomplete.
 
-### Bildanalyse mit Kontext
+### Image analysis with context
 
-Die Vision-Abfrage kann zusätzlich einen kurzen direkten Textkontext und/oder
-eine größere Markdown-Datei verwenden. Beide Eingaben sind optional:
+A Vision request may include short direct text context and/or a larger Markdown file; both are optional:
 
 ```json
 {
-  "path": "bilder/architektur.png",
-  "question": "Welche Probleme zeigt das Architekturdiagramm?",
-  "context": "L1 bezeichnet die Hauslast, L2 die Batterie.",
-  "context_path": "docs/systemarchitektur.md"
+  "path": "images/architecture.png",
+  "question": "What problems does the architecture diagram show?",
+  "context": "L1 is household load and L2 is the battery.",
+  "context_path": "docs/system-architecture.md"
 }
 ```
 
-`context` akzeptiert maximal 64.000 UTF-8-Bytes. `context_path` muss
-workspace-relativ auf eine UTF-8-kodierte Markdown-Datei mit der Endung
-`.md` oder `.markdown` verweisen (maximal 2.000.000 Bytes).
-Der kombinierte Kontext ist auf 2.000.000 Bytes begrenzt.
-Bei Überschreitung erfolgt ein Fehler, keine automatische Trunkierung,
-Zusammenfassung oder Aufteilung. Das Kontextfenster des Vision-Modells
-muss für die vollständige Eingabe ausreichen.
+`context` accepts at most 64,000 UTF-8 bytes. `context_path` must refer to a workspace-relative UTF-8 Markdown file with a `.md` or `.markdown` suffix, at most 2,000,000 bytes. Combined context is limited to 2,000,000 bytes. Exceeding these limits raises an error, with no automatic truncation, summarization or splitting. The Vision model's context window must accommodate the complete input.
 
-Der OS-MCP liest die Datei direkt, sodass ihr vollständiger Inhalt nicht
-vorher in den Hauptagentenkontext geladen werden muss. Für `context_path`
-gelten dieselben Workspace-Lesegrenzen wie für andere OS-Dateizugriffe.
-Absolute Pfade, `..`, geschützte oder sensitive Pfade, Symlinks und
-Hardlinks werden zurückgewiesen.
+The OS MCP reads the file directly; its full contents need not first be loaded into the main agent's context. `context_path` obeys the same workspace read restrictions as other OS file operations. Absolute paths, `..`, protected/sensitive paths, symlinks and hardlinks are rejected.
 
-Die externe Toolfreigabe gilt ausdrücklich für **Bild, Frage, direkten Kontext
-und den vollständigen Inhalt der angegebenen Markdown-Datei**. Der Approval-
-Dialog zeigt den Dateipfad, nicht zwingend deren gesamten Inhalt.
-Der Kontext wird als nicht vertrauenswürdiger Referenztext behandelt.
-Nur Dateien angeben, deren Inhalt an den konfigurierten Vision-Endpunkt
-übermittelt werden darf.
+Approval explicitly covers **image, question, direct context and full content of the supplied Markdown file**. The dialog displays the file path, not necessarily its full contents. Context is untrusted reference text. Select only files whose contents may be transmitted to the configured Vision endpoint.
 
-## Textsuche
+## Text search
 
-`search_text` liefert `path`, `line`, `column` und `text` pro Treffer. Zeile und
-Spalte beginnen bei 1; `column` bezeichnet das erste Vorkommen in der Zeile und
-zählt Unicode-Zeichen. Lange Zeilen werden um dieses Vorkommen gekürzt, sodass der
-gesamte Suchtext sichtbar bleibt. Ein solcher Ausschnitt enthält zusätzlich
-`text_truncated: true` und `text_start_column` als Anfangsspalte des Ausschnitts.
-Die Textlänge ist auf 4.000 Zeichen begrenzt; bei einem längeren erlaubten
-Suchtext wächst sie höchstens auf dessen Länge von maximal 4.096 Zeichen.
+Each `search_text` hit contains `path`, `line`, `column` and `text`. Line and column are one-based; `column` locates the first match in the line and counts Unicode characters. Long lines are truncated around the occurrence so the complete search term remains visible. Such snippets additionally contain `text_truncated: true` and `text_start_column` identifying the first snippet column. Text length is bounded to 4,000 characters, increasing at most to an allowed search term's maximum length of 4,096 characters.
 
-Das separate Feld `truncated` der Gesamtausgabe zeigt an, ob weitere Treffer
-wegen `max_results` ausgelassen wurden. Die bestehenden Dateityp-, Größen- und
-Workspace-Prüfungen gelten auch für diese Suche.
+The output-wide `truncated` property indicates additional hits omitted because of `max_results`. Normal file-type, size and workspace restrictions apply.
 
-## Zeilenbereiche bei Textdateien
+## Text line ranges
 
-Für große Textdateien kann `read_file` einen Ausschnitt anhand von Zeilennummern
-lesen:
+For large text files, `read_file` can read a range by line number:
 
 ```text
 read_file("src/large-file.txt", start_line=120, end_line=180)
 ```
 
-`start_line` und `end_line` sind 1-basiert und inklusiv. Beide Parameter sind
-optional: nur `start_line` liest ab dieser Zeile weiter, nur `end_line` liest
-ab Zeile 1 bis einschließlich dieser Zeile.
+`start_line` and `end_line` are inclusive and one-based. Either is optional: only `start_line` reads from that line onward, only `end_line` reads from line 1 through that line.
 
-Ohne Zeilenparameter bleibt das bisherige Verhalten unverändert: Textdateien
-dürfen für einen vollständigen Read maximal 1 MB groß sein. Bei einem
-Zeilenbereich darf die Quelldatei größer sein; der Server liest sie streaming-
-basiert und begrenzt sowohl den Scan-Aufwand als auch die Rückgabe. Pro Aufruf
-dürfen höchstens 64 MB bis zum beziehungsweise innerhalb des angeforderten
-Bereichs gescannt und höchstens 1 MB Text zurückgegeben werden. Überschreitungen
-liefern einen Fehler und werden nicht still gekürzt.
+Without line arguments, the existing full-read limit of 1 MB applies. Range reads permit larger source files, but use streaming scanning with bounded work and output: at most 64 MB scanned up to/within the requested range and at most 1 MB text returned. Exceeding limits is an error, not silent truncation.
 
-Liegt der gewünschte Bereich vollständig hinter dem Dateiende, wird
-`(No lines in requested range)` zurückgegeben. Für PDF-Dateien sind
-`start_line` und `end_line` bewusst nicht verfügbar, da extrahierter PDF-Text
-keine stabile Quellzeilenstruktur besitzt.
+If the requested range lies wholly beyond EOF, `(No lines in requested range)` is returned. PDF files do not support line ranges because their extracted text lacks stable source-line structure.
 
-## PDF-Dateien
+## PDF files
 
-`read_file("unterlagen/handbuch.pdf")` extrahiert mit `pypdf` vorhandenen Text,
-einschließlich bereits eingebetteter OCR-Textebenen. Es wird keine OCR ausgeführt.
-Jede Seite erhält eine Markierung; Seiten ohne extrahierbaren Text erhalten einen
-expliziten Hinweis. Bilder und Diagramme werden nicht interpretiert, Tabellen
-und Spalten können ihre ursprüngliche Struktur verlieren.
+`read_file("documents/manual.pdf")` uses `pypdf` to extract existing text, including previously embedded OCR text layers. It does not perform OCR. Every page receives a marker; pages without extractable text have an explicit notice. Images and diagrams are not interpreted, and tables or columns may lose their original layout.
 
-PDFs dürfen maximal 10.000.000 Bytes umfassen. Das Seitenlimit lässt sich in der
-Benutzerkonfiguration einstellen (Standard: 100, maximal konfigurierbar: 2.000):
+PDFs are limited to 10,000,000 bytes. The user configuration controls the selected-page limit (default 100, configurable up to 2,000):
 
 ```toml
 [pdf]
 max_pdf_pages = 200
 ```
 
-Dieses Limit gilt für die **je Aufruf ausgewählten Seiten**. Unabhängig davon gilt\nein hartes Sicherheitslimit von 2.000 Gesamtseiten pro PDF. Ein PDF mit mehr als
-200 Seiten lässt sich also abschnittsweise lesen:
+The configured limit applies to pages **selected per call**. Independently, a hard limit of 2,000 total pages per PDF applies. For example, a PDF longer than 200 pages may be read in sections:
 
 ```text
-read_file("unterlagen/handbuch.pdf", start_page=120, end_page=135)
+read_file("documents/manual.pdf", start_page=120, end_page=135)
 ```
 
-`start_page` und `end_page` sind 1-basiert und inklusiv; eine Grenze darf
-weggelassen werden. Ohne Seitenbereich wird das ganze PDF extrahiert und muss
-innerhalb des konfigurierten Seitenlimits liegen. Ungültige, vertauschte oder
-außerhalb des Dokuments liegende Grenzen erzeugen einen Fehler. In der Ausgabe
-werden stets die ursprünglichen Seitennummern angezeigt. `start_line` und
-`end_line` sind für PDFs nicht verfügbar; die Seitenargumente sind für
-Textdateien nicht verfügbar.
+`start_page` and `end_page` are inclusive and one-based; either boundary may be omitted. Without a range, the whole PDF is extracted and must fit within the configured per-call page limit. Invalid, reversed or out-of-document ranges raise errors. Original page numbers are always shown. Line arguments are unavailable for PDFs; page arguments are unavailable for text files.
 
-Die gesamte Ausgabe
-ist auf 1.000.000 Zeichen begrenzt (inklusive Markierungen). Die Extraktion läuft
-mit 20 Sekunden Timeout in einem separaten Prozess. Der Parser-Prozess erhält
-eine minimale Environment-Allowlist und `PYTHONSAFEPATH=1`; insbesondere werden
-beliebige Credential-Variablen und `PYTHONPATH` nicht geerbt. Der separate
-Prozess dient der Timeout-/Lifecycle-Isolation und ist keine vollwertige Sandbox.
-Dies ist kein hartes Speicherlimit: komprimierte PDF-Inhalte können beim Parsen
-deutlich anwachsen.
-Die übrigen Limits stehen weiterhin in `pdf_text.py`; Überschreitungen liefern einen Fehler,
-keinen still gekürzten Text. Verschlüsselte und nicht lesbare PDFs liefern ebenfalls
-einen Fehler. Die Originaldatei bleibt unverändert; es gibt keine externen Dienste
-oder zusätzlichen Systemprogramme. `pypdf` wird bei der Installation mitinstalliert.
+The entire extraction output is limited to 1,000,000 characters including markers. Extraction runs with a 20-second timeout in a separate process. The parser process receives a minimal environment allowlist with `PYTHONSAFEPATH=1`; arbitrary credential variables and `PYTHONPATH` are not inherited. Process isolation provides timeout/lifecycle separation, **not a full sandbox or hard memory limit**. Compressed PDF content can expand substantially in memory.
 
-PDF-Unterstützung gilt nur für `read_file`, nicht für `write_file`.
+Other restrictions remain in `pdf_text.py`. Exceeding a limit raises an error, not silently shortened text. Encrypted and unreadable PDFs also raise errors. The original file is never modified, and no external service or additional system executable is needed. `pypdf` is installed as a normal dependency.
 
-## Sicherheitsgrenzen
+PDF support applies only to `read_file`, not `write_file`.
 
-Der Workspace wird beim Start auf einen festen absoluten Pfad aufgelöst. Für
-jede Dateioperation wird anschließend geprüft, dass das Ziel innerhalb dieses
-Workspaces bleibt.
+## Security boundaries
 
-Zusätzlich gelten unter anderem:
+The workspace is resolved to a fixed absolute path on startup. Every file operation subsequently verifies its target remains within that workspace.
 
-- absolute Tool-Pfade sind verboten,
-- `..` ist in Pfaden verboten,
-- Symlinks dürfen nicht aus dem Workspace herausführen,
-- `write_file` akzeptiert nur bekannte Textdateitypen; `read_file` zusätzlich PDFs,
-- die Text-Allowlist umfasst gängige Quellcode-, Skript-, Web-, Markup-,
-  Konfigurations- und strukturierte Datenformate,
-- `read_file` und `copy_file` verweigern `.env*`, Credential-/Private-Key-Dateien,
-  `.git`-/`.cli-agent`-Artefakte und Logdateien,
-- die tatsächlich aktive Agent-Konfigurationsdatei wird, falls sie innerhalb des
-  Workspaces liegt, zusätzlich als konkreter geschützter Pfad behandelt; sie wird
-  von Lesen, Suche/Find, Kopieren und Mutationen ausgeschlossen,
-- `list_files` blendet sensible beziehungsweise geschützte Einträge aus und
-  verweigert das direkte Listing geschützter Verzeichnisse,
-- vollständige `read_file`-Reads begrenzen Textdateien auf 1 MB; Range-Reads begrenzen den Scan auf 64 MB und die Rückgabe auf 1 MB; für PDFs gelten die oben genannten Limits,
-- mutierende Operationen verweigern bekannte Secret-/Credential-, `.git`-,
-  `.cli-agent`-, Log- und dynamisch geschützte Ziele,
-- der Parent-Ordner einer zu schreibenden Datei muss bereits existieren.
+Further restrictions include:
 
-Die MCP-`instructions` fordern das Modell außerdem auf, bestehende Dateien vor
-einer Änderung zu lesen und Schreiboperationen nur auf ausdrückliche
-Benutzeranforderung auszuführen. Diese Instructions unterstützen die korrekte
-Tool-Nutzung; die eigentlichen Workspace- und Approval-Grenzen werden unabhängig
-davon deterministisch im Agenten beziehungsweise im OS-MCP erzwungen.
+- Absolute tool paths are forbidden.
+- `..` path segments are forbidden.
+- Symlinks cannot escape the workspace.
+- `write_file` accepts known text file types; `read_file` additionally accepts PDFs.
+- The text allowlist includes common source code, scripts, web, markup, configuration and structured data formats.
+- `read_file` and `copy_file` deny `.env*`, credentials/private keys, `.git` and `.cli-agent` artifacts, and logs.
+- The active agent configuration file, if workspace-local, is explicitly protected against reading, search/find, copying and mutation.
+- `list_files` hides sensitive/protected entries and refuses direct listing of protected directories.
+- Full text reads are limited to 1 MB; range reads to 64 MB scanning and 1 MB returned. PDF-specific limits apply as described above.
+- Mutations deny known secret/credential, `.git`, `.cli-agent`, log and dynamically protected targets.
+- Parent directories must already exist when writing a file.
+
+MCP `instructions` additionally ask the model to read existing files before editing and perform writes only when explicitly requested by the user. These instructions guide appropriate tool use; workspace and approval restrictions are enforced **deterministically** by the agent or OS MCP independently of model behavior.
