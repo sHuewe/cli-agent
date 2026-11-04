@@ -11,6 +11,25 @@ from cli_agent.interfaces.agent_api import AgentApiService, create_app
 from cli_agent.interfaces.web_ui_sessions import BrowserSessionRegistry
 
 
+def _browser_translation_shim() -> str:
+    """Provide real German catalog messages to isolated JS function tests."""
+    import json
+    import re
+    from cli_agent.interfaces.web_ui_api import API_I18N_JS
+
+    german = API_I18N_JS.split("de: Object.freeze({", 1)[1].split("\\n    })", 1)[0]
+    entries = dict(re.findall(r'^\\s*"([^"]+)": "([^"]*)"', german, re.MULTILINE))
+    assert "tools.group" in entries and "error.messageTooLarge" in entries
+    return (
+        "const t = (key, values = {}) => { const messages = " +
+        json.dumps(entries, ensure_ascii=False) +
+        "; return (messages[key] || key).replace(" +
+        r"/\\{([a-zA-Z][a-zA-Z0-9_]*)\\}/g, (match, name) => " +
+        "Object.hasOwn(values, name) ? String(values[name]) : match); };\\n"
+    )
+
+
+
 class BrowserAgent:
     def __init__(self, session):
         self.session = session
@@ -263,7 +282,7 @@ def test_local_exit_and_quit_are_not_sent_to_agent():
         'api("/ag-ui", "POST", input)'
     )
     assert 'api("/ui/shutdown"' not in API_APP_JS
-    assert 'quit.textContent = "Session beenden";' in API_APP_JS
+    assert 'quit.textContent = t("session.end");' in API_APP_JS
     assert 'quit.disabled = busy || disconnected;' in API_APP_JS
     assert 'void deleteUnusedSession(sessionId).catch(showApiError);' in API_APP_JS
 
@@ -343,7 +362,7 @@ def test_browser_agui_transcript_compaction_with_real_javascript():
     console.log("ok");
     """
     result = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, timeout=60,
+        [node, "-e", _browser_translation_shim() + script], capture_output=True, text=True, timeout=60,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -669,7 +688,7 @@ function assert(condition, message) {
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
     result = subprocess.run(
-        [node, "-e", script], text=True, capture_output=True, timeout=15,
+        [node, "-e", _browser_translation_shim() + script], text=True, capture_output=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
@@ -786,7 +805,7 @@ function stream(events) {
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
     result = subprocess.run(
-        [node, "-e", script], text=True, capture_output=True, timeout=15,
+        [node, "-e", _browser_translation_shim() + script], text=True, capture_output=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
@@ -817,7 +836,7 @@ def test_cancelled_session_close_does_not_issue_delete_request():
         '})().catch(error => { console.error(error); process.exitCode = 1; });\n'
     )
     result = subprocess.run(
-        [node, "-e", script], text=True, capture_output=True, timeout=15,
+        [node, "-e", _browser_translation_shim() + script], text=True, capture_output=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
@@ -914,7 +933,7 @@ async function action(msg) {
   console.log("ok");
 })().catch(err => {console.error(err); process.exitCode=1;});
 '''
-    result = subprocess.run([node, "-e", script], capture_output=True,
+    result = subprocess.run([node, "-e", _browser_translation_shim() + script], capture_output=True,
                             text=True, timeout=15)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
