@@ -460,22 +460,56 @@ def create_server(
             @mcp.tool(structured_output=False)
             def resample_data(
                 path: str,
-                frequency: str,
-                aggregations: list[ResampleAggregation],
-                time_column: str | None = None,
-                records_path: str | None = None,
+                frequency: Annotated[
+                    str,
+                    Field(
+                        pattern=r"^[1-9][0-9]{0,3}(?:s|min|h|d)$",
+                        description="Positive fixed-length bucket width: 1-9999 followed by s, min, h or d (e.g. '30s', '5min', '1h', '1d'). Use lowercase units.",
+                    ),
+                ],
+                aggregations: Annotated[
+                    list[ResampleAggregation],
+                    Field(min_length=1, max_length=20, description="1-20 objects, each with required column, method, and alias."),
+                ],
+                time_column: Annotated[
+                    str | None,
+                    Field(description="Name of the ISO datetime input column; omit only if it can be inferred unambiguously."),
+                ] = None,
+                records_path: Annotated[
+                    str | None,
+                    Field(description="JSON Pointer to input rows, e.g. '/points' or '/rows'; propagate it from the source artifact."),
+                ] = None,
             ) -> CallToolResult:
-                """Aggregate a time series into fixed buckets to reduce data volume.
+                """Resample time series into fixed-width [start, end) buckets.
 
-                Specify a frequency like '5min', '30s', '1h' or '1d'. Supported
-                aggregation methods: mean, min, max, sum, count. Omit
-                time_column to infer the unique ISO datetime column; specify
-                it explicitly if more than one candidate exists. Each resulting
-                timestamp labels the start of its [start, end) bucket. No
-                interpolation; empty buckets may have null aggregates. Beware:
-                summing power samples is not the same as integrating energy.
-                Pass the prior records_path as input. Reuse the result via
-                workspace_path and records_path='/rows'.
+                Each aggregation REQUIRES "column" (existing numeric input
+                column), "method" (mean|min|max|sum|count), and "alias"
+                (unique output name, not "timestamp"). Unlike aggregate_data,
+                resample_data uses "method", not "function", and alias is
+                mandatory. Example arguments:
+                  {"path":"measurements.json", "records_path":"/points",
+                   "time_column":"time", "frequency":"5min",
+                   "aggregations":[{"column":"value", "method":"mean",
+                                    "alias":"avg_value"},
+                                   {"column":"value", "method":"count",
+                                    "alias":"sample_count"}]}
+
+                Use lowercase frequencies such as "30s", "5min", "1h", "1d".
+                time_column may be omitted only when exactly one ISO datetime
+                column is detectable; otherwise specify it. Buckets are
+                left-closed and labeled by their starting timestamp, with no
+                interpolation or extrapolation. Values must be numeric even
+                for count. count gives the number of non-null numeric samples
+                per bucket; empty buckets have count=0 and other aggregates
+                null, including sum when there are no valid samples.
+
+                Timezone-aware timestamps are normalized to UTC; buckets
+                such as "1d" are UTC calendar days, NOT local calendar days
+                (and not daylight-saving-aware local day lengths). UTC labels
+                are returned. Summing sampled power (W) does NOT yield
+                energy (Wh); use integrate_data for time-weighted integration.
+                Propagate source records_path. Results are session artifacts;
+                chain via workspace_path and records_path="/rows".
                 """
                 return frames.resample_data(
                     path, frequency, aggregations,
