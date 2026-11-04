@@ -1,190 +1,95 @@
 # Workspace Data MCP Server
 
-Der eingebaute Data-MCP-Server führt deterministische Auswertungen auf
-strukturierten Daten aus. Einziger Einstieg für neue Text-Datensätze ist
-`wrap_data(content)`. Bereits vorhandene Workspace-Dateien werden direkt über
-`path` und bei JSON gegebenenfalls `records_path` verarbeitet.
+The built-in Data MCP server performs deterministic analysis of structured data. The only entry point for **new textual datasets** is `wrap_data(content)`. Existing workspace files are processed directly through `path` and, for JSON where needed, `records_path`.
 
-Für Dateizugriffe verwendet der Server dieselbe `Workspace`-Klasse und damit
-dieselben Pfad-, Secret-, Symlink/Junction-, Hardlink- und Protected-Path-
-Prüfungen wie der eingebaute OS-MCP. Er stellt jedoch keine allgemeinen
-Dateioperationen wie `read_file`, `write_file` oder `delete_file` als Tools
-bereit.
+For file access it uses the same `Workspace` implementation as built-in OS MCP, including path, secret, symlink/junction, hardlink and protected-path checks. It does **not** expose general file tools such as `read_file`, `write_file` or `delete_file`.
 
-## Aktivierung
+## Activation
 
-Der Data-MCP wird mit genau einem Schalter aktiviert:
+Enable Data MCP with:
 
 ```powershell
 cli-agent --with-data
 ```
 
-Der erlaubte Dateisystemzugriff wird ausschließlich über die bestehenden
-OS-Optionen bestimmt:
+Filesystem permissions are determined solely through the existing OS switches:
 
 ```powershell
-# Nur calculate; kein Workspace-Dateizugriff für Data
+# Calculator only; no workspace file access for Data
 cli-agent --with-data
 
-# wrap_data und tabellarische Analyse über Workspace-Dateien
+# wrap_data and tabular analysis over workspace files
 cli-agent --with-os-read --with-data
 
-# Dieselbe Data-Pipeline; OS-Tools dürfen zusätzlich schreiben
+# Same Data pipeline; OS tools may also write
 cli-agent --with-os-write --with-data
 ```
 
-**Pandas wird bei jeder Installation von cli-agent mitinstalliert.**
-Die Tools `join_data`, `derive_columns`, `resample_data`, `describe_data`,
-`analyze_intervals`, `integrate_data` und `concat_data` erscheinen bei
-`--with-data --with-os-read` (auch mit `--with-os-write`). Sie benötigen keine allgemeine Codeausführung
-und akzeptieren keine frei formulierten Python-/Pandas-Ausdrücke.
+**Pandas is installed with every cli-agent installation.** With `--with-data --with-os-read` (also `--with-os-write`), `join_data`, `derive_columns`, `resample_data`, `describe_data`, `analyze_intervals`, `integrate_data` and `concat_data` are available. They require no generic code execution and accept no arbitrary Python/Pandas expressions.
 
-Ohne `--with-os-read` bzw. `--with-os-write` wird für den Data-MCP keine
-`Workspace`-Instanz erzeugt. In diesem Modus ist ausschließlich `calculate`
-verfügbar. Alle tabellarischen Tools benötigen OS-Lesezugriff, damit cli-agent
-ihre vollständigen Resultate als Session-Artefakte speichern und Folge-Tools
-sie lesen können. Der Data-MCP registriert keine mutierenden Datei-Tools.
+Without `--with-os-read` or `--with-os-write`, Data MCP creates no `Workspace` and exposes only `calculate`. Every tabular tool requires OS read access to store complete results as session artifacts and allow subsequent tools to read them. Data MCP registers no mutating file tools.
 
-Der Data-MCP ist ein Built-in. Seine Launchparameter werden vom Agenten erzeugt;
-der OS-Zugriffsmodus wird außerhalb der Modellkontrolle aus den CLI-Rechten
-abgeleitet.
+Data MCP is built in. Launch arguments are agent-generated, and OS permissions are derived from CLI capabilities outside model control.
 
-## Unterstützte Datenformate
+## Supported formats
 
-Workspace-Dateien unterstützen `.csv`, `.tsv`, `.json`, `.jsonl`, `.ndjson`,
-`.md` und `.markdown`. `wrap_data(content: str)` erkennt ohne Formatparameter
-Markdown-Pipe-Tabellen, JSON, CSV, TSV und JSONL/NDJSON automatisch. Bei
-JSON-ähnlichen, aber ungültigen Eingaben erfolgt ein Parsefehler statt eines
-stillen Fallbacks. Mehrdeutige/nicht-tabellarische Texte werden abgewiesen.
+Workspace files support `.csv`, `.tsv`, `.json`, `.jsonl`, `.ndjson`, `.md` and `.markdown`. `wrap_data(content: str)` autodetects Markdown pipe tables, JSON, CSV, TSV and JSONL/NDJSON without a format argument. Invalid JSON-like content produces a parse error rather than a silent fallback; ambiguous/non-tabular text is rejected.
 
-Bei bestehenden JSON-Dateien kann ein Array flacher Objekte über
-**`records_path`** als JSON Pointer (z. B. `/measurements` oder `/rows`)
-ausgewählt werden. `inspect_json(path)` findet bei unbekannter Struktur
-geeignete Arrays, Pfade, Zeilenzahl und Spaltennamen ohne Datenwerte. Liegt
-das Array an der Wurzel, ist kein Pointer notwendig. Bereits bekannte Pointer
-werden ohne `wrap_data` direkt verwendet. Das neue `wrap_data` normalisiert
-alle eindeutig erkannten Datensätze: für eine Tabelle zu `/rows`, für mehrere
-zu `/tables/0/rows`, `/tables/1/rows` usw. mit `record_sets`-Metadaten.
-JSONL/NDJSON enthält pro nicht-leerer Zeile genau ein Objekt.
-Verschachtelte Werte **innerhalb** der ausgewählten Zeilen werden weiterhin
-bewusst abgewiesen. Heterogene JSON-/JSONL-Datensätze bleiben
-intern sparse: fehlende Felder werden nicht für jede Zeile als zusätzliche
-`null`-Einträge materialisiert. Tabellarische Ausgaben behandeln fehlende
-Felder weiterhin wie `null`. CSV/TSV-Werte werden konservativ als `null`,
-Boolean, Integer, Float oder String interpretiert. Spaltennamen aus CSV/TSV und
-JSON/JSONL müssen nicht-leer sein und dürfen keine führenden oder
-nachgestellten Leerzeichen enthalten. Dasselbe gilt für explizite
-Aggregations-Aliase, damit erzeugte Spaltennamen bei Folgeoperationen stabil
-bleiben.
+For existing JSON files, `records_path` selects an array of flat objects via JSON Pointer (e.g. `/measurements` or `/rows`). When the structure is unknown, `inspect_json(path)` locates candidate arrays and exposes their paths, row counts and column names **without data values**. No pointer is needed for a root-level array. Known pointers are used directly without `wrap_data`.
 
-Eine Datendatei ist derzeit auf 100 MB und 1.000.000 Datensätze begrenzt.
-`wrap_data`-Inhalte sind auf 2.000.000 UTF-8-Bytes und Zeichen begrenzt. Für CSV/TSV wird das
-Python-Feldgrößenlimit bewusst bis zur bereits geltenden maximalen
-Dateigröße angehoben; neue Text-Datensätze bleiben durch ihr eigenes
-2.000.000-Byte-Limit begrenzt. Bei Markdown wird das Zeilenbudget für die
-Summe aller zu materialisierenden Tabellenzeilen bereits vor der eigentlichen
-Markdown-Tokenisierung geprüft. Tool-Ergebnisse sind zusätzlich durch ein
-Größenbudget begrenzt. `select_data` und `aggregate_data` kürzen Zeilen
-**niemals**: Ist die vollständige Ausgabe zu groß (aktuell 16 MB), wird
-stattdessen ein Fehler zurückgegeben. Bei aktiviertem Workspace-Zugriff
-gelangen große Ergebnisse nur als Session-Dateipfad und Metadaten in den
-LLM-Kontext.
+`wrap_data` normalizes unambiguously recognized datasets: a single table becomes `/rows`; multiple tables become `/tables/0/rows`, `/tables/1/rows`, etc., with `record_sets` metadata. JSONL/NDJSON requires exactly one object per nonempty line. Nested values **inside** selected rows are deliberately rejected. Heterogeneous JSON/JSONL rows remain sparse internally: absent fields are not materialized as explicit `null` in every row, but tabular output treats them as `null`. CSV/TSV scalars are conservatively inferred as null, boolean, integer, float or string.
 
-## Externer Datenexport (nur zur Bereitstellung)
+CSV/TSV and JSON/JSONL column names must be nonempty and have no leading/trailing spaces. Explicit aggregation aliases obey the same rule to keep generated column names stable in downstream operations.
 
-**Interne Analyseartefakte und externe Exportdateien haben unterschiedliche Zwecke.**
-`select_data`, `aggregate_data`, `join_data` und weitere Data-Tools erzeugen
-weiterverwendbare Session-Artefakte. Für nachfolgende Analyseschritte werden
-deren `workspace_path` und `records_path` direkt an das nächste Data-Tool
-übergeben – ohne Export und ohne erneutes Einlesen der Rohdaten durch das LLM.
+Dataset files are limited to **100 MB and 1,000,000 records**. `wrap_data` content is limited to **2,000,000 UTF-8 bytes and characters**. The Python CSV/TSV field limit is raised to the existing maximum file size; new text inputs still obey their separate 2,000,000-byte bound. Markdown checks the total number of rows to materialize **before** tokenization.
 
-`export_data(path, format, records_path=...)` ist **ausschließlich ein
-Ausgabeschritt**, wenn ein fertiger Datensatz außerhalb des Agenten
-bereitgestellt werden soll, etwa als CSV-, JSON- oder Markdown-Download.
-Das Tool liefert dem LLM bewusst **keine Exportzeilen**, sondern nur Metadaten
-und den Pfad des fertigen Exportartefakts. Deshalb darf es **nicht** zur
-Analyse, Kontrolle, Zusammenfassung, Transformation, Kontextreduktion oder
-als Zwischenstufe einer Datenpipeline verwendet werden.
+Tool results also have size bounds. `select_data` and `aggregate_data` **never truncate rows**: if the complete result exceeds the current **16 MB** limit, the call fails. With workspace access, large results are exposed to the LLM as session paths and metadata rather than raw rows.
 
-Typischer Ablauf für eine ausdrücklich benötigte Datendatei:
+## External data export: delivery only
 
-1. Daten mit den regulären Data-Tools fertig analysieren und aufbereiten.
-2. Das finale Ergebnis mit `export_data` im gewünschten Format exportieren.
-3. Den **vom Export zurückgegebenen** `workspace_path` an
-   `agent__publish_artifact(path=..., filename=...)` übergeben und damit
-   den Download bereitstellen.
+**Internal analysis artifacts and external exported files serve different purposes.** `select_data`, `aggregate_data`, `join_data` and other Data tools create reusable session artifacts. Pass their `workspace_path` and `records_path` directly to subsequent Data tools without exporting or rereading raw rows into the LLM.
 
-Wenn lediglich eine Frage zu Daten beantwortet werden soll und kein
-Datensatz nach außen gegeben werden muss, wird `export_data` **nicht** aufgerufen.
-`agent__publish_artifact` kann auch andere Session-Artefakte bereitstellen;
-ein Export ist ausschließlich für den entsprechenden Datenexport nötig.
+`export_data(path, format, records_path=...)` is **exclusively an output step** when the final dataset must be delivered outside the agent, for example as CSV, JSON or Markdown. The tool deliberately returns **no export rows to the LLM**, only metadata and the exported artifact path. Never use it for analysis, checking, summarization, transformations, context reduction or intermediate pipeline stages.
 
-## Read-/Analyse-Tools
+For a requested downloadable data file:
 
-| Tool | Funktion |
+1. Complete analysis/preparation with ordinary Data tools.
+2. Export the final result with `export_data` in the requested format.
+3. Pass **the path returned by export** to `agent__publish_artifact(path=..., filename=...)`.
+
+If the user asks only a question about data, and no dataset needs delivery, **do not call `export_data`**. `agent__publish_artifact` can also publish other session artifacts; export is needed only for the corresponding data export.
+
+## Read and analysis tools
+
+| Tool | Purpose |
 | --- | --- |
-| `calculate(expression)` | Wertet einen begrenzten arithmetischen Ausdruck deterministisch mit Dezimalarithmetik aus. |
-| `wrap_data(content)` | Einziger Einstieg für neue Text-Datensätze (Markdown, JSON, CSV, TSV, JSONL, NDJSON); erstellt strukturierte Artefakte. |
-| `inspect_json(path)` | Findet Record-Arrays in verschachtelten Workspace-JSON-Dateien ohne die einzelnen Messwerte auszugeben; nur bei Dateileserechten. |
-| `inspect_schema(...)` | Liefert Schema-/Profil-Metadaten ohne Datensätze: Zeilenzahl, Spaltennamen, Typinferenz, Null-/Unique-Zahlen und bei niedriger Kardinalität die vollständige Distinct-Wertedomäne. |
-| `preview_data(path, sample_rows=5, offset=0, records_path=...)` | Liefert Schema-Metadaten und bis zu **50** vollständige Zeilen ab dem nullbasierten `offset`. `next_offset` ist der Start der nächsten Seite oder `null` am Ende. Für reine Schema-Erkundung ist `inspect_schema` vorzuziehen. |
-| `select_data(path, ...)` | Filtert, projiziert und sortiert Datensätze ohne Zeilenlimit; strukturiertes Artefakt. |
-| `value_counts(column, path, ...)` | Zählt unterschiedliche Werte einer Spalte; begrenzte Ergebnistabelle als Artefakt. |
-| `aggregate_data(aggregations, path, ...)` | Gruppiert und aggregiert Daten deterministisch; strukturiertes Artefakt. |
+| `calculate(expression)` | Evaluate a bounded arithmetic expression deterministically using decimal arithmetic. |
+| `wrap_data(content)` | Only entry point for new text datasets (Markdown, JSON, CSV, TSV, JSONL/NDJSON); create structured artifacts. |
+| `inspect_json(path)` | Discover record arrays in nested workspace JSON without exposing individual measurements; needs file-read permission. |
+| `inspect_schema(...)` | Schema/profile metadata without records: rows, columns, inferred types, null/unique counts and complete low-cardinality distinct domains. |
+| `preview_data(path, sample_rows=5, offset=0, records_path=...)` | Schema metadata and at most **50 complete records** from zero-based `offset`; `next_offset` points to the next page or is `null` at end. Prefer `inspect_schema` for schema-only exploration. |
+| `select_data(path, ...)` | Filter, project and sort records without a row limit; structured artifact. |
+| `value_counts(column, path, ...)` | Count distinct values in a column; bounded result artifact. |
+| `aggregate_data(aggregations, path, ...)` | Deterministic grouped aggregations; structured artifact. |
 
-Für die längsten/größten Ereignisse zuerst mit `select_data(sort_by=[...],
-descending=true)` sortieren und dessen `workspace_path` plus `records_path`
-an `preview_data(sample_rows=50, offset=0)` übergeben. Weitere Seiten über
-`next_offset` lesen, bis dieser `null` ist. Das Vorschaulimit betrifft nur
-die an das LLM gelieferten Zeilen, nicht das vollständige Artefakt.
+To inspect largest/longest events, first sort with `select_data(sort_by=[...], descending=true)`, then pass its `workspace_path` and `records_path` to `preview_data(sample_rows=50, offset=0)`. Continue using `next_offset` until `null`. Preview limits affect only model-visible rows, not the complete underlying artifact.
 
-### Zeitreihen und DataFrames (Pandas, `--with-os-read`)
+### Time series and DataFrames (Pandas, `--with-os-read`)
 
-Die neuen Tools sind auf die Analyse vieler Messwerte ausgelegt. Ihr Ergebnis
-ist ein strukturiertes JSON mit `columns` und `rows`, wird aber bei Nutzung
-mit cli-agent **nicht vollständig in den LLM-Kontext geschrieben**: Über das
-MCP-Feld `_meta.io.github.shuewe.cli-agent/only_metadata_to_llm` wird
-stattdessen das bereits vorhandene Session-Artefakt-Verfahren genutzt. Das
-Modell erhält die durch Data-MCP definierten Metadaten (`operation`,
-`row_count`, `columns`, `records_path`) und den vom Agenten ergänzten
-`workspace_path`. Unabhängig von der Ergebnisgröße erhält das Modell eine
-**automatisch berechnete Kurz-Zusammenfassung**: bis zu fünf vollständige Beispielzeilen
-(`sample_rows`), `null_count` je betrachteter Spalte, `min`/`max` und
-`mean` bei numerischen Spalten, Zeitbereiche bei ISO-Zeitstempelspalten
-und vollständige `value_counts` bei höchstens fünf unterschiedlichen kurzen
-kategorischen Werten. Der Mittelwert wird näherungsweise als Gleitkommazahl
-ausgegeben. Statistiken beziehen sich stets auf **alle Ergebniszeilen**, nicht
-nur auf die Vorschau. Mehrdeutige oder gemischt typisierte Spalten erhalten
-keine irreführenden numerischen oder zeitlichen Statistiken.
+Advanced tools are designed for many measurements. Their full output is structured JSON with `columns` and `rows`, but `cli-agent` does **not** place all of it in LLM context. Through `_meta.io.github.shuewe.cli-agent/only_metadata_to_llm`, the existing session artifact mechanism stores it separately.
 
-Sämtliche tabellenerzeugenden Tools (einschließlich `wrap_data`,
-`select_data`, `aggregate_data` und `value_counts`) liefern die vollständigen
-Daten in MCP-`structuredContent`. Das LLM bekommt **nie** ein separates
-vollständiges `rows`-Feld in den Metadaten. Bei 1–5 Zeilen kann die Vorschau
-zufällig alle Zeilen umfassen; dann ist `sample_rows_complete=true`.
-Booleans und große Integer bleiben typgetreu. Exakte `Decimal`-Werte werden
-reversibel als `{"__cli_agent_decimal__":"..."}` mit
-`scalar_encoding="cli-agent-decimal-v1"` kodiert und beim nächsten Data-Tool
-als numerische Werte rekonstruiert; unveränderte Float64-Werte behalten ihre
-Float64-Semantik.
+The model receives Data MCP metadata (`operation`, `row_count`, `columns`, `records_path`) and the agent-supplied `workspace_path`. Regardless of output size, it also receives an **automatically calculated concise summary** with up to five complete example rows (`sample_rows`), per-column `null_count`, numeric min/max/mean, ISO timestamp ranges, and complete `value_counts` for up to five distinct short categorical values. Mean is an approximate float. Statistics cover **all result rows**, never only the preview. Ambiguous or mixed-type columns do not get misleading numeric/time statistics.
 
-Für die ergänzten Metadaten gilt ein Budget von 5.000 UTF-8-Bytes inklusive
-Platz für den vom Agenten hinzugefügten `workspace_path`. Um es einzuhalten,
-werden ganze Vorschauzeilen oder Spaltenstatistiken weggelassen (niemals
-einzelne Zellwerte abgeschnitten). `sample_rows_complete` und
-`stats_columns_complete` zeigen an, ob die jeweiligen Informationen
-vollständig sind. Bei extrem breiten Schemata werden zusätzlich
-`column_count` und `columns_complete=false` ausgegeben. Auch in diesen
-Fällen bleibt die vollständige Ergebnisdatei unter `workspace_path` lesbar.
+All table-producing tools (including `wrap_data`, `select_data`, `aggregate_data`, `value_counts`) return complete data in MCP `structuredContent`. The LLM **never** receives a separate full `rows` field in metadata. For 1–5 rows, sample rows may happen to cover everything; `sample_rows_complete=true` indicates that.
 
-Beispiel-Workflow für L1/L3-Phasenmessungen:
+Booleans and large integers preserve scalar types. Exact `Decimal` values use reversible encoding `{"__cli_agent_decimal__":"..."}` with `scalar_encoding="cli-agent-decimal-v1"`; downstream Data tools reconstruct them numerically. Unchanged Float64 values retain their Float64 semantics.
 
-1. Die bereits mitgelieferten `workspace_path`-/`records_path`-Metadaten
-   verwenden. **Nur bei unbekannter JSON-Struktur** `inspect_json` aufrufen,
-   um z. B. `records_path="/measurements"` zu ermitteln.
-2. Mit `join_data` zwei Zeitreihen anhand exakt gleicher Zeitstempel
-   zusammenführen. Beide Quellen benennen `path`, `alias`, `time_column`,
-   `value_column` und bei Bedarf `records_path`:
+The metadata budget is **5,000 UTF-8 bytes**, including space reserved for agent-added `workspace_path`. Whole preview rows or column statistics are omitted to fit; individual cell values are **never truncated**. `sample_rows_complete` and `stats_columns_complete` indicate completeness. For extremely wide schemas, `column_count` and `columns_complete=false` are included. The complete artifact remains accessible at `workspace_path`.
+
+Example L1/L3 phase measurement workflow:
+
+1. Reuse known `workspace_path`/`records_path` metadata. Call `inspect_json` **only if JSON structure is unknown** to find, for example, `records_path="/measurements"`.
+2. Use `join_data` to align two time series on exactly equal timestamps. Each source provides `path`, `alias`, `time_column`, `value_column`, and optional `records_path`:
 
    ```json
    {
@@ -197,9 +102,7 @@ Beispiel-Workflow für L1/L3-Phasenmessungen:
    }
    ```
 
-3. Die Antwort liefert unter anderem `workspace_path` (z. B.
-   `mcp-data-<id>/r-<id>.json`) und `records_path="/rows"`. Damit kann
-   `derive_columns` auf dem bereits verknüpften DataFrame arbeiten:
+3. The result includes `workspace_path` (e.g. `mcp-data-<id>/r-<id>.json`) and `records_path="/rows"`. Apply `derive_columns` to that joined DataFrame:
 
    ```json
    {
@@ -211,60 +114,33 @@ Beispiel-Workflow für L1/L3-Phasenmessungen:
    }
    ```
 
-4. Für übersichtliche Trends kann `resample_data` das Ergebnis z. B. in
-   5-Minuten-Fenstern mit `mean` oder `max` zusammenfassen. Die Antwort
-   enthält wieder `workspace_path` und `records_path="/rows"`.
+4. For trends, `resample_data` can summarize the result in five-minute windows using `mean` or `max`, again returning `workspace_path` and `records_path="/rows"`.
 
-### Große Zeitreihen in Blöcken auswerten
+### Processing long time series in chunks
 
-Für längere Historien (z. B. 13 Wochenblöcke) ist folgende **optionale**
-Strategie sinnvoll. Jeder Schritt verwendet die tatsächlich zurückgegebenen
-Metadaten; der Agent muss nicht alle Schritte ausführen, wenn die Frage schon
-beantwortet ist.
+For longer histories, such as 13 weekly blocks, the following is an **optional** approach. Every step uses actual returned metadata; stop when the question is already answered.
 
-1. Historien in den von der Datenquelle zugelassenen Blöcken mit Messpunkten
-   abrufen, z. B. `get_history(include_points=true)`. Bereits vom Agenten
-   abgelegte Antworten direkt über `workspace_path` nutzen. Nur wenn Daten
-   **ausschließlich als Text** vorliegen, einmalig `wrap_data(content)` nutzen.
-2. Die bekannten Datensatz-Pointer (`records_path`) von jeder Quelle
-   übernehmen. Für eine unbekannte externe JSON-Struktur bei Bedarf
-   `inspect_json(path)` verwenden, ansonsten darauf verzichten.
-3. Gleichartige Zeitreihen per `concat_data` zusammenführen. Da ein Aufruf
-   **2 bis 8 Quellen** erlaubt, lassen sich 13 Blöcke beispielsweise zuerst
-   als 8 + 5 und anschließend die zwei Ergebnisartefakte zusammenführen.
-   Dabei für jedes Zwischenergebnis `workspace_path` und `records_path="/rows"`
-   weitergeben; bei Bedarf chronologisch sortieren.
-4. Die zusammengeführte Reihe etwa mit `resample_data(frequency="10min")`
-   verdichten. Je nach Fragestellung mit `derive_columns` (z. B. `diff`)
-   oder `describe_data` auffällige Zeiträume identifizieren.
-5. Mit `select_data` nur interessante **Original-Zeitfenster** als neue
-   Artefakte herausfiltern; `preview_data` gezielt für konkrete Messwerte
-   verwenden. Erst falls erforderlich weitere Sensorreihen abrufen.
+1. Fetch measurements in source-permitted chunks, e.g. `get_history(include_points=true)`. Use responses already stored by the agent directly via `workspace_path`. Use `wrap_data(content)` only once when data exist **solely as text**.
+2. Reuse the `records_path` pointers from each source. Use `inspect_json(path)` only when external JSON structure is unknown.
+3. Combine matching time series with `concat_data`. Each call accepts **2–8 sources**, so 13 blocks may be merged as 8 + 5, then combined again. Pass `workspace_path` and `records_path="/rows"` for intermediates; sort chronologically if needed.
+4. Reduce the combined series with `resample_data(frequency="10min")`, then locate relevant periods using `derive_columns` (e.g. `diff`) or `describe_data`.
+5. Extract only interesting **original time windows** with `select_data`; use `preview_data` for specific measurements. Fetch other sensors only when needed.
 
-Nach jedem tabellenerzeugenden Schritt lautet der nächste Input sinngemäß
-`path=<workspace_path aus Antwort>` zusammen mit
-`records_path=<records_path aus Antwort>`. Für normalisierte Einzeltabellen
-ist letzterer `/rows`, für mehrere Tabellen beispielsweise `/tables/1/rows`.
-Kein Tool braucht die vorherigen Rohzeilen erneut im LLM-Kontext. Ein
-erneuter Abruf derselben Tagesdaten ist unnötig, wenn sie bereits im
-vorhandenen Wochenartefakt enthalten sind. Dateigrößen-, Zeilen- und
-Session-Artefaktlimits gelten weiterhin.
+After each table-producing step, pass `path=<returned workspace_path>` and `records_path=<returned records_path>`. For normalized single tables this is `/rows`; multi-table inputs can use `/tables/1/rows`. No tool needs earlier raw rows reconstructed in the LLM context. Do not refetch daily data already included in an existing weekly artifact. File, row and session artifact limits still apply.
 
-| Tool | Zweck / Grenzen |
+| Tool | Purpose and constraints |
 | --- | --- |
-| `join_data(sources, direction, how, tolerance_seconds)` | Exakter Join ist der Standard und interpoliert nichts; bei unterschiedlichen Abtastraten sind `nearest`, `backward` oder `forward` nur mit expliziter maximaler Toleranz und `how="left"` möglich. Doppelte Zeitstempel werden abgewiesen. |
-| `derive_columns(path, operations, records_path)` | `add`, `subtract`, `multiply`, `divide`, `diff`, `diff_per_time`, `cumsum`, `rolling_mean`. Binäre Operationen verwenden Spaltennamen oder einen konstanten Wert; `rolling_mean.window` zählt Zeilen. `diff_per_time` verwendet reale Zeitabstände und ein explizites Lückenlimit. |
-| `resample_data(path, frequency, aggregations, time_column, records_path)` | Begrenztes Raster wie `30s`, `5min`, `1h`, `1d`. Aggregationen `mean`, `min`, `max`, `sum`, `count`, ohne Interpolation. Die Zeitstempel bezeichnen den Beginn der Intervalle. |
-| `describe_data(path, columns, time_column, records_path)` | Kompakte JSON-Statistiken (Anzahl, Nullwerte, Min/Max, Mittelwert, Median, Stichproben-Standardabweichung, Quartile, erster/letzter gültiger Wert). Mit `time_column` auch Zeitpunkte der Extremwerte. Ohne `columns` werden numerische Spalten gewählt. Direkte Ausgabe ans LLM, auf 5 KB begrenzt. |
-| `analyze_intervals(path, time_column, value_column, condition, threshold, max_gap_seconds, records_path)` | Findet zusammenhängende Zeiträume für `lt`, `lte`, `gt`, `gte`, `eq`, `ne`. Gibt Anzahl, Gesamtdauer und längstes Intervall direkt als Metadaten zurück; vollständige Zeitintervalle als Session-Artefakt. |
-| `integrate_data(path, time_column, value_column, max_gap_seconds, method, time_unit, records_path)` | Integriert unregelmäßige Messungen mit Trapezregel (`trapezoid`) oder konstantem Vorgängerwert (`previous`). Ergebnis als kompakte JSON-Zahl in *Werteinheit × Stunden* (Standard) oder *Werteinheit × Sekunden*. Watt × Stunden ergeben Wh, nicht kWh. |
-| `concat_data(sources, sort_by, unique_by, keep)` | Hängt zwei bis acht Datensätze mit denselben Spaltennamen untereinander. Die Spaltenreihenfolge darf unterschiedlich sein; Duplikate und Quellreihenfolge bleiben standardmäßig erhalten. Sortierung und Deduplizierung auf `unique_by` sind explizit wählbar. |
+| `join_data(sources, direction, how, tolerance_seconds)` | Exact joins are default and never interpolate; differing sampling rates can use `nearest`, `backward`, `forward` only with explicit maximum tolerance and `how="left"`. Duplicate timestamps are rejected. |
+| `derive_columns(path, operations, records_path)` | Operations: `add`, `subtract`, `multiply`, `divide`, `diff`, `diff_per_time`, `cumsum`, `rolling_mean`. Binary operations accept columns or constants; `rolling_mean.window` counts rows. `diff_per_time` uses real intervals and an explicit gap limit. |
+| `resample_data(path, frequency, aggregations, time_column, records_path)` | Bounded grids such as `30s`, `5min`, `1h`, `1d`. Functions `mean`, `min`, `max`, `sum`, `count`; no interpolation. Output timestamp marks interval start. |
+| `describe_data(path, columns, time_column, records_path)` | Compact JSON statistics: count, nulls, min/max, mean, median, sample standard deviation, quartiles and first/last valid value. Optional time of extrema with `time_column`. Select numeric columns by default. Direct model result limited to 5 KB. |
+| `analyze_intervals(path, time_column, value_column, condition, threshold, max_gap_seconds, records_path)` | Contiguous periods using `lt`, `lte`, `gt`, `gte`, `eq`, `ne`. Return count, total duration and longest interval in metadata; complete intervals in session artifact. |
+| `integrate_data(path, time_column, value_column, max_gap_seconds, method, time_unit, records_path)` | Integrate irregular samples using trapezoids (`trapezoid`) or predecessor-held values (`previous`). Compact numeric result in value-unit × hours (default) or × seconds. Watts × hours yield Wh, **not** kWh. |
+| `concat_data(sources, sort_by, unique_by, keep)` | Append 2–8 datasets with identical column names, regardless of column order. Preserve duplicates/source ordering by default; sorting and deduplication on `unique_by` are opt-in. |
 
-### Zeitliche Änderungsraten (D2)
+### Temporal change rates (D2)
 
-`diff` bleibt die reine Differenz zur vorigen Zeile. Bei unregelmäßigen
-Sensorabständen liefert `diff_per_time` eine vergleichbare Rate:
-`(aktueller Wert − vorheriger Wert) / tatsächlich vergangene Zeit`.
+`diff` is the difference from the preceding row. For irregular sampling, `diff_per_time` provides a comparable rate: (current value − prior value) / actual elapsed time.
 
 ```json
 {
@@ -279,185 +155,80 @@ Sensorabständen liefert `diff_per_time` eine vergleichbare Rate:
 }
 ```
 
-Das Beispiel erzeugt eine Temperaturänderung in °C pro Stunde (sofern die
-Eingabespalte °C enthält). `time_unit` kann `seconds`, `minutes` oder `hours`
-sein; Standard ist `hours`. `max_gap_seconds` ist für diese Operation
-**verpflichtend** (größer 0 und maximal 604.800 Sekunden). Die verwendete
-Zeiteinheit steht auch in `summary.rate_time_units` der Artefaktmetadaten.
+For Celsius inputs, this produces °C per hour. `time_unit` accepts `seconds`, `minutes` or `hours` (default). `max_gap_seconds` is **mandatory**, greater than zero and at most 604,800 seconds. The unit is also reported as `summary.rate_time_units` in artifact metadata.
 
-Die erste Rate ist `null`. Bei identischen Zeitstempeln, fehlenden
-Messwerten oder zu großen Zeitlücken wird ebenfalls `null` erzeugt – es
-findet keine Interpolation statt. Fehlende Zeitstempel und rückwärts
-sortierte Zeitreihen werden abgewiesen. Bei einem Wechsel von UTC-Offsets
-zählt der tatsächliche Zeitabstand, nicht der Abstand der lokalen Uhrzeit.
-Für 30-/60-/90-Minuten-Trends kann stattdessen zunächst mit `resample_data`
-verdichtet und danach `diff` berechnet werden; das sind Differenzen von
-aggregierten Intervallen und keine exakten gleitenden Fenster.
+The first rate is `null`; equal timestamps, missing values or gaps exceeding the limit also produce `null`. There is no interpolation. Missing timestamps or reverse-ordered series are rejected. Offset changes use real elapsed time, not wall-clock differences. For 30/60/90-minute trends, resample first and then apply `diff`; this measures differences of aggregated intervals, **not exact sliding windows**.
 
-### Zeitzonen-Metadaten (D3)
+### Time-zone metadata (D3)
 
-`join_data` und `resample_data` serialisieren zeitzonenbehaftete
-Ergebniszeitstempel in UTC (`Z`) und geben dann
-`timestamp_timezone="UTC"` in den LLM-Metadaten aus. `source_timezone`
-enthält **nur dann** einen Offset wie `"+02:00"`, wenn alle unmittelbar
-verwendeten Quellen diesen Offset eindeutig als ISO-8601-Wert enthalten.
-Das ist **keine** Aussage über eine IANA-Zone wie `Europe/Berlin`.
+`join_data` and `resample_data` serialize timezone-aware result timestamps as UTC (`Z`) and expose `timestamp_timezone="UTC"` in model metadata. `source_timezone` contains a fixed offset such as `"+02:00"` **only if all directly used sources consistently provide that offset as ISO-8601**. This does **not** identify an IANA zone such as `Europe/Berlin`.
 
-Bei verschiedenen Offsets, beispielsweise während einer Zeitumstellung,
-wird `source_timezone` weggelassen, während UTC im Ergebnis eindeutig bleibt.
-Bei naiven Zeitstempeln werden keine Zeitzoneninformationen erfunden.
-Für lokale Ereigniszeiten ist die tatsächliche Zielzeitzone separat
-anzuwenden und die konkrete Messreihe zu prüfen.
+When sources have different offsets (e.g. at daylight saving transitions), `source_timezone` is omitted; the output remains unambiguously UTC. No time-zone information is invented for naive timestamps. To report local event times, apply the actual target time zone separately and inspect the series.
 
-Bei `analyze_intervals` gilt ein Messwert vom eigenen Zeitstempel bis zum
-nächsten Punkt (Sample-and-Hold); der letzte Wert wird nicht extrapoliert.
-Bei `integrate_data` wählt `method` alternativ die Trapezregel.
-Beide benötigen das explizite `max_gap_seconds` (größer als 0, maximal 604.800 Sekunden): Abschnitte mit größeren
-Lücken oder fehlenden Endpunktwerten werden ausgelassen. Doppelte Zeitstempel
-sind unzulässig. Die Antworten enthalten die tatsächlich abgedeckte Dauer
-und die ausgelassenen Abschnitte, damit unbeobachtete Zeiten nicht als
-Messwerte erscheinen. Einheitenumrechnung (z. B. Wh zu kWh) erfolgt nicht
-automatisch.
+For `analyze_intervals`, a sample holds from its timestamp until the next point; the last value is not extrapolated. `integrate_data` can instead use trapezoidal integration. Both require `max_gap_seconds` greater than zero and at most 604,800: larger gaps and missing endpoint values are excluded. Duplicate timestamps are rejected. Results report actual covered duration and excluded intervals so unobserved periods are not treated as measurements. Unit conversion (e.g. Wh to kWh) is **not automatic**.
 
-Beim Join werden unterschiedliche Zeitstempelauflösungen (z. B. Mikro- und
-Nanosekunden) vor dem Abgleich verlustfrei vereinheitlicht. Auch bei
-zeitzonenbehafteten Zeitstempeln bleiben Nanosekunden im Ergebnis erhalten.
-ISO-Zeitstempel dürfen innerhalb einer Quelle unterschiedlich viele
-Nachkommastellen besitzen. Zeitstempel mit explizitem Zeitzonen-Offset werden
-nach UTC normalisiert; unterschiedliche Offsets lassen sich dadurch gemeinsam
-verarbeiten. Quellen mit und ohne Zeitzonenangabe dürfen dagegen nicht
-vermischt werden.
-Liefert ein Join keine Zeilen, bewahrt sein JSON-Artefakt trotzdem die
-deklarierte `columns`-Liste für `inspect_schema` und nachfolgende DataFrame-Tools.
+Joins reconcile timestamp precision (e.g. microseconds versus nanoseconds) losslessly. Nanoseconds remain intact even for timezone-aware timestamps. A source may contain ISO timestamps with varying fractional precision. Explicit timezone offsets are normalized to UTC, allowing multiple offsets together; naive and aware sources may **not** be mixed.
 
-Diese Tools nutzen Pandas-`float64`-Berechnungen. Für exakte Dezimalarithmetik
-bleibt `calculate` bzw. die bestehenden Decimal-basierten Aggregationen
-zuständig. Nur die für Berechnungen ausgewählten Spalten werden nach `float64`
-konvertiert; nicht veränderte Quellspalten behalten ihre Skalartypen, auch bei
-großen Ganzzahl-IDs mit `null`-Werten. Die DataFrame-Verarbeitung ist auf 100.000 Zeilen, 100 Spalten,
-höchstens acht Join-/Concat-Quellen und 16 MB pro tabellarischem Ergebnis begrenzt. Große Zeiträume
-sollten deshalb nach Möglichkeit schon an der Datenquelle eingegrenzt werden.
-Endliche `float64`-Ergebniswerte werden ohne zusätzliche dezimale Rundung als
-JSON serialisiert und beim erneuten Einlesen bitgenau rekonstruiert; das ist
-keine Zusage exakter Dezimalarithmetik während der Berechnung.
-Das Summieren einer Momentanleistung ist **keine** Berechnung der Energie:
-hierzu muss die Zeitbasis beachtet werden.
+Even a zero-row join retains declared `columns` in its JSON artifact for `inspect_schema` and downstream DataFrame tools.
 
-Die temporären Artefakte gehören zur laufenden cli-agent-Session und werden
-nach einer Antwort für die Inspektion aufbewahrt. Beim Beginn der nächsten
-regulären Benutzeranfrage werden sie samt Session-Unterordner bereinigt;
-`enable`/`disable` und Frontend-Tool-Fortsetzungen lösen das nicht aus.
-Auch `reset_history()` und das reguläre Session-Ende bereinigen die Dateien.
-Der in einer früheren Antwort angegebene `workspace_path` ist danach ungültig.
-Andere Workspace-Dateien – insbesondere solche, die der Nutzer oder
-andere OS-Tools explizit anlegen – werden dadurch nicht gelöscht. Nach
-einem Prozessabsturz kann eine Bereinigung ausgeblieben sein.
+Pandas tools compute with `float64`; use `calculate` or existing Decimal-based aggregations for exact decimal arithmetic. Only selected calculation columns convert to `float64`; untouched source columns preserve scalar types, even large integer IDs containing nulls. DataFrame processing is bounded to **100,000 rows, 100 columns, 8 join/concat sources and 16 MB** per tabular result. Narrow long time ranges at the source when practical.
 
-### Markdown-Tabellen
+Finite `float64` outputs serialize to JSON without additional decimal rounding and deserialize bit-identically; this does not guarantee exact decimal arithmetic during computation. **Summing instantaneous power is not computing energy**; integration requires a time basis.
 
-Der bestehende Markdown-Pipe-Parser wird weiterhin intern von wrap_data
-verwendet, aber extract_markdown_tables ist kein öffentliches MCP-Tool mehr.
-wrap_data erhält das vollständige relevante Markdown-Dokument; das LLM
-muss Tabellen weder ausschneiden noch neu serialisieren. Mehrere erkannte
-Tabellen werden gemeinsam abgelegt und in record_sets einzeln über
-JSON-Pointer adressiert.
+Temporary artifacts belong to the active session and are retained for inspection after a response. At the next regular user request, the session subdirectory and its artifacts are removed. `enable`/`disable` and frontend tool continuation do **not** trigger cleanup. `reset_history()` and normal session shutdown also clean them. Paths reported in earlier answers then become invalid. Other workspace files, including files explicitly created by users or OS tools, remain untouched. A process crash may prevent cleanup.
 
-Der Parser erhält seine bisherigen Schutzregeln: eindeutige Namen für leere
-oder doppelte Header, eng begrenzte Reparaturen von Separator-/Zeilenbruch-
-Defekten und keine erfundenen Zellwerte. Die bisherige versionierte
-Markdown-Zellkodierung für exakte Skalar-Roundtrips bleibt für bestehende
-Markdown-Dateien lesbar. Neue tabellarische Ausgaben werden dagegen
-strukturiert als JSON-Artefakte transportiert und nicht erneut als Markdown
-gerendert und geparst.
+### Markdown tables
 
-Beispielkette für einen neuen Textdatensatz:
+The Markdown pipe parser is used internally by `wrap_data`; `extract_markdown_tables` is no longer a public MCP tool. Supply the complete relevant Markdown document to `wrap_data`; the LLM need not cut out or reserialize tables. Multiple recognized tables are stored together and separately addressable through `record_sets` pointers.
 
-1. wrap_data(content="| group | value |\\n|---|---|\\n| A | 3 |")
-2. select_data(path=workspace_path, records_path="/rows", ...)
-3. aggregate_data(path=neuer_workspace_path, records_path="/rows", ...)
+The parser retains its safeguards: unique replacements for blank/duplicate headers, narrowly limited repairs of separator/line-break defects, and no invented cells. Existing versioned Markdown scalar encoding remains readable for exact round-trips. New tabular outputs use structured JSON artifacts rather than Markdown render-and-reparse cycles.
 
-Bei bereits vorhandenen Dateien entfällt Schritt 1. Unabhängig davon
-soll das LLM keine Rohdaten zwischen Toolaufrufen rekonstruieren.
+Example:
 
-### Schema-Erkundung und Datenvorschau
+1. `wrap_data(content="| group | value |\\n|---|---|\\n| A | 3 |")`
+2. `select_data(path=workspace_path, records_path="/rows", ...)`
+3. `aggregate_data(path=new_workspace_path, records_path="/rows", ...)`
 
-`inspect_schema` ist für die Query-Planung gedacht und gibt **niemals
-vollständige Datensätze/Zeilen** zurück. Das Tool liest den Datensatz intern,
-um Metadaten zu bestimmen, exponiert an das Modell aber nur:
+Step 1 is unnecessary for existing files. In either case, the LLM should never reconstruct raw rows between tool calls.
 
-- `row_count`,
-- pro Spalte `name`, `dtype`, `null_count` und `unique_count`,
-- optional eine vollständige `distinct_values`-Domäne bei niedriger
-  Kardinalität.
+### Schema exploration and previews
 
-Der Parameter `distinct_values_limit` ist standardmäßig 20 und auf 100
-begrenzt. Liegt die Anzahl unterschiedlicher Werte einer Spalte höchstens bei
-diesem Limit, wird die **vollständige** Wertedomäne zurückgegeben und
-`distinct_values_complete=true` gesetzt – sofern die Werte zusätzlich innerhalb
-der Größenbudgets für Schema-Ausgaben liegen. Einzelne sehr große Werte sowie
-Wertedomänen, die das kumulierte Distinct-Value-Budget überschreiten würden,
-werden nicht exponiert; in diesem Fall bleibt `distinct_values` aus und
-`distinct_values_complete=false`. Es werden niemals gekürzte oder partielle
-Distinct-Listen zurückgegeben. Liegt bereits die Kardinalität über dem Limit,
-gilt dasselbe Verhalten. Mit `distinct_values_limit=0` lassen sich
-Distinct-Werte vollständig unterdrücken.
+`inspect_schema` is intended for query planning and **never returns full dataset rows**. It reads the dataset internally but exposes only:
 
-Zusätzlich besitzt `inspect_schema` ein eigenes Gesamtbudget für das vollständig
-serialisierte Ergebnis. Reicht dieses Budget nicht aus, werden zuerst optionale
-`distinct_values` weggelassen, damit möglichst alle Spaltenmetadaten erhalten
-bleiben. Falls selbst die reinen Spaltenmetadaten zu groß wären, wird die
-Spaltenliste gekürzt. In diesem Fall enthält die Antwort weiterhin
-`column_count` mit der tatsächlichen Gesamtzahl und
-`columns_complete=false`. Bei vollständiger Ausgabe ist
-`columns_complete=true`. Die Ausgabe wird kompakt als JSON serialisiert, damit
-das Schema-Budget möglichst für Nutzdaten statt Formatierungs-Whitespace
-verwendet wird.
+- `row_count`.
+- Per-column `name`, `dtype`, `null_count`, `unique_count`.
+- Optional complete `distinct_values` domains for low-cardinality columns.
 
-Damit kann ein LLM beispielsweise tatsächliche Spaltennamen oder kleine
-Enum-artige Wertebereiche kennenlernen, bevor es einen Filter konstruiert,
-ohne Beziehungen zwischen verschiedenen Spalten aus Beispielzeilen zu sehen.
-Wenn Wertehäufigkeiten benötigt werden, ist `value_counts` das passende Tool.
+`distinct_values_limit` defaults to 20 and is bounded to 100. When cardinality is at or below this value, the **complete** domain is returned with `distinct_values_complete=true`, provided the values fit within schema output budgets. Oversized individual values or domains exceeding cumulative distinct-value budgets are withheld entirely, with `distinct_values_complete=false`; **partial/truncated distinct lists are never returned**. Cardinality over the limit behaves the same way. Setting the limit to zero disables distinct domains entirely.
 
-`preview_data` hat bewusst einen anderen Vertrag: Es liefert zusätzlich die
-ersten `sample_rows` vollständigen Records und ist damit eine
-**Datenvorschau**. Es soll nur verwendet werden, wenn Beziehungen zwischen
-Spalten anhand einiger Beispielzeilen tatsächlich benötigt werden. Es ist
-weder die bevorzugte Schema-Erkundung noch ein Ersatz für eine gezielte
-`select_data`-Abfrage.
+`inspect_schema` also enforces a total serialized-result budget. To preserve as much column metadata as possible, optional distinct values are dropped first. If bare column metadata is still too large, the list is truncated with `column_count` reporting the real total and `columns_complete=false`; complete listings set `columns_complete=true`. Compact JSON minimizes formatting overhead.
 
-Für Agenten gilt daher als typische Reihenfolge:
+Thus the model can learn real column names or small enum-like domains without seeing cross-column relationships in sample rows. For value frequencies, use `value_counts`.
 
-1. `inspect_schema`, wenn Spalten oder kleine Wertedomänen noch unbekannt sind.
-2. `select_data`, sobald konkrete Datensätze/Spalten gefiltert oder projiziert
-   werden sollen.
-3. `value_counts`, wenn Häufigkeiten einzelner Werte benötigt werden.
-4. `preview_data` nur bei echtem Bedarf an einer kleinen Row-Preview.
+`preview_data` deliberately differs: it includes up to `sample_rows` full records and is a **data preview**. Use it only when relationships between fields in a few example records are genuinely needed, rather than for routine schema discovery or instead of targeted `select_data`.
+
+Typical order:
+
+1. `inspect_schema` when columns or small domains are unknown.
+2. `select_data` to filter/project concrete records.
+3. `value_counts` when value frequencies are needed.
+4. `preview_data` only for a justified small row preview.
 
 ### Calculator
 
-`calculate(expression)` ist unabhängig vom OS-Zugriff immer mit
-`--with-data` verfügbar. Das Tool ist für nicht-triviale Arithmetik,
-Prozent-/Verhältnisrechnungen, Dezimalrechnung, Potenzen und Wurzeln gedacht.
-
-Beispiel:
+`calculate(expression)` is available with `--with-data` regardless of OS permissions. It handles nontrivial arithmetic, ratios, percentages, decimal calculations, powers and roots.
 
 ```text
 calculate("(417.3 - 382.1) / 382.1 * 100")
 ```
 
-Unterstützt werden ausschließlich numerische Literale, Klammern, `+`, `-`,
-`*`, `/`, `%`, `**`, unäres `+`/`-` sowie `abs()`, `round()`,
-`min()`, `max()` und `sqrt()`. Die Auswertung verwendet `Decimal` mit
-begrenzter Präzision statt binärer Float-Arithmetik. Es gibt kein `eval()`,
-keine Variablen, Attribute, Imports oder beliebigen Python-Ausdrücke.
+Only numeric literals, parentheses, `+`, `-`, `*`, `/`, `%`, `**`, unary `+`/`-`, and `abs()`, `round()`, `min()`, `max()`, `sqrt()` are supported. Computation uses bounded-precision `Decimal`, not binary float. No `eval()`, variables, attributes, imports or arbitrary Python expressions.
 
-Ausdruckslänge, AST-Größe/-Tiefe, Exponenten, Funktionsargumente und
-Ergebnisgrößen sind begrenzt, damit der Calculator nicht als
-Ressourcenverbrauchs-/Codeausführungsprimitive missbraucht werden kann.
+Expression length, AST size/depth, exponents, function arguments and result size have limits to prevent abuse as a resource-exhaustion/code-execution primitive.
 
-### Filter
+### Filters
 
-Filter sind deklarativ und werden mit AND verknüpft:
+Filters are declarative and combined using AND:
 
 ```json
 [
@@ -466,20 +237,13 @@ Filter sind deklarativ und werden mit AND verknüpft:
 ]
 ```
 
-Unterstützte Operatoren:
+Supported operators: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `not_in`, `is_null`, `not_null`, `contains`.
 
-`eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `not_in`,
-`is_null`, `not_null`, `contains`.
+No Python expressions, Pandas expressions, SQL fragments, regex or lambdas are evaluated. Numeric filter inputs are normalized by numeric value for comparisons with exact JSON Decimal values, including membership and ordering; booleans remain distinct from numeric 0/1.
 
-Es werden bewusst keine Python-Ausdrücke, Pandas-Expressions, SQL-Fragmente,
-Regexe oder Lambdas ausgewertet.
-Numerische Filterargumente werden für Vergleiche mit exakten JSON-Decimal-
-Werten wertgleich normalisiert (auch bei `in`/`not_in` und Größenvergleichen).
-Booleans bleiben dagegen von den numerischen Werten 0 und 1 unterschieden.
+### Aggregations
 
-### Aggregationen
-
-Eine Aggregation besteht aus `column`, `function` und optional `alias`:
+An aggregation specifies `column`, `function`, and optional `alias`:
 
 ```json
 [
@@ -488,69 +252,34 @@ Eine Aggregation besteht aus `column`, `function` und optional `alias`:
 ]
 ```
 
-Unterstützte Funktionen:
+Supported functions: `count`, `sum`, `mean`, `min`, `max`, `median`, `nunique`, `std`.
 
-`count`, `sum`, `mean`, `min`, `max`, `median`, `nunique`, `std`.
-Reine Integer-Summen werden mit Python-Integer-Arithmetik ohne Float-Konvertierung
-berechnet. Für `mean`, `median` und `std` auf reinen Integer-Spalten sowie
-für Aggregationen, die bereits präzise Dezimalwerte enthalten, wird intern
-`Decimal` mit einer an die Größenordnung der Werte angepassten Präzision
-verwendet. Die daraus abgeleitete Decimal-Arbeitspräzision ist auf 10.000
-Stellen begrenzt; Datensätze mit einem größeren erforderlichen Exponenten-/
-Präzisionsbereich werden abgewiesen, bevor ein Decimal-Kontext mit dieser
-Präzision angelegt wird. Vorhandene Float-Spalten behalten aus
-Kompatibilitätsgründen ihre bisherige Float-Semantik; nicht-endliche
-Aggregationsergebnisse werden jedoch abgewiesen. Präzise Dezimalwerte bleiben
-über die reversible Dezimal-Kodierung in JSON-Artefakten erhalten.
+Integer-only sums use Python integer arithmetic without float conversion. For mean, median and standard deviation on integer-only columns, and for aggregations with precise decimal values, `Decimal` uses working precision based on the values' magnitudes. Working precision is capped at **10,000 digits**; datasets requiring greater exponent/precision ranges are rejected before creating such a context.
 
-Boolesche Werte besitzen bei Gleichheit, Membership, Gruppierung und
-Distinct-Zählungen eine eigene skalare Identität und werden daher nicht mit den
-numerischen Werten `0` bzw. `1` zusammengelegt. Bei Sortierungen bleiben
-Nullwerte unabhängig von auf- oder absteigender Sortierrichtung am Ende.
+Existing float columns retain their float semantics for compatibility; nonfinite aggregation results are rejected. Exact decimal values survive via reversible encoding in JSON artifacts. Booleans have distinct scalar identity from 0/1 for equality, membership, grouping and distinct counts. Nulls sort last in both ascending and descending order.
 
-## Automatische Session-Artefakte
+## Automatic session artifacts
 
-Alle tabellenerzeugenden Tools liefern vollständige strukturierte Datensätze
-über MCP-structuredContent und LLM-geeignete Metadaten über das
-cli-agent-spezifische _meta-Protokoll. cli-agent speichert die Daten unter
-einem selbst gewählten, verifizierten Session-Pfad als JSON; Data MCP schreibt
-keine selbst gewählten Dateien. Die Antwort an das LLM enthält nur
-workspace_path, records_path, Schema, Statistiken und begrenzte Vorschau.
-Das gilt ebenso für ein Ergebnis mit nur einer Zeile wie für große Tabellen.
+All table-producing tools return complete structured datasets in MCP `structuredContent` and model-appropriate metadata through the cli-agent-specific `_meta` protocol. The agent saves data as JSON under a self-selected verified session path; Data MCP does not write arbitrary chosen files. The LLM receives only `workspace_path`, `records_path`, schema, statistics and bounded preview, **even for one-row results**.
 
-Die Folgeoperation liest diese Daten ausschließlich über path und den
-angegebenen records_path. Ein erneutes Kopieren, Parsen oder Rekonstruieren der
-Tabellen im LLM-Kontext entfällt. Andere MCP-Clients erhalten weiterhin das
-vollständige structuredContent. Ohne OS-Lesezugriff wird keines der
-tabellarischen Tools registriert.
+Downstream tools read that data solely using `path` and supplied `records_path`. No raw rows are copied, parsed or reconstructed in model context. Other MCP clients still receive full `structuredContent`. Without OS read access, no tabular tools are registered.
 
-Beim regulären Beenden entfernt der Agent ausschließlich seine eigenen
-Session-Dateien; vorhandene Workspace-Daten bleiben unverändert. Ein
-Prozessabsturz kann die Bereinigung verhindern. Nach abgeschlossenen
-Antworten bleiben die eigenen Artefakte zur Inspektion erhalten und werden
-erst bei einer neuen regulären Anfrage oder einem History-Reset bereinigt.
+On clean shutdown, only agent-owned session files are removed; existing workspace data remain unchanged. Crashes may leave artifacts. After completed responses, artifacts are available for inspection until the next regular user request or history reset.
 
-## Workspace-Sicherheit
+## Workspace security
 
-Dateipfade werden vor dem Parsen über dieselbe
-`Workspace`-Sicherheitsgrenze wie beim OS-MCP validiert. Insbesondere gelten:
+Paths are validated through the same `Workspace` boundary as OS MCP before parsing:
 
-- nur relative Pfade innerhalb des fest gebundenen Workspaces,
-- kein `..`,
-- keine Symlink-/Junction-Indirektion für Data-Dateien,
-- kein Zugriff auf geschützte oder als sensibel klassifizierte Pfade,
-- keine Verarbeitung von Dateien mit mehreren Hardlinks,
-- der Agent legt ausschließlich seinen eigenen temporären Session-Ordner an,
-- die aktive Agent-Konfiguration bleibt geschützt.
+- Only relative paths inside the fixed workspace.
+- No `..` traversal.
+- No symlink/junction indirection for Data files.
+- No protected or sensitive paths.
+- No multiply hard-linked files.
+- Only the agent's own temporary session directory is created.
+- Active agent configuration remains protected.
 
-`--exclude-path` wird bei aktiviertem OS-Zugriff sowohl an den OS-MCP als auch
-an den Data-MCP weitergereicht. Mit `--with-data` allein hat der Data-MCP
-keinen Dateizugriff und benötigt daher keine Workspace-Pfadausschlüsse.
+When OS access is enabled, `--exclude-path` is forwarded to both OS MCP and Data MCP. With only `--with-data`, Data MCP has no filesystem capability and needs no workspace exclusions.
 
-## Implementierungsgrenze
+## Implementation boundary
 
-Die Basisoperationen (`select_data`, `aggregate_data`, `inspect_schema` usw.)
-verwenden weiterhin die Python-Standardbibliothek; die drei erweiterten
-Zeitreihen- und DataFrame-Tools nutzen Pandas. Pandas ist eine reguläre
-Projektabhängigkeit und wird immer mitinstalliert. Alle Operationen bleiben
-deklarativ, ohne beliebige Python-Ausdrücke des Modells auszuführen.
+Basic operations such as `select_data`, `aggregate_data` and `inspect_schema` still use Python standard library. The advanced time-series and DataFrame tools use Pandas, installed as a regular project dependency. All operations are declarative and never execute arbitrary Python expressions supplied by the model.
