@@ -553,3 +553,19 @@ def test_write_preview_fails_closed_when_inode_unavailable(tmp_path, monkeypatch
     assert snapshot is None
     assert "Dateiidentität" in preview["diff_error"]
     assert "legitimate" not in str(preview)
+
+
+def test_chroma_search_summaries_render_only_from_standard_agui_tool_results():
+    from importlib.resources import files
+
+    script = files("cli_agent.interfaces").joinpath("static", "app.js").read_text(
+        encoding="utf-8",
+    )
+    assert 'event.type === "TOOL_CALL_RESULT"' in script
+    assert "renderChromaSearchSummary(event)" in script
+    assert 'status.dataset.toolName !== "vector__knowledge_search"' in script
+    assert "value.matches" in script
+    assert "Collection: " in script
+    assert "Initiale Suche" in script
+    assert "summary.textContent =" in script
+    assert "summary.innerHTML" not in script
