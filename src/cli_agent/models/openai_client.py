@@ -46,7 +46,7 @@ def _safe_http_error_text(detail: str) -> str:
         return normalized
 
     omitted = len(normalized) - MAX_HTTP_ERROR_DETAIL_CHARS
-    return normalized[:MAX_HTTP_ERROR_DETAIL_CHARS] + f"... [{omitted} Zeichen gekürzt]"
+    return normalized[:MAX_HTTP_ERROR_DETAIL_CHARS] + f"... [{omitted} characters truncated]"
 
 
 def _safe_http_error_detail(response: httpx.Response) -> str:
@@ -187,17 +187,17 @@ class OpenAIClient:
         usage = self.last_usage
         if usage is None or self.context_length is None:
             return ContextLimitReachedError(
-                "Context-Limit der aktuellen Sitzung wurde erreicht. "
+                "The current session's context limit was reached. "
                 "Es werden keine weiteren Modellanfragen gesendet. Bitte starte "
                 "eine neue Sitzung."
             )
         return ContextLimitReachedError(
-            "Context-Limit der aktuellen Sitzung wurde erreicht. "
-            f"Input des letzten Modellaufrufs: {usage.input_tokens} Tokens; "
-            f"konfiguriertes Limit: {self.context_length} Tokens; "
-            f"Sicherheitsreserve: {CONTEXT_LIMIT_MARGIN} Tokens. "
-            "Die Modellantwort wurde verworfen. Es werden keine weiteren "
-            "Modellanfragen gesendet. Bitte starte eine neue Sitzung."
+            "The current session's context limit was reached. "
+            f"Input of the most recent model call: {usage.input_tokens} Tokens; "
+            f"configured limit: {self.context_length} Tokens; "
+            f"safety margin: {CONTEXT_LIMIT_MARGIN} Tokens. "
+            "The model response was discarded. No more "
+            "model requests will be sent. Start a new session."
         )
 
     def _check_context_limit(self) -> None:
@@ -267,7 +267,7 @@ class OpenAIClient:
                             error_body.decode("utf-8", errors="replace")
                         )
                         if truncated and detail:
-                            detail += "... [HTTP-Fehlerantwort gekürzt]"
+                            detail += "... [HTTP error response truncated]"
                         suffix = f": {detail}" if detail else ""
                         status = response.status_code
                         retryable = status == 429 or 500 <= status <= 599

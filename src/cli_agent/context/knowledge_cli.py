@@ -28,7 +28,7 @@ async def _run_index(config_file):
     )
     db = db_path(vector, config_file=config_file)
     if db.is_relative_to(root):
-        raise ValueError("Knowledge-Index muss außerhalb des Quellenverzeichnisses liegen.")
+        raise ValueError("Knowledge index must be outside the source directory.")
     count = await build_index(
         vector, root=root, path=db,
         network=admin.network, credential_rules=admin.model_credentials,

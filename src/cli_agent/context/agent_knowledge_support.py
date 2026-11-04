@@ -80,7 +80,7 @@ def _knowledge_document(result: Any) -> dict[str, Any]:
     structured = _structured_tool_result(result)
     if structured is None:
         raise RuntimeError(
-            "Das Ergebnis von knowledge_read enthält keine strukturierten Daten."
+            "The knowledge_read result contains no structured data."
         )
 
     path = structured.get("path")
@@ -92,8 +92,8 @@ def _knowledge_document(result: Any) -> dict[str, Any]:
         or not isinstance(content, str)
     ):
         raise RuntimeError(
-            "Das Ergebnis von knowledge_read enthält keinen gültigen Pfad, "
-            "Dokumenttyp oder Dokumentinhalt."
+            "The knowledge_read result contains no valid path, "
+            "document type or document content."
         )
 
     return {

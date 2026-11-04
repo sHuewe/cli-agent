@@ -100,8 +100,8 @@ def classify_local_command(prompt: str) -> LocalCommandInput:
                 command=spec.name,
                 arguments=arguments,
                 error=(
-                    f"Ungültige Syntax für lokalen Befehl {spec.name!r}. "
-                    f"Verwendung: {spec.usage}"
+                    f"Invalid syntax for local command {spec.name!r}. "
+                    f"Usage: {spec.usage}"
                 ),
             )
         return LocalCommandInput(is_local=False)

@@ -27,7 +27,7 @@ class FrontendToolHandoff(Exception):
     """The agent yielded tool calls for the client, without executing them."""
 
     def __init__(self, calls: list[FrontendToolCall], assistant: dict[str, Any]):
-        super().__init__("AG-UI-Frontend-Tools müssen vom Client ausgeführt werden.")
+        super().__init__("AG-UI frontend tools must be executed by the client.")
         self.calls = tuple(calls)
         self.assistant = assistant
 
@@ -49,7 +49,7 @@ def normalize_frontend_tools(
             not name or len(name) > 128 or not name.isascii()
             or not all(c.isalnum() or c in "_-" for c in name)
         ):
-            raise ValueError("Ungültiger Frontend-Tool-Name.")
+            raise ValueError("Invalid frontend tool name.")
         if name in normalized or name in server_names:
             raise ValueError("Doppelter oder mit MCP kollidierender Tool-Name.")
         description = item["description"]
@@ -57,18 +57,18 @@ def normalize_frontend_tools(
             raise ValueError("Frontend-Tool-Beschreibung ist zu lang.")
         schema = item.get("parameters", {"type": "object", "properties": {}})
         if not isinstance(schema, dict):
-            raise ValueError("Frontend-Tool-Parameter müssen ein JSON-Schema-Objekt sein.")
+            raise ValueError("Frontend tool parameters must be a JSON schema object.")
         from jsonschema import Draft202012Validator
         try:
             Draft202012Validator.check_schema(schema)
         except Exception as exc:
-            raise ValueError("Ungültiges Frontend-Tool-Parameterschema.") from exc
+            raise ValueError("Invalid frontend tool parameter schema.") from exc
         try:
             encoded = json.dumps(item, ensure_ascii=False, allow_nan=False)
         except (TypeError, ValueError) as exc:
-            raise ValueError("Ungültige Frontend-Tool-Definition.") from exc
+            raise ValueError("Invalid frontend tool definition.") from exc
         if len(encoded.encode("utf-8")) > MAX_TOOL_DEFINITION_BYTES:
-            raise ValueError("Frontend-Tool-Definition ist zu groß.")
+            raise ValueError("Frontend tool definition is too large.")
         normalized[name] = {
             "type": "function",
             "function": {
@@ -109,12 +109,12 @@ def checked_frontend_results(
                     if (not isinstance(info, dict)
                             or info.get("name") != issued.name
                             or info.get("arguments") != issued.arguments):
-                        raise ValueError("Frontend-Tool-Definition wurde beim Wiederaufnehmen verändert.")
+                        raise ValueError("Frontend tool definition changed during resume.")
                 assistant_found = True
         elif message.get("role") == "tool" and message.get("toolCallId") in required:
             call_id = message["toolCallId"]
             if call_id in results:
-                raise ValueError("Frontend-Tool-Ergebnis wurde mehrfach übermittelt.")
+                raise ValueError("Frontend tool result was submitted more than once.")
             content = message.get("content")
             if isinstance(content, list):
                 content = "\n".join(
@@ -125,7 +125,7 @@ def checked_frontend_results(
             if not isinstance(content, str):
                 raise ValueError("Frontend-Tool-Ergebnis muss Text oder ContentParts sein.")
             if len(content.encode("utf-8")) > MAX_FRONTEND_RESULTS_BYTES:
-                raise ValueError("Frontend-Tool-Ergebnis ist zu groß.")
+                raise ValueError("Frontend tool result is too large.")
             error = message.get("error")
             if error is not None:
                 if not isinstance(error, str):
@@ -138,7 +138,7 @@ def checked_frontend_results(
     if not assistant_found:
         raise ValueError("Assistenten-Nachricht mit den ausstehenden Tool-Aufrufen fehlt.")
     if set(results) != required:
-        raise ValueError("Nicht alle Frontend-Tool-Ergebnisse wurden übermittelt.")
+        raise ValueError("Not all frontend tool results were submitted.")
     return [results[call.id] for call in expected]
 
 
