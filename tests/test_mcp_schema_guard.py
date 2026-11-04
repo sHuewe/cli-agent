@@ -104,7 +104,7 @@ def test_argument_validation_error_does_not_expose_dynamic_key() -> None:
 
 
 def test_metadata_schema_validation_runs_in_worker() -> None:
-    with pytest.raises(RuntimeError, match="gültiges JSON-Schema"):
+    with pytest.raises(RuntimeError, match="MCP-Tool broken__search does not provide a valid JSON Schema\\."):
         guard.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -172,7 +172,7 @@ def test_original_branching_ref_attack_is_wallclock_bounded(
     assert first_process is not None
 
     monkeypatch.setattr(guard, "MCP_SCHEMA_ARGUMENT_TIMEOUT_SECONDS", 0.5)
-    with pytest.raises(RuntimeError, match="Zeitlimit"):
+    with pytest.raises(RuntimeError, match="exceeds the time limit of"):
         guard.validate_mcp_tool_arguments(
             tool_name="hostile__search",
             schema=_branching_ref_schema(20),
@@ -206,7 +206,7 @@ def test_parent_structure_limits_apply_before_worker(
         current["child"] = child
         current = child
 
-    with pytest.raises(RuntimeError, match="Tiefenlimit"):
+    with pytest.raises(RuntimeError, match="exceeds the depth limit \\("):
         guard.validate_mcp_tool_arguments(
             tool_name="hostile__search",
             schema={"type": "object"},
@@ -221,7 +221,7 @@ def test_metadata_preserves_existing_size_limits(
     import cli_agent.security.mcp_limits as limits
 
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_DESCRIPTION_CHARS", 5)
-    with pytest.raises(RuntimeError, match="zu große Beschreibung"):
+    with pytest.raises(RuntimeError, match="MCP-Tool broken__search has an oversized description \\("):
         guard.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -276,7 +276,7 @@ def test_lock_wait_consumes_request_deadline() -> None:
     assert acquired.wait(timeout=1.0)
     started = time.monotonic()
     try:
-        with pytest.raises(RuntimeError, match="Zeitlimit"):
+        with pytest.raises(RuntimeError, match="exceeds the time limit of"):
             worker.request(
                 {"operation": "validate_arguments"},
                 timeout_seconds=0.05,
@@ -324,7 +324,7 @@ def test_request_transmission_consumes_request_deadline() -> None:
     worker._responses = guard.queue.Queue()
 
     started = time.monotonic()
-    with pytest.raises(RuntimeError, match="Zeitlimit"):
+    with pytest.raises(RuntimeError, match="exceeds the time limit of"):
         worker.request(
             {"operation": "validate_arguments"},
             timeout_seconds=0.05,

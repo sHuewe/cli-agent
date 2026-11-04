@@ -22,7 +22,7 @@ def test_mcp_operation_timeout_is_reported() -> None:
         await asyncio.sleep(1)
         return "done"
 
-    with pytest.raises(RuntimeError, match="initialize.*Timeout"):
+    with pytest.raises(RuntimeError, match="initialize exceeded the timeout of 0\\.01 seconds\\."):
         asyncio.run(
             limits.await_mcp_operation(
                 slow(),
@@ -75,7 +75,7 @@ def test_tool_count_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_instruction_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_INSTRUCTIONS_CHARS", 10)
 
-    with pytest.raises(RuntimeError, match="zu große Instructions"):
+    with pytest.raises(RuntimeError, match="MCP-Server 'broken' provides oversized instructions \\(11 > 10 characters\\)\\."):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions="x" * 11,
@@ -85,7 +85,7 @@ def test_instruction_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_description_and_schema_limits_are_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_DESCRIPTION_CHARS", 10)
-    with pytest.raises(RuntimeError, match="zu große Beschreibung"):
+    with pytest.raises(RuntimeError, match="MCP-Tool broken__search has an oversized description \\("):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -94,7 +94,7 @@ def test_description_and_schema_limits_are_enforced(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_DESCRIPTION_CHARS", 100)
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_SCHEMA_CHARS", 20)
-    with pytest.raises(RuntimeError, match="zu großes Schema"):
+    with pytest.raises(RuntimeError, match="MCP-Tool untrusted__read has an oversized schema \\(17 > 2 characters\\)\\."):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -118,7 +118,7 @@ def test_tool_name_length_limit_is_enforced() -> None:
 
 
 def test_tool_name_with_lone_surrogate_is_rejected() -> None:
-    with pytest.raises(RuntimeError, match="Unicode-Surrogate"):
+    with pytest.raises(RuntimeError, match="MCP-Server 'broken' provides a tool name containing an invalid Unicode surr"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -127,7 +127,7 @@ def test_tool_name_with_lone_surrogate_is_rejected() -> None:
 
 
 def test_duplicate_tool_names_are_rejected() -> None:
-    with pytest.raises(RuntimeError, match="mehrfach"):
+    with pytest.raises(RuntimeError, match="Prompt template variable 'name' was assigned more than once using --var\\."):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -136,7 +136,7 @@ def test_duplicate_tool_names_are_rejected() -> None:
 
 
 def test_invalid_and_external_ref_schemas_are_rejected() -> None:
-    with pytest.raises(RuntimeError, match="gültiges JSON-Schema"):
+    with pytest.raises(RuntimeError, match="MCP-Tool broken__search does not provide a valid JSON Schema\\."):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -205,7 +205,7 @@ def test_tool_result_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_RESULT_CHARS", 10)
 
     assert limits.enforce_mcp_tool_result_limit("1234567890") == "1234567890"
-    with pytest.raises(RuntimeError, match="Sicherheitslimit"):
+    with pytest.raises(RuntimeError, match="safety limit"):
         limits.enforce_mcp_tool_result_limit("12345678901")
 
 
@@ -609,7 +609,7 @@ def test_metadata_rejects_non_object_and_non_serializable_schemas() -> None:
             tools=[tool(schema=["not", "an", "object"])],
         )
 
-    with pytest.raises(RuntimeError, match="serialisierbares Schema"):
+    with pytest.raises(RuntimeError, match="does not provide a valid serializable schema\\."):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,

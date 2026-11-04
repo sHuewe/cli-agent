@@ -27,7 +27,7 @@ def test_manifest_round_trip_for_many_windows_like_paths(tmp_path: Path) -> None
 
 
 def test_manifest_missing_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="nicht lesbar"):
+    with pytest.raises(ValueError, match="MCP path policy cannot be read or is invalid:"):
         read_path_policy(tmp_path / "missing.json")
 
 
@@ -61,7 +61,7 @@ def test_manifest_rejects_oversize_file(
         "mutation_protected_paths": [],
     }), encoding="utf-8")
     monkeypatch.setattr(module, "MAX_POLICY_BYTES", 8)
-    with pytest.raises(ValueError, match="Größenlimit"):
+    with pytest.raises(ValueError, match="the size limit\\."):
         read_path_policy(manifest)
 
 

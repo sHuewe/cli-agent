@@ -104,7 +104,7 @@ def test_empty_tool_metadata_never_starts_worker(monkeypatch):
 @pytest.mark.parametrize("invalid", [3, [], {}, False])
 def test_invalid_validation_error_response_fails_closed(monkeypatch, invalid):
     monkeypatch.setattr(guard, "_run_worker", lambda *a, **k: {"validation_error": invalid})
-    with pytest.raises(RuntimeError, match="ungültige Antwort"):
+    with pytest.raises(RuntimeError, match="MCP-Tool server__read: JSON Schema validation returned an invalid response\\."):
         guard.validate_mcp_tool_arguments(
             tool_name="server__read", schema={"type": "object"}, arguments={},
         )
@@ -116,7 +116,7 @@ def test_arguments_are_bounded_before_schema_worker(monkeypatch):
         guard, "_run_worker",
         lambda *args, **kwargs: pytest.fail("deep arguments reached worker"),
     )
-    with pytest.raises(RuntimeError, match="Tiefenlimit"):
+    with pytest.raises(RuntimeError, match="exceeds the depth limit \\("):
         guard.validate_mcp_tool_arguments(
             tool_name="server__read", schema={"type": "object"},
             arguments={"deep": {"deeper": {"too_deep": True}}},
@@ -163,7 +163,7 @@ def test_untrusted_worker_request_rejects_unserializable_and_large_payload(monke
     with pytest.raises(RuntimeError, match="serialisierbar"):
         worker.request({"x": object()}, timeout_seconds=0.1, operation="safe")
     monkeypatch.setattr(guard, "MAX_MCP_SCHEMA_WORKER_REQUEST_BYTES", 8)
-    with pytest.raises(RuntimeError, match="Prozesslimit"):
+    with pytest.raises(RuntimeError, match="safe: validation data exceed the process limit \\(21 > 8 Bytes\\)\\."):
         worker.request({"payload": "too-big"}, timeout_seconds=0.1, operation="safe")
     assert worker._process is None
 
