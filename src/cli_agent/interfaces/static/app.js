@@ -1166,6 +1166,47 @@
       showApiError(error);
     }
   }
+  window.addEventListener("cli-agent-language-change", () => {
+    renderSessionMeta();
+    if (!pendingCommand) {
+      prompt.placeholder = t("composer.placeholder");
+    } else {
+      const spec = COMMANDS[pendingCommand];
+      prompt.placeholder = spec.placeholder === "https://…" ? spec.placeholder : t(spec.placeholder);
+    }
+    for (const group of chat.querySelectorAll(".tool-call-group")) {
+      const count = group.querySelectorAll(".tool-call-row").length;
+      const summary = group.querySelector("summary");
+      if (summary) summary.textContent = t("tools.group", {count});
+      for (const status of group.querySelectorAll(".tool-call-status")) {
+        const state = status.dataset.state || "finished";
+        const keys = {
+          running: "tools.running", success: "tools.success", error: "tools.error",
+          denied: "tools.denied", approval: "tools.approval", finished: "tools.finished"
+        };
+        status.textContent = t(keys[state] || "tools.finished");
+      }
+      for (const summary of group.querySelectorAll(".tool-call-summary[data-vector-matches]")) {
+        summary.textContent = t("vector.summary", {
+          count: Number(summary.dataset.vectorMatches),
+          collection: summary.dataset.vectorCollection,
+          phase: t(summary.dataset.vectorInitial === "true" ? "vector.initial" : "vector.next")
+        });
+      }
+      for (const button of group.querySelectorAll(".artifact-download[data-download-filename]")) {
+        button.textContent = t("download.button", {filename: button.dataset.downloadFilename});
+      }
+    }
+    for (const button of document.querySelectorAll("button[data-runtime-toggle]")) {
+      button.textContent = t(button.dataset.toggleEnabled === "true" ? "toggle.disable" : "toggle.enable");
+      if (button.dataset.permanentlyDisabled === "true") button.title = t("toggle.mcpDisabled");
+    }
+    if (currentContextPayload) {
+      processServerMessage({data: JSON.stringify({type: "working_context", ...currentContextPayload})});
+    }
+    if (sessionsDialog.open) void refreshSessions().catch(showApiError);
+  });
+
   setBusy(true);
   void bootstrap();
 
