@@ -85,7 +85,7 @@ def conversation_history_for_cleanup(history: list[dict[str, Any]], question: st
             continue
         if message.get("tool_calls") or message.get("tool_call_id"):
             continue
-        if content.startswith(("[cli-agent evidence state:", "Externer Referenzkontext für die nachfolgende Benutzeranfrage.")):
+        if content.startswith(("[cli-agent evidence state:", "External reference context for the following user request.", "Externer Referenzkontext für die nachfolgende Benutzeranfrage.")):
             continue
         result.append({"role": role, "content": content})
     result.append({"role": "user", "content": question})
