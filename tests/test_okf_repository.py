@@ -42,7 +42,7 @@ def test_workspace_rejects_symlink_escape(tmp_path: Path) -> None:
         pytest.skip("symlinks are not available in this test environment")
 
     workspace = WorkspaceRoot.from_directory(tmp_path)
-    with pytest.raises(WorkspacePathError, match="außerhalb"):
+    with pytest.raises(WorkspacePathError, match="outside the"):
         workspace.resolve("escape/secret.md")
 
 
@@ -150,7 +150,7 @@ def test_repository_requires_index_md_directly_in_configured_root(tmp_path: Path
     (nested / "index.md").write_text("[Deep](deep.md)\n", encoding="utf-8")
     (nested / "deep.md").write_text(_concept(title="Deep"), encoding="utf-8")
 
-    with pytest.raises(OkfRepositoryError, match="Repository-Root.*index.md"):
+    with pytest.raises(OkfRepositoryError, match="The configured path is not a valid OKF repository: An index\\.md must exist a"):
         OkfRepository.from_directory(tmp_path)
 
 
@@ -163,7 +163,7 @@ def test_root_index_does_not_expose_non_okf_markdown(tmp_path: Path) -> None:
 
     assert index["source"] == "index.md"
     assert index["internal_links"] == []
-    with pytest.raises(OkfRepositoryError, match="nicht konformes Markdown"):
+    with pytest.raises(OkfRepositoryError, match="knowledge_read refuses nonconforming Markdown; OKF concepts require valid Y"):
         repository.knowledge_read("notes.md")
 
 
@@ -179,7 +179,7 @@ def test_non_conforming_markdown_is_hidden_inside_valid_okf_root(tmp_path: Path)
     index = repository.knowledge_index()
     assert [link["path"] for link in index["internal_links"]] == ["valid.md"]
 
-    with pytest.raises(OkfRepositoryError, match="nicht konformes Markdown"):
+    with pytest.raises(OkfRepositoryError, match="knowledge_read refuses nonconforming Markdown; OKF concepts require valid Y"):
         repository.knowledge_read("private-notes.md")
 
 
@@ -335,7 +335,7 @@ def test_knowledge_read_rejects_missing_file(tmp_path: Path) -> None:
     (tmp_path / "index.md").write_text("Root", encoding="utf-8")
     repository = OkfRepository.from_directory(tmp_path)
 
-    with pytest.raises(OkfRepositoryError, match="Pfad konnte nicht aufgelöst werden"):
+    with pytest.raises(OkfRepositoryError, match="Path could not be resolved: 'missing\\.md"):
         repository.knowledge_read("missing.md")
 
 

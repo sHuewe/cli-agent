@@ -37,7 +37,7 @@ def test_search_text_rejects_multiline_literals(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("first\nsecond\n", encoding="utf-8")
     workspace = _workspace(tmp_path)
 
-    with pytest.raises(WorkspaceError, match="Zeilenumbrüche"):
+    with pytest.raises(WorkspaceError, match="text must not contain newlines\\."):
         workspace.search_text("a.txt", "first\nsecond")
-    with pytest.raises(WorkspaceError, match="Zeilenumbrüche"):
+    with pytest.raises(WorkspaceError, match="text must not contain newlines\\."):
         workspace.search_text("a.txt", "\r")

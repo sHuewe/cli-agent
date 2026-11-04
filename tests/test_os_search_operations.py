@@ -115,7 +115,7 @@ def test_file_info_returns_bounded_metadata_and_rejects_sensitive_paths(tmp_path
     assert dir_info["size_bytes"] is None
 
     (tmp_path / ".env").write_text("secret", encoding="utf-8")
-    with pytest.raises(WorkspaceError, match="Secret-/Credential"):
+    with pytest.raises(WorkspaceError, match="credential or"):
         workspace.file_info(".env")
     with pytest.raises(WorkspaceError, match="'..'"):
         workspace.file_info("../outside.txt")
@@ -139,7 +139,7 @@ def test_move_file_rejects_parent_escape_sensitive_and_missing_parent(tmp_path: 
 
     with pytest.raises(WorkspaceError, match="'..'"):
         workspace.move_file("source.txt", "../outside.txt")
-    with pytest.raises(WorkspaceError, match="Ändern"):
+    with pytest.raises(WorkspaceError, match="Modifying secret, credential or protected workspace files is not allowed th"):
         workspace.move_file("source.txt", ".env")
     with pytest.raises(WorkspaceError, match="Zielordner"):
         workspace.move_file("source.txt", "missing/target.txt")
@@ -181,11 +181,11 @@ def test_recursive_tools_do_not_follow_directory_symlink_outside_workspace(tmp_p
 
     assert [item["path"] for item in search["matches"]] == ["inside.txt"]
     assert found["files"] == ["inside.txt"]
-    with pytest.raises(WorkspaceError, match="außerhalb"):
+    with pytest.raises(WorkspaceError, match="outside the"):
         workspace.search_text("external", "needle")
-    with pytest.raises(WorkspaceError, match="außerhalb"):
+    with pytest.raises(WorkspaceError, match="outside the"):
         workspace.find_files("external", "*.txt")
-    with pytest.raises(WorkspaceError, match="außerhalb"):
+    with pytest.raises(WorkspaceError, match="outside the"):
         workspace.file_info("external/secret.txt")
 
 
@@ -203,9 +203,9 @@ def test_move_file_cannot_use_symlink_to_escape_workspace(tmp_path: Path) -> Non
         pytest.skip("Symlinks are unavailable on this platform")
 
     workspace = _workspace(root)
-    with pytest.raises(WorkspaceError, match="außerhalb|Symlinks|Junctions"):
+    with pytest.raises(WorkspaceError, match="The path points outside the project workspace\\."):
         workspace.move_file("source.txt", "outside-link/moved.txt")
-    with pytest.raises(WorkspaceError, match="außerhalb|Symlinks|Junctions"):
+    with pytest.raises(WorkspaceError, match="The path points outside the project workspace\\."):
         workspace.move_file("source-link.txt", "moved.txt")
     assert (root / "source.txt").read_text(encoding="utf-8") == "inside"
     assert (outside / "outside.txt").read_text(encoding="utf-8") == "outside"
@@ -225,9 +225,9 @@ def test_new_read_tools_skip_or_reject_hardlinked_files(tmp_path: Path) -> None:
     found = json.loads(workspace.find_files(".", "*.txt"))
     assert search["matches"] == []
     assert found["files"] == []
-    with pytest.raises(WorkspaceError, match="Hardlinks"):
+    with pytest.raises(WorkspaceError, match="multiple hardlinks"):
         workspace.file_info("source.txt")
-    with pytest.raises(WorkspaceError, match="Hardlinks"):
+    with pytest.raises(WorkspaceError, match="multiple hardlinks"):
         workspace.move_file("source.txt", "moved.txt")
 
 
