@@ -12,22 +12,21 @@ from cli_agent.interfaces.web_ui_sessions import BrowserSessionRegistry
 
 
 def _browser_translation_shim() -> str:
-    """Provide real German catalog messages to isolated JS function tests."""
+    """Provide actual German catalog strings to isolated browser JS tests."""
     import json
     import re
     from cli_agent.interfaces.web_ui_api import API_I18N_JS
 
-    german = API_I18N_JS.split("de: Object.freeze({", 1)[1].split("\\n    })", 1)[0]
-    entries = dict(re.findall(r'^\\s*"([^"]+)": "([^"]*)"', german, re.MULTILINE))
+    german = API_I18N_JS.split("de: Object.freeze({", 1)[1].split(chr(10) + "    })", 1)[0]
+    entries = dict(re.findall(r'^ *"([^"]+)": "([^"]*)"', german, re.MULTILINE))
     assert "tools.group" in entries and "error.messageTooLarge" in entries
     return (
         "const t = (key, values = {}) => { const messages = " +
         json.dumps(entries, ensure_ascii=False) +
-        "; return (messages[key] || key).replace(" +
-        r"/\\{([a-zA-Z][a-zA-Z0-9_]*)\\}/g, (match, name) => " +
-        "Object.hasOwn(values, name) ? String(values[name]) : match); };\\n"
+        "; return Object.entries(values).reduce((text, [name, value]) => " +
+        'text.split("{" + name + "}").join(String(value)), messages[key] || key); };' +
+        chr(10)
     )
-
 
 
 class BrowserAgent:
