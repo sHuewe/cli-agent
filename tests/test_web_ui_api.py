@@ -360,8 +360,11 @@ def test_browser_agui_transcript_compaction_with_real_javascript():
       throw new Error("Latest tool result was removed");
     console.log("ok");
     """
+    # Pipe JavaScript through UTF-8 stdin rather than a long Windows command
+    # line. Node's argument decoding/startup may be slow or unreliable there.
     result = subprocess.run(
-        [node, "-e", _browser_translation_shim() + script], capture_output=True, text=True, timeout=60,
+        [node, "-"], input=_browser_translation_shim() + script,
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
         check=False,
     )
     assert result.returncode == 0, result.stderr
