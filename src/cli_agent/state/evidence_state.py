@@ -317,7 +317,7 @@ class EvidenceState(EvidenceOperationsMixin):
             if not isinstance(step_id, str) or not _ID.fullmatch(step_id):
                 raise EvidenceError("Invalid plan step ID.")
             if step_id in seen:
-                raise EvidenceError("Doppelte Planschritt-ID.")
+                raise EvidenceError("Duplicate plan step ID.")
             seen.add(step_id)
             if (not isinstance(description, str) or not description.strip()
                     or len(description) > MAX_PLAN_DESCRIPTION_LENGTH):
@@ -353,9 +353,9 @@ class EvidenceState(EvidenceOperationsMixin):
         unknown = sorted(set(arguments) - allowed)
         if unknown:
             raise EvidenceError(
-                f"Unbekannte Evidence-Felder: {unknown}. "
+                f"Unknown evidence fields: {unknown}. "
                 f"Allowed fields: {sorted(allowed)}. "
-                "Entferne die unbekannten Felder oder korrigiere ihre Namen."
+                "Remove unknown fields or correct their names."
             )
         if not arguments:
             raise EvidenceError(
@@ -392,7 +392,7 @@ class EvidenceState(EvidenceOperationsMixin):
             if not isinstance(step_id, str) or not _ID.fullmatch(step_id):
                 raise EvidenceError("Invalid plan step ID in status update.")
             if step_id in updates_by_id:
-                raise EvidenceError("Doppelte Planschritt-ID im Status-Update.")
+                raise EvidenceError("Duplicate plan step ID in status update.")
             if not isinstance(status, str) or status not in _PLAN_STATUSES:
                 raise EvidenceError("Invalid plan step status.")
             updates_by_id[step_id] = status
@@ -400,7 +400,7 @@ class EvidenceState(EvidenceOperationsMixin):
             by_id = {step["id"]: step for step in candidate_plan["steps"]}
             for step_id, status in updates_by_id.items():
                 if step_id not in by_id:
-                    raise EvidenceError(f"Unbekannte Planschritt-ID: {step_id!r}.")
+                    raise EvidenceError(f"Unknown plan step ID: {step_id!r}.")
                 by_id[step_id]["status"] = status
         plan_step_ids = (
             {step["id"] for step in candidate_plan["steps"]}
@@ -415,10 +415,10 @@ class EvidenceState(EvidenceOperationsMixin):
             raise EvidenceError("Ein Toolaufruf kann nicht zugleich entfernt und wiederhergestellt werden.")
         for item in (*discard, *restore):
             if item not in self.tool_results:
-                raise EvidenceError(f"Unbekannter oder nicht abgeschlossener Toolaufruf: {item!r}.")
+                raise EvidenceError(f"Unknown or unfinished tool call: {item!r}.")
         for evidence_id in remove:
             if evidence_id not in candidates:
-                raise EvidenceError(f"Unbekannte Evidence-ID: {evidence_id!r}.")
+                raise EvidenceError(f"Unknown evidence ID: {evidence_id!r}.")
             del candidates[evidence_id]
 
         incoming = arguments.get("evidences", [])
@@ -448,7 +448,7 @@ class EvidenceState(EvidenceOperationsMixin):
             if not isinstance(evidence_id, str) or not _ID.fullmatch(evidence_id):
                 raise EvidenceError("Invalid evidence ID.")
             if evidence_id in seen_ids:
-                raise EvidenceError("Doppelte Evidence-ID im Update.")
+                raise EvidenceError("Duplicate evidence ID in update.")
             seen_ids.add(evidence_id)
             if entry["type"] not in ("observation", "calculation", "hypothesis"):
                 raise EvidenceError("Invalid evidence type.")
@@ -475,14 +475,14 @@ class EvidenceState(EvidenceOperationsMixin):
                         for source_id, meta in list(self.tool_results.items())[-12:]
                     ]
                     raise EvidenceError(
-                        f"Unbekannte oder nicht abgeschlossene Quelle: {call_id!r}. "
+                        f"Unknown or unfinished source: {call_id!r}. "
                         "Use an actual call ID from a completed "
                         "Toolantwort, statt tool_calls leer zu lassen. "
                         "Zuletzt registrierte Quellen: "
                         + (", ".join(available) if available else "(keine)")
                     )
                 if call_id in source_ids:
-                    raise EvidenceError("Doppelte Quelle in einer Evidence.")
+                    raise EvidenceError("Duplicate source in evidence.")
                 if not isinstance(description, str) or not description.strip() or len(description) > 300:
                     raise EvidenceError("Quellenbeschreibung fehlt oder ist zu lang.")
                 source_ids.add(call_id)
