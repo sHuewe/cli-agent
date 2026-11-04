@@ -790,7 +790,7 @@ def _expand_global_input_vars(
             name = match.group(1)
             if name not in variables:
                 raise ValueError(
-                    f"{field} referenziert unknowne globale Variable {name!r}."
+                    f"{field} references unknown global variable {name!r}."
                 )
             return variables[name]
 
@@ -802,7 +802,7 @@ def _expand_global_input_vars(
         if _GLOBAL_INPUT_START_EXPR.search(rendered):
             raise ValueError(
                 f"{field} contains an invalid or nested "
-                "globale Variablenreferenz."
+                "global variable reference."
             )
         return rendered
     if isinstance(value, list):
@@ -870,7 +870,7 @@ def _path_list(value: Any, *, field: str) -> tuple[Path, ...]:
     ):
         raise ValueError(
             f"{field} must be a nonempty string or a list "
-            "nichtleerer Strings sein."
+            "of nonempty strings."
         )
     values = tuple(item.strip() for item in raw_values)
     if len(values) != len(set(values)):
@@ -940,7 +940,7 @@ def _validate_when(
     if match.group("step") and match.group("step") not in prior_ids:
         raise ValueError(f"{label} may only reference previous steps.")
     if match.group("input") and match.group("input").split(".")[1] not in inputs:
-        raise ValueError(f"{label} verweist auf einen unknownen Flow-Input.")
+        raise ValueError(f"{label} references an unknown flow input.")
     if (match.group("item") or match.group("iteration")) and not foreach:
         raise ValueError(f"{label} requires foreach for item/iteration.id.")
     op = ops[0]
@@ -1681,7 +1681,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         ):
             raise ValueError(
                 f"steps[{index}].add_web_context must be a list "
-                "nichtleerer URLs sein."
+                "of nonempty URLs."
             )
         add_web_context = tuple(
             value.strip()
@@ -1771,7 +1771,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         ):
             raise ValueError(
                 f"steps[{index}].with_mcp must be a list "
-                "nichtleerer MCP-Servernamen sein."
+                "of nonempty MCP server names."
             )
         with_mcp = tuple(name.strip() for name in raw_with_mcp)
         if any("${" in name for name in with_mcp):
@@ -1842,7 +1842,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         ):
             raise ValueError(
                 f"steps[{index}].approve_tools must be a list "
-                "nichtleerer Toolnamen sein."
+                "of nonempty tool names."
             )
         approve_tools = tuple(value.strip() for value in raw_approve_tools)
         if len(approve_tools) != len(set(approve_tools)):
@@ -1918,23 +1918,23 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 )
             if "${each" in path_template and iterate is None:
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.path verwendet "
-                    "each ohne iterate."
+                    f"steps[{index}].json_inputs.{name}.path uses "
+                    "each without iterate."
                 )
             if "${item" in path_template and raw.get("foreach") is None:
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.path verwendet "
-                    "item ohne foreach."
+                    f"steps[{index}].json_inputs.{name}.path uses "
+                    "item without foreach."
                 )
             if "${iteration.id}" in path_template and raw.get("foreach") is None:
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.path verwendet "
-                    "iteration.id ohne foreach."
+                    f"steps[{index}].json_inputs.{name}.path uses "
+                    "iteration.id without foreach."
                 )
             if iterate is not None and iterate.startswith("item.") and raw.get("foreach") is None:
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.iterate verwendet "
-                    "item ohne foreach."
+                    f"steps[{index}].json_inputs.{name}.iterate uses "
+                    "item without foreach."
                 )
             _validate_input_references(
                 [path_template],
@@ -2044,8 +2044,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if item_match is not None:
                 if foreach is None:
                     raise ValueError(
-                        f"steps[{index}].conversation_items verwendet "
-                        "${item...} ohne foreach."
+                        f"steps[{index}].conversation_items uses "
+                        "${item...} without foreach."
                     )
             elif source_match is not None:
                 source_id = source_match.group(1)
@@ -2124,8 +2124,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 for value in dynamic_values
             ):
                 raise ValueError(
-                    f"steps[{index}] verwendet "
-                    "${item...} ohne foreach."
+                    f"steps[{index}] uses "
+                    "${item...} without foreach."
                 )
 
         if conversation_items is None and any(
@@ -2133,8 +2133,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             for value in variables.values()
         ):
             raise ValueError(
-                f"steps[{index}] verwendet ${{conversation.item...}} "
-                "ohne conversation_items."
+                f"steps[{index}] uses ${{conversation.item...}} "
+                "without conversation_items."
             )
 
         uses_previous_output = any(
@@ -2838,7 +2838,7 @@ def _capture_run_start_invocation(
     budget.consume(purpose="Run-Start-Planung")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
-        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+        raise ValueError("Cyclic subflow invocation detected.")
     if len(call_stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
             f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
@@ -3377,8 +3377,8 @@ def _snapshot_dynamic_checkpoint_candidates(
                     examined_paths.add(key)
                     if len(examined_paths) > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
                         raise ValueError(
-                            "Zu viele eindeutige dynamische JSON-Checkpoint-"
-                            "Kandidaten beim Run-Start."
+                            "Too many distinct dynamic JSON checkpoint "
+                            "candidates at run startup."
                         )
 
             # Never follow symlinks or Windows reparse points.
@@ -3647,7 +3647,7 @@ def _json_input_items(
         for value in values:
             if not isinstance(value, list):
                 raise ValueError(
-                    f"json_inputs.iterate {selector!r} erwartet Listen."
+                    f"json_inputs.iterate {selector!r} requires lists."
                 )
             if len(next_values) + len(value) > MAX_JSON_INPUT_FILES:
                 raise ValueError(
@@ -4011,7 +4011,7 @@ def _collect_reserved_flow_input_paths(
     key = _filesystem_path_key(flow.source)
     if key in stack:
         chain = " -> ".join((*stack, key))
-        raise ValueError(f"Zyklischer Subflow-Aufruf erkannt: {chain}")
+        raise ValueError(f"Cyclic subflow invocation detected: {chain}")
     if len(stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
             f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
@@ -4148,7 +4148,7 @@ def validate_flow(
     )
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in _stack:
-        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+        raise ValueError("Cyclic subflow invocation detected.")
     if len(_stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
             f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
@@ -4320,7 +4320,7 @@ def validate_flow(
         if missing:
             raise ValueError(
                 f"Step {step.step_id!r} does not set all "
-                "Prompt-Variablen: "
+                "prompt variables: "
                 + ", ".join(missing)
             )
 
@@ -4459,7 +4459,7 @@ def _preflight_concrete_invocation_outputs(
     budget.consume(purpose="Preflight")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
-        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+        raise ValueError("Cyclic subflow invocation detected.")
     if len(call_stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
             f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
@@ -5668,7 +5668,7 @@ async def _run_flow_internal(
 ) -> _FlowResultValue | None:
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
-        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+        raise ValueError("Cyclic subflow invocation detected.")
     if len(call_stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
             f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
@@ -6247,7 +6247,7 @@ def main() -> None:
         if details:
             message += f"\nFlow-Diagnose: {details}"
         print(
-            "Fehler: " + sanitize_terminal_text(
+            "Error: " + sanitize_terminal_text(
                 message, multiline=True,
                 escape_invisible_formatting=True,
             ),
