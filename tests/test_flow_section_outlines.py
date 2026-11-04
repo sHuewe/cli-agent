@@ -62,7 +62,7 @@ def test_assembled_outlines_merge_shared_concept_keys_without_llm():
 
 def test_missing_or_wrong_section_outline_is_rejected():
     tasks = prepare_section_outline_tasks(*data())
-    with pytest.raises(ValueError, match="fehlen"):
+    with pytest.raises(ValueError, match="are missing"):
         assemble_section_outlines(
             tasks, {"iterations": []},
             source_path="sources/doc.md", source_slug="doc-123",
