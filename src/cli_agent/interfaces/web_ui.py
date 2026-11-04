@@ -613,12 +613,12 @@ INDEX_HTML = """<!doctype html>
   <dialog id="working-context-dialog" class="working-context-dialog">
     <div class="dialog-header">
       <div>
-        <h2>LLM Context</h2>
+        <h2 data-i18n="context.open">LLM Context</h2>
         <div class="meta" data-i18n="context.description">Messages from the last main loop, plus currently active tools and reference contexts.</div>
       </div>
       <div class="dialog-actions">
-        <button id="refresh-working-context" class="secondary" type="button">Aktualisieren</button>
-        <button id="close-working-context" class="secondary" type="button">Schließen</button>
+        <button id="refresh-working-context" class="secondary" type="button" data-i18n="actions.refresh">Refresh</button>
+        <button id="close-working-context" class="secondary" type="button" data-i18n="actions.close">Close</button>
       </div>
     </div>
     <div class="dialog-actions"><label for="context-run-select" data-i18n="context.runLabel">Agent run:</label><select id="context-run-select"><option value="main" data-i18n="context.mainRun">Main run</option></select></div>
