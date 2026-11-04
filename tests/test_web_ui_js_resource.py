@@ -79,15 +79,21 @@ def test_browser_scripts_have_valid_javascript_syntax():
 
 
 def test_i18n_language_detection_switch_and_persistence_with_node():
+    import json
     import shutil
     import subprocess
     import pytest
     from cli_agent.interfaces.web_ui_api import API_I18N_JS
+    from cli_agent.interfaces.web_ui_locales import get_locale
 
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is not installed")
-    script = r"""
+    catalogs = {
+        "en": get_locale("en"), "de": get_locale("de"),
+        "fr": {"session.new": "Nouvelle session"},
+    }
+    script = "const catalogs = " + json.dumps(catalogs, ensure_ascii=True) + ";\n" + r"""
 const vm = require("node:vm");
 const fs = require("node:fs");
 const assert = require("node:assert/strict");
@@ -97,7 +103,12 @@ const elements = {
     setAttribute(name, value) { this[name] = value; }},
   aria: {dataset: {i18nAriaLabel: "commands.label"},
     setAttribute(name, value) { this[name] = value; }},
-  select: {value: "", addEventListener(name, callback) { this.onChange = callback; }}
+  select: {
+    value: "", options: [],
+    replaceChildren() { this.options = []; },
+    add(option) { this.options.push(option); },
+    addEventListener(name, callback) { this.onChange = callback; }
+  }
 };
 const document = {
   documentElement: {lang: ""},
@@ -119,34 +130,55 @@ const window = {
   addEventListener(type, callback) { events[type] = callback; },
   dispatchEvent(event) { this.lastEvent = event; }
 };
+const requests = [];
+async function fetch(url) {
+  requests.push(url);
+  if (url === "/assets/i18n/locales.json") {
+    return {ok: true, json: async () => ["en", "de", "fr"]};
+  }
+  const name = url.replace("/assets/i18n/", "").replace(".json", "");
+  if (!Object.hasOwn(catalogs, name)) return {ok: false};
+  return {ok: true, json: async () => catalogs[name]};
+}
 const sandbox = {
-  window, document,
+  window, document, fetch,
+  Option: class { constructor(label, value) { this.label = label; this.value = value; } },
   navigator: {languages: ["fr-FR", "de-DE", "en-US"]},
   CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } }
 };
 vm.runInNewContext(fs.readFileSync(0, "utf8"), sandbox);
-assert.equal(document.documentElement.lang, "de");
-assert.equal(elements.label.textContent, "Neue Session in neuem Tab");
-assert.equal(elements.select.value, "de");
-assert.equal(elements.placeholder.placeholder, "Nachricht an cli-agent");
-elements.select.onChange({target: {value: "en"}});
-assert.equal(document.documentElement.lang, "en");
-assert.equal(elements.label.textContent, "New session in new tab");
-assert.equal(elements.aria["aria-label"], "Local commands");
-assert.equal(store["cli-agent-ui-language"], "en");
-assert.equal(window.lastEvent.type, "cli-agent-language-change");
-assert.equal(window.cliAgentI18n.t("tools.group", {count: 3}), "Tool calls (3)");
-events.storage({key: "cli-agent-ui-language", newValue: "de"});
-assert.equal(document.documentElement.lang, "de");
-assert.equal(store["cli-agent-ui-language"], "en");
-window.cliAgentI18n.setLocale("unsupported");
-assert.equal(document.documentElement.lang, "de");
+(async () => {
+  await window.cliAgentI18n.ready;
+  assert.equal(document.documentElement.lang, "fr");
+  assert.deepEqual(elements.select.options.map(x => x.value), ["en", "de", "fr"]);
+  assert.equal(elements.label.textContent, "Nouvelle session");
+  assert.equal(elements.placeholder.placeholder, "Message to cli-agent"); // Fallback for missing fr key.
+  assert.equal(elements.select.value, "fr");
+  await window.cliAgentI18n.setLocale("en");
+  assert.equal(document.documentElement.lang, "en");
+  assert.equal(elements.label.textContent, "New session in new tab");
+  assert.equal(elements.aria["aria-label"], "Local commands");
+  assert.equal(store["cli-agent-ui-language"], "en");
+  assert.equal(window.lastEvent.type, "cli-agent-language-change");
+  assert.equal(window.cliAgentI18n.t("tools.group", {count: 3}), "Tool calls (3)");
+  events.storage({key: "cli-agent-ui-language", newValue: "de-DE"});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(document.documentElement.lang, "de");
+  assert.equal(store["cli-agent-ui-language"], "en"); // Storage event does not persist.
+  assert.equal(elements.label.textContent, "Neue Session in neuem Tab");
+  const accepted = await window.cliAgentI18n.setLocale("unsupported");
+  assert.equal(accepted, false);
+  assert.equal(document.documentElement.lang, "de");
+  assert(requests.includes("/assets/i18n/fr.json"));
+  console.log("ok");
+})().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = subprocess.run(
         [node, "-e", script], input=API_I18N_JS, text=True,
         encoding="utf-8", capture_output=True, timeout=20, check=False,
     )
     assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
 
 
 def test_connection_status_survives_language_changes():
