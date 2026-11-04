@@ -49,6 +49,7 @@ packages = ["src/cli_agent"]
 "src/cli_agent/settings/config.example.toml" = "cli_agent/settings/config.example.toml"
 "src/cli_agent/interfaces/static/app.js" = "cli_agent/interfaces/static/app.js"
 "src/cli_agent/interfaces/static/i18n.js" = "cli_agent/interfaces/static/i18n.js"
+"src/cli_agent/interfaces/static/i18n" = "cli_agent/interfaces/static/i18n"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
