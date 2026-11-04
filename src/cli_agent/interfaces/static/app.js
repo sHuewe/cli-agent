@@ -1,6 +1,8 @@
 
 (() => {
   "use strict";
+  const i18n = window.cliAgentI18n;
+  const t = (key, values) => i18n.t(key, values);
 
   const chat = document.getElementById("chat");
   const form = document.getElementById("composer");
@@ -40,19 +42,19 @@
     }
     const result = cleanupRun.processing_result || {};
     const labels = {
-      running: "Läuft", cancelled: "Abgebrochen", applied: "Angewendet", unchanged: "Keine Änderung",
-      invalid: "Ungültige Antwort", failed: "Fehlgeschlagen"
+      running: t("cleanup.running"), cancelled: t("cleanup.cancelled"),
+      applied: t("cleanup.applied"), unchanged: t("cleanup.unchanged"),
+      invalid: t("cleanup.invalid"), failed: t("cleanup.failed")
     };
     const bytesBefore = Number(result.bytes_before ?? 0);
     const bytesAfter = Number(result.bytes_after ?? 0);
     const lines = [
-      "Verarbeitung: " + (labels[result.status] || String(result.status || "Unbekannt")),
-      "Evidences: " + (result.evidences_before ?? "?") + " → " + (result.evidences_after ?? "?"),
-      "Größe: " + bytesBefore + " → " + bytesAfter + " Bytes",
-      "Entfernt: " + (result.removed ?? 0) + " · Aktualisiert: " +
-        (result.updated ?? 0) + " · Zusammengeführt: " + (result.merged ?? 0)
+      t("cleanup.processing", {status: labels[result.status] || String(result.status || t("cleanup.unknown"))}),
+      t("cleanup.evidences", {before: result.evidences_before ?? "?", after: result.evidences_after ?? "?"}),
+      t("cleanup.size", {before: bytesBefore, after: bytesAfter}),
+      t("cleanup.changes", {removed: result.removed ?? 0, updated: result.updated ?? 0, merged: result.merged ?? 0})
     ];
-    if (result.error) lines.push("Fehler: " + String(result.error));
+    if (result.error) lines.push(t("cleanup.error", {error: String(result.error)}));
     cleanupProcessingResult.textContent = lines.join("\n");
   }
   contextRunSelect.addEventListener("change", renderSelectedWorkingMessages);
@@ -98,19 +100,19 @@
     add_web_context: {
       argument: true,
       display: "add_web_context",
-      question: "Welche URL soll als Web-Kontext hinzugefügt werden?",
+      question: "commands.webQuestion",
       placeholder: "https://…"
     },
     enable: {
       argument: true,
       display: "enable",
-      question: "Welcher MCP-Server soll aktiviert werden?",
-      placeholder: "Name des MCP-Servers"
+      question: "commands.enableQuestion",
+      placeholder: "commands.serverPlaceholder"
     },
     disable: {
       argument: true,
       display: "disable",
-      question: "Welcher MCP-Server soll deaktiviert werden?",
+      question: "commands.disableQuestion",
       placeholder: "Name des MCP-Servers"
     }
   };
@@ -133,7 +135,7 @@
     details.className = "tool-call-group";
     details.open = true;
     const summary = document.createElement("summary");
-    summary.textContent = "Tool-Aufrufe (0)";
+    summary.textContent = t("tools.group", {count: 0});
     const list = document.createElement("div");
     list.className = "tool-call-list";
     details.append(summary, list);
@@ -161,7 +163,7 @@
     row.append(name, status);
     group.list.appendChild(row);
     group.calls.set(id, status);
-    group.summary.textContent = "Tool-Aufrufe (" + group.calls.size + ")";
+    group.summary.textContent = t("tools.group", {count: group.calls.size});
   }
 
   function setToolStatus(id, state) {
@@ -173,7 +175,7 @@
     };
     const normalized = Object.hasOwn(labels, state) ? state : "finished";
     status.dataset.state = normalized;
-    status.textContent = labels[normalized];
+    status.textContent = t(labels[normalized]);
   }
 
   function renderChromaSearchSummary(event) {
@@ -205,9 +207,8 @@
       summary.className = "tool-call-summary";
       row.appendChild(summary);
     }
-    summary.textContent = value.matches + " Treffer" +
-      " · Collection: " + value.collection +
-      (value.initial ? " · Initiale Suche" : " · Weitere Suche");
+    summary.textContent = t("vector.summary", {count: value.matches, collection: value.collection,
+      phase: t(value.initial ? "vector.initial" : "vector.next")});
     setToolStatus(event.toolCallId, "success");
     return true;
   }
@@ -235,7 +236,8 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "secondary artifact-download";
-      button.textContent = "Herunterladen: " + filename;
+      button.textContent = t("download.button", {filename});
+      button.dataset.downloadFilename = filename;
       button.addEventListener("click", async () => {
         button.disabled = true;
         try {
@@ -256,7 +258,7 @@
             setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
           }
         } catch (error) {
-          addMessage("error", "Download fehlgeschlagen: " + String(error?.message || error));
+          addMessage("error", t("download.failed", {error: String(error?.message || error)}));
         } finally {
           button.disabled = false;
         }
@@ -329,9 +331,9 @@
       return;
     }
     pendingCommand = name;
-    prompt.placeholder = spec.placeholder;
+    prompt.placeholder = spec.placeholder === "https://…" ? spec.placeholder : t(spec.placeholder);
     cancelCommand.classList.remove("hidden");
-    addMessage("system", spec.question);
+    addMessage("system", t(spec.question));
     prompt.focus();
   }
 
@@ -354,7 +356,7 @@
     const button = document.createElement("button");
     button.type = "button";
     button.className = enabled ? "secondary" : "";
-    button.textContent = enabled ? "Disable" : "Enable";
+    button.textContent = t(enabled ? "toggle.disable" : "toggle.enable");
     button.title = label;
     button.dataset.runtimeToggle = "true";
     button.dataset.permanentlyDisabled = String(Boolean(disabled));
@@ -447,8 +449,8 @@
       name.textContent = String(context.label || context.source || "");
       const source = document.createElement("div");
       source.className = "state-source";
-      source.textContent = (context.kind === "file" ? "Datei: " : "Web: ") +
-        String(context.source || "");
+      source.textContent = t(context.kind === "file" ? "context.fileSource" : "context.webSource",
+        {source: String(context.source || "")});
       heading.append(name, source);
 
       const body = document.createElement("div");
@@ -620,7 +622,7 @@
           } else if (event.type === "RUN_ERROR") {
             dismissApproval();
             finishPendingTools("error");
-            emit({type: "error", content: String(event.message || "Agentenlauf fehlgeschlagen.")});
+            emit({type: "error", content: String(event.message || t("error.runFailed"))});
             finished = true;
           } else if (event.type === "RUN_FINISHED") {
             finished = true;
@@ -693,8 +695,7 @@
     if (messages.length - start > MAX_SYNCED_MESSAGES ||
         bytes > MAX_SYNCED_REQUEST_BYTES) {
       throw new Error(
-        "Die aktuelle Nachricht oder Tool-Fortsetzung ist zu groß. " +
-        "Bitte den Inhalt verkürzen."
+        t("error.messageTooLarge")
       );
     }
     return messages.slice(start);
@@ -867,10 +868,8 @@
       const servers = Array.isArray(payload.mcp_servers)
         ? payload.mcp_servers.join(", ")
         : "";
-      meta.textContent =
-        "Workspace: " + payload.workspace +
-        " · Modell: " + payload.model +
-        " · MCP: " + (servers || "(keine)");
+      currentSessionMetadata = {workspace: payload.workspace, model: payload.model, servers};
+      renderSessionMeta();
       for (const message of payload.initial_messages || []) {
         addMessage("system", String(message));
       }
@@ -908,13 +907,13 @@
       currentContextPayload = payload;
       const previous = contextRunSelect.value;
       contextRunSelect.replaceChildren();
-      contextRunSelect.add(new Option("Hauptlauf", "main"));
+      contextRunSelect.add(new Option(t("context.mainRun"), "main"));
       for (const run of (Array.isArray(payload.sub_runs) ? payload.sub_runs : [])) {
-        contextRunSelect.add(new Option("Sub-Run: " + run.task.slice(0, 75), run.id));
+        contextRunSelect.add(new Option(t("context.subRun", {task: run.task.slice(0, 75)}), run.id));
       }
       for (const run of (Array.isArray(payload.cleanup_runs) ? payload.cleanup_runs : [])) {
-        const cause = run.trigger === "plan_changed" ? "Planänderung" : "20 Toolaufrufe";
-        contextRunSelect.add(new Option("Cleanup #" + String(run.id).replace(/^cleanup-/, "") + " – " + cause, run.id));
+        const cause = t(run.trigger === "plan_changed" ? "context.planChanged" : "context.toolLimit");
+        contextRunSelect.add(new Option(t("context.cleanupRun", {number: String(run.id).replace(/^cleanup-/, ""), cause}), run.id));
       }
       contextRunSelect.value = [...contextRunSelect.options].some(o => o.value === previous) ? previous : "main";
       renderSelectedWorkingMessages();
@@ -1037,7 +1036,7 @@
       const current = item.session_id === sessionId;
       const executing = item.busy && !item.approval_pending;
       name.textContent = item.session_id.slice(0, 12) +
-        (current ? " · aktueller Tab" : item.occupied ? " · geöffnet" : " · frei");
+        " · " + t(current ? "session.currentTab" : item.occupied ? "session.occupied" : "session.available");
       const actions = document.createElement("div");
       const open = document.createElement("button");
       open.type = "button";
