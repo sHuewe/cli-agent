@@ -279,3 +279,70 @@ async def test_chroma_retrieval_is_independent_of_unavailable_optional_okf():
     payload = json.loads(await agent._collect_knowledge("Wie funktioniert OAuth2?"))
     assert payload["backend"] == "chroma"
     assert payload["content"][0]["source"] == "handbuch.pdf"
+
+
+@pytest.mark.asyncio
+async def test_initial_chroma_retrieval_emits_bounded_tool_events():
+    session = ChromaKnowledgeSession(config=_config(), rag=StubReader([_hit()]))
+    agent = _agent_with_chroma(session)
+    events = []
+
+    async def on_event(kind, payload):
+        events.append((kind, payload))
+
+    agent.event_callback = on_event
+
+    async def model_select(**kwargs):
+        request = json.loads(kwargs["messages"][-1]["content"])
+        token = request["initial_search"]["entries"][0]["selection_token"]
+        return json.dumps({
+            "found_content": True, "selected_okf_tokens": [token], "warnings": [],
+        })
+
+    agent._run_model_loop = AsyncMock(side_effect=model_select)
+    knowledge = await agent._collect_knowledge("What does handbook.pdf say?")
+    assert json.loads(knowledge)["found_content"] is True
+    assert [event[0] for event in events] == ["tool_started", "tool_finished"]
+    assert events[0][1]["tool"] == "vector__knowledge_search"
+    assert events[1][1]["call_id"] == events[0][1]["call_id"]
+    assert events[1][1]["status"] == "success"
+    assert events[1][1]["search_summary"] == {
+        "matches": 1, "collection": "knowledge", "initial": True,
+    }
+    assert "handbuch.pdf" not in str(events)
+    assert "Authentifizierung" not in str(events)
+    assert "What does handbook" not in str(events)
+
+
+@pytest.mark.asyncio
+async def test_failed_initial_chroma_retrieval_balances_tool_events():
+    class BrokenReader:
+        async def search(self, *_args, **_kwargs):
+            raise ValueError("sensitive internal embedding failure")
+
+    session = ChromaKnowledgeSession(config=_config(), rag=BrokenReader())
+    agent = _agent_with_chroma(session)
+    agent._vector_config = _config(required=False)
+    events = []
+
+    async def on_event(kind, payload):
+        events.append((kind, payload))
+
+    agent.event_callback = on_event
+    assert await agent._collect_knowledge("question") is None
+    assert [event[0] for event in events] == ["tool_started", "tool_finished"]
+    assert events[1][1]["status"] == "error"
+    assert events[1][1]["call_id"] == events[0][1]["call_id"]
+    assert "sensitive internal" not in str(events)
+
+
+def test_chroma_summary_never_includes_raw_result_data():
+    from cli_agent.context.chroma_knowledge import chroma_search_event_summary
+
+    result = {"query": "secret question", "entries": [{
+        "id": "secret-id", "content": "sensitive document text",
+        "source": "internal.pdf", "metadata": {"private": "value"},
+    }]}
+    assert chroma_search_event_summary(result, collection="knowledge", initial=False) == {
+        "matches": 1, "collection": "knowledge", "initial": False,
+    }
