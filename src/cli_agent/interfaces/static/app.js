@@ -26,6 +26,14 @@
   const contextRunSelect = document.getElementById("context-run-select");
   const cleanupProcessingResult = document.getElementById("cleanup-processing-result");
   let currentContextPayload = null;
+  let currentSessionMetadata = null;
+  function renderSessionMeta() {
+    if (!currentSessionMetadata) return;
+    meta.textContent = t("session.meta", {
+      ...currentSessionMetadata,
+      servers: currentSessionMetadata.servers || t("session.noneMcp")
+    });
+  }
   function renderSelectedWorkingMessages() {
     if (!currentContextPayload) return;
     const selected = contextRunSelect.value;
@@ -113,7 +121,7 @@
       argument: true,
       display: "disable",
       question: "commands.disableQuestion",
-      placeholder: t("commands.serverPlaceholder")
+      placeholder: "commands.serverPlaceholder"
     }
   };
 
@@ -170,8 +178,8 @@
     const status = activeToolGroup?.calls.get(String(id || ""));
     if (!status) return;
     const labels = {
-      running: t("tools.running"), success: t("tools.success"), error: t("tools.error"), denied: t("tools.denied"),
-      approval: t("tools.approval"), finished: t("tools.finished")
+      running: "tools.running", success: "tools.success", error: "tools.error",
+      denied: "tools.denied", approval: "tools.approval", finished: "tools.finished"
     };
     const normalized = Object.hasOwn(labels, state) ? state : "finished";
     status.dataset.state = normalized;
@@ -207,6 +215,9 @@
       summary.className = "tool-call-summary";
       row.appendChild(summary);
     }
+    summary.dataset.vectorMatches = String(value.matches);
+    summary.dataset.vectorCollection = value.collection;
+    summary.dataset.vectorInitial = String(value.initial);
     summary.textContent = t("vector.summary", {count: value.matches, collection: value.collection,
       phase: t(value.initial ? "vector.initial" : "vector.next")});
     setToolStatus(event.toolCallId, "success");
@@ -356,6 +367,7 @@
     const button = document.createElement("button");
     button.type = "button";
     button.className = enabled ? "secondary" : "";
+    button.dataset.toggleEnabled = String(enabled);
     button.textContent = t(enabled ? "toggle.disable" : "toggle.enable");
     button.title = label;
     button.dataset.runtimeToggle = "true";
