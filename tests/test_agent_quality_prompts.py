@@ -21,6 +21,39 @@ def _agent(tmp_path: Path, *, agent_timezone: str | None = None) -> CliAgent:
     )
 
 
+
+def test_built_in_agent_prompts_use_english_instructions() -> None:
+    """Prompt language is independent of the user's response language."""
+    from cli_agent.runtime.agent import (
+        EVIDENCE_WORKING_MEMORY_SYSTEM_RULE,
+        MCP_INSTRUCTION_SYSTEM_RULE,
+        REFERENCE_CONTEXT_SYSTEM_RULE,
+        WORKSPACE_TOOL_SYSTEM_RULE,
+    )
+    from cli_agent.runtime.agent_prompts import (
+        KNOWLEDGE_SYSTEM_PROMPT,
+        VECTOR_KNOWLEDGE_PROMPT,
+        HYBRID_OKF_KNOWLEDGE_PROMPT,
+        CHROMA_KNOWLEDGE_PROMPT,
+    )
+    from cli_agent.context.file_context import FILE_CONTEXT_SYSTEM_RULE
+    from cli_agent.context.web_context_agent import WEB_CONTEXT_SYSTEM_RULE
+
+    prompts = (
+        BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE,
+        EVIDENCE_WORKING_MEMORY_SYSTEM_RULE, MCP_INSTRUCTION_SYSTEM_RULE,
+        REFERENCE_CONTEXT_SYSTEM_RULE, WORKSPACE_TOOL_SYSTEM_RULE,
+        KNOWLEDGE_SYSTEM_PROMPT, VECTOR_KNOWLEDGE_PROMPT,
+        HYBRID_OKF_KNOWLEDGE_PROMPT, CHROMA_KNOWLEDGE_PROMPT,
+        FILE_CONTEXT_SYSTEM_RULE, WEB_CONTEXT_SYSTEM_RULE,
+    )
+    for prompt in prompts:
+        assert not any(char in prompt for char in "äöüÄÖÜß")
+    assert "user's language" in BASE_SYSTEM_PROMPT
+    assert "untrusted" in REFERENCE_CONTEXT_SYSTEM_RULE
+    assert "one OKF tool per model response" in KNOWLEDGE_SYSTEM_PROMPT
+
+
 def test_system_prompt_uses_system_local_time_by_default(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
     instant = datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc)
