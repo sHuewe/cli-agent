@@ -374,12 +374,12 @@ class EvidenceState(EvidenceOperationsMixin):
         status_updates = arguments.get("plan_step_updates", [])
         if (not isinstance(status_updates, list)
                 or len(status_updates) > MAX_PLAN_STEPS):
-            raise EvidenceError("plan_step_updates muss eine begrenzte Liste sein.")
+            raise EvidenceError("plan_step_updates must be a bounded list.")
         if status_updates and candidate_plan is None:
-            raise EvidenceError("plan_step_updates erfordert einen bestehenden Plan.")
+            raise EvidenceError("plan_step_updates requires an existing plan.")
         if status_updates and "plan" in arguments:
             raise EvidenceError(
-                "plan und plan_step_updates nicht gleichzeitig verwenden. "
+                "Do not provide plan and plan_step_updates simultaneously. "
                 "Provide individual status updates or the complete plan."
             )
         updates_by_id: dict[str, str] = {}
@@ -412,7 +412,7 @@ class EvidenceState(EvidenceOperationsMixin):
         discard = self._ids(arguments.get("discard_tool_call_ids", []), "discard_tool_call_ids")
         restore = self._ids(arguments.get("restore_tool_call_ids", []), "restore_tool_call_ids")
         if set(discard) & set(restore):
-            raise EvidenceError("Ein Toolaufruf kann nicht zugleich entfernt und wiederhergestellt werden.")
+            raise EvidenceError("A tool call cannot be discarded and restored simultaneously.")
         for item in (*discard, *restore):
             if item not in self.tool_results:
                 raise EvidenceError(f"Unknown or unfinished tool call: {item!r}.")
@@ -423,7 +423,7 @@ class EvidenceState(EvidenceOperationsMixin):
 
         incoming = arguments.get("evidences", [])
         if not isinstance(incoming, list) or len(incoming) > MAX_EVIDENCES:
-            raise EvidenceError("evidences muss eine begrenzte Liste sein.")
+            raise EvidenceError("evidences must be a bounded list.")
         seen_ids: set[str] = set()
         referenced: set[str] = set()
         for entry in incoming:

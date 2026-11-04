@@ -521,7 +521,7 @@ def test_invalid_plan_or_unlinked_evidence_rejected_atomically():
         invalid["steps"][1]["id"] = "identify"
         state.update({"plan": invalid})
     assert "plan" not in state.snapshot()
-    with pytest.raises(EvidenceError, match="Status"):
+    with pytest.raises(EvidenceError, match="status"):
         invalid = _plan()
         invalid["steps"][0]["status"] = "unknown"
         state.update({"plan": invalid})
@@ -580,7 +580,7 @@ def test_partial_plan_status_update_and_atomic_failures():
     with pytest.raises(EvidenceError, match="Unknown plan step ID"):
         state.update({"plan_step_updates": [{"id": "missing", "status": "skipped"}]})
     assert state.snapshot() == before
-    with pytest.raises(EvidenceError, match="nicht gleichzeitig"):
+    with pytest.raises(EvidenceError, match="simultaneously"):
         state.update({"plan": _plan(), "plan_step_updates": [
             {"id": "identify", "status": "completed"}
         ]})
