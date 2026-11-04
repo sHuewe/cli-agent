@@ -175,7 +175,7 @@ def test_flow_rejects_oversized_static_conversation_items(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="conversation_items.*mehr als"):
+    with pytest.raises(ValueError, match="conversation_items.*contains more than"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
