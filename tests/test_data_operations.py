@@ -404,6 +404,44 @@ def test_select_data_returns_rows_without_writing_workspace_files(
     assert sorted(path.name for path in tmp_path.iterdir()) == ["sales.csv"]
 
 
+def test_aggregate_count_ignores_nulls_and_nunique_counts_distinct_non_nulls(tmp_path: Path) -> None:
+    (tmp_path / "measurements.json").write_text(
+        json.dumps([
+            {"group": "A", "value": 5},
+            {"group": "A", "value": None},
+            {"group": "A", "value": 5},
+            {"group": "B", "value": 8},
+        ]),
+        encoding="utf-8",
+    )
+    result = _operations(tmp_path).aggregate_data(
+        [
+            {"column": "value", "function": "count", "alias": "non_null"},
+            {"column": "value", "function": "nunique", "alias": "unique_non_null"},
+        ],
+        "measurements.json",
+        group_by=["group"],
+        sort_by=["group"],
+    )
+    assert _markdown_rows(result) == [
+        {"group": "A", "non_null": 2, "unique_non_null": 1},
+        {"group": "B", "non_null": 1, "unique_non_null": 1},
+    ]
+
+
+@pytest.mark.parametrize("bad_key", ["op", "agg", "operation", "func"])
+def test_aggregate_invalid_function_keys_report_accepted_schema(tmp_path: Path, bad_key: str) -> None:
+    _write_csv(tmp_path)
+    with pytest.raises(
+        DataOperationError,
+        match=r"Unknown aggregation fields \\(allowed: column, function, alias\\): " + bad_key,
+    ):
+        _operations(tmp_path).aggregate_data(
+            [{"column": "revenue", bad_key: "mean"}],
+            "sales.csv",
+        )
+
+
 def test_aggregate_data_returns_all_group_results_without_writing(tmp_path: Path) -> None:
     _write_csv(tmp_path)
     operations = _operations(tmp_path)
