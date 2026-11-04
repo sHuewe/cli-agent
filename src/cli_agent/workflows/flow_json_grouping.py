@@ -18,19 +18,19 @@ _WINDOWS_RESERVED_NAMES = frozenset(
 
 def _object(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError(f"{name} muss ein JSON-Objekt sein.")
+        raise ValueError(f"{name} must be a JSON object.")
     return value
 
 
 def _list(value: Any, name: str) -> list[Any]:
     if not isinstance(value, list):
-        raise ValueError(f"{name} muss eine JSON-Liste sein.")
+        raise ValueError(f"{name} must be a JSON list.")
     return value
 
 
 def _string(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} muss ein nichtleerer String sein.")
+        raise ValueError(f"{name} must be a nonempty string.")
     return value
 
 

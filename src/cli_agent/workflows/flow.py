@@ -261,7 +261,7 @@ def _ensure_output_parent_directory(workspace: Path, output: Path) -> None:
         relative_parent = output.parent.relative_to(workspace)
     except ValueError as exc:
         raise ValueError(
-            f"Output-Ordner must be inside the fixed workspace: {output.parent}"
+            f"Output directory must be inside the fixed workspace: {output.parent}"
         ) from exc
 
     current = workspace
@@ -290,7 +290,7 @@ def _ensure_output_parent_directory(workspace: Path, output: Path) -> None:
             resolved.relative_to(workspace)
         except ValueError as exc:
             raise ValueError(
-                f"Output-Ordner must be inside the fixed workspace: "
+                f"Output directory must be inside the fixed workspace: "
                 f"{candidate}"
             ) from exc
         current = resolved
@@ -605,7 +605,7 @@ def _reserve_future_child_checkpoint_inputs(
     budget just because a flow contains more steps.
     """
     scan_budget = budget if budget is not None else _SubflowTraversalBudget()
-    scan_budget.consume(purpose="Checkpoint-Eingabereservierung")
+    scan_budget.consume(purpose="checkpoint input reservation")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError("Cyclic or excessively nested subflow.")
@@ -1990,8 +1990,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     continue
                 if source_id not in known_ids or source_id == step_id:
                     raise ValueError(
-                        f"steps[{index}] may contain only Output eines vorherigen "
-                        f"Schritts referenzieren: {source_id!r}."
+                        f"steps[{index}] may only reference output from a previous "
+                        f"step: {source_id!r}."
                     )
 
         foreach_value = raw.get("foreach")
