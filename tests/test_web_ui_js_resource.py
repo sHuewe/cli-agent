@@ -23,9 +23,9 @@ def test_i18n_catalog_is_packaged_and_has_both_languages():
     assert 'window.localStorage.setItem(STORAGE_KEY, locale)' in source
     assert 'document.documentElement.lang = locale' in source
 
-    english = source.split("en: Object.freeze({", 1)[1].split("}),\\n    de:", 1)[0]
-    german = source.split("de: Object.freeze({", 1)[1].split("\\n    })", 1)[0]
-    names = lambda block: set(re.findall(r'^\\s*"([^"]+)":', block, re.MULTILINE))
+    english = source.split("en: Object.freeze({", 1)[1].split("}),\n    de:", 1)[0]
+    german = source.split("de: Object.freeze({", 1)[1].split("\n    })", 1)[0]
+    names = lambda block: set(re.findall(r'^\s*"([^"]+)":', block, re.MULTILINE))
     assert names(english) == names(german)
     assert len(names(english)) >= 70
 
