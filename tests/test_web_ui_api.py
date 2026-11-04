@@ -12,13 +12,12 @@ from cli_agent.interfaces.web_ui_sessions import BrowserSessionRegistry
 
 
 def _browser_translation_shim() -> str:
-    """Provide actual German catalog strings to isolated browser JS tests."""
+    """Provide the actual German JSON catalog to isolated browser JS tests."""
     import json
-    import re
-    from cli_agent.interfaces.web_ui_api import API_I18N_JS
+    from cli_agent.interfaces.web_ui_locales import get_locale
 
-    german = API_I18N_JS.split("de: Object.freeze({", 1)[1].split(chr(10) + "    })", 1)[0]
-    entries = dict(re.findall(r'^ *"([^"]+)": "([^"]*)"', german, re.MULTILINE))
+    entries = get_locale("de")
+    assert entries is not None
     assert "tools.group" in entries and "error.messageTooLarge" in entries
     return (
         "const t = (key, values = {}) => { const messages = " +
@@ -113,6 +112,19 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
         assert "script-src 'self'" in i18n.headers["content-security-policy"]
         assert i18n.headers["cache-control"] == "no-store"
         assert "cli-agent-ui-language" in i18n.text
+        manifest = await client.get("/assets/i18n/locales.json")
+        assert manifest.status_code == 200
+        assert manifest.json() == ["en", "de"]
+        assert manifest.headers["cache-control"] == "no-store"
+        for code in ("en", "de"):
+            catalog = await client.get(f"/assets/i18n/{code}.json")
+            assert catalog.status_code == 200
+            assert catalog.json()["session.new"]
+            assert catalog.headers["content-security-policy"]
+            assert catalog.headers["cache-control"] == "no-store"
+        assert (await client.get("/assets/i18n/fr.json")).status_code == 404
+        assert (await client.get("/assets/i18n/locales.json", headers={"Host": "evil.example"})).status_code == 403
+        assert (await client.get("/assets/i18n/en.json", headers={"Origin": "https://example.com"})).status_code == 403
         assert (await client.get("/assets/i18n.js", headers={"Host": "evil.example"})).status_code == 403
         assert "WebSocket(wsUrl)" not in (await client.get("/assets/app.js")).text
         assert (await client.post("/ui/bootstrap", json={})).status_code == 401
