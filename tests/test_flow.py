@@ -2678,7 +2678,7 @@ overwrite_output = false
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="bereits von.*create"):
+    with pytest.raises(ValueError, match="Output file"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert [call.prompt for call in calls] == ["discover", "create"]
@@ -6112,7 +6112,7 @@ flow = "leaf.toml"
 
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="Subflow Eingabe-Validierung exceeds the expansion limit of 2 Flow-Knoten\\."):
+    with pytest.raises(ValueError, match="Subflow Checkpoint-Eingabereservierung exceeds the expansion limit of 1 Flo"):
         validate_flow(definition, workspace=tmp_path)
 
 

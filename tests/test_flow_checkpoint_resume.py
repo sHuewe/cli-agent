@@ -288,7 +288,7 @@ def test_parent_retains_only_live_checkpoint_source_guards(
     monkeypatch.setattr(flow_module, "run_once", fake_run)
     flow = load_flow(root, workspace=tmp_path)
     if checkpoint_success:
-        with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
             asyncio.run(run_flow(flow, workspace=tmp_path))
         assert called == []
     else:
@@ -316,7 +316,7 @@ def test_parent_protects_unknown_future_checkpoint_before_writer(
         raise AssertionError("Earlier writer must not run")
 
     monkeypatch.setattr(flow_module, "run_once", fake_run)
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
     assert called == []
 
@@ -369,7 +369,7 @@ def test_completed_child_still_protects_verifier_checkpoint_file(
             web_context_statuses=(),
         )
     monkeypatch.setattr(flow_module, "run_once", fake_run)
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
 
 

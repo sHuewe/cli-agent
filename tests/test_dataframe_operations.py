@@ -49,7 +49,7 @@ def test_json_file_and_pointer_work_with_existing_tools(tmp_path):
     ))["row_count"] == 2
     with pytest.raises(DataOperationError, match="records_path"):
         operations.inspect_data("readings.json", records_path="/missing")
-    with pytest.raises(DataOperationError, match="JSON-Pointer"):
+    with pytest.raises(DataOperationError, match="Invalid JSON Pointer escape sequence\\."):
         operations.inspect_data("readings.json", records_path="/measurements/~2")
 
 
@@ -582,7 +582,7 @@ def test_resample_and_rolling_operations(frames):
 
 
 def test_division_by_zero_and_invalid_frequency_rejected(frames):
-    with pytest.raises(DataOperationError, match="null"):
+    with pytest.raises(DataOperationError, match="Division by zero is not allowed\\."):
         frames.derive_columns("l1.json", [DerivedColumn("x", "divide", "power", constant=0)], records_path="/measurements")
     with pytest.raises(DataOperationError, match="frequency"):
         frames.resample_data("l1.json", "1D; import os", [ResampleAggregation("power", "mean", "avg")], records_path="/measurements")
@@ -590,12 +590,12 @@ def test_division_by_zero_and_invalid_frequency_rejected(frames):
 
 @pytest.mark.parametrize("invalid_name", [" delta", "delta ", "\tvalue", "value\n"])
 def test_generated_column_names_must_be_readable_by_data_mcp(frames, invalid_name):
-    with pytest.raises(DataOperationError, match="column names"):
+    with pytest.raises(DataOperationError, match="DataFrame-Ergebnis contains an invalid column name\\. Column names must be no"):
         frames.derive_columns(
             "l1.json", [DerivedColumn(invalid_name, "diff", "power")],
             records_path="/measurements",
         )
-    with pytest.raises(DataOperationError, match="column names"):
+    with pytest.raises(DataOperationError, match="DataFrame-Ergebnis contains an invalid column name\\. Column names must be no"):
         frames.resample_data(
             "l1.json", "1min", [ResampleAggregation("power", "sum", invalid_name)],
             records_path="/measurements",
@@ -603,7 +603,7 @@ def test_generated_column_names_must_be_readable_by_data_mcp(frames, invalid_nam
 
 
 def test_dataframe_result_applies_reader_column_validation():
-    with pytest.raises(DataOperationError, match="column names"):
+    with pytest.raises(DataOperationError, match="DataFrame-Ergebnis contains an invalid column name\\. Column names must be no"):
         DataFrameOperations._result(pd.DataFrame({"value ": [1]}), operation="derive_columns")
 
 
@@ -645,7 +645,7 @@ def test_resample_rejects_aggregation_overflow(frames, tmp_path):
         {"timestamp": "2026-06-24T07:00:00", "power": 1e308},
         {"timestamp": "2026-06-24T07:00:10", "power": 1e308},
     ])
-    with pytest.raises(DataOperationError, match="nonfinite result"):
+    with pytest.raises(DataOperationError, match="Resampling erzeugte ein nichtendliches Ergebnis\\."):
         frames.resample_data("overflow.json", "1min", [
             ResampleAggregation("power", "sum", "total"),
         ], records_path="/measurements")
@@ -835,7 +835,7 @@ def test_empty_join_artifact_preserves_schema_for_followup_tools(frames, tmp_pat
 @pytest.mark.parametrize("invalid_columns", ["name", ["name ", "value"], ["name", "name"], list(range(101))])
 def test_empty_json_artifact_rejects_invalid_declared_schema(invalid_columns):
     document = json.dumps({"columns": invalid_columns, "rows": []})
-    with pytest.raises(DataOperationError, match="column names|schema|columns"):
+    with pytest.raises(DataOperationError, match="JSON-DataFrame-Schema contains an invalid column name\\. Column names must be"):
         DataOperations(None)._read_records(
             data=document, data_format="json", records_path="/rows",
         )
