@@ -6,7 +6,7 @@ class DataReadMixin:
     @staticmethod
     def extract_markdown_tables(markdown: str) -> str:
         if not isinstance(markdown, str):
-            raise DataOperationError("markdown muss ein String sein.")
+            raise DataOperationError("markdown must be a string.")
         if len(markdown) > MAX_DATA_PAYLOAD_CHARS:
             raise DataOperationError(
                 "Markdown exceeds the limit of "
@@ -46,7 +46,7 @@ class DataReadMixin:
     @staticmethod
     def _read_table(table: dict[str, Any]) -> tuple[list[str], list[Record]]:
         if not isinstance(table, dict):
-            raise DataOperationError("table muss ein Objekt sein.")
+            raise DataOperationError("table must be an object.")
         columns = table.get("columns")
         raw_rows = table.get("rows")
         if (
@@ -56,11 +56,11 @@ class DataReadMixin:
             or len(columns) != len(set(columns))
         ):
             raise DataOperationError(
-                "table.columns muss eine nicht-leere Liste eindeutiger "
-                "Spaltennamen sein."
+                "table.columns must be a nonempty list of unique "
+                "column names."
             )
         if not isinstance(raw_rows, list):
-            raise DataOperationError("table.rows muss eine Liste sein.")
+            raise DataOperationError("table.rows must be a list.")
         if len(raw_rows) > MAX_DATA_ROWS:
             raise DataOperationError(
                 "Tabular data exceed the row limit of "
@@ -70,7 +70,7 @@ class DataReadMixin:
         for index, raw_row in enumerate(raw_rows, start=1):
             if not isinstance(raw_row, dict):
                 raise DataOperationError(
-                    f"table.rows entry {index} muss ein Objekt sein."
+                    f"table.rows entry {index} must be an object."
                 )
             extras = set(raw_row) - set(columns)
             if extras:
@@ -99,7 +99,7 @@ class DataReadMixin:
             or table_index < 0
         ):
             raise DataOperationError(
-                "table_index muss eine nicht-negative ganze Zahl sein."
+                "table_index must be a nonnegative integer."
             )
         try:
             tables = extract_markdown_tables(
@@ -143,13 +143,13 @@ class DataReadMixin:
         files may be passed directly to downstream path-based tools instead.
         """
         if not isinstance(content, str):
-            raise DataOperationError("content muss ein String sein.")
+            raise DataOperationError("content must be a string.")
         if len(content) > MAX_DATA_PAYLOAD_CHARS or len(content.encode("utf-8")) > MAX_DATA_PAYLOAD_CHARS:
             raise DataOperationError("Inline data exceed the size limit.")
         normalized = content.lstrip("\ufeff")
         stripped = normalized.lstrip(" \t\r\n")
         if not stripped:
-            raise DataOperationError("Kein Datensatz im Text erkannt.")
+            raise DataOperationError("No dataset was recognized in the text.")
 
         if stripped[0] in "{[":
             try:
@@ -246,12 +246,12 @@ class DataReadMixin:
         source_count = sum(source is not None for source in (path, data))
         if source_count != 1:
             raise DataOperationError(
-                "Genau eine Datenquelle muss angegeben werden: path oder data."
+                "Exactly one data source must be provided: path or data."
             )
 
         if data is not None:
             if not isinstance(data, str):
-                raise DataOperationError("data muss ein String sein.")
+                raise DataOperationError("data must be a string.")
             if len(data) > MAX_DATA_PAYLOAD_CHARS:
                 raise DataOperationError(
                     "Inline data exceed the limit of "
@@ -293,7 +293,7 @@ class DataReadMixin:
 
         if data_format is not None:
             raise DataOperationError(
-                "data_format darf nur zusammen mit data verwendet werden."
+                "data_format may only be used together with data."
             )
         if self.workspace is None:
             raise DataOperationError(
@@ -323,11 +323,11 @@ class DataReadMixin:
                 text = file_path.read_text(encoding="utf-8")
             except UnicodeDecodeError as exc:
                 raise DataOperationError(
-                    f"Datendatei ist nicht als UTF-8 lesbar: {file_path.name!r}"
+                    f"Data file is not readable as UTF-8: {file_path.name!r}"
                 ) from exc
             except OSError as exc:
                 raise DataOperationError(
-                    f"Datendatei konnte nicht gelesen werden: "
+                    f"Could not read data file: "
                     f"{file_path.name!r}: {exc}"
                 ) from exc
             return self._read_markdown_text(
@@ -346,7 +346,7 @@ class DataReadMixin:
                     records_path=records_path,
                 )
             except (UnicodeDecodeError, OSError) as exc:
-                raise DataOperationError("JSON-Datei konnte nicht als UTF-8 gelesen werden.") from exc
+                raise DataOperationError("Could not read JSON file as UTF-8.") from exc
         if suffix in {".csv", ".tsv"}:
             return self._read_delimited(
                 file_path,
@@ -394,15 +394,15 @@ class DataReadMixin:
                 return columns, rows
         except UnicodeDecodeError as exc:
             raise DataOperationError(
-                f"Datendatei ist nicht als UTF-8 lesbar: {file_path.name!r}"
+                f"Data file is not readable as UTF-8: {file_path.name!r}"
             ) from exc
         except csv.Error as exc:
             raise DataOperationError(
-                f"CSV/TSV konnte nicht geparst werden: {file_path.name!r}: {exc}"
+                f"Could not parse CSV/TSV: {file_path.name!r}: {exc}"
             ) from exc
         except OSError as exc:
             raise DataOperationError(
-                f"Datendatei konnte nicht gelesen werden: {file_path.name!r}: {exc}"
+                f"Could not read data file: {file_path.name!r}: {exc}"
             ) from exc
 
     @staticmethod
@@ -444,7 +444,7 @@ class DataReadMixin:
             return columns, rows
         except csv.Error as exc:
             raise DataOperationError(
-                f"CSV/TSV konnte nicht geparst werden: {exc}"
+                f"Could not parse CSV/TSV: {exc}"
             ) from exc
 
     @staticmethod
@@ -464,13 +464,13 @@ class DataReadMixin:
         for index, raw in enumerate(raw_rows, start=1):
             if not isinstance(raw, dict):
                 raise DataOperationError(
-                    f"JSON-Eintrag {index} muss ein Objekt enthalten."
+                    f"JSON entry {index} must contain an object."
                 )
             record: Record = {}
             for raw_name, raw_value in raw.items():
                 column = _validate_column_name(
                     raw_name,
-                    source=f"JSON-Eintrag {index}",
+                    source=f"JSON entry {index}",
                 )
                 if column not in known_columns:
                     known_columns.add(column)
@@ -540,10 +540,10 @@ class DataReadMixin:
         if pointer is None or pointer == "":
             return raw
         if not isinstance(pointer, str) or not pointer.startswith("/"):
-            raise DataOperationError("records_path muss ein JSON Pointer ab '/' sein.")
+            raise DataOperationError("records_path must be a JSON Pointer starting with '/'.")
         parts = pointer[1:].split("/")
         if len(parts) > 32:
-            raise DataOperationError("records_path ist zu tief verschachtelt.")
+            raise DataOperationError("records_path is nested too deeply.")
         current = raw
         for part in parts:
             if "~" in part:
@@ -555,22 +555,22 @@ class DataReadMixin:
             elif isinstance(current, list) and part.isascii() and part.isdecimal() and (part == "0" or not part.startswith("0")) and int(part) < len(current):
                 current = current[int(part)]
             else:
-                raise DataOperationError(f"records_path existiert nicht: {pointer!r}.")
+                raise DataOperationError(f"records_path does not exist: {pointer!r}.")
         return current
 
     def inspect_json(self, path: str) -> str:
         """Discover JSON record arrays without returning their values."""
         if self.workspace is None:
-            raise DataOperationError("Dateizugriff ist nicht aktiviert.")
+            raise DataOperationError("File access is not enabled.")
         file_path = self.workspace.resolve_readable_file(path, direct=True)
         if file_path.suffix.casefold() != ".json":
-            raise DataOperationError("inspect_json erwartet eine .json-Datei.")
+            raise DataOperationError("inspect_json requires a .json file.")
         if file_path.stat().st_size > MAX_DATA_FILE_BYTES:
             raise DataOperationError("JSON file exceeds the size limit.")
         try:
             raw = json.loads(file_path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant)
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise DataOperationError("JSON-Datei konnte nicht geparst werden.") from exc
+            raise DataOperationError("Could not parse JSON file.") from exc
         discovered: list[dict[str, Any]] = []
         inspected = 0
         complete = True
@@ -650,13 +650,13 @@ class DataReadMixin:
                         ) from exc
                     if not isinstance(raw, dict):
                         raise DataOperationError(
-                            f"JSONL-Zeile {line_number} muss ein Objekt enthalten."
+                            f"JSONL line {line_number} must contain an object."
                         )
                     record: Record = {}
                     for raw_name, raw_value in raw.items():
                         column = _validate_column_name(
                             raw_name,
-                            source=f"JSONL-Zeile {line_number}",
+                            source=f"JSONL line {line_number}",
                         )
                         if column not in known_columns:
                             known_columns.add(column)
@@ -665,11 +665,11 @@ class DataReadMixin:
                     rows.append(record)
         except UnicodeDecodeError as exc:
             raise DataOperationError(
-                f"Datendatei ist nicht als UTF-8 lesbar: {file_path.name!r}"
+                f"Data file is not readable as UTF-8: {file_path.name!r}"
             ) from exc
         except OSError as exc:
             raise DataOperationError(
-                f"Datendatei konnte nicht gelesen werden: {file_path.name!r}: {exc}"
+                f"Could not read data file: {file_path.name!r}: {exc}"
             ) from exc
 
         return columns, rows
