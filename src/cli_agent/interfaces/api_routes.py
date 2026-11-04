@@ -37,9 +37,9 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         """
         thread_id = request.path_params["thread_id"]
         if not isinstance(thread_id, str) or not 0 < len(thread_id) <= 128:
-            return error(400, "Ungültige AG-UI-threadId.")
+            return error(400, "Invalid AG-UI threadId.")
         if not await service.remove_agui_thread(thread_id):
-            return error(404, "AG-UI-Thread nicht gefunden.")
+            return error(404, "AG-UI thread not found.")
         return Response(status_code=204)
 
     async def download_artifact(request: Request) -> Response:
@@ -54,7 +54,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
             if not ui["registry"].is_owner(
                 thread_id, request.headers.get("x-cli-agent-lease")
             ):
-                return error(403, "Keine gültige Browser-Bindung.")
+                return error(403, "No valid browser lease.")
             session = service.sessions.get(thread_id)
         else:
             session_id = service._agui_threads.get(thread_id)
@@ -67,7 +67,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         try:
             payload = session.agent._result_artifacts.read_registered(descriptor["path"])
         except (ValueError, RuntimeError, OSError):
-            return error(404, "Download nicht mehr verfügbar.")
+            return error(404, "Download is no longer available.")
         from urllib.parse import quote
         filename = descriptor["filename"]
         return Response(
@@ -128,7 +128,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
                             for key in ("threadId", "runId")
                         )
                     ):
-                        return error(400, "Ungültige Cancel-Anfrage.")
+                        return error(400, "Invalid cancel request.")
                     thread_id, run_id = body["threadId"], body["runId"]
                     browser_cancel = (
                         ui is not None
@@ -139,13 +139,13 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
                         if not ui["registry"].is_owner(
                             thread_id, request.headers.get("x-cli-agent-lease")
                         ):
-                            return error(403, "Keine gültige Browser-Bindung.")
+                            return error(403, "No valid browser lease.")
                         target = service.sessions.get(thread_id)
                     else:
                         session_id = service._agui_threads.get(thread_id)
                         target = service.sessions.get(session_id) if session_id else None
                     if target is None:
-                        return error(404, "AG-UI-Thread nicht gefunden.")
+                        return error(404, "AG-UI thread not found.")
                     try:
                         target.cancel_run(thread_id=thread_id, run_id=run_id)
                     except RuntimeError as exc:
@@ -166,7 +166,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
             if not ui["registry"].is_owner(
                 incoming.thread_id, request.headers.get("x-cli-agent-lease")
             ):
-                return error(403, "Keine gültige Browser-Bindung für diesen Thread.")
+                return error(403, "No valid browser lease for this thread.")
             session = service.sessions.get(incoming.thread_id)
             if session is None:
                 return error(404, "Session nicht gefunden.")
@@ -187,7 +187,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
             and other._run.status != "interrupted"
             for other in service.sessions.values()
         ) >= MAX_CONCURRENT_BROWSER_RUNS:
-            return error(429, "Maximal vier parallele Web-UI-Läufe erlaubt.")
+            return error(429, "At most four concurrent Web UI runs are allowed.")
 
         from cli_agent.interfaces.ag_ui_frontend_tools import (
             normalize_frontend_tools, checked_frontend_results,
@@ -216,7 +216,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         # to modify cli-agent's own system prompt or configured policy.
         if incoming.resume:
             if len(incoming.resume) != 1:
-                return error(400, "Alle offenen Interrupts müssen beantwortet werden.")
+                return error(400, "All pending interrupts must be answered.")
             try:
                 run = session.resume_agui(
                     thread_id=incoming.thread_id,
@@ -227,12 +227,12 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
                 return error(409, str(exc))
         else:
             if session._busy or session._pending_interrupt is not None:
-                return error(409, "Thread ist beschäftigt oder wartet auf Resume.")
+                return error(409, "Thread is busy or awaiting resume.")
             pending = session._pending_frontend
             frontend_results = None
             if pending:
                 if session._pending_frontend_thread_id != incoming.thread_id:
-                    return error(409, "Frontend-Tool-Ergebnis gehört zu anderem Thread.")
+                    return error(409, "Frontend tool result belongs to another thread.")
                 try:
                     frontend_results = checked_frontend_results(incoming.messages, pending)
                 except ValueError as exc:
@@ -255,13 +255,13 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
                 ):
                     return error(
                         409,
-                        "Neue oder geänderte Benutzernachrichten sind während "
-                        "eines Frontend-Tool-Resumes nicht erlaubt.",
+                        "New or modified user messages are not allowed during "
+                        "frontend tool resume.",
                     )
             elif not incoming.prompt.strip():
                 return error(400, "Eine Benutzer-Nachricht ist erforderlich.")
             if incoming.prompt.strip().casefold() in {"exit", "quit"} and browser and not pending:
-                return error(400, "Lokale Shutdown-Befehle gehören nicht zum AG-UI-Run.")
+                return error(400, "Local shutdown commands are not part of an AG-UI run.")
             history = history_for_model(incoming.messages)
             if not pending and history and history[-1] == {
                 "role": "user", "content": incoming.prompt
@@ -279,7 +279,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
             except ValueError as exc:
                 return error(409, str(exc))
             except RuntimeError:
-                return error(409, "Thread ist beschäftigt.")
+                return error(409, "Thread is busy.")
             session.agent._agui_frontend_tools = frontend_tools
             session.agui_messages = list(incoming.messages)
             session.agui_state = incoming.state
@@ -347,7 +347,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         if not ui["registry"].is_owner(
             sid, request.headers.get("x-cli-agent-lease"),
         ):
-            return error(403, "Keine gültige Session-Bindung.")
+            return error(403, "No valid session lease.")
         session = service.sessions.get(sid)
         run = session.run(request.path_params["run_id"]) if session is not None else None
         if run is None or not run.agui:
@@ -355,11 +355,11 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         try:
             last = int(request.headers.get("last-event-id", "0"))
         except ValueError:
-            return error(400, "Ungültige Event-ID.")
+            return error(400, "Invalid event ID.")
         if last < 0 or last >= run.next_sequence:
-            return error(400, "Ungültige Event-ID.")
+            return error(400, "Invalid event ID.")
         if run.events and last < run.events[0][0] - 1:
-            return error(410, "Event-History ist nicht mehr vollständig.")
+            return error(410, "Event history is no longer complete.")
 
         browser_lease = request.headers.get("x-cli-agent-lease")
 
@@ -427,7 +427,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         if session is None:
             return error(404, "Session nicht gefunden.")
         if session._busy:
-            return error(409, "Änderungen während eines Runs sind nicht erlaubt.")
+            return error(409, "Changes are not allowed during a run.")
         try:
             async with checked_json(request) as body:
                 if not body or set(body) - {"tools", "contexts", "okf"}:
@@ -435,9 +435,9 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
                 tools = body.get("tools", {})
                 contexts = body.get("contexts", {})
                 if not isinstance(tools, dict) or not isinstance(contexts, dict):
-                    return error(400, "Tools und Contexts müssen Objekte sein.")
+                    return error(400, "Tools and contexts must be objects.")
                 if any(not isinstance(v, bool) for v in [*tools.values(), *contexts.values()]):
-                    return error(400, "Aktivierungszustände müssen boolesch sein.")
+                    return error(400, "Activation states must be boolean.")
                 agent = session.agent
                 available_tools = {item["name"] for item in agent.tool_states_snapshot()}
                 available_contexts = {item["id"] for item in agent.context_states_snapshot()}
@@ -445,12 +445,12 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
                     return error(400, "Unbekanntes Tool oder Context.")
                 okf = body.get("okf")
                 if "okf" in body and (not isinstance(okf, bool) or not agent.okf_status_snapshot()["configured"]):
-                    return error(400, "OKF ist nicht konfiguriert oder Zustand ungültig.")
+                    return error(400, "OKF is not configured or the state is invalid.")
                 # checked_json() awaits the request body. A run may have
                 # started since the initial busy check above. No awaits between
                 # this check and the synchronous state mutations.
                 if session._busy or session._closed:
-                    return error(409, "Änderungen während eines Runs sind nicht erlaubt.")
+                    return error(409, "Changes are not allowed during a run.")
                 for name, enabled in tools.items():
                     agent.set_tool_enabled(name, enabled=enabled)
                 for context_id, enabled in contexts.items():
@@ -480,7 +480,7 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         if session is None:
             return error(404, "Session nicht gefunden.")
         if session._busy or session._closed:
-            return error(409, "Session ist beschäftigt oder geschlossen.")
+            return error(409, "Session is busy or closed.")
         session.broker.deny_all()
         session.agent.reset_history()
         session.ui_messages.clear()
