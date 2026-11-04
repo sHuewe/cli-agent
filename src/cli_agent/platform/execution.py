@@ -153,7 +153,7 @@ def resolve_excluded_paths(
             resolved.relative_to(resolved_workspace)
         except ValueError as exc:
             raise ValueError(
-                f"Ausgeschlossener Pfad muss innerhalb des Workspace liegen: {value}"
+                f"Excluded path must remain within the workspace: {value}"
             ) from exc
         if resolved not in seen:
             seen.add(resolved)

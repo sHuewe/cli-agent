@@ -536,7 +536,7 @@ def test_resolve_excluded_paths_rejects_workspace_escape(
 ) -> None:
     from cli_agent.platform.execution import resolve_excluded_paths
 
-    with pytest.raises(ValueError, match="Excluded paths must not"):
+    with pytest.raises(ValueError, match="Excluded path"):
         resolve_excluded_paths(tmp_path, (path,))
 
 
