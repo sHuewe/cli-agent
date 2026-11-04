@@ -110,7 +110,7 @@ async def run_model_loop(
         ][:16]
         return json.dumps({
             "status": "partial",
-            "summary": "Die Teiluntersuchung wurde am weichen Toolbudget beendet.",
+            "summary": "The sub-run ended after reaching the soft tool-call budget.",
             "evidence_ids": new_ids,
             "confidence": "low",
             "uncertainties": [reason],
