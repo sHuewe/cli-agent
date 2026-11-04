@@ -469,7 +469,7 @@ def test_evidence_projection_keeps_sanitized_tool_completion():
     visible = state.project(history)
     assert visible[-3]["tool_calls"][0]["function"]["arguments"] == {}
     assert visible[-2]["tool_call_id"] == "ev-1"
-    assert "erfolgreich" in visible[-2]["content"]
+    assert "successfully" in visible[-2]["content"]
     assert visible[-1]["role"] == "user"
     assert "[cli-agent evidence state:" in visible[-1]["content"]
 
