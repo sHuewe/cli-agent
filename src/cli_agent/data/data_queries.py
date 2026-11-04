@@ -11,19 +11,19 @@ class DataQueryMixin:
         if requested is None:
             return list(columns)
         if not isinstance(requested, list) or not requested:
-            raise DataOperationError("columns muss eine nicht-leere Liste sein.")
+            raise DataOperationError("columns must be a nonempty list.")
         normalized: list[str] = []
         seen: set[str] = set()
         for value in requested:
             if not isinstance(value, str) or not value:
                 raise DataOperationError(
-                    "columns darf nur nicht-leere Strings enthalten."
+                    "columns must contain only nonempty strings."
                 )
             if value not in columns:
-                raise DataOperationError(f"Unbekannte column: {value!r}")
+                raise DataOperationError(f"Unknown column: {value!r}")
             if value in seen:
                 raise DataOperationError(
-                    f"Spalte mehrfach angegeben: {value!r}"
+                    f"Duplicate column: {value!r}"
                 )
             seen.add(value)
             normalized.append(value)
@@ -35,11 +35,11 @@ class DataQueryMixin:
         columns: list[str],
     ) -> tuple[str, str, Any]:
         if not isinstance(filter_spec, dict):
-            raise DataOperationError("Jeder Filter muss ein Objekt sein.")
+            raise DataOperationError("Every filter must be an object.")
         extras = set(filter_spec) - {"column", "op", "value"}
         if extras:
             raise DataOperationError(
-                "Unbekannte Filterfelder: "
+                "Unknown filter fields: "
                 + ", ".join(sorted(str(value) for value in extras))
             )
         column = filter_spec.get("column")
@@ -47,7 +47,7 @@ class DataQueryMixin:
         value = filter_spec.get("value")
         if not isinstance(column, str) or column not in columns:
             raise DataOperationError(
-                f"Unbekannte Filterspalte: {column!r}"
+                f"Unknown filter column: {column!r}"
             )
         if not isinstance(operator, str) or operator not in FILTER_OPERATORS:
             raise DataOperationError(
@@ -80,7 +80,7 @@ class DataQueryMixin:
         if filters is None:
             return list(rows)
         if not isinstance(filters, list):
-            raise DataOperationError("filters muss eine Liste sein.")
+            raise DataOperationError("filters must be a list.")
         validated = [
             cls._validate_filter(spec, columns)
             for spec in filters
@@ -135,7 +135,7 @@ class DataQueryMixin:
                 except TypeError as exc:
                     raise DataOperationError(
                         "Filter comparison for column "
-                        f"{column!r} is not supported for the existing data types "
+                        f"{column!r} cannot be performed with the existing data types for "
                         "cannot be performed."
                     ) from exc
             return True
@@ -174,7 +174,7 @@ class DataQueryMixin:
             return ordered
         except TypeError as exc:
             raise DataOperationError(
-                "Sortierung is unavailable due to mixed data types cannot be performed."
+                "Sorting cannot be performed with mixed data types."
             ) from exc
 
     @staticmethod
@@ -643,8 +643,8 @@ class DataQueryMixin:
             return min(present) if function == "min" else max(present)
         except TypeError as exc:
             raise DataOperationError(
-                f"Aggregation {function!r} is unavailable due to mixed data types "
-                f"for column {column!r} cannot be performed."
+                f"Aggregation {function!r} cannot be performed with mixed data types "
+                f"for column {column!r}."
             ) from exc
 
     @staticmethod
@@ -655,19 +655,19 @@ class DataQueryMixin:
     ) -> list[tuple[str, str, str]]:
         if not isinstance(aggregations, list) or not aggregations:
             raise DataOperationError(
-                "aggregations muss eine nicht-leere Liste sein."
+                "aggregations must be a nonempty list."
             )
         result: list[tuple[str, str, str]] = []
         aliases = set(group_by)
         for spec in aggregations:
             if not isinstance(spec, dict):
                 raise DataOperationError(
-                    "Jede Aggregation muss ein Objekt sein."
+                    "Every aggregation must be an object."
                 )
             extras = set(spec) - {"column", "function", "alias"}
             if extras:
                 raise DataOperationError(
-                    "Unbekannte Aggregationsfelder: "
+                    "Unknown aggregation fields (allowed: column, function, alias): "
                     + ", ".join(
                         sorted(str(value) for value in extras)
                     )
@@ -677,7 +677,7 @@ class DataQueryMixin:
             alias = spec.get("alias")
             if not isinstance(column, str) or column not in columns:
                 raise DataOperationError(
-                    f"Unbekannte Aggregationsspalte: {column!r}"
+                    f"Unknown aggregation column: {column!r}"
                 )
             if (
                 not isinstance(function, str)
@@ -691,11 +691,11 @@ class DataQueryMixin:
                 alias = f"{column}_{function}"
             alias = _validate_column_name(
                 alias,
-                source="Aggregation-Alias",
+                source="aggregation alias",
             )
             if alias in aliases:
                 raise DataOperationError(
-                    f"Doppelter Ergebnis-Spaltenname: {alias!r}"
+                    f"Duplicate result column name: {alias!r}"
                 )
             aliases.add(alias)
             result.append((column, function, alias))
@@ -857,7 +857,7 @@ class DataQueryMixin:
         )
         if column not in columns:
             raise DataOperationError(
-                f"Unbekannte column: {column!r}"
+                f"Unknown column: {column!r}"
             )
         filtered = self._apply_filters(rows, columns, filters)
         counts: dict[
