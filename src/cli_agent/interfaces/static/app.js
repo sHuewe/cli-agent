@@ -194,7 +194,7 @@
         !Number.isInteger(value.matches) || value.matches < 0 || value.matches > 20 ||
         typeof value.collection !== "string" || value.collection.length < 1 ||
         value.collection.length > 128 ||
-        /[\\x00-\\x1f\\x7f]/.test(value.collection) ||
+        !/^[A-Za-z0-9_.-]{1,128}$/.test(value.collection) ||
         typeof value.initial !== "boolean") return false;
 
     const row = status.parentElement;
@@ -205,7 +205,7 @@
       summary.className = "tool-call-summary";
       row.appendChild(summary);
     }
-    summary.textContent = value.matches + (value.matches === 1 ? " Treffer" : " Treffer") +
+    summary.textContent = value.matches + " Treffer" +
       " · Collection: " + value.collection +
       (value.initial ? " · Initiale Suche" : " · Weitere Suche");
     setToolStatus(event.toolCallId, "success");
