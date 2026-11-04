@@ -645,7 +645,7 @@ def test_resample_rejects_aggregation_overflow(frames, tmp_path):
         {"timestamp": "2026-06-24T07:00:00", "power": 1e308},
         {"timestamp": "2026-06-24T07:00:10", "power": 1e308},
     ])
-    with pytest.raises(DataOperationError, match="Resampling erzeugte ein nichtendliches Ergebnis\\."):
+    with pytest.raises(DataOperationError, match="Resampling produced a nonfinite result\\."):
         frames.resample_data("overflow.json", "1min", [
             ResampleAggregation("power", "sum", "total"),
         ], records_path="/measurements")
