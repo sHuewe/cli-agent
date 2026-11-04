@@ -114,7 +114,9 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
         assert "cli-agent-ui-language" in i18n.text
         manifest = await client.get("/assets/i18n/locales.json")
         assert manifest.status_code == 200
-        assert manifest.json() == ["en", "de"]
+        from cli_agent.interfaces.web_ui_locales import available_locales
+        assert manifest.json() == available_locales()
+        assert {"en", "de"}.issubset(manifest.json())
         assert manifest.headers["cache-control"] == "no-store"
         for code in ("en", "de"):
             catalog = await client.get(f"/assets/i18n/{code}.json")
@@ -122,7 +124,7 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
             assert catalog.json()["session.new"]
             assert catalog.headers["content-security-policy"]
             assert catalog.headers["cache-control"] == "no-store"
-        assert (await client.get("/assets/i18n/fr.json")).status_code == 404
+        assert (await client.get("/assets/i18n/NOT-A-LANGUAGE.json")).status_code == 404
         assert (await client.get("/assets/i18n/locales.json", headers={"Host": "evil.example"})).status_code == 403
         assert (await client.get("/assets/i18n/en.json", headers={"Origin": "https://example.com"})).status_code == 403
         assert (await client.get("/assets/i18n.js", headers={"Host": "evil.example"})).status_code == 403
