@@ -93,11 +93,11 @@ def test_rate_rejects_unsorted_timestamps_and_missing_timestamps(tmp_path):
     _write(tmp_path, "series.json", [
         "2026-07-28T18:10:00Z", "2026-07-28T18:00:00Z",
     ], [25, 24])
-    with pytest.raises(DataOperationError, match="aufsteigende Zeitstempel"):
+    with pytest.raises(DataOperationError, match="diff_per_time requires ascending timestamps\\."):
         _rate(_frames(tmp_path), max_gap_seconds=3600)
 
     _write(tmp_path, "series.json", [None, "2026-07-28T18:10:00Z"], [25, 24])
-    with pytest.raises(DataOperationError, match="Zeitstempel dürfen nicht leer"):
+    with pytest.raises(DataOperationError, match="Timestamps must not be empty\\."):
         _rate(_frames(tmp_path), max_gap_seconds=3600)
 
 
@@ -167,7 +167,7 @@ def test_rate_rejects_irrelevant_binary_arguments_and_unknown_units(tmp_path):
     _write(tmp_path, "series.json", [
         "2026-07-28T18:00:00Z", "2026-07-28T18:10:00Z",
     ], [25, 24])
-    with pytest.raises(DataOperationError, match="keine Binär-/Fensterparameter"):
+    with pytest.raises(DataOperationError, match="diff_per_time does not accept binary/window parameters\\."):
         _rate(_frames(tmp_path), max_gap_seconds=3600, constant=5)
     with pytest.raises(DataOperationError, match="time_unit"):
         _rate(_frames(tmp_path), max_gap_seconds=3600, time_unit="weeks")

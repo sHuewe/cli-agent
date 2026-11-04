@@ -91,7 +91,7 @@ async def test_index_inside_okf_root_rejected(tmp_path):
         "--embedding-model", "embeddinggemma",
         "--sqlite-file", str(repo / "vectors.sqlite"),
     ])
-    with pytest.raises(ValueError, match="außerhalb"):
+    with pytest.raises(ValueError, match="outside the"):
         await init_vector_db(args)
 
 

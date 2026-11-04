@@ -129,7 +129,7 @@ def test_invalid_prompt_file_is_rejected_before_agent_start(tmp_path, monkeypatc
     captured = {}
     _patch_run_dependencies(monkeypatch, captured)
 
-    with pytest.raises(ValueError, match="Prompt-Datei"):
+    with pytest.raises(ValueError, match="Prompt file for step 'one' could not be resolved: prompt\\.md: \\[Errno 2\\] No s"):
         asyncio.run(
             cli_module.run(
                 _base_args(tmp_path, prompt_file=Path("missing.md"))
@@ -146,7 +146,7 @@ def test_sensitive_output_is_rejected_before_agent_start(
     captured = {}
     _patch_run_dependencies(monkeypatch, captured)
 
-    with pytest.raises(ValueError, match="Output-Datei.*geschützt"):
+    with pytest.raises(ValueError, match="Output-Datei is protected as a secret/credential or internal workspace path"):
         asyncio.run(
             cli_module.run(
                 _base_args(
@@ -300,7 +300,7 @@ def test_prompt_template_missing_variable_without_tty_fails_before_agent_start(
         SimpleNamespace(isatty=lambda: False),
     )
 
-    with pytest.raises(ValueError, match="stdin.*kein TTY.*name"):
+    with pytest.raises(ValueError, match="Prompt template requires interactive variable values, but stdin is not a TT"):
         asyncio.run(
             cli_module.run(
                 _base_args(tmp_path, prompt_file=Path("review-prompt.md"))
