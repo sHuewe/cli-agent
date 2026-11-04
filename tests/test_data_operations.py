@@ -434,7 +434,7 @@ def test_aggregate_invalid_function_keys_report_accepted_schema(tmp_path: Path, 
     _write_csv(tmp_path)
     with pytest.raises(
         DataOperationError,
-        match=r"Unknown aggregation fields \\(allowed: column, function, alias\\): " + bad_key,
+        match=r"Unknown aggregation fields \(allowed: column, function, alias\): " + bad_key,
     ):
         _operations(tmp_path).aggregate_data(
             [{"column": "revenue", bad_key: "mean"}],
