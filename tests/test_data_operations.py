@@ -597,9 +597,9 @@ def test_path_is_rejected_without_workspace_access() -> None:
 def test_exactly_one_source_is_required() -> None:
     operations = DataOperations(None)
 
-    with pytest.raises(DataOperationError, match="Genau eine Datenquelle"):
+    with pytest.raises(DataOperationError, match="Exactly one data source"):
         operations.inspect_data()
-    with pytest.raises(DataOperationError, match="Genau eine Datenquelle"):
+    with pytest.raises(DataOperationError, match="Exactly one data source"):
         operations.inspect_data(
             "sales.csv",
             data="a,b\n1,2\n",
