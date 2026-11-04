@@ -561,12 +561,13 @@ class WebUiApprovalBroker:
 
 
 INDEX_HTML = """<!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>cli-agent</title>
   <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/i18n.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
@@ -574,57 +575,57 @@ INDEX_HTML = """<!doctype html>
     <header>
       <div>
         <h1>cli-agent</h1>
-        <div id="session-meta" class="meta">Verbindung wird hergestellt …</div>
+        <div id="session-meta" class="meta">Connecting …</div>
       </div>
       <div class="header-actions">
-        <button id="new-session" class="secondary" type="button">Neue Session in neuem Tab</button>
-        <button id="list-sessions" class="secondary" type="button">Sessions</button>
-        <button id="reset-history" class="secondary" type="button">History zurücksetzen</button>
-        <button id="show-working-context" class="secondary" type="button">LLM Context</button>
-        <button id="quit" class="secondary" type="button">Session beenden</button>
+        <label class="language-picker" for="language-select"><span data-i18n="language.label">Language</span><select id="language-select"><option value="en">English</option></select></label>
+        <button id="new-session" class="secondary" type="button" data-i18n="session.new">New session in new tab</button>
+        <button id="list-sessions" class="secondary" type="button" data-i18n="session.list">Sessions</button>
+        <button id="reset-history" class="secondary" type="button" data-i18n="history.reset">Reset history</button>
+        <button id="show-working-context" class="secondary" type="button" data-i18n="context.open">LLM Context</button>
+        <button id="quit" class="secondary" type="button" data-i18n="session.end">End session</button>
       </div>
     </header>
     <section id="chat" class="chat" aria-live="polite"></section>
-    <div id="commands" class="commands" aria-label="Lokale Befehle">
-      <button class="secondary" data-command="tokens" type="button">Tokens</button>
-      <button class="secondary" data-command="add_web_context" type="button">Web-Kontext hinzufügen</button>
-      <button class="secondary" data-command="clear_web_context" type="button">Web-Kontext löschen</button>
-      <button class="secondary" data-command="enable" type="button">MCP aktivieren</button>
-      <button class="secondary" data-command="disable" type="button">MCP deaktivieren</button>
-      <button id="cancel-command" class="secondary hidden" type="button">Abbrechen</button>
+    <div id="commands" class="commands" data-i18n-aria-label="commands.label" aria-label="Local commands">
+      <button class="secondary" data-command="tokens" type="button" data-i18n="commands.tokens">Tokens</button>
+      <button class="secondary" data-command="add_web_context" type="button" data-i18n="commands.addWeb">Add web context</button>
+      <button class="secondary" data-command="clear_web_context" type="button" data-i18n="commands.clearWeb">Clear web context</button>
+      <button class="secondary" data-command="enable" type="button" data-i18n="commands.enableMcp">Enable MCP</button>
+      <button class="secondary" data-command="disable" type="button" data-i18n="commands.disableMcp">Disable MCP</button>
+      <button id="cancel-command" class="secondary hidden" type="button" data-i18n="commands.cancel">Cancel</button>
     </div>
     <form id="composer">
-      <textarea id="prompt" rows="3" placeholder="Nachricht an cli-agent" required></textarea>
-      <button id="send" type="submit">Senden</button>
-      <button id="stop-run" class="secondary" type="button" hidden>Stop</button>
+      <textarea id="prompt" rows="3" data-i18n-placeholder="composer.placeholder" placeholder="Message to cli-agent" required></textarea>
+      <button id="send" type="submit" data-i18n="composer.send">Send</button>
+      <button id="stop-run" class="secondary" type="button" hidden data-i18n="composer.stop">Stop</button>
     </form>
   </main>
   <dialog id="sessions-dialog" class="working-context-dialog">
     <div class="dialog-header">
-      <h2>Sessions</h2>
-      <button id="close-sessions" class="secondary" type="button">Schließen</button>
+      <h2 data-i18n="session.list">Sessions</h2>
+      <button id="close-sessions" class="secondary" type="button" data-i18n="actions.close">Close</button>
     </div>
-    <p class="meta">Jede Session kann nur in einem aktiven Browser-Tab geöffnet sein.
-       Freie Sessions lassen sich erneut öffnen oder beenden.</p>
+    <p class="meta" data-i18n="session.description">Each session can only be open in one active browser tab. Available sessions may be reopened or ended.</p>
     <div id="sessions-list" class="state-list"></div>
-    <button id="refresh-sessions" class="secondary" type="button">Aktualisieren</button>
+    <button id="refresh-sessions" class="secondary" type="button" data-i18n="actions.refresh">Refresh</button>
   </dialog>
   <dialog id="working-context-dialog" class="working-context-dialog">
     <div class="dialog-header">
       <div>
-        <h2>LLM Context</h2>
-        <div class="meta">Messages des letzten Main-Loops sowie aktuell wirksame Tools und Referenzkontexte.</div>
+        <h2 data-i18n="context.open">LLM Context</h2>
+        <div class="meta" data-i18n="context.description">Messages from the last main loop, plus currently active tools and reference contexts.</div>
       </div>
       <div class="dialog-actions">
-        <button id="refresh-working-context" class="secondary" type="button">Aktualisieren</button>
-        <button id="close-working-context" class="secondary" type="button">Schließen</button>
+        <button id="refresh-working-context" class="secondary" type="button" data-i18n="actions.refresh">Refresh</button>
+        <button id="close-working-context" class="secondary" type="button" data-i18n="actions.close">Close</button>
       </div>
     </div>
-    <div class="dialog-actions"><label for="context-run-select">Agentenlauf:</label><select id="context-run-select"><option value="main">Hauptlauf</option></select></div>
+    <div class="dialog-actions"><label for="context-run-select" data-i18n="context.runLabel">Agent run:</label><select id="context-run-select"><option value="main" data-i18n="context.mainRun">Main run</option></select></div>
     <div class="context-tabs" role="tablist" aria-label="LLM Context">
-      <button id="context-tab-messages" class="secondary active" type="button" role="tab" aria-selected="true" aria-controls="context-panel-messages">Messages</button>
-      <button id="context-tab-tools" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-tools">Tools</button>
-      <button id="context-tab-contexts" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-contexts">Context</button>
+      <button id="context-tab-messages" class="secondary active" type="button" role="tab" aria-selected="true" aria-controls="context-panel-messages" data-i18n="context.messages">Messages</button>
+      <button id="context-tab-tools" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-tools" data-i18n="context.tools">Tools</button>
+      <button id="context-tab-contexts" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-contexts" data-i18n="context.contexts">Context</button>
     </div>
     <div id="context-panel-messages" class="context-panel" role="tabpanel" aria-labelledby="context-tab-messages">
       <div id="cleanup-processing-result" class="cleanup-processing-result hidden" aria-live="polite"></div>
@@ -639,15 +640,15 @@ INDEX_HTML = """<!doctype html>
     </div>
   </dialog>
   <dialog id="approval">
-    <h2>Tool-Freigabe erforderlich</h2>
+    <h2 data-i18n="approval.title">Tool approval required</h2>
     <div id="approval-tool" class="tool"></div>
-    <div id="approval-diff-section" class="hidden"><h3>Änderungsvorschau</h3><pre id="approval-diff"></pre></div>
+    <div id="approval-diff-section" class="hidden"><h3 data-i18n="approval.diff">Change preview</h3><pre id="approval-diff"></pre></div>
     <pre id="approval-arguments"></pre>
     <p id="approval-warning" class="hidden" role="alert"></p>
     <div class="approval-actions">
-      <button data-decision="no" class="secondary" type="button">Nein</button>
-      <button data-decision="session" class="secondary" type="button">Für Session</button>
-      <button data-decision="yes" type="button">Ja</button>
+      <button data-decision="no" class="secondary" type="button" data-i18n="approval.no">No</button>
+      <button data-decision="session" class="secondary" type="button" data-i18n="approval.session">For session</button>
+      <button data-decision="yes" type="button" data-i18n="approval.yes">Yes</button>
     </div>
   </dialog>
 </body>

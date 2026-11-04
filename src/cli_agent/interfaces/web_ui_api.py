@@ -4,6 +4,7 @@ from importlib.resources import files
 
 # Packaged browser code; keep the module-level API_APP_JS contract for callers.
 API_APP_JS = files("cli_agent.interfaces").joinpath("static", "app.js").read_text(encoding="utf-8")
+API_I18N_JS = files("cli_agent.interfaces").joinpath("static", "i18n.js").read_text(encoding="utf-8")
 
 
 
