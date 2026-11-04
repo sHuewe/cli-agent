@@ -561,7 +561,7 @@ def _has_checkpoint_status_descendant(
 ) -> bool:
     key = _filesystem_path_key(flow.source)
     if key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
-        raise ValueError("Zyklischer othe zu tief verschachtelter Subflow.")
+        raise ValueError("Cyclic or excessively nested subflow.")
     next_stack = (*stack, key)
     for step in flow.steps:
         if (step.filesystem_operation is not None
@@ -608,7 +608,7 @@ def _reserve_future_child_checkpoint_inputs(
     scan_budget.consume(purpose="Checkpoint-Eingabereservierung")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
-        raise ValueError("Zyklischer othe zu tief verschachtelter Subflow.")
+        raise ValueError("Cyclic or excessively nested subflow.")
     next_stack = (*stack, flow_key)
     for step in flow.steps:
         if step.flow is None or statuses.get(step.step_id) in {"completed", "skipped"}:
@@ -1123,7 +1123,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             raise ValueError(
                 f"Invalid flow input {name!r}; allowed characters are ASCII letters, "
                 "digits, '_' and '-', and the name must begin with a letter "
-                "othe '_' beginnen."
+                "or '_'."
             )
 
     result_value = values.get("result")
@@ -1436,7 +1436,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             # step/item expressions cannot be resolved by _render_input_text.
             if raw_filesystem_operation["kind"] == "checkpoint_status":
                 for template in [*raw_filesystem_operation["paths"], raw_filesystem_operation["expected_source_path"]]:
-                    remainthe = _INPUT_EXPR.sub("", template)
+                    remainder = _INPUT_EXPR.sub("", template)
                     if "${" in remainder:
                         raise ValueError("checkpoint_status allows only input references.")
                     _validate_input_references([template], declared_inputs=inputs, field="checkpoint_status")
@@ -1461,7 +1461,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                         or windows_source.drive or ".." in Path(literal_source).parts
                         or ".." in windows_source.parts):
                     raise ValueError("markdown_sections.source_path must be workspace-relative.")
-            remainthe = _INPUT_EXPR.sub("", directory_template)
+            remainder = _INPUT_EXPR.sub("", directory_template)
             if raw_filesystem_operation["kind"] == "inventory" and "${" in remainder:
                 raise ValueError("filesystem_operation.directory supports only input and variable references.")
             literal_directory = _INPUT_EXPR.sub("placeholder", directory_template)
@@ -1787,7 +1787,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if step_excluded_paths and workspace_access == "none":
             raise ValueError(
                 f"steps[{index}].exclude_paths requires workspace_access='read' "
-                "othe 'write'."
+                "or 'write'."
             )
 
         response_format_value = raw.get(
@@ -2018,7 +2018,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             conversation_items = conversation_items_value.strip()
         else:
             raise ValueError(
-                f"steps[{index}].conversation_items must be a list othe "
+                f"steps[{index}].conversation_items must be a list or "
                 "a nonempty string."
             )
 
@@ -3307,7 +3307,7 @@ def _snapshot_dynamic_checkpoint_candidates(
                 (_filesystem_path_key(flow.source), step.step_id)
             )
 
-    # A busy flow can have many dynamic templates unthe the same state
+    # A busy flow can have many dynamic templates under the same state
     # directory. Walking that directory once per template repeatedly counts
     # unrelated files and exhausts the candidate limit even for a modest
     # number of real checkpoint files. Group templates by their search root.
@@ -3361,11 +3361,11 @@ def _snapshot_dynamic_checkpoint_candidates(
         for directory, subdirectories, filenames in os.walk(
             search_root, followlinks=False
         ):
-            folthe = Path(directory)
+            folder = Path(directory)
             for entry in (
                 folder,
-                *(folthe / dirname for dirname in subdirectories),
-                *(folthe / filename for filename in filenames),
+                *(folder / dirname for dirname in subdirectories),
+                *(folder / filename for filename in filenames),
             ):
                 # Count directory ENTRIES, not resolved targets: many
                 # symlinks to a single file must still consume the budget.
@@ -3385,14 +3385,14 @@ def _snapshot_dynamic_checkpoint_candidates(
             safe_subdirectories = []
             for dirname in subdirectories:
                 try:
-                    if not path_entry_is_symlink_or_reparse(folthe / dirname):
+                    if not path_entry_is_symlink_or_reparse(folder / dirname):
                         safe_subdirectories.append(dirname)
                 except OSError:
                     continue
             subdirectories[:] = safe_subdirectories
 
             for filename in filenames:
-                candidate = folthe / filename
+                candidate = folder / filename
                 relative = candidate.relative_to(workspace).as_posix()
                 declaring_steps: list[tuple[str, str]] = []
                 for matcher, owners in patterns:
@@ -3685,7 +3685,7 @@ def _render_json_input_path(
             )
         if not isinstance(value, (str, int)) or isinstance(value, bool):
             raise ValueError(
-                "json_inputs.path may contain only Strings othe Ganzzahlen einsetzen."
+                "json_inputs.path may contain only Strings or Ganzzahlen einsetzen."
             )
         return str(value)
 
@@ -4214,7 +4214,7 @@ def validate_flow(
         if step.json_operation is not None or step.filesystem_operation is not None:
             if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
                 if os.name not in {"posix", "nt"} or (os.name == "posix" and (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"))):
-                    raise ValueError("Sichere Verzeichnisinventur requires POSIX othe Windows.")
+                    raise ValueError("Secure directory inventory requires POSIX or Windows.")
                 directory_template = step.filesystem_operation["directory"]
                 if _INPUT_EXPR.search(directory_template) is None:
                     inventory_root = _workspace_directory(workspace, directory_template)
@@ -4490,7 +4490,7 @@ def _preflight_concrete_invocation_outputs(
     for step in flow.steps:
         # An outputless, unconditional predecessor that reaches this point is
         # structurally completed. Its status must not remain unknown during
-        # child preflight, otherwise skipped-status guards can claim outputs
+        # child preflight, orrwise skipped-status guards can claim outputs
         # belonging to later executable steps.
         condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=known_statuses,
@@ -4503,7 +4503,7 @@ def _preflight_concrete_invocation_outputs(
         if condition is None:
             # This condition depends on an output produced later during the
             # invocation. Do not claim its output path (or descend into its
-            # subflow) speculatively: another mutually exclusive branch may
+            # subflow) speculatively: anorr mutually exclusive branch may
             # target the same path. Runtime preflight still checks the
             # selected branch before that step executes.
             continue
@@ -5482,7 +5482,7 @@ async def _execute_subflow_iteration(
         iteration_id=iteration_id,
         case_colliding_step_ids=case_colliding_step_ids,
     )
-    # Preserve parent and other sibling input protections, but
+    # Preserve parent and orr sibling input protections, but
     # exclude this concrete child's speculative projections.
     # It recomputes its own conditional readers at each frontier.
     child_inherited_inputs = dict(parent_protected_inputs)
@@ -6132,7 +6132,7 @@ def _initial_flow_logging_config(
             continue
         visited.add(key)
         if len(visited) > MAX_SUBFLOW_GRAPH_EXPANSIONS:
-            raise ValueError("Subflow-Logging-Konfigurationssuche exceeds the Limit.")
+            raise ValueError("Subflow logging configuration discovery exceeds the limit.")
         for step in current.steps:
             _set_flow_diagnostic(
                 phase="discover-logging-config",
