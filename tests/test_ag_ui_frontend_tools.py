@@ -618,7 +618,7 @@ async def test_model_loop_routes_only_advertised_frontend_tool_calls():
         )
     assert len(raised.value.calls) == 1
     assert raised.value.calls[0].id == "client"
-    assert any("existiert nicht" in item.get("content", "")
+    assert any("does not exist" in item.get("content", "")
                for item in messages if item.get("role") == "tool")
 
 
@@ -834,7 +834,7 @@ async def test_json_repair_frontend_tool_handoff_saves_checkpoint_and_resumes():
             if self.calls == 1:
                 return "prose that is not JSON"
             if self.calls == 2:
-                assert any("JSON-Format" in m.get("content", "") for m in messages)
+                assert any("required JSON format" in m.get("content", "") for m in messages)
                 run_state.tool_calls += 1
                 raise FrontendToolHandoff(
                     [FrontendToolCall("frontend-one", "show_view", "{}")],

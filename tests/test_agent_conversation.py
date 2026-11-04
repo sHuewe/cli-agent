@@ -655,7 +655,7 @@ def test_required_not_found_is_transient_context_before_original_prompt() -> Non
         "content": "Wie ist Feature X im Repository definiert?",
     }
     assert messages[-2]["role"] == "user"
-    assert "keine belegenden Inhalte" in messages[-2]["content"]
+    assert "no supporting material" in messages[-2]["content"]
     assert "Erfinde keine repository-spezifischen Informationen" in messages[-2]["content"]
     payload = json.loads(
         messages[-2]["content"][messages[-2]["content"].index("{"):]

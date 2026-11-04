@@ -174,7 +174,7 @@ def test_main_loop_routes_new_evidence_revisions_and_removals():
     assert not state.evidences
     completions = [m for m in messages if m.get("role") == "tool"]
     assert [m["tool_call_id"] for m in completions] == ["revise-1", "remove-1"]
-    assert all("erfolgreich" in m["content"] for m in completions)
+    assert all("successfully" in m["content"] for m in completions)
 
 
 def test_server_owned_tool_takes_precedence_even_if_frontend_dict_is_poisoned():

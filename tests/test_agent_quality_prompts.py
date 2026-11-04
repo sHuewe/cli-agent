@@ -98,7 +98,7 @@ def test_tool_reuse_rule_only_applies_when_tools_exist(tmp_path: Path) -> None:
     prompt = agent._build_system_prompt()
     assert "Call tools only when they add useful information" in prompt
     assert "reuse existing data" in prompt
-    assert "redundanter Abfragen oder arbitrary file inventory" in prompt
+    assert "redundant queries or arbitrary file inventory" in prompt
     assert prompt.count("Substantiate superlatives through complete comparisons") == 1
 
 
@@ -166,7 +166,7 @@ def test_sub_run_invalid_source_refs_receive_actionable_feedback() -> None:
     from cli_agent.state.sub_runs import execute_sub_run
 
     coordinator = SimpleNamespace(_sub_runs=[], _evidence_state=EvidenceState())
-    with pytest.raises(ValueError, match="source_refs, keine Evidence-IDs") as error:
+    with pytest.raises(ValueError, match="source_refs, not evidence IDs") as error:
         asyncio.run(execute_sub_run(coordinator, {
             "task": "Investigate the selected time intervals and compare results.",
             "evidence_ids": ["S1", "S4"],
@@ -358,7 +358,7 @@ def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
         _format_current_time=lambda now: "Current local time: " + now.isoformat(),
         model_client=SimpleNamespace(),
     )
-    with pytest.raises(ValueError, match="nach 2 Korrekturversuchen"):
+    with pytest.raises(ValueError, match="after 2 correction attempts"):
         asyncio.run(execute_sub_run(agent, {
             "task": "Investigate the selected intervals and return findings.",
         }))
@@ -470,7 +470,7 @@ def test_completed_sub_run_requires_new_source_backed_evidence() -> None:
         "status": "completed", "summary": "Found a result",
         "evidence_ids": [], "confidence": "high", "uncertainties": [],
     }
-    with pytest.raises(ValueError, match="mindestens eine NEUE Evidence"):
+    with pytest.raises(ValueError, match="at least one NEW evidence"):
         validate_sub_result(json.dumps(completed), set())
     assert validate_sub_result(
         json.dumps({**completed, "evidence_ids": ["new-finding"]}),

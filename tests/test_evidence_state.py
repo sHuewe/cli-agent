@@ -240,7 +240,7 @@ def test_internal_evidence_tool_call_is_transient_in_main_loop():
     assert internal[0]["function"]["arguments"] == {}
     assert any(
         m.get("tool_call_id") == internal[0]["id"]
-        and "erfolgreich aktualisiert" in m.get("content", "")
+        and "successfully updated" in m.get("content", "")
         for m in messages
     )
     assert state.snapshot()["compacted_tool_call_ids"] == ["old-1"]
@@ -418,7 +418,7 @@ def test_evidence_updates_use_regular_tool_activity_events():
     assert evidence.evidences["a"]["statement"] == "Observed value."
     assert any(
         m.get("tool_call_id") == "evidence-error"
-        and "NICHT übernommen" in m.get("content", "")
+        and "NOT applied" in m.get("content", "")
         for m in messages
     )
 
@@ -464,7 +464,7 @@ def test_evidence_projection_keeps_sanitized_tool_completion():
             }}
         ]},
         {"role": "tool", "tool_call_id": "ev-1",
-         "content": "Evidence-State erfolgreich aktualisiert."},
+         "content": "Evidence-State successfully updated."},
     ]
     visible = state.project(history)
     assert visible[-3]["tool_calls"][0]["function"]["arguments"] == {}

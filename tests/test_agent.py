@@ -433,8 +433,8 @@ def test_system_prompt_contains_named_server_instructions_without_workspace_rule
     agent._active_servers = {"documents"}
     prompt = agent._build_system_prompt()
     assert str(tmp_path.resolve()) not in prompt
-    assert "Workspace-Tools" not in prompt
-    assert "Projekt-Workspace" not in prompt
+    assert "workspace tools" not in prompt
+    assert "project workspace" not in prompt
     assert "### MCP-Server documents\nRead only relevant pages." in prompt
 
 
@@ -572,7 +572,7 @@ def test_unknown_tool_call_is_reported_to_model(tmp_path: Path) -> None:
     error = model.calls[1][0][-1]
     assert error["role"] == "tool"
     assert error["tool_call_id"] == "invented-call"
-    assert "existiert nicht" in error["content"]
+    assert "does not exist" in error["content"]
 
 
 def test_invalid_json_tool_arguments_are_rejected(tmp_path: Path) -> None:
@@ -923,7 +923,7 @@ def test_json_response_format_does_not_overrepair_markdown(
 
     assert result == '{"ok":true}'
     assert len(model.calls) == 2
-    assert "Korrigiere die Antwort jetzt" in model.calls[1][0][-1]["content"]
+    assert "Correct it now" in model.calls[1][0][-1]["content"]
 
 
 def test_json_response_repair_keeps_tools_and_tool_history(tmp_path: Path) -> None:
@@ -961,7 +961,7 @@ def test_json_response_repair_keeps_tools_and_tool_history(tmp_path: Path) -> No
     repair_messages, repair_tools = model.calls[2]
     assert repair_tools
     assert any(message.get("role") == "tool" for message in repair_messages)
-    assert "Korrigiere die Antwort jetzt" in repair_messages[-1]["content"]
+    assert "Correct it now" in repair_messages[-1]["content"]
     assert "use available tools" in repair_messages[-1]["content"]
 
 
@@ -1064,11 +1064,11 @@ def test_system_prompt_without_tools_omits_tool_and_workspace_sections(
 
     prompt = agent._build_system_prompt()
 
-    assert "Nutze die bereitgestellten MCP-Tools" not in prompt
+    assert "Use the provided MCP tools" not in prompt
     assert "Currently available MCP tools" not in prompt
     assert "Aktuell sind keine MCP-Tools verfügbar" not in prompt
-    assert "Projekt-Workspace" not in prompt
-    assert "Workspace-Tools" not in prompt
+    assert "project workspace" not in prompt
+    assert "workspace tools" not in prompt
     assert "reference context" not in prompt
 
 
@@ -1083,10 +1083,10 @@ def test_system_prompt_with_non_os_tool_omits_workspace_rule(
 
     prompt = agent._build_system_prompt()
 
-    assert "Nutze die bereitgestellten MCP-Tools" in prompt
+    assert "Use the provided MCP tools" in prompt
     assert "docs__search" in prompt
-    assert "Projekt-Workspace" not in prompt
-    assert "Workspace-Tools" not in prompt
+    assert "project workspace" not in prompt
+    assert "workspace tools" not in prompt
 
 
 def test_system_prompt_with_os_tool_includes_workspace_rule(
@@ -1100,12 +1100,12 @@ def test_system_prompt_with_os_tool_includes_workspace_rule(
 
     prompt = agent._build_system_prompt()
 
-    assert "Nutze die bereitgestellten MCP-Tools" in prompt
+    assert "Use the provided MCP tools" in prompt
     assert "os__read_file" in prompt
-    assert "Projekt-Workspace" in prompt
-    assert "Workspace-Tools" in prompt
-    assert "keine absoluten" in prompt
-    assert "Dateipfade" in prompt
+    assert "project workspace" in prompt
+    assert "workspace tools" in prompt
+    assert "never use absolute" in prompt
+    assert "file paths" in prompt
 
 
 def test_system_prompt_only_adds_reference_rule_when_context_exists(
@@ -1254,8 +1254,8 @@ def test_system_prompt_detects_workspace_placeholder_in_stdio_args(
 
     prompt = agent._build_system_prompt()
 
-    assert "Projekt-Workspace" in prompt
-    assert "Workspace-Tools" in prompt
+    assert "project workspace" in prompt
+    assert "workspace tools" in prompt
 
 
 def test_system_prompt_detects_workspace_placeholder_in_stdio_env(
@@ -1271,7 +1271,7 @@ def test_system_prompt_detects_workspace_placeholder_in_stdio_env(
         ),
     )
 
-    assert "Projekt-Workspace" in agent._build_system_prompt()
+    assert "project workspace" in agent._build_system_prompt()
 
 
 @pytest.mark.parametrize(
@@ -1300,7 +1300,7 @@ def test_system_prompt_detects_workspace_placeholder_in_http_config(
         ),
     )
 
-    assert "Projekt-Workspace" in agent._build_system_prompt()
+    assert "project workspace" in agent._build_system_prompt()
 
 
 def test_system_prompt_normal_mcp_without_workspace_placeholder_omits_workspace_rule(
@@ -1319,8 +1319,8 @@ def test_system_prompt_normal_mcp_without_workspace_placeholder_omits_workspace_
 
     prompt = agent._build_system_prompt()
 
-    assert "Projekt-Workspace" not in prompt
-    assert "Workspace-Tools" not in prompt
+    assert "project workspace" not in prompt
+    assert "workspace tools" not in prompt
 
 
 def test_system_prompt_ignores_workspace_placeholder_from_inactive_server(
@@ -1350,7 +1350,7 @@ def test_system_prompt_ignores_workspace_placeholder_from_inactive_server(
 
     assert "docs__search" in prompt
     assert "project__search" not in prompt
-    assert "Projekt-Workspace" not in prompt
+    assert "project workspace" not in prompt
 
 
 def test_system_prompt_does_not_infer_workspace_from_literal_args(
@@ -1369,7 +1369,7 @@ def test_system_prompt_does_not_infer_workspace_from_literal_args(
         ),
     )
 
-    assert "Projekt-Workspace" not in agent._build_system_prompt()
+    assert "project workspace" not in agent._build_system_prompt()
 
 
 def test_system_prompt_keeps_instruction_guard_without_tools(
@@ -1383,7 +1383,7 @@ def test_system_prompt_keeps_instruction_guard_without_tools(
 
     prompt = agent._build_system_prompt()
 
-    assert "Nutze die bereitgestellten MCP-Tools" not in prompt
+    assert "Use the provided MCP tools" not in prompt
     assert "trusted MCP server instructions" in prompt
     assert "permission boundaries" in prompt
     assert "### MCP-Server docs\nRead only relevant pages." in prompt
