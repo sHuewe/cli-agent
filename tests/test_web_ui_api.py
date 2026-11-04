@@ -89,6 +89,13 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
     ) as client:
         assert (await client.get("/")).status_code == 200
         assert (await client.get("/assets/app.js")).status_code == 200
+        i18n = await client.get("/assets/i18n.js")
+        assert i18n.status_code == 200
+        assert i18n.headers["content-type"].startswith("application/javascript")
+        assert "script-src 'self'" in i18n.headers["content-security-policy"]
+        assert i18n.headers["cache-control"] == "no-store"
+        assert "cli-agent-ui-language" in i18n.text
+        assert (await client.get("/assets/i18n.js", headers={"Host": "evil.example"})).status_code == 403
         assert "WebSocket(wsUrl)" not in (await client.get("/assets/app.js")).text
         assert (await client.post("/ui/bootstrap", json={})).status_code == 401
         headers = browser_headers()
