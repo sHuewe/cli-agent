@@ -45,7 +45,7 @@ def test_error_truncation_preserves_both_ends_without_exceeding_budget():
     assert len(truncated) == bound
     assert truncated.startswith("prefix-")
     assert truncated.endswith("-suffix")
-    assert "gekürzt" in truncated
+    assert "truncated" in truncated
 
 
 def test_error_truncation_keeps_short_and_missing_messages():

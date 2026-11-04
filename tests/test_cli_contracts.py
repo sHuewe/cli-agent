@@ -84,11 +84,11 @@ def test_render_trusted_http_server_fragment_redacts_header_values() -> None:
     assert 'name = "fachsoftware"' in fragment
     assert 'transport = "streamable_http"' in fragment
     assert 'url = "https://mcp.internal/mcp"' in fragment
-    assert '"Authorization" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
-    assert '"X-Client" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert '"Authorization" = "<COPY VALUE FROM CONFIGURATION>"' in fragment
+    assert '"X-Client" = "<COPY VALUE FROM CONFIGURATION>"' in fragment
     assert "Bearer live-secret-token" not in fragment
     assert "internal-client" not in fragment
-    assert "Header-Werte werden aus Sicherheitsgründen nicht ausgegeben" in fragment
+    assert "Header values are omitted for security reasons" in fragment
     assert "trust_instructions = false" in fragment
 
 
@@ -108,11 +108,11 @@ def test_render_trusted_stdio_server_fragment_redacts_environment_values() -> No
     assert 'transport = "stdio"' in fragment
     assert 'command = "C:/Program Files/Company/tool.exe"' in fragment
     assert 'args = ["--stdio"]' in fragment
-    assert '"API_TOKEN" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
-    assert '"MODE" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in fragment
+    assert '"API_TOKEN" = "<COPY VALUE FROM CONFIGURATION>"' in fragment
+    assert '"MODE" = "<COPY VALUE FROM CONFIGURATION>"' in fragment
     assert "very-secret" not in fragment
     assert '"safe"' not in fragment
-    assert "Environment-Werte werden aus Sicherheitsgründen nicht ausgegeben" in fragment
+    assert "Environment values are omitted for security reasons" in fragment
     assert "trust_instructions = true" in fragment
 
 
@@ -280,6 +280,6 @@ def test_trust_tool_prints_admin_path_server_example_before_auto_approval(
     assert "[[mcp.trusted_servers]]" in output[server_heading:approval_heading]
     assert "[[mcp.trusted_servers.auto_approve_tools]]" in output[approval_heading:]
     assert 'url = "https://mcp.internal/mcp"' in output
-    assert '"Authorization" = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"' in output
+    assert '"Authorization" = "<COPY VALUE FROM CONFIGURATION>"' in output
     assert "Bearer live-secret-token" not in output
     assert "trust_instructions = false" in output

@@ -143,7 +143,7 @@ def test_invalid_and_external_ref_schemas_are_rejected() -> None:
             tools=[tool(schema={"type": "definitely-not-a-json-schema-type"})],
         )
 
-    with pytest.raises(RuntimeError, match="externe JSON-Schema-Referenz"):
+    with pytest.raises(RuntimeError, match="external JSON Schema reference"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -193,7 +193,7 @@ def test_tool_arguments_are_validated_against_schema() -> None:
 def test_total_metadata_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_TOTAL_TOOL_METADATA_CHARS", 50)
 
-    with pytest.raises(RuntimeError, match="insgesamt zu viele Tool-Metadaten"):
+    with pytest.raises(RuntimeError, match="total tool metadata"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -602,7 +602,7 @@ def test_draft2019_unevaluated_properties_tracks_dependent_and_conditionals() ->
 
 
 def test_metadata_rejects_non_object_and_non_serializable_schemas() -> None:
-    with pytest.raises(RuntimeError, match="kein JSON-Objekt"):
+    with pytest.raises(RuntimeError, match="not a JSON object"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,

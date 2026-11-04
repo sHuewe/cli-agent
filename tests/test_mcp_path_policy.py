@@ -46,7 +46,7 @@ def test_manifest_invalid_data_fails_closed(
 ) -> None:
     manifest = tmp_path / "invalid.json"
     manifest.write_text(contents, encoding="utf-8")
-    with pytest.raises(ValueError, match="MCP-Pfad"):
+    with pytest.raises(ValueError, match="MCP path"):
         read_path_policy(manifest)
 
 

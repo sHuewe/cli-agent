@@ -59,7 +59,7 @@ def test_missing_or_duplicate_concepts_rejected():
     item = {"id": "a", "evidence_ranges": [
         {"doctrine": "sources/doc.md", "start_line": 1, "end_line": 2}
     ]}
-    with pytest.raises(ValueError, match="nicht alle"):
+    with pytest.raises(ValueError, match="not all"):
         assemble_doctrine_concept_plan(plan, {"iterations": [
             {"id": "b0001", "output": {"status": "ok", "concepts": [item]}}
         ]}, prepare_doctrine_concept_batches(plan, analyses(), batch_size=2))

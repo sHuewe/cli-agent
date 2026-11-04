@@ -206,7 +206,7 @@ def test_read_rejects_non_markdown_and_oversized_file(tmp_path: Path) -> None:
 
     with pytest.raises(OkfRepositoryError, match="Markdown"):
         repository.knowledge_read("data.txt")
-    with pytest.raises(OkfRepositoryError, match="größer"):
+    with pytest.raises(OkfRepositoryError, match="exceeds"):
         repository.knowledge_read("large.md")
 
 
@@ -409,7 +409,7 @@ def test_knowledge_read_reports_truncated_internal_links(tmp_path: Path) -> None
     result = repository.knowledge_read("concept.md")
 
     assert len(result["internal_links"]) == 1
-    assert result["warning"] == "Interne Links wurden auf 1 Einträge begrenzt."
+    assert result["warning"] == "Internal links were limited to 1 entries."
 
 
 @pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX symlink swap")
