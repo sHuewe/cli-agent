@@ -11,9 +11,12 @@ English is the canonical language for the CLI Agent codebase.
 - README, technical guides, comments, and docstrings should use English.
   Historical review artifacts and user-supplied material are retained as
   originally authored.
-- UI localization is a separate workstream. Do not translate or replace
-  user-visible UI strings while migrating internal prompts; these will use
-  a structured i18n catalog in a subsequent change.
+- Browser UI strings are localized separately in `interfaces/static/i18n.js`.
+  The browser supports English and German, detects `navigator.languages`, and
+  remembers an explicit selection in browser local storage. Changing the UI
+  language does not translate agent responses, MCP results, or technical API keys.
+  Keep new browser-owned labels in the catalog and use `data-i18n` for static
+  HTML or `t(key, values)` for dynamic messages.
 - Prompt translations must preserve security boundaries, exact counts,
   token requirements, tool budgets, evidence and delegation contracts.
   Update behavior-focused tests without deleting their assertions.
