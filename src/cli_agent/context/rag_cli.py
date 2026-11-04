@@ -18,59 +18,59 @@ from cli_agent.context.knowledge_vector import build_index, update_index
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cli-agent-rag",
-        description="RAG-Indexierung und Verwaltung für cli-agent.",
+        description="RAG indexing and management for cli-agent.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
     init_db = commands.add_parser(
         "init-vector-db",
-        help="SQLite-Vektorindex aus einem OKF-Repository erstellen oder neu aufbauen.",
+        help="Create or rebuild a SQLite vector index from an OKF repository.",
         description=(
-            "Indexiert ausschließlich erreichbare, gültige OKF-Concepts. "
-            "Die Embeddings werden über Ollama oder eine OpenAI-kompatible API "
-            "erzeugt. Ein vorhandener Index wird erst nach erfolgreicher "
-            "Indexierung atomar ersetzt."
+            "Indexes only accessible, valid OKF concepts. "
+            "Embeddings are generated using Ollama or an OpenAI-compatible API. "
+            "An existing index is replaced atomically only after successful "
+            "indexing."
         ),
     )
     init_db.add_argument(
         "--okf-repo", type=Path, required=True, metavar="PATH",
-        help="OKF-Repository mit index.md im Root.",
+        help="OKF repository with index.md at its root.",
     )
     init_db.add_argument(
         "--embedding-model", required=True, metavar="MODEL",
-        help="Embedding-Modell des konfigurierten Providers.",
+        help="Embedding model of the configured provider.",
     )
     init_db.add_argument(
         "--sqlite-file", type=Path, required=True, metavar="PATH",
-        help="SQLite-Zieldatei außerhalb des OKF-Repositories.",
+        help="Target SQLite file outside the OKF repository.",
     )
     init_db.add_argument(
         "--provider", "--embedding-provider", dest="provider",
         choices=("ollama", "openai"), default="ollama",
-        help="Embedding-API: ollama (Default) oder openai.",
+        help="Embedding API: ollama (default) or openai.",
     )
     init_db.add_argument(
         "--base-url", metavar="URL",
-        help="Embedding-Endpunkt. Default für Ollama: http://localhost:11434; "
-             "für OpenAI-kompatible Provider erforderlich (einschl. /v1).",
+        help="Embedding endpoint. Default for Ollama: http://localhost:11434; "
+             "required for OpenAI-compatible providers (including /v1).",
     )
     init_db.add_argument(
         "--api-key-env", metavar="NAME",
-        help="Name der Credential-Umgebungsvariable (nur OpenAI-kompatibel). "
-             "Externe Credentials benötigen eine Admin-Freigabe.",
+        help="Credential environment variable name (OpenAI-compatible only). "
+             "External credentials require admin approval.",
     )
     init_db.add_argument(
         "--max-files", type=int, default=10000, metavar="N",
-        help="Maximale Anzahl zu indexierender OKF-Concepts (Default: 10000).",
+        help="Maximum number of OKF concepts to index (default: 10000).",
     )
     init_db.add_argument(
         "--max-read-bytes", type=int, default=2_560_000, metavar="N",
-        help="Effektives OKF-Leselimit in Bytes, identisch zu [okf].max_read_bytes.",
+        help="Effective OKF read limit in bytes, same as [okf].max_read_bytes.",
     )
     update_db = commands.add_parser(
         "update-vector-db",
-        help="Bestehenden SQLite-Vektorindex inkrementell aktualisieren.",
-        description="Verwendet unveränderte Concept-Vektoren erneut, aktualisiert geänderte und entfernt nicht mehr erreichbare Concepts.",
+        help="Incrementally update an existing SQLite vector index.",
+        description="Reuses unchanged concept vectors, updates changed ones and removes unreachable concepts.",
     )
     # Both commands accept the same source/model/backend arguments.
     for action in init_db._actions:
@@ -99,7 +99,7 @@ async def init_vector_db(args: argparse.Namespace, *, incremental: bool = False)
         raise ValueError(f"OKF-Repository ist kein vorhandenes Verzeichnis: {root}")
     if database.is_relative_to(root):
         raise ValueError(
-            "SQLite-Zieldatei muss außerhalb des OKF-Repositories liegen."
+            "Target SQLite file must be outside the OKF repository."
         )
     if not isinstance(args.embedding_model, str) or not args.embedding_model.strip():
         raise ValueError("--embedding-model darf nicht leer sein.")
@@ -109,10 +109,10 @@ async def init_vector_db(args: argparse.Namespace, *, incremental: bool = False)
         raise ValueError("--max-files muss zwischen 1 und 100000 liegen.")
     if args.provider == "openai" and not args.base_url:
         raise ValueError(
-            "Für --provider openai muss --base-url explizit angegeben werden."
+            "--provider openai requires an explicit --base-url."
         )
     if args.provider == "ollama" and args.api_key_env:
-        raise ValueError("--api-key-env wird nur für --provider openai unterstützt.")
+        raise ValueError("--api-key-env is supported only for --provider openai.")
 
     # Validate the OKF marker before contacting the embedding endpoint.
     from cli_agent.okf_mcp_server.repository import OkfRepository
@@ -139,13 +139,13 @@ async def init_vector_db(args: argparse.Namespace, *, incremental: bool = False)
     if incremental:
         result = await update_index(vector, **kwargs)
         print(
-            f"SQLite-Knowledge-Index aktualisiert: {database} "
-            f"(neu: {result.added}, geändert: {result.changed}, "
-            f"unverändert: {result.unchanged}, entfernt: {result.removed})."
+            f"SQLite Knowledge index updated: {database} "
+            f"(added: {result.added}, changed: {result.changed}, "
+            f"unchanged: {result.unchanged}, removed: {result.removed})."
         )
         return result.total
     count = await build_index(vector, **kwargs)
-    print(f"SQLite-Knowledge-Index erstellt: {database} ({count} OKF-Concepts).")
+    print(f"SQLite Knowledge index created: {database} ({count} OKF-Concepts).")
     return count
 
 

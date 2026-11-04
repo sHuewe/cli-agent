@@ -16,7 +16,7 @@ def _preview_string(value: str) -> str:
     omitted = len(value) - MAX_APPROVAL_STRING_HEAD - MAX_APPROVAL_STRING_TAIL
     return (
         value[:MAX_APPROVAL_STRING_HEAD]
-        + f"\n... <{omitted} Zeichen gekürzt; insgesamt {len(value)} Zeichen> ...\n"
+        + f"\n... <{omitted} characters truncated; total {len(value)} characters> ...\n"
         + value[-MAX_APPROVAL_STRING_TAIL:]
     )
 
@@ -34,8 +34,8 @@ def _approval_value(value: object) -> object:
             for key, item in items[:MAX_APPROVAL_COLLECTION_ITEMS]
         }
         if len(items) > MAX_APPROVAL_COLLECTION_ITEMS:
-            result["<gekürzt>"] = (
-                f"{len(items) - MAX_APPROVAL_COLLECTION_ITEMS} weitere Einträge"
+            result["<truncated>"] = (
+                f"{len(items) - MAX_APPROVAL_COLLECTION_ITEMS} additional entries"
             )
         return result
     if isinstance(value, (list, tuple)):
@@ -45,7 +45,7 @@ def _approval_value(value: object) -> object:
         ]
         if len(value) > MAX_APPROVAL_COLLECTION_ITEMS:
             result.append(
-                f"<{len(value) - MAX_APPROVAL_COLLECTION_ITEMS} weitere Elemente gekürzt>"
+                f"<{len(value) - MAX_APPROVAL_COLLECTION_ITEMS} additional items truncated>"
             )
         return result
     if isinstance(value, bytes):

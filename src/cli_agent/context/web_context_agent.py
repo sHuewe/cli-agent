@@ -95,27 +95,27 @@ class WebContextCliAgent(CliAgent):
     @classmethod
     def _format_loop_usage(cls, name: str, *, ran: bool, usage: LoopTokenUsage | None) -> str:
         if not ran:
-            return f"{name}: nicht ausgeführt."
+            return f"{name}: not executed."
         if usage is None:
-            return f"{name}: ausgeführt, aber die Anzahl der Modellaufrufe konnte nicht ermittelt werden."
+            return f"{name}: executed, but the number of model requests could not be determined."
         if usage.usage_requests == 0:
-            return "\n".join([f"{name}:", f"  Modellaufrufe: {usage.requests}", "  Usage verfügbar: 0/" f"{usage.requests}", "  Der Modell-Endpunkt hat keine Usage-Daten geliefert."])
+            return "\n".join([f"{name}:", f"  Model requests: {usage.requests}", "  Usage available: 0/" f"{usage.requests}", "  The model endpoint provided no usage data."])
         complete = usage.usage_requests == usage.requests
-        qualifier = "" if complete else "mindestens "
-        max_input = f"{cls._format_token_count(usage.max_input_tokens)} Tokens" if usage.max_input_tokens is not None else "nicht verfügbar"
-        last_input = f"{cls._format_token_count(usage.last_input_tokens)} Tokens" if usage.last_input_tokens is not None else "nicht verfügbar"
+        qualifier = "" if complete else "at least "
+        max_input = f"{cls._format_token_count(usage.max_input_tokens)} Tokens" if usage.max_input_tokens is not None else "unavailable"
+        last_input = f"{cls._format_token_count(usage.last_input_tokens)} Tokens" if usage.last_input_tokens is not None else "unavailable"
         lines = [
             f"{name}:",
-            f"  Modellaufrufe: {usage.requests}",
-            f"  Usage verfügbar: {usage.usage_requests}/{usage.requests}",
-            f"  Input gesamt: {qualifier}{cls._format_token_count(usage.input_tokens)} Tokens",
-            f"  Output gesamt: {qualifier}{cls._format_token_count(usage.output_tokens)} Tokens",
+            f"  Model requests: {usage.requests}",
+            f"  Usage available: {usage.usage_requests}/{usage.requests}",
+            f"  Total input: {qualifier}{cls._format_token_count(usage.input_tokens)} Tokens",
+            f"  Total output: {qualifier}{cls._format_token_count(usage.output_tokens)} Tokens",
             f"  Tokens gesamt: {qualifier}{cls._format_token_count(usage.total_tokens)} Tokens",
             f"  Max. gemeldeter Input eines Aufrufs: {max_input}",
             f"  Input letzter Aufruf: {last_input}",
         ]
         if not complete:
-            lines.append("  Hinweis: Usage-Daten sind unvollständig; Summen und Maximum berücksichtigen nur gemeldete Requests.")
+            lines.append("  Note: usage data are incomplete; totals and maxima include only reported requests.")
         return "\n".join(lines)
 
     def token_usage_text(self) -> str:
@@ -197,10 +197,10 @@ class WebContextCliAgent(CliAgent):
                 context.truncated,
                 replaced,
             )
-            action = "aktualisiert" if replaced else "hinzugefügt"
-            truncated = ", gekürzt" if context.truncated else ""
+            action = "updated" if replaced else "added"
+            truncated = ", truncated" if context.truncated else ""
             return (
-                f"Web-Kontext {action}: "
+                f"Web context {action}: "
                 f"{redact_url_for_display(context.final_url)} "
                 f"({len(context.content)} Zeichen{truncated})."
             )
@@ -209,8 +209,8 @@ class WebContextCliAgent(CliAgent):
             self._web_contexts.clear()
             self._disabled_web_context_urls.clear()
             logger.info("web_context_cleared count=%d", count)
-            noun = "Eintrag" if count == 1 else "Einträge"
-            return f"Web-Kontext gelöscht ({count} {noun})."
+            noun = "entry" if count == 1 else "entries"
+            return f"Web context cleared ({count} {noun})."
         if local_command.command in {"enable", "disable"}:
             # Delegate the normalized command parsed above. The base
             # ConversationMixin intentionally owns the actual server toggle,
@@ -269,7 +269,7 @@ class WebContextCliAgent(CliAgent):
                     "content": (
                         context.content
                         if len(context.content) <= 20_000
-                        else context.content[:20_000] + "\n\n[… Context-Vorschau gekürzt …]"
+                        else context.content[:20_000] + "\n\n[… Context preview truncated …]"
                     ),
                     "content_chars": len(context.content),
                     "enabled": context.requested_url not in self._disabled_web_context_urls,
