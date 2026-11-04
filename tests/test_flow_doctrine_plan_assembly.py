@@ -63,7 +63,7 @@ def test_missing_or_duplicate_concepts_rejected():
         assemble_doctrine_concept_plan(plan, {"iterations": [
             {"id": "b0001", "output": {"status": "ok", "concepts": [item]}}
         ]}, prepare_doctrine_concept_batches(plan, analyses(), batch_size=2))
-    with pytest.raises(ValueError, match="Prompt template variable 'name' was assigned more than once using --var\\."):
+    with pytest.raises(ValueError, match="Unknown or multiply planned concept"):
         assemble_doctrine_concept_plan(plan, {"iterations": [
             {"id": "b0001", "output": {"status": "ok", "concepts": [item, item]}}
         ]}, prepare_doctrine_concept_batches(plan, analyses(), batch_size=2))

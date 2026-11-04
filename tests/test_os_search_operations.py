@@ -139,7 +139,7 @@ def test_move_file_rejects_parent_escape_sensitive_and_missing_parent(tmp_path: 
 
     with pytest.raises(WorkspaceError, match="'..'"):
         workspace.move_file("source.txt", "../outside.txt")
-    with pytest.raises(WorkspaceError, match="Modifying secret, credential or protected workspace files is not allowed th"):
+    with pytest.raises(WorkspaceError, match="Modifying protected workspace files is not allowed"):
         workspace.move_file("source.txt", ".env")
     with pytest.raises(WorkspaceError, match="Zielordner"):
         workspace.move_file("source.txt", "missing/target.txt")

@@ -634,14 +634,14 @@ def test_confluence_document_accepts_single_search_result() -> None:
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        ({"results": []}, "nicht gefunden"),
+        ({"results": []}, "not found"),
         (
             {"results": [{"title": "A"}, {"title": "B"}]},
-            "nicht eindeutig",
+            "ambiguous",
         ),
         (
             {"results": ["invalid"]},
-            "ungültiges Seitenergebnis",
+            "invalid page result",
         ),
         (
             {"title": "No body"},
@@ -649,7 +649,7 @@ def test_confluence_document_accepts_single_search_result() -> None:
         ),
         (
             {"title": "Empty", "body": {"view": {"value": "   "}}},
-            "keinen verwertbaren Seiteninhalt",
+            "no usable page content",
         ),
     ],
 )

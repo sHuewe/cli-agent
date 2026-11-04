@@ -271,7 +271,7 @@ def test_workspace_rejects_windows_drive_paths(tmp_path, path: str) -> None:
 def test_write_file_rejects_sensitive_destinations(tmp_path, relative_path) -> None:
     path = tmp_path / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    with pytest.raises(WorkspaceError, match="Modifying secret, credential or protected workspace files is not allowed th"):
+    with pytest.raises(WorkspaceError, match="Modifying protected workspace files is not allowed"):
         _workspace(tmp_path).write_file(relative_path, "replacement")
     assert not path.exists()
 
@@ -281,7 +281,7 @@ def test_delete_file_rejects_sensitive_files(tmp_path, relative_path) -> None:
     path = tmp_path / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("original", encoding="utf-8")
-    with pytest.raises(WorkspaceError, match="Modifying secret, credential or protected workspace files is not allowed th"):
+    with pytest.raises(WorkspaceError, match="Modifying protected workspace files is not allowed"):
         _workspace(tmp_path).delete_file(relative_path)
     assert path.read_text(encoding="utf-8") == "original"
 
@@ -291,14 +291,14 @@ def test_copy_file_rejects_sensitive_destinations(tmp_path, destination) -> None
     (tmp_path / "source.txt").write_text("safe", encoding="utf-8")
     path = tmp_path / destination
     path.parent.mkdir(parents=True, exist_ok=True)
-    with pytest.raises(WorkspaceError, match="Modifying secret, credential or protected workspace files is not allowed th"):
+    with pytest.raises(WorkspaceError, match="Modifying protected workspace files is not allowed"):
         _workspace(tmp_path).copy_file("source.txt", destination)
     assert not path.exists()
 
 
 @pytest.mark.parametrize("directory", [".git", ".cli-agent", ".ssh", ".aws"])
 def test_make_directory_rejects_sensitive_directories(tmp_path, directory) -> None:
-    with pytest.raises(WorkspaceError, match="Modifying secret, credential or protected workspace files is not allowed th"):
+    with pytest.raises(WorkspaceError, match="Modifying protected workspace files is not allowed"):
         _workspace(tmp_path).make_directory(directory)
     assert not (tmp_path / directory).exists()
 
