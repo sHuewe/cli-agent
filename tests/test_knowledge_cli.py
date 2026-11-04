@@ -98,7 +98,7 @@ async def test_index_rejects_database_inside_source_tree(monkeypatch, tmp_path):
         pytest.fail("Indexing must not start with a source-tree database")
     monkeypatch.setattr(knowledge_cli, "build_index", must_not_run)
 
-    with pytest.raises(ValueError, match="außerhalb"):
+    with pytest.raises(ValueError, match="outside"):
         await knowledge_cli._run_index(config_file)
 
 

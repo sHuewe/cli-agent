@@ -463,7 +463,7 @@ def test_oversized_full_result_fails_instead_of_truncating(
     )
     monkeypatch.setattr("cli_agent.data.data_queries.MAX_FULL_RESULT_BYTES", 25)
     operations = _operations(tmp_path)
-    with pytest.raises(DataOperationError, match="zu groß"):
+    with pytest.raises(DataOperationError, match="too large"):
         if aggregate:
             operations.aggregate_data(
                 [{"column": "value", "function": "sum"}],
@@ -483,7 +483,7 @@ def test_data_reads_cannot_escape_workspace(tmp_path: Path, path: str) -> None:
 def test_data_read_rejects_protected_path(tmp_path: Path) -> None:
     source = _write_csv(tmp_path)
 
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="protected"):
         _operations(
             tmp_path,
             protected_paths=(source,),
@@ -498,7 +498,7 @@ def test_select_data_cannot_read_protected_path(tmp_path: Path) -> None:
         protected_paths=(protected,),
     )
 
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="protected"):
         operations.select_data("sales.csv")
     assert protected.exists()
 
@@ -506,14 +506,14 @@ def test_select_data_cannot_read_protected_path(tmp_path: Path) -> None:
 def test_data_operations_reject_unsupported_formats(tmp_path: Path) -> None:
     (tmp_path / "data.txt").write_text("a,b\n1,2\n", encoding="utf-8")
 
-    with pytest.raises(DataOperationError, match="Datenformat"):
+    with pytest.raises(DataOperationError, match="data format"):
         _operations(tmp_path).inspect_data("data.txt")
 
 
 def test_filters_reject_unknown_operator_without_evaluation(tmp_path: Path) -> None:
     _write_csv(tmp_path)
 
-    with pytest.raises(DataOperationError, match="Filteroperator"):
+    with pytest.raises(DataOperationError, match="filter operator"):
         _operations(tmp_path).select_data(
             "sales.csv",
             filters=[
@@ -590,7 +590,7 @@ def test_inline_json_array_works_without_workspace() -> None:
 def test_path_is_rejected_without_workspace_access() -> None:
     operations = DataOperations(None)
 
-    with pytest.raises(DataOperationError, match="Dateizugriff"):
+    with pytest.raises(DataOperationError, match="File access"):
         operations.inspect_data("sales.csv")
 
 
@@ -627,7 +627,7 @@ def test_data_format_is_rejected_for_path_source(tmp_path: Path) -> None:
 def test_inline_json_rejects_nested_values() -> None:
     operations = DataOperations(None)
 
-    with pytest.raises(DataOperationError, match="skalare"):
+    with pytest.raises(DataOperationError, match="scalar"):
         operations.inspect_data(
             data='[{"name":"A","nested":{"x":1}}]',
             data_format="json",
@@ -649,7 +649,7 @@ def test_inline_json_rejects_non_finite_numbers(
     data_format: str,
     data: str,
 ) -> None:
-    with pytest.raises(DataOperationError, match="nicht-endliche Zahl"):
+    with pytest.raises(DataOperationError, match="nonfinite number"):
         DataOperations(None).inspect_data(
             data=data,
             data_format=data_format,
@@ -680,7 +680,7 @@ def test_jsonl_file_rejects_non_finite_numbers(
 ) -> None:
     (tmp_path / "bad.jsonl").write_text(content, encoding="utf-8")
 
-    with pytest.raises(DataOperationError, match="nicht-endliche Zahl"):
+    with pytest.raises(DataOperationError, match="nonfinite number"):
         _operations(tmp_path).inspect_data("bad.jsonl")
 
 
@@ -1196,7 +1196,7 @@ def test_bool_and_numbers_have_distinct_scalar_identity() -> None:
 def test_float_aggregation_rejects_non_finite_result() -> None:
     operations = DataOperations(None)
 
-    with pytest.raises(DataOperationError, match="endliches Ergebnis"):
+    with pytest.raises(DataOperationError, match="nonfinite result"):
         operations.aggregate_data(
             [{"column": "value", "function": "sum", "alias": "total"}],
             data="value\n1e308\n1e308\n",
@@ -1211,7 +1211,7 @@ def test_failed_non_finite_aggregation_does_not_change_workspace(
     output = tmp_path / "summary.jsonl"
     output.write_text("keep\n", encoding="utf-8")
 
-    with pytest.raises(DataOperationError, match="endliches Ergebnis"):
+    with pytest.raises(DataOperationError, match="nonfinite result"):
         operations.aggregate_data(
             [{"column": "value", "function": "sum", "alias": "total"}],
             data="value\n1e308\n1e308\n",
@@ -1286,7 +1286,7 @@ def test_decimal_aggregation_rejects_excessive_working_precision() -> None:
         "| `decimal:1` |"
     )
 
-    with pytest.raises(DataOperationError, match="Arbeitspräzision"):
+    with pytest.raises(DataOperationError, match="working precision"):
         operations.aggregate_data(
             [
                 {
@@ -1347,7 +1347,7 @@ def test_markdown_row_limit_is_checked_before_table_materialization() -> None:
         "| 3 |\n"
     )
 
-    with pytest.raises(MarkdownTableError, match="Zeilenlimit"):
+    with pytest.raises(MarkdownTableError, match="row limit"):
         parse_markdown_tables(markdown, max_rows=2)
 
 
@@ -1363,7 +1363,7 @@ def test_markdown_row_budget_applies_across_all_extracted_tables() -> None:
         "| 3 |\n"
     )
 
-    with pytest.raises(MarkdownTableError, match="Zeilenlimit"):
+    with pytest.raises(MarkdownTableError, match="row limit"):
         parse_markdown_tables(markdown, max_rows=2)
 
 
@@ -1409,7 +1409,7 @@ def test_inline_sources_reject_column_names_with_surrounding_whitespace(
     data_format: str,
     data: str,
 ) -> None:
-    with pytest.raises(DataOperationError, match="Spaltennamen.*Leerzeichen"):
+    with pytest.raises(DataOperationError, match="Column names.*whitespace"):
         DataOperations(None).inspect_data(
             data=data,
             data_format=data_format,
@@ -1430,12 +1430,12 @@ def test_file_sources_reject_column_names_with_surrounding_whitespace(
 ) -> None:
     (tmp_path / filename).write_text(content, encoding="utf-8")
 
-    with pytest.raises(DataOperationError, match="Spaltennamen.*Leerzeichen"):
+    with pytest.raises(DataOperationError, match="Column names.*whitespace"):
         _operations(tmp_path).inspect_data(filename)
 
 
 def test_aggregation_alias_rejects_surrounding_whitespace() -> None:
-    with pytest.raises(DataOperationError, match="Spaltennamen.*Leerzeichen"):
+    with pytest.raises(DataOperationError, match="Column names.*whitespace"):
         DataOperations(None).aggregate_data(
             [
                 {

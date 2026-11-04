@@ -123,7 +123,7 @@ async def test_source_race_during_update_keeps_original_database(tmp_path, monke
                 return "---\ntype: concept\n---\nSecond revision"
         return original_read(root_path, relative, **kwargs)
     monkeypatch.setattr(vector, "_read_source", changed_between_passes)
-    with pytest.raises(ValueError, match="während der Indexierung"):
+    with pytest.raises(ValueError, match="during indexing"):
         await vector.update_index(config, root=root, path=path, network=NetworkConfig())
     assert reads == 2
     assert _published_index(path) == before

@@ -47,7 +47,7 @@ def test_frontend_tools_validate_schema_names_bounds_and_collisions():
         normalize_frontend_tools([{"name": "a", "description": "x",
                                   "parameters": {"type": "not-a-json-schema-type"}}],
                                  server_names=set())
-    with pytest.raises(ValueError, match="groß"):
+    with pytest.raises(ValueError, match="too large"):
         normalize_frontend_tools([{"name": "a", "description": "x",
                                    "parameters": {"x": "z" * 66000}}], server_names=set())
     with pytest.raises(ValueError, match="Definition"):
@@ -83,7 +83,7 @@ def test_frontend_results_require_exactly_once_and_original_call():
     ]
     with pytest.raises(ValueError, match="fehlt"):
         checked_frontend_results(completed_messages(include_assistant=False), pending)
-    with pytest.raises(ValueError, match="Nicht alle"):
+    with pytest.raises(ValueError, match="Not all"):
         checked_frontend_results(completed_messages(result=False), pending)
     with pytest.raises(ValueError, match="mehrfach"):
         checked_frontend_results(completed_messages(repeat=True), pending)
@@ -93,7 +93,7 @@ def test_frontend_results_require_exactly_once_and_original_call():
         checked_frontend_results([], ())
     long = completed_messages()
     long[-1]["content"] = "a" * 270000
-    with pytest.raises(ValueError, match="groß"):
+    with pytest.raises(ValueError, match="too large"):
         checked_frontend_results(long, pending)
     invalid = completed_messages()
     invalid[-1]["content"] = 42
@@ -120,11 +120,11 @@ def test_frontend_results_error_and_content_part_reduction():
         checked_frontend_results(messages, pending)
     tampered = completed_messages()
     tampered[1]["toolCalls"][0]["function"]["name"] = "os__write_file"
-    with pytest.raises(ValueError, match="verändert"):
+    with pytest.raises(ValueError, match="changed"):
         checked_frontend_results(tampered, pending)
     tampered = completed_messages()
     tampered[1]["toolCalls"][0]["function"]["arguments"] = '{"view":"other"}'
-    with pytest.raises(ValueError, match="verändert"):
+    with pytest.raises(ValueError, match="changed"):
         checked_frontend_results(tampered, pending)
 
 
@@ -295,7 +295,7 @@ async def test_frontend_handoff_and_followup_without_replaying_agent_call():
                 "/ag-ui", json=with_new_user, headers=headers
             )
             assert rejected.status_code == 409
-            assert "Benutzernachrichten" in rejected.json()["error"]
+            assert "user messages" in rejected.json()["error"]
             assert session._pending_frontend is not None
             assert agents[0].resume_data == []
 
@@ -582,7 +582,7 @@ def test_multiple_frontend_tools_require_all_results_in_issued_order():
         {"role": "tool", "tool_call_id": "second", "content": "done second"},
     ]
     messages.pop()
-    with pytest.raises(ValueError, match="Nicht alle"):
+    with pytest.raises(ValueError, match="Not all"):
         checked_frontend_results(messages, pending)
 
 
@@ -1140,7 +1140,7 @@ async def test_frontend_tool_cannot_shadow_internal_evidence_name():
             }
             response = await client.post("/ag-ui", json=request, headers=headers)
             assert response.status_code == 400
-            assert "kollidierender Tool-Name" in response.json()["error"]
+            assert "colliding tool name" in response.json()["error"]
     finally:
         await service.shutdown()
 

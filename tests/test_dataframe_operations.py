@@ -61,7 +61,7 @@ def test_json_pointer_escaping_and_file_access_boundary(tmp_path):
     assert json.loads(ops.inspect_json("nested.json"))["record_sets"][0]["records_path"] == "/a~1b/x~0y"
     assert ops._read_records("nested.json", records_path="/a~1b/x~0y")[1] == [{"value": 10}]
     (tmp_path / "table.csv").write_text("value\n10\n", encoding="utf-8")
-    with pytest.raises(DataOperationError, match="nur für JSON"):
+    with pytest.raises(DataOperationError, match="only for JSON"):
         ops.inspect_data("table.csv", records_path="/rows")
     with pytest.raises(Exception):
         ops.inspect_json("../nested.json")
@@ -260,7 +260,7 @@ def test_time_series_tools_reject_duplicate_timestamps_and_invalid_gap(frames, t
         {"t": "2026-06-24T00:00:00", "v": 2},
     ])
     for fn in (frames.analyze_intervals, frames.integrate_data):
-        with pytest.raises(DataOperationError, match="doppelte"):
+        with pytest.raises(DataOperationError, match="duplicate"):
             fn("duplicates.json", time_column="t", value_column="v",
                max_gap_seconds=60, records_path="/measurements",
                **({"condition": "lt", "threshold": 2} if fn == frames.analyze_intervals else {}))
@@ -355,12 +355,12 @@ def test_concat_dedup_keeps_bool_distinct_from_numeric_one(frames, tmp_path):
 
 def test_concat_data_rejects_missing_columns_or_implicit_overflow(frames, tmp_path, monkeypatch):
     _write_json(tmp_path, "wrong.json", [{"other": 1}])
-    with pytest.raises(DataOperationError, match="dieselben Spalten"):
+    with pytest.raises(DataOperationError, match="same columns"):
         frames.concat_data([_input("l1.json"), _input("wrong.json")])
     with pytest.raises(DataOperationError, match="unique_by"):
         frames.concat_data([_input("l1.json"), _input("l1.json")], unique_by=["missing"])
     monkeypatch.setattr("cli_agent.data.dataframe_operations.MAX_FRAME_ROWS", 5)
-    with pytest.raises(DataOperationError, match="Zeilenlimit"):
+    with pytest.raises(DataOperationError, match="row limit"):
         frames.concat_data([_input("l1.json"), _input("l1.json")])
 
 
@@ -509,7 +509,7 @@ def test_legacy_non_iso_datetime_input_remains_parseable(frames, tmp_path):
 def test_mixed_aware_and_naive_timestamps_are_not_silently_combined(frames, tmp_path):
     _write_json(tmp_path, "aware.json", [{"timestamp": "2026-06-24T07:00:00Z", "power": 1}])
     _write_json(tmp_path, "naive.json", [{"timestamp": "2026-06-24T07:00:00", "power": 2}])
-    with pytest.raises(DataOperationError, match="Zeitzone|Zeitreihen"):
+    with pytest.raises(DataOperationError, match="timezone|time series"):
         frames.join_data([
             _source("aware.json", "A"), _source("naive.json", "B"),
         ], direction="nearest", how="left", tolerance_seconds=1)
@@ -517,7 +517,7 @@ def test_mixed_aware_and_naive_timestamps_are_not_silently_combined(frames, tmp_
         {"timestamp": "2026-06-24T07:00:00Z", "power": 1},
         {"timestamp": "2026-06-24T07:00:01", "power": 2},
     ])
-    with pytest.raises(DataOperationError, match="Zeitzone"):
+    with pytest.raises(DataOperationError, match="timezone"):
         frames.resample_data("mixed_awareness.json", "1min", [
             ResampleAggregation("power", "sum", "total"),
         ], records_path="/measurements")
@@ -547,7 +547,7 @@ def test_duplicate_join_timestamps_rejected(frames, tmp_path):
         {"timestamp": "2026-06-24T07:00:00", "power": 2},
         {"timestamp": "2026-06-24T07:00:00", "power": 3},
     ])
-    with pytest.raises(DataOperationError, match="doppelte"):
+    with pytest.raises(DataOperationError, match="duplicate"):
         frames.join_data([_source("l1.json", "L1"), _source("dup.json", "dup")])
 
 
@@ -557,9 +557,9 @@ def test_join_and_resample_reject_timestamps_missing_after_conversion(frames, tm
         {"timestamp": "2026-06-24T07:00:00", "power": 1},
         {"timestamp": missing_timestamp, "power": 2},
     ])
-    with pytest.raises(DataOperationError, match="Zeitstempel dürfen nicht leer"):
+    with pytest.raises(DataOperationError, match="Timestamps must not be empty"):
         frames.join_data([_source("missing_time.json", "A"), _source("l1.json", "B")])
-    with pytest.raises(DataOperationError, match="Zeitstempel dürfen nicht leer"):
+    with pytest.raises(DataOperationError, match="Timestamps must not be empty"):
         frames.resample_data("missing_time.json", "1min", [
             ResampleAggregation("power", "sum", "total"),
         ], records_path="/measurements")
@@ -590,12 +590,12 @@ def test_division_by_zero_and_invalid_frequency_rejected(frames):
 
 @pytest.mark.parametrize("invalid_name", [" delta", "delta ", "\tvalue", "value\n"])
 def test_generated_column_names_must_be_readable_by_data_mcp(frames, invalid_name):
-    with pytest.raises(DataOperationError, match="Spaltennamen"):
+    with pytest.raises(DataOperationError, match="column names"):
         frames.derive_columns(
             "l1.json", [DerivedColumn(invalid_name, "diff", "power")],
             records_path="/measurements",
         )
-    with pytest.raises(DataOperationError, match="Spaltennamen"):
+    with pytest.raises(DataOperationError, match="column names"):
         frames.resample_data(
             "l1.json", "1min", [ResampleAggregation("power", "sum", invalid_name)],
             records_path="/measurements",
@@ -603,7 +603,7 @@ def test_generated_column_names_must_be_readable_by_data_mcp(frames, invalid_nam
 
 
 def test_dataframe_result_applies_reader_column_validation():
-    with pytest.raises(DataOperationError, match="Spaltennamen"):
+    with pytest.raises(DataOperationError, match="column names"):
         DataFrameOperations._result(pd.DataFrame({"value ": [1]}), operation="derive_columns")
 
 
@@ -645,7 +645,7 @@ def test_resample_rejects_aggregation_overflow(frames, tmp_path):
         {"timestamp": "2026-06-24T07:00:00", "power": 1e308},
         {"timestamp": "2026-06-24T07:00:10", "power": 1e308},
     ])
-    with pytest.raises(DataOperationError, match="nichtendliches Ergebnis"):
+    with pytest.raises(DataOperationError, match="nonfinite result"):
         frames.resample_data("overflow.json", "1min", [
             ResampleAggregation("power", "sum", "total"),
         ], records_path="/measurements")
@@ -661,7 +661,7 @@ def test_resample_rejects_huge_sparse_span_before_allocating(frames, tmp_path, m
         raise AssertionError("Dense resampling must not start for an oversized span")
 
     monkeypatch.setattr(pd.DataFrame, "resample", unexpected_resample)
-    with pytest.raises(DataOperationError, match="Zeilenlimit"):
+    with pytest.raises(DataOperationError, match="row limit"):
         frames.resample_data("year.json", "1s", [
             ResampleAggregation("power", "sum", "total"),
         ], records_path="/measurements")
@@ -684,7 +684,7 @@ def test_resample_checks_exact_bucket_count_at_limit(frames, tmp_path, monkeypat
         {"timestamp": "2026-06-24T00:00:59", "power": 1},
         {"timestamp": "2026-06-24T00:03:00", "power": 2},
     ])
-    with pytest.raises(DataOperationError, match="Zeilenlimit"):
+    with pytest.raises(DataOperationError, match="row limit"):
         frames.resample_data("four.json", "1min", [
             ResampleAggregation("power", "sum", "total"),
         ], records_path="/measurements")
@@ -835,7 +835,7 @@ def test_empty_join_artifact_preserves_schema_for_followup_tools(frames, tmp_pat
 @pytest.mark.parametrize("invalid_columns", ["name", ["name ", "value"], ["name", "name"], list(range(101))])
 def test_empty_json_artifact_rejects_invalid_declared_schema(invalid_columns):
     document = json.dumps({"columns": invalid_columns, "rows": []})
-    with pytest.raises(DataOperationError, match="Spaltennamen|Schema|Spalten"):
+    with pytest.raises(DataOperationError, match="column names|schema|columns"):
         DataOperations(None)._read_records(
             data=document, data_format="json", records_path="/rows",
         )
@@ -855,10 +855,10 @@ def test_pandas_output_bound_and_non_numeric_data_are_rejected(frames, tmp_path,
     _write_json(tmp_path, "bad.json", [
         {"timestamp": "2026-06-24T07:00:00", "power": "not-a-number"},
     ])
-    with pytest.raises(DataOperationError, match="nichtnumerische"):
+    with pytest.raises(DataOperationError, match="nonnumeric"):
         frames.join_data([_source("bad.json", "A"), _source("l1.json", "B")])
     monkeypatch.setattr(dataframe_operations, "MAX_FRAME_RESULT_CHARS", 10)
-    with pytest.raises(DataOperationError, match="zu groß"):
+    with pytest.raises(DataOperationError, match="too large"):
         frames.join_data([_source("l1.json", "A"), _source("l3.json", "B")])
 
 
@@ -940,7 +940,7 @@ def test_resample_requires_explicit_column_when_ambiguous(frames, tmp_path):
         {"time": "2026-06-24T07:01:00Z", "timestamp": "2026-06-24T07:01:00Z", "power": 2},
     ])
     aggs = [ResampleAggregation("power", "mean", "avg")]
-    with pytest.raises(DataOperationError, match="Mehrere mögliche Zeitspalten"):
+    with pytest.raises(DataOperationError, match="Multiple possible time columns"):
         frames.resample_data("ambiguous.json", "1min", aggs, records_path="/measurements")
     result = frames.resample_data(
         "ambiguous.json", "1min", aggs,

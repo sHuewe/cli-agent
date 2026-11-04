@@ -94,7 +94,7 @@ async def test_chroma_adapter_rejects_oversized_untrusted_chunks():
     session = ChromaKnowledgeSession(config=_config(), rag=StubReader([
         _hit(content="x" * 16_001),
     ]))
-    with pytest.raises(ValueError, match="maximale Kontextgröße"):
+    with pytest.raises(ValueError, match="maximum context size"):
         await session.search("what")
 
 

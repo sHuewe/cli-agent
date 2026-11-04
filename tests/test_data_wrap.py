@@ -110,9 +110,9 @@ def test_unsupported_or_ambiguous_inline_data_fails(configured, content):
 
 
 def test_inline_limit_and_invalid_jsonl_are_rejected():
-    with pytest.raises(DataOperationError, match="Größenlimit"):
+    with pytest.raises(DataOperationError, match="size limit"):
         DataOperations.wrap_data("a" * (MAX_DATA_PAYLOAD_CHARS + 1))
-    with pytest.raises(DataOperationError, match="Ungültiges JSON"):
+    with pytest.raises(DataOperationError, match="Invalid JSON"):
         DataOperations.wrap_data('{"a":1}\n{"a":broken}\n')
 
 
