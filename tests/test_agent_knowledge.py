@@ -83,7 +83,7 @@ def test_synthesized_index_entries_are_allowed_for_followup_calls() -> None:
 @pytest.mark.parametrize(
     ("answer", "expected"),
     [
-        ("not json", "kein gültiges JSON"),
+        ("not json", "not a valid JSON"),
         ("[]", "kein JSON-Objekt"),
         (json.dumps({"found_content": "yes", "selected_okf_tokens": []}), "boolescher"),
         (json.dumps({"found_content": True, "selected_okf_tokens": "x"}), "Liste von Zeichenketten"),
@@ -136,7 +136,7 @@ def test_validate_not_applicable_only_before_followup_and_not_found_requires_con
     assert _validate_knowledge_selection(not_applicable, state)[1] is None
 
     state.successful_followup_calls = 1
-    assert "nur vor Beginn" in (_validate_knowledge_selection(not_applicable, state)[1] or "")
+    assert "only allowed before" in (_validate_knowledge_selection(not_applicable, state)[1] or "")
 
     empty = _KnowledgeRunState()
     not_found = json.dumps(
@@ -205,10 +205,10 @@ def test_assemble_payload_deduplicates_tokens_and_warnings() -> None:
 @pytest.mark.parametrize(
     "selection,match",
     [
-        ({"selected_okf_tokens": []}, "keine ausgewählten"),
-        ({"selected_okf_tokens": [7]}, "ungültigen OKF-Token"),
+        ({"selected_okf_tokens": []}, "no selected"),
+        ({"selected_okf_tokens": [7]}, "invalid OKF token"),
         ({"selected_okf_tokens": ["missing"]}, "unbekannte OKF-Tokens"),
-        ({"selected_okf_tokens": ["known"], "warnings": "bad"}, "ungültige Warnungen"),
+        ({"selected_okf_tokens": ["known"], "warnings": "bad"}, "invalid warnings"),
     ],
 )
 def test_assemble_payload_rejects_invalid_selection(selection: dict, match: str) -> None:

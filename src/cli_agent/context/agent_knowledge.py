@@ -84,34 +84,34 @@ def _validate_knowledge_selection(answer: str, state: _KnowledgeRunState) -> tup
     try:
         selection = json.loads(answer)
     except json.JSONDecodeError:
-        return None, "Die finale Antwort ist kein gültiges JSON-Objekt."
+        return None, "The final response is not a valid JSON object."
     if not isinstance(selection, dict):
-        return None, "Die finale Antwort ist kein JSON-Objekt."
+        return None, "The final response is not a JSON object."
     found_content = selection.get("found_content")
     if not isinstance(found_content, bool):
-        return selection, "`found_content` muss ein boolescher Wert sein."
+        return selection, "`found_content` must be a boolean."
     selected_tokens = selection.get("selected_okf_tokens")
     if not isinstance(selected_tokens, list) or not all(isinstance(token, str) for token in selected_tokens):
-        return selection, "`selected_okf_tokens` muss eine Liste von Zeichenketten sein."
+        return selection, "`selected_okf_tokens` must be a list of strings."
     warnings = selection.get("warnings", [])
     if not isinstance(warnings, list) or not all(isinstance(warning, str) for warning in warnings):
-        return selection, "`warnings` muss eine Liste von Zeichenketten sein."
+        return selection, "`warnings` must be a list of strings."
     if found_content:
         if not selected_tokens:
-            return selection, "Bei `found_content: true` fehlt eine `selected_okf_tokens`-Auswahl."
+            return selection, "A `selected_okf_tokens` selection is missing for `found_content: true`."
         unknown_tokens = sorted({token for token in selected_tokens if token not in state.concepts})
         if unknown_tokens:
-            return selection, "Diese Tokens gehören zu keinem erfolgreich gelesenen Concept: " + ", ".join(unknown_tokens)
+            return selection, "These tokens do not belong to any successfully read concept: " + ", ".join(unknown_tokens)
     elif selected_tokens:
-        return selection, "Bei `found_content: false` muss `selected_okf_tokens` leer sein."
+        return selection, "`selected_okf_tokens` must be empty for `found_content: false`."
     else:
         reason_code = selection.get("reason_code")
         if reason_code not in {"not_applicable", "not_found"}:
-            return selection, "Bei `found_content: false` muss `reason_code` entweder `not_applicable` oder `not_found` sein."
+            return selection, "For `found_content: false`, `reason_code` must be `not_applicable` or `not_found`."
         if reason_code == "not_applicable" and state.successful_followup_calls > 0:
-            return selection, "`not_applicable` ist nur vor Beginn der Repository-Recherche zulässig."
+            return selection, "`not_applicable` is only allowed before repository research begins."
         if reason_code == "not_found" and not state.concepts and not state.allow_empty_not_found:
-            return selection, "`not_found` ist erst zulässig, nachdem mindestens ein Concept-Dokument erfolgreich gelesen und geprüft wurde."
+            return selection, "`not_found` is only allowed after at least one concept document was read and evaluated."
     return selection, None
 
 
@@ -133,27 +133,27 @@ def _fallback_knowledge_selection(selection: dict[str, Any] | None, state: _Know
     fallback = {"strategy": strategy, "reason": reason}
     if selected_tokens:
         return {"found_content": True, "selected_okf_tokens": selected_tokens, "warnings": warnings, "agent_fallback": fallback}
-    return {"found_content": False, "selected_okf_tokens": [], "warnings": warnings, "reason_code": "retrieval_incomplete", "reason": "Der Knowledge-Lauf konnte keine belegte Concept-Auswahl erzeugen.", "agent_fallback": fallback}
+    return {"found_content": False, "selected_okf_tokens": [], "warnings": warnings, "reason_code": "retrieval_incomplete", "reason": "The Knowledge run could not produce a supported concept selection.", "agent_fallback": fallback}
 
 
 def _assemble_knowledge_payload(selection: dict[str, Any], concepts: dict[str, dict[str, Any]]) -> dict[str, Any]:
     selected_tokens = selection.get("selected_okf_tokens")
     if not isinstance(selected_tokens, list) or not selected_tokens:
-        raise RuntimeError("Der OKF-Wissenslauf hat keine ausgewählten OKF-Tokens geliefert.")
+        raise RuntimeError("The OKF Knowledge run returned no selected OKF tokens.")
     unique_tokens: list[str] = []
     seen_tokens: set[str] = set()
     for token in selected_tokens:
         if not isinstance(token, str):
-            raise RuntimeError("Der OKF-Wissenslauf hat einen ungültigen OKF-Token geliefert.")
+            raise RuntimeError("The OKF Knowledge run returned an invalid OKF token.")
         if token not in seen_tokens:
             unique_tokens.append(token)
             seen_tokens.add(token)
     unknown_tokens = [token for token in unique_tokens if token not in concepts]
     if unknown_tokens:
-        raise RuntimeError("Der OKF-Wissenslauf hat unbekannte OKF-Tokens ausgewählt: " + ", ".join(unknown_tokens))
+        raise RuntimeError("The OKF Knowledge run selected unknown OKF tokens: " + ", ".join(unknown_tokens))
     raw_warnings = selection.get("warnings", [])
     if not isinstance(raw_warnings, list) or not all(isinstance(warning, str) for warning in raw_warnings):
-        raise RuntimeError("Der OKF-Wissenslauf hat ungültige Warnungen geliefert.")
+        raise RuntimeError("The OKF Knowledge run returned invalid warnings.")
     warnings = list(dict.fromkeys(raw_warnings))
     content: list[dict[str, str]] = []
     for token in unique_tokens:
@@ -184,14 +184,14 @@ def _register_chroma_results(
     """
     entries = result.get("entries")
     if not isinstance(entries, list):
-        raise ValueError("Chroma-Suche lieferte keine gültige Trefferliste.")
+        raise ValueError("Chroma search did not return a valid match list.")
     enriched: list[dict[str, Any]] = []
     for entry in entries:
         if not isinstance(entry, dict):
-            raise ValueError("Chroma-Treffer hat ein ungültiges Format.")
+            raise ValueError("Chroma match has an invalid format.")
         record_id, content = entry.get("id"), entry.get("content")
         if not isinstance(record_id, str) or not record_id or not isinstance(content, str) or not content.strip():
-            raise ValueError("Chroma-Treffer enthält keine gültige ID oder keinen Inhalt.")
+            raise ValueError("Chroma match has no valid ID or content.")
         path = f"chroma:{record_id}"
         known_token = state.selection_tokens_by_path.get(path)
         if known_token is not None:
@@ -233,7 +233,7 @@ def _assemble_chroma_payload(
     """Return only selected, host-verified Chroma records as untrusted context."""
     tokens = selection.get("selected_okf_tokens")
     if not isinstance(tokens, list) or not tokens:
-        raise ValueError("Es wurden keine Chroma-Treffer ausgewählt.")
+        raise ValueError("No Chroma matches were selected.")
     records: list[dict[str, Any]] = []
     for token in dict.fromkeys(tokens):
         document = state.concepts.get(token)
@@ -248,5 +248,5 @@ def _assemble_chroma_payload(
         })
     warnings = selection.get("warnings", [])
     if not isinstance(warnings, list) or not all(isinstance(x, str) for x in warnings):
-        raise ValueError("Ungültige Warnungen in der Chroma-Auswahl.")
+        raise ValueError("Invalid warnings in Chroma selection.")
     return {"found_content": True, "backend": "chroma", "content": records, "warnings": list(dict.fromkeys(warnings))}
