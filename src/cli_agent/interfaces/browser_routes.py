@@ -204,6 +204,7 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         ("ui_index", ui_index),
         ("ui_css", ui_css),
         ("ui_js", ui_js),
+        ("ui_i18n", ui_i18n),
         ("ui_bootstrap", ui_bootstrap),
         ("ui_sessions", ui_sessions),
         ("ui_session_new", ui_session_new),
