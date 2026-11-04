@@ -156,6 +156,7 @@
     const status = document.createElement("span");
     status.className = "tool-call-status";
     status.dataset.state = "running";
+    status.dataset.toolName = String(event.toolCallName || "");
     status.textContent = "Läuft …";
     row.append(name, status);
     group.list.appendChild(row);
@@ -173,6 +174,42 @@
     const normalized = Object.hasOwn(labels, state) ? state : "finished";
     status.dataset.state = normalized;
     status.textContent = labels[normalized];
+  }
+
+  function renderChromaSearchSummary(event) {
+    // Only the built-in vector tool may surface a strictly bounded summary.
+    // Never render raw tool result contents, record IDs or source chunks.
+    const status = activeToolGroup?.calls.get(String(event.toolCallId || ""));
+    if (!status || status.dataset.toolName !== "vector__knowledge_search" ||
+        typeof event.content !== "string") return false;
+    let value;
+    try {
+      value = JSON.parse(event.content);
+    } catch (_error) {
+      return false;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+        Object.keys(value).sort().join(",") !== "collection,initial,matches,status" ||
+        value.status !== "success" ||
+        !Number.isInteger(value.matches) || value.matches < 0 || value.matches > 20 ||
+        typeof value.collection !== "string" || value.collection.length < 1 ||
+        value.collection.length > 128 ||
+        /[\\x00-\\x1f\\x7f]/.test(value.collection) ||
+        typeof value.initial !== "boolean") return false;
+
+    const row = status.parentElement;
+    if (!row) return false;
+    let summary = row.querySelector(".tool-call-summary");
+    if (!summary) {
+      summary = document.createElement("span");
+      summary.className = "tool-call-summary";
+      row.appendChild(summary);
+    }
+    summary.textContent = value.matches + (value.matches === 1 ? " Treffer" : " Treffer") +
+      " · Collection: " + value.collection +
+      (value.initial ? " · Initiale Suche" : " · Weitere Suche");
+    setToolStatus(event.toolCallId, "success");
+    return true;
   }
 
   function renderPublishedDocuments(event) {
@@ -573,7 +610,7 @@
             // raw MCP results are never displayed as text.
             if (Array.isArray(event.content)) {
               if (!renderPublishedDocuments(event)) setToolStatus(event.toolCallId, "finished");
-            } else {
+            } else if (!renderChromaSearchSummary(event)) {
               setToolStatus(event.toolCallId, String(event.content || "").toLowerCase());
             }
           } else if (event.type === "CUSTOM") {
