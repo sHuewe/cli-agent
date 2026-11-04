@@ -1407,7 +1407,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 name = match.group(1)
                 if name not in global_variables:
                     raise ValueError(
-                        f"Unbekannte Inventory-Variable {name!r} in "
+                        f"Unknown inventory variable {name!r} in "
                         f"steps[{index}].filesystem_operation.directory."
                     )
                 return global_variables[name]
@@ -1871,7 +1871,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if not isinstance(name, str) or not isinstance(value, str):
                 raise ValueError(
                     f"steps[{index}].vars may contain only "
-                    "String-zu-String-Werte enthalten."
+                    "string-to-string values."
                 )
             variables[name] = value
 
@@ -1946,7 +1946,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if root_name not in inputs:
                     raise ValueError(
                         f"steps[{index}].json_inputs.{name}.iterate "
-                        f"verweist auf unknownen Input {root_name!r}."
+                        f"references unknown input {root_name!r}."
                     )
             json_inputs[name] = JsonInputSpec(
                 path=path_template, iterate=iterate,
@@ -2010,7 +2010,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         elif isinstance(conversation_items_value, list):
             if len(conversation_items_value) > MAX_FOREACH_ITEMS:
                 raise ValueError(
-                    f"steps[{index}].conversation_items contains mehr als "
+                    f"steps[{index}].conversation_items contains more than "
                     f"{MAX_FOREACH_ITEMS} Elemente."
                 )
             conversation_items = tuple(conversation_items_value)
@@ -5914,7 +5914,7 @@ async def _run_flow_internal(
                 print(
                     sanitize_terminal_text(
                         f"Flow step {display_name}{suffix}: "
-                        f"vorhandenen JSON-Checkpoint verwendet: {output}",
+                        f"existing JSON checkpoint used: {output}",
                         multiline=False,
                         escape_invisible_formatting=True,
                         escape_literal_backslashes=True,
