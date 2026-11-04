@@ -494,7 +494,7 @@ class AgentSession:
             or not 0 <= matches <= 20
             or not isinstance(collection, str)
             or not 1 <= len(collection) <= 128
-            or any(ord(c) < 32 or ord(c) == 127 for c in collection)
+            or any(not (c.isascii() and (c.isalnum() or c in "_.-")) for c in collection)
             or not isinstance(initial, bool)
         ):
             return None
