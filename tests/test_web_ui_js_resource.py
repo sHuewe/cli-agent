@@ -151,6 +151,8 @@ def test_connection_status_survives_language_changes():
         '''
 const assert = require("node:assert/strict");
 const meta = {textContent: ""};
+const localeListeners = {};
+const window = {addEventListener(type, callback) { localeListeners[type] = callback; }};
 let locale = "en";
 const translations = {
   en: {"connection.establishing": "Connecting", "error.invalidLink": "Invalid link",
@@ -165,6 +167,8 @@ function t(key, values = {}) {
   return translations[locale][key] ?? key;
 }
 ''' + status_logic + '''
+assert.equal(meta.textContent, "Connecting");
+assert.equal(typeof localeListeners["cli-agent-language-change"], "function");
 currentSessionMetadata = {workspace: "/test", model: "model-x", servers: ""};
 setSessionStatus("session.meta");
 assert.equal(meta.textContent, "Model: model-x");
@@ -176,13 +180,13 @@ for (const [key, en, de] of [
 ]) {
   locale = "en"; setSessionStatus(key);
   assert.equal(meta.textContent, en);
-  locale = "de"; renderSessionMeta();
+  locale = "de"; localeListeners["cli-agent-language-change"]();
   assert.equal(meta.textContent, de);
-  locale = "en"; renderSessionMeta();
+  locale = "en"; localeListeners["cli-agent-language-change"]();
   assert.equal(meta.textContent, en);
 }
 setSessionStatus("session.meta");
-locale = "de"; renderSessionMeta();
+locale = "de"; localeListeners["cli-agent-language-change"]();
 assert.equal(meta.textContent, "Modell: model-x");
 console.log("ok");
 '''
