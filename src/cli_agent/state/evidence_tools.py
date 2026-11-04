@@ -229,7 +229,7 @@ class EvidenceOperationsMixin:
     def _resolve_refs(self, value: Any) -> list[dict]:
         if (not isinstance(value, list) or not 1 <= len(value) <= 16
                 or len(value) != len(set(value))):
-            raise EvidenceInputError("source_refs benötigt 1–16 verschiedene Quellen.")
+            raise EvidenceInputError("source_refs requires 1–16 distinct sources.")
         sources = {s["source_ref"]: (call_id, s)
                    for call_id, s in self.tool_results.items()
                    if "source_ref" in s}
@@ -247,12 +247,12 @@ class EvidenceOperationsMixin:
         if not isinstance(args, dict) or not required <= set(args) or set(args) - (
             required | {"plan_step_id"}
         ):
-            raise EvidenceInputError("add_evidence benötigt id, type, statement, source_refs und ggf. plan_step_id.")
+            raise EvidenceInputError("add_evidence requires id, type, statement, source_refs, and optional plan_step_id.")
         evidence_id = args["id"]
         if not isinstance(evidence_id, str) or not _ID.fullmatch(evidence_id):
-            raise EvidenceInputError("Ungültige Evidence-ID.")
+            raise EvidenceInputError("Invalid evidence ID.")
         if args["type"] not in ("observation", "calculation", "hypothesis"):
-            raise EvidenceInputError("Ungültiger Evidence-Typ.")
+            raise EvidenceInputError("Invalid evidence type.")
         statement = args["statement"]
         if not isinstance(statement, str) or not statement.strip() or len(statement) > 1200:
             raise EvidenceInputError("Evidence-Statement fehlt oder ist zu lang.")
@@ -261,7 +261,7 @@ class EvidenceOperationsMixin:
             if not isinstance(step, str) or step not in {s["id"] for s in self.plan["steps"]}:
                 raise EvidenceInputError("plan_step_id muss einen aktuellen Planschritt bezeichnen.")
         elif "plan_step_id" in args and not getattr(self, "_sub_run_no_plan", False):
-            raise EvidenceInputError("plan_step_id ist ohne Plan nicht zulässig.")
+            raise EvidenceInputError("plan_step_id is not allowed without a plan.")
         return {
             "id": evidence_id, "type": args["type"], "statement": statement,
             "tool_calls": self._resolve_refs(args["source_refs"]),
@@ -270,10 +270,10 @@ class EvidenceOperationsMixin:
 
     def _check_budget(self, entries: dict, plan: dict | None = None) -> None:
         if len(entries) > 64:
-            raise EvidenceInputError("Evidence-Limit überschritten.")
+            raise EvidenceInputError("Evidence limit exceeded.")
         state = visible_evidence_state(entries, self.plan if plan is None else plan)
         if len(json.dumps(state, ensure_ascii=False).encode("utf-8")) > 32000:
-            raise EvidenceInputError("Evidence-State überschreitet das Größenlimit.")
+            raise EvidenceInputError("Evidence state exceeds the size limit.")
 
     def add_evidence(self, args: dict) -> None:
         record = self._validated_record(args)
@@ -287,12 +287,12 @@ class EvidenceOperationsMixin:
 
     def remove_evidence(self, args: dict) -> dict:
         if not isinstance(args, dict) or set(args) != {"evidence_ids"}:
-            raise EvidenceInputError("remove_evidence erwartet ausschließlich evidence_ids.")
+            raise EvidenceInputError("remove_evidence accepts only evidence_ids.")
         ids = args["evidence_ids"]
         if (not isinstance(ids, list) or not 1 <= len(ids) <= 64
                 or any(not isinstance(i, str) for i in ids)
                 or len(set(ids)) != len(ids)):
-            raise EvidenceInputError("Ungültige Evidence-IDs.")
+            raise EvidenceInputError("Invalid evidence IDs.")
         unknown = [i for i in ids if i not in self.evidences]
         if unknown:
             raise EvidenceInputError("Unbekannte Evidence-IDs: " + ", ".join(unknown))
@@ -306,7 +306,7 @@ class EvidenceOperationsMixin:
         fields = {"id", "type", "statement", "plan_step_id", "source_refs", "remove"}
         if (not isinstance(args, dict) or "id" not in args or set(args) - fields
                 or len(args) == 1):
-            raise EvidenceInputError("update_evidence benötigt id und mindestens ein Änderungsfeld.")
+            raise EvidenceInputError("update_evidence requires id and at least one changed field.")
         key = args["id"]
         if not isinstance(key, str) or key not in self.evidences:
             raise EvidenceInputError("Evidence-ID nicht gefunden.")
@@ -325,16 +325,16 @@ class EvidenceOperationsMixin:
         if (not isinstance(record["statement"], str) or not record["statement"].strip()
                 or len(record["statement"]) > 1200
                 or record["type"] not in ("observation", "calculation", "hypothesis")):
-            raise EvidenceInputError("Ungültige Evidence-Aussage oder Typ.")
+            raise EvidenceInputError("Invalid evidence statement or type.")
         if "plan_step_id" in args and not getattr(self, "_sub_run_no_plan", False):
             sid = args["plan_step_id"]
             if self.plan is None or sid not in {s["id"] for s in self.plan["steps"]}:
-                raise EvidenceInputError("Ungültige plan_step_id.")
+                raise EvidenceInputError("Invalid plan_step_id.")
             record["plan_step_id"] = sid
         if "source_refs" in args:
             record["tool_calls"] = self._resolve_refs(args["source_refs"])
         if record == self.evidences[key]:
-            raise EvidenceInputError("Evidence-Update enthält keine Änderung.")
+            raise EvidenceInputError("Evidence update contains no changes.")
         candidate = {**self.evidences, key: record}
         self._check_budget(candidate)
         self.evidences = candidate
@@ -386,7 +386,7 @@ class EvidenceOperationsMixin:
         if changes:
             result["changes"] = changes
         if kind == "unchanged":
-            result["message"] = "Plan unverändert. Keinen identischen Aufruf wiederholen."
+            result["message"] = "Plan unchanged. Do not repeat the same call."
         return result
 
     def update_plan(self, args: dict) -> dict:
@@ -394,7 +394,7 @@ class EvidenceOperationsMixin:
             raise EvidenceInputError("update_plan erwartet goal, steps oder remove_step_ids.")
         if self.plan is None:
             if set(args) != {"goal", "steps"}:
-                raise EvidenceInputError("Initialer Plan benötigt goal und vollständige steps.")
+                raise EvidenceInputError("Initial plan requires goal and complete steps.")
             candidate = self._validate_plan(args)
         else:
             candidate = copy.deepcopy(self.plan)
@@ -420,7 +420,7 @@ class EvidenceOperationsMixin:
             if not isinstance(remove, list) or len(remove) != len(set(remove)) or any(
                 not isinstance(x, str) for x in remove
             ):
-                raise EvidenceInputError("Ungültige remove_step_ids.")
+                raise EvidenceInputError("Invalid remove_step_ids.")
             if any(v.get("plan_step_id") in remove for v in self.evidences.values()):
                 raise EvidenceInputError("Planschritt wird noch von einer Evidence verwendet.")
             candidate["steps"] = [s for s in candidate["steps"] if s["id"] not in remove]

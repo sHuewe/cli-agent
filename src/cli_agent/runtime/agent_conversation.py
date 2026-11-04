@@ -120,7 +120,7 @@ class ConversationMixin:
                 if restore_errors:
                     raise RuntimeError(
                         "History-Reset fehlgeschlagen und die bisherigen "
-                        "LLM-Context-Dumps konnten nicht vollständig "
+                        "LLM context dumps could not be fully "
                         "wiederhergestellt werden: "
                         + "; ".join(restore_errors)
                     ) from exc
@@ -302,7 +302,7 @@ class ConversationMixin:
             raise ValueError(
                 "Das Modell hat auch nach "
                 f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen kein "
-                f"gültiges JSON geliefert: {last_error}"
+                f"valid JSON: {last_error}"
             )
         self._agui_pending_json_repairs = 0
         return answer
@@ -499,7 +499,7 @@ class ConversationMixin:
             # on the OKF server's state or required flag.
             if not active_vector:
                 if vector_config.required:
-                    raise RuntimeError("Die konfigurierte ChromaDB ist nicht verfügbar.")
+                    raise RuntimeError("The configured ChromaDB is unavailable.")
                 return None
             return await self._collect_chroma_knowledge(
                 prompt, required=bool(vector_config.required),
@@ -511,10 +511,10 @@ class ConversationMixin:
         required = okf_required or (vector_required and active_vector)
         if active_okf and self._knowledge_session is None:
             if okf_required:
-                raise RuntimeError("Der konfigurierte OKF-Wissensserver ist nicht verfügbar.")
+                raise RuntimeError("The configured OKF Knowledge server is unavailable.")
             return None
         if vector_config is not None and not active_vector and vector_required:
-            raise RuntimeError("Der konfigurierte Vektorindex ist nicht verfügbar.")
+            raise RuntimeError("The configured vector index is unavailable.")
 
         try:
             seen_calls = set()
@@ -523,7 +523,7 @@ class ConversationMixin:
             if active_okf:
                 root_route = self._knowledge_routes.get("okf__knowledge_index")
                 if root_route is None:
-                    raise RuntimeError("Das OKF-Tool 'knowledge_index' ist nicht verfügbar.")
+                    raise RuntimeError("The OKF tool 'knowledge_index' is unavailable.")
                 root_session, root_tool_name, _ = root_route
                 root_arguments = {"path": "."}
                 root_result = await await_mcp_operation(
@@ -618,7 +618,7 @@ class ConversationMixin:
                 if reason_code == "retrieval_incomplete":
                     raise RuntimeError(
                         "Der OKF-Wissenslauf konnte die Repository-Recherche "
-                        "nicht zuverlässig abschließen."
+                        "not reliably complete the repository search."
                     )
                 raise RuntimeError(
                     "Der OKF-Wissenslauf lieferte einen unbekannten negativen "
@@ -659,7 +659,7 @@ class ConversationMixin:
         try:
             session = self._vector_session
             if session is None:
-                raise RuntimeError("Die konfigurierte ChromaDB ist nicht verfügbar.")
+                raise RuntimeError("The configured ChromaDB is unavailable.")
             state = _KnowledgeRunState(allow_empty_not_found=True)
             # The initial semantic search is executed by the host, not called
             # by the LLM. Publish the same tool lifecycle as follow-up searches
@@ -735,7 +735,7 @@ class ConversationMixin:
                     return None
                 if reason == "not_found":
                     return json.dumps(selection, ensure_ascii=False) if required else None
-                raise RuntimeError(f"Unvollständige Chroma-Recherche: {reason!r}")
+                raise RuntimeError(f"Incomplete Chroma retrieval: {reason!r}")
             payload = _assemble_chroma_payload(selection, state)
             self._dump_value("knowledge_result.json", payload)
             return json.dumps(payload, ensure_ascii=False)
@@ -896,7 +896,7 @@ class ConversationMixin:
 
         if not compressed:
             raise RuntimeError(
-                f"Komprimierung für Tool {tool_name!r} lieferte keinen Text."
+                f"Compression of tool {tool_name!r} returned no text."
             )
 
         return (
