@@ -121,3 +121,75 @@ assert.equal(document.documentElement.lang, "de");
         encoding="utf-8", capture_output=True, timeout=20, check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_connection_status_survives_language_changes():
+    """A disconnected or terminated session must never show stale metadata."""
+    import shutil
+    import subprocess
+    import pytest
+    from cli_agent.interfaces.web_ui import INDEX_HTML
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
+
+    # Static locale application runs before app.js and must not overwrite a
+    # runtime-owned status on later language switches.
+    assert 'id="session-meta" class="meta" data-i18n=' not in INDEX_HTML
+    start = API_APP_JS.index("  let currentSessionMetadata = null;")
+    end = API_APP_JS.index("  function renderSelectedWorkingMessages()", start)
+    status_logic = API_APP_JS[start:end]
+    assert 'setSessionStatus("error.invalidLink")' in API_APP_JS
+    assert 'setSessionStatus("session.ended")' in API_APP_JS
+    assert 'setSessionStatus("session.bindingLost")' in API_APP_JS
+    assert 'setSessionStatus("session.openFailed")' in API_APP_JS
+    assert 'setSessionStatus("session.meta")' in API_APP_JS
+    assert 'window.addEventListener("cli-agent-language-change", () => {\n    renderSessionMeta();' in API_APP_JS
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    script = (
+        '''
+const assert = require("node:assert/strict");
+const meta = {textContent: ""};
+let locale = "en";
+const translations = {
+  en: {"connection.establishing": "Connecting", "error.invalidLink": "Invalid link",
+    "session.ended": "Session ended", "session.bindingLost": "Lease lost",
+    "session.openFailed": "Open failed", "session.noneMcp": "(none)"},
+  de: {"connection.establishing": "Verbinden", "error.invalidLink": "Ungültiger Link",
+    "session.ended": "Session beendet", "session.bindingLost": "Verbindung verloren",
+    "session.openFailed": "Öffnen fehlgeschlagen", "session.noneMcp": "(keine)"}
+};
+function t(key, values = {}) {
+  if (key === "session.meta") return (locale === "en" ? "Model: " : "Modell: ") + values.model;
+  return translations[locale][key] ?? key;
+}
+''' + status_logic + '''
+currentSessionMetadata = {workspace: "/test", model: "model-x", servers: ""};
+setSessionStatus("session.meta");
+assert.equal(meta.textContent, "Model: model-x");
+for (const [key, en, de] of [
+  ["session.ended", "Session ended", "Session beendet"],
+  ["session.bindingLost", "Lease lost", "Verbindung verloren"],
+  ["session.openFailed", "Open failed", "Öffnen fehlgeschlagen"],
+  ["error.invalidLink", "Invalid link", "Ungültiger Link"]
+]) {
+  locale = "en"; setSessionStatus(key);
+  assert.equal(meta.textContent, en);
+  locale = "de"; renderSessionMeta();
+  assert.equal(meta.textContent, de);
+  locale = "en"; renderSessionMeta();
+  assert.equal(meta.textContent, en);
+}
+setSessionStatus("session.meta");
+locale = "de"; renderSessionMeta();
+assert.equal(meta.textContent, "Modell: model-x");
+console.log("ok");
+'''
+    )
+    result = subprocess.run(
+        [node, "-e", script], text=True, encoding="utf-8",
+        capture_output=True, timeout=20, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
