@@ -999,3 +999,81 @@ async def test_mcp_cancel_notification_timeout_does_not_block_run_cancellation(m
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, MCP_CANCEL_NOTIFY_TIMEOUT_SECONDS + 1)
+
+
+@pytest.mark.asyncio
+async def test_chroma_search_tool_result_is_agui_standard_and_metadata_only():
+    service = AgentApiService(lambda session: AgUiAgent(session))
+    session = await service.create()
+    from cli_agent.interfaces.agent_api import AgentRun
+    session._run = AgentRun(
+        id="search-run", thread_id="search-thread", prompt="retrieve",
+        agui=True, status="running",
+    )
+    try:
+        await session.on_agent_event("tool_started", {
+            "call_id": "search-1", "tool": "vector__knowledge_search",
+        })
+        await session.on_agent_event("tool_finished", {
+            "call_id": "search-1", "tool": "vector__knowledge_search",
+            "status": "success", "search_summary": {
+                "matches": 5, "collection": "knowledge", "initial": True,
+            },
+            "secret": "never include source chunk text",
+        })
+        events = [value for _, value in session._run.events]
+        assert [event["type"] for event in events] == [
+            "TOOL_CALL_START", "TOOL_CALL_END", "TOOL_CALL_RESULT",
+        ]
+        for event in events:
+            _EVENT_VALIDATOR.validate(event)
+        assert events[0]["toolCallName"] == "vector__knowledge_search"
+        assert all(event["toolCallId"] == "search-1" for event in events)
+        assert json.loads(events[-1]["content"]) == {
+            "status": "success", "matches": 5,
+            "collection": "knowledge", "initial": True,
+        }
+        assert "never include" not in str(events)
+
+        # Do not accept untrusted summary data from an arbitrary MCP tool.
+        await session.on_agent_event("tool_started", {
+            "call_id": "other-tool", "tool": "external__read",
+        })
+        await session.on_agent_event("tool_finished", {
+            "call_id": "other-tool", "tool": "external__read",
+            "status": "success", "search_summary": {
+                "matches": 5, "collection": "secret", "initial": True,
+            },
+        })
+        assert session._run.events[-1][1]["content"] == "success"
+
+        # Malformed summaries must not leak, even from the vector tool.
+        await session.on_agent_event("tool_started", {
+            "call_id": "bad-search", "tool": "vector__knowledge_search",
+        })
+        await session.on_agent_event("tool_finished", {
+            "call_id": "bad-search", "tool": "vector__knowledge_search",
+            "status": "success", "search_summary": {
+                "matches": 5, "collection": "bad\\nprivate", "initial": True,
+            },
+        })
+        assert session._run.events[-1][1]["content"] == "success"
+    finally:
+        session._run.status = "completed"
+        await service.shutdown()
+
+
+@pytest.mark.parametrize("summary", [
+    {"matches": True, "collection": "knowledge", "initial": False},
+    {"matches": 21, "collection": "knowledge", "initial": False},
+    {"matches": 1, "collection": "secret\\ncollection", "initial": False},
+    {"matches": 1, "collection": "knowledge", "initial": "true"},
+    {"matches": 1, "collection": "knowledge", "initial": True, "content": "secret"},
+])
+def test_chroma_agui_result_allowlist_rejects_malformed_summaries(summary):
+    from cli_agent.interfaces.agent_api_sessions import AgentSession
+
+    assert AgentSession._safe_chroma_search_result(
+        "vector__knowledge_search",
+        {"status": "success", "search_summary": summary},
+    ) is None

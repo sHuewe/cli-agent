@@ -664,7 +664,37 @@ class ConversationMixin:
             if session is None:
                 raise RuntimeError("Die konfigurierte ChromaDB ist nicht verfügbar.")
             state = _KnowledgeRunState(allow_empty_not_found=True)
-            initial = _register_chroma_results(state, await session.search(prompt))
+            # The initial semantic search is executed by the host, not called
+            # by the LLM. Publish the same tool lifecycle as follow-up searches
+            # so the UI can show all actual retrievals without exposing chunks.
+            from cli_agent.context.chroma_knowledge import chroma_search_event_summary
+            from uuid import uuid4
+
+            callback = getattr(self, "event_callback", None)
+            search_call_id = uuid4().hex
+            if callback is not None:
+                await callback("tool_started", {
+                    "call_id": search_call_id, "tool": "vector__knowledge_search",
+                })
+            try:
+                raw_initial = await session.search(prompt)
+                initial = _register_chroma_results(state, raw_initial)
+            except BaseException:
+                if callback is not None:
+                    await callback("tool_finished", {
+                        "call_id": search_call_id,
+                        "tool": "vector__knowledge_search", "status": "error",
+                    })
+                raise
+            else:
+                if callback is not None:
+                    await callback("tool_finished", {
+                        "call_id": search_call_id,
+                        "tool": "vector__knowledge_search", "status": "success",
+                        "search_summary": chroma_search_event_summary(
+                            raw_initial, collection=session.config.collection, initial=True,
+                        ),
+                    })
             state.seen_calls.add(_knowledge_call_key("knowledge_search", {"query": prompt}))
             run_tools = [
                 tool for tool in self._knowledge_tools

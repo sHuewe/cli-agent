@@ -474,6 +474,35 @@ class AgentSession:
     def run(self, run_id: str) -> AgentRun | None:
         return self._run if self._run is not None and self._run.id == run_id else None
 
+    @staticmethod
+    def _safe_chroma_search_result(name: str, payload: dict[str, Any]) -> str | None:
+        """Allowlist a bounded telemetry summary, never raw Chroma records.
+
+        TOOL_CALL_RESULT is standard AG-UI. Only the known built-in retrieval
+        tool may carry a summary; ordinary MCP result contents remain hidden.
+        """
+        if name != "vector__knowledge_search" or payload.get("status") != "success":
+            return None
+        summary = payload.get("search_summary")
+        if not isinstance(summary, dict) or set(summary) != {"matches", "collection", "initial"}:
+            return None
+        matches = summary["matches"]
+        collection = summary["collection"]
+        initial = summary["initial"]
+        if (
+            isinstance(matches, bool) or not isinstance(matches, int)
+            or not 0 <= matches <= 20
+            or not isinstance(collection, str)
+            or not 1 <= len(collection) <= 128
+            or any(not (c.isascii() and (c.isalnum() or c in "_.-")) for c in collection)
+            or not isinstance(initial, bool)
+        ):
+            return None
+        return json.dumps({
+            "status": "success", "matches": matches,
+            "collection": collection, "initial": initial,
+        }, ensure_ascii=False)
+
     async def on_agent_event(self, kind: str, payload: dict[str, Any]) -> None:
         run = self._run
         if run is None or run.done:
@@ -530,7 +559,10 @@ class AgentSession:
                 else:
                     run.emit({"type": "TOOL_CALL_RESULT",
                               "toolCallId": tool_id, "messageId": uuid.uuid4().hex,
-                              "content": str(payload.get("status") or "finished")})
+                              "content": (
+                                  self._safe_chroma_search_result(name, payload)
+                                  or str(payload.get("status") or "finished")
+                              )})
             else:
                 run.emit({"type": "TOOL_CALL_END", "toolCallId": tool_id})
                 run.emit({"type": "CUSTOM", "name": "tool_status", "value": {
