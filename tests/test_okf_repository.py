@@ -348,7 +348,7 @@ def test_repository_rejects_hardlinked_root_index(tmp_path: Path) -> None:
     except (OSError, NotImplementedError):
         pytest.skip("hardlinks are not available in this test environment")
 
-    with pytest.raises(OkfRepositoryError, match="mehreren Hardlinks"):
+    with pytest.raises(OkfRepositoryError, match="multiple hardlinks"):
         OkfRepository.from_directory(tmp_path)
 
 
@@ -364,7 +364,7 @@ def test_knowledge_read_rejects_hardlinked_concept(tmp_path: Path) -> None:
 
     repository = OkfRepository.from_directory(tmp_path)
 
-    with pytest.raises(OkfRepositoryError, match="mehreren Hardlinks"):
+    with pytest.raises(OkfRepositoryError, match="multiple hardlinks"):
         repository.knowledge_read("concept.md")
 
 

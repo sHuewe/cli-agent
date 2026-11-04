@@ -37,20 +37,20 @@ def test_frontend_tools_validate_schema_names_bounds_and_collisions():
     for bad in ("", "with space", "symbol!", "é", "a" * 129):
         with pytest.raises(ValueError, match="frontend tool name"):
             normalize_frontend_tools([definition(bad)], server_names=set())
-    with pytest.raises(ValueError, match="Zu viele"):
+    with pytest.raises(ValueError, match="Too many"):
         normalize_frontend_tools([definition(str(n)) for n in range(33)], server_names=set())
     with pytest.raises(ValueError, match="too long"):
         normalize_frontend_tools([{"name": "a", "description": "x" * 4097}], server_names=set())
-    with pytest.raises(ValueError, match="Objekt"):
+    with pytest.raises(ValueError, match="JSON schema object"):
         normalize_frontend_tools([{"name": "a", "description": "x", "parameters": []}], server_names=set())
-    with pytest.raises(ValueError, match="Parameterschema"):
+    with pytest.raises(ValueError, match="parameter schema"):
         normalize_frontend_tools([{"name": "a", "description": "x",
                                   "parameters": {"type": "not-a-json-schema-type"}}],
                                  server_names=set())
     with pytest.raises(ValueError, match="too large"):
         normalize_frontend_tools([{"name": "a", "description": "x",
                                    "parameters": {"x": "z" * 66000}}], server_names=set())
-    with pytest.raises(ValueError, match="Definition"):
+    with pytest.raises(ValueError, match="definition"):
         normalize_frontend_tools([{"name": "a", "description": "x",
                                    "parameters": {"x": float("nan")}}], server_names=set())
 
@@ -81,13 +81,13 @@ def test_frontend_results_require_exactly_once_and_original_call():
     assert checked_frontend_results(completed_messages(), pending) == [
         {"role": "tool", "tool_call_id": "call-1", "content": "view opened"}
     ]
-    with pytest.raises(ValueError, match="fehlt"):
+    with pytest.raises(ValueError, match="missing"):
         checked_frontend_results(completed_messages(include_assistant=False), pending)
     with pytest.raises(ValueError, match="Not all"):
         checked_frontend_results(completed_messages(result=False), pending)
     with pytest.raises(ValueError, match="more than once"):
         checked_frontend_results(completed_messages(repeat=True), pending)
-    with pytest.raises(ValueError, match="Doppelte"):
+    with pytest.raises(ValueError, match="Duplicate"):
         checked_frontend_results(completed_messages(), pending * 2)
     with pytest.raises(ValueError, match="No pending frontend tools"):
         checked_frontend_results([], ())
@@ -97,7 +97,7 @@ def test_frontend_results_require_exactly_once_and_original_call():
         checked_frontend_results(long, pending)
     invalid = completed_messages()
     invalid[-1]["content"] = 42
-    with pytest.raises(ValueError, match="Text"):
+    with pytest.raises(ValueError, match="text or content parts"):
         checked_frontend_results(invalid, pending)
 
 

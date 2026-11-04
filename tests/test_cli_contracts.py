@@ -273,8 +273,8 @@ def test_trust_tool_prints_admin_path_server_example_before_auto_approval(
     output = capsys.readouterr().out
 
     path_heading = output.index("Admin configuration path:")
-    server_heading = output.index("Beispiel für den Trusted-Server-Eintrag:")
-    approval_heading = output.index("Auto-Approval für dieses Tool:")
+    server_heading = output.index("Example trusted-server entry:")
+    approval_heading = output.index("Auto-approval for this tool:")
     assert path_heading < server_heading < approval_heading
     assert str(cli_module.default_admin_config_file()) in output[path_heading:server_heading]
     assert "[[mcp.trusted_servers]]" in output[server_heading:approval_heading]
