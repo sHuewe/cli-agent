@@ -4,6 +4,8 @@
   const i18n = window.cliAgentI18n;
   const t = (key, values) => i18n.t(key, values);
 
+  void i18n.ready.then(() => {
+
   const chat = document.getElementById("chat");
   const form = document.getElementById("composer");
   const prompt = document.getElementById("prompt");
@@ -1222,6 +1224,7 @@
 
   setBusy(true);
   void bootstrap();
+  });
 
   newSessionButton.addEventListener("click", () => { void createNewTab(); });
   listSessionsButton.addEventListener("click", () => {
