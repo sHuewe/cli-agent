@@ -33,3 +33,20 @@ def test_i18n_catalog_is_packaged_and_has_both_languages():
     assert 'window.cliAgentI18n' in app_source
     assert 'cli-agent-language-change' in app_source
     assert "replaceState(null" in app_source  # Browser token handling is unchanged.
+
+
+def test_browser_scripts_have_valid_javascript_syntax():
+    import shutil
+    import subprocess
+    import pytest
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    for filename in ("i18n.js", "app.js"):
+        asset = files("cli_agent.interfaces").joinpath("static", filename)
+        result = subprocess.run(
+            [node, "--check", str(asset)],
+            capture_output=True, text=True, check=False, timeout=20,
+        )
+        assert result.returncode == 0, result.stderr
