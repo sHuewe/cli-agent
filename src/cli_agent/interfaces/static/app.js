@@ -27,13 +27,24 @@
   const cleanupProcessingResult = document.getElementById("cleanup-processing-result");
   let currentContextPayload = null;
   let currentSessionMetadata = null;
+  // Keep the visible connection state independent of cached session metadata.
+  // Translation changes must never make a closed or disconnected tab look active.
+  let sessionStatusKey = "connection.establishing";
   function renderSessionMeta() {
-    if (!currentSessionMetadata) return;
-    meta.textContent = t("session.meta", {
-      ...currentSessionMetadata,
-      servers: currentSessionMetadata.servers || t("session.noneMcp")
-    });
+    if (sessionStatusKey === "session.meta" && currentSessionMetadata) {
+      meta.textContent = t("session.meta", {
+        ...currentSessionMetadata,
+        servers: currentSessionMetadata.servers || t("session.noneMcp")
+      });
+    } else {
+      meta.textContent = t(sessionStatusKey);
+    }
   }
+  function setSessionStatus(key) {
+    sessionStatusKey = key;
+    renderSessionMeta();
+  }
+  renderSessionMeta();
   function renderSelectedWorkingMessages() {
     if (!currentContextPayload) return;
     const selected = contextRunSelect.value;
@@ -510,7 +521,7 @@
   const entryTicket = new URLSearchParams(window.location.hash.slice(1)).get("ticket");
   const token = tokenFromFragment();
   if (!token) {
-    meta.textContent = t("error.invalidLink");
+    setSessionStatus("error.invalidLink");
     prompt.disabled = true;
     send.disabled = true;
     return;
@@ -881,7 +892,7 @@
         ? payload.mcp_servers.join(", ")
         : "";
       currentSessionMetadata = {workspace: payload.workspace, model: payload.model, servers};
-      renderSessionMeta();
+      setSessionStatus("session.meta");
       for (const message of payload.initial_messages || []) {
         addMessage("system", String(message));
       }
@@ -1031,7 +1042,7 @@
       try { window.sessionStorage.removeItem("cli-agent-session-id"); }
       catch (_error) {}
       chat.replaceChildren();
-      meta.textContent = t("session.ended");
+      setSessionStatus("session.ended");
       setBusy(true);
     }
     await refreshSessions();
@@ -1081,7 +1092,7 @@
         leaseToken = null;
         sessionId = null;
         setBusy(true);
-        meta.textContent = t("session.bindingLost");
+        setSessionStatus("session.bindingLost");
       }
     }, 8000);
   }
@@ -1162,7 +1173,7 @@
       }
       startHeartbeat();
     } catch (error) {
-      meta.textContent = t("session.openFailed");
+      setSessionStatus("session.openFailed");
       showApiError(error);
     }
   }
