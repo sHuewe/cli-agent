@@ -217,7 +217,7 @@ class Workspace(WorkspaceIoMixin):
     def _reject_protected_mutation(self, path: Path) -> None:
         if self._is_mutation_protected_path(path):
             raise WorkspaceError(
-                "Modifying secret, credential or protected "
+                "Modifying protected "
                 "workspace files is not allowed through workspace file access."
             )
 

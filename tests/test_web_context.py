@@ -373,11 +373,11 @@ def test_tokens_command_reports_main_and_knowledge_usage(tmp_path: Path) -> None
 
     assert "Main-Loop:" in answer
     assert "Usage available: 1/1" in answer
-    assert "Input gesamt: 3.000 Tokens" in answer
-    assert "Output gesamt: 200 Tokens" in answer
-    assert "Max. gemeldeter Input eines Aufrufs: 3.000 Tokens" in answer
+    assert "Total input: 3.000 Tokens" in answer
+    assert "Total output: 200 Tokens" in answer
+    assert "Maximum reported input in one request: 3.000 Tokens" in answer
     assert "Knowledge-Loop:" in answer
-    assert "Input gesamt: 1.500 Tokens" in answer
+    assert "Total input: 1.500 Tokens" in answer
     assert len(model.calls) == calls_before
 
 
@@ -397,9 +397,9 @@ def test_tokens_command_marks_mixed_usage_as_incomplete(tmp_path: Path) -> None:
         usage=usage,
     )
 
-    assert "Modellaufrufe: 3" in text
+    assert "Model requests: 3" in text
     assert "Usage available: 2/3" in text
-    assert "Input gesamt: mindestens 3.000 Tokens" in text
+    assert "Total input: mindestens 3.000 Tokens" in text
     assert "Last input: unavailable" in text
     assert "usage data are incomplete" in text
 
@@ -414,9 +414,9 @@ def test_tokens_command_reports_all_missing_usage(tmp_path: Path) -> None:
         usage=usage,
     )
 
-    assert "Modellaufrufe: 2" in text
+    assert "Model requests: 2" in text
     assert "Usage available: 0/2" in text
-    assert "keine Usage-Daten geliefert" in text
+    assert "no usage data" in text
 
 
 def test_tokens_command_does_not_clear_previous_usage(tmp_path: Path) -> None:
@@ -708,10 +708,10 @@ def test_json_repairs_accumulate_main_usage(tmp_path: Path) -> None:
         last_input_tokens=200,
     )
     tokens = asyncio.run(agent.ask("tokens"))
-    assert "Modellaufrufe: 2" in tokens
-    assert "Input gesamt: 300 Tokens" in tokens
-    assert "Output gesamt: 30 Tokens" in tokens
-    assert "Tokens gesamt: 330 Tokens" in tokens
+    assert "Model requests: 2" in tokens
+    assert "Total input: 300 Tokens" in tokens
+    assert "Total output: 30 Tokens" in tokens
+    assert "Total tokens: 330 Tokens" in tokens
 
 
 

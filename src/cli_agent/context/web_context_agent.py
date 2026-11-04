@@ -110,9 +110,9 @@ class WebContextCliAgent(CliAgent):
             f"  Usage available: {usage.usage_requests}/{usage.requests}",
             f"  Total input: {qualifier}{cls._format_token_count(usage.input_tokens)} Tokens",
             f"  Total output: {qualifier}{cls._format_token_count(usage.output_tokens)} Tokens",
-            f"  Tokens gesamt: {qualifier}{cls._format_token_count(usage.total_tokens)} Tokens",
-            f"  Max. gemeldeter Input eines Aufrufs: {max_input}",
-            f"  Input letzter Aufruf: {last_input}",
+            f"  Total tokens: {qualifier}{cls._format_token_count(usage.total_tokens)} Tokens",
+            f"  Maximum reported input in one request: {max_input}",
+            f"  Input of last request: {last_input}",
         ]
         if not complete:
             lines.append("  Note: usage data are incomplete; totals and maxima include only reported requests.")
@@ -120,8 +120,8 @@ class WebContextCliAgent(CliAgent):
 
     def token_usage_text(self) -> str:
         if not self._last_main_loop_ran and not self._last_knowledge_loop_ran:
-            return "Noch keine Token-Usage aus einem Agentenlauf vorhanden."
-        return "\n\n".join(["Token-Usage des letzten Agentenlaufs:", self._format_loop_usage("Main-Loop", ran=self._last_main_loop_ran, usage=self._last_main_usage), self._format_loop_usage("Knowledge-Loop", ran=self._last_knowledge_loop_ran, usage=self._last_knowledge_usage)])
+            return "No token usage from an agent run is available yet."
+        return "\n\n".join(["Token usage of the most recent agent run:", self._format_loop_usage("Main-Loop", ran=self._last_main_loop_ran, usage=self._last_main_usage), self._format_loop_usage("Knowledge-Loop", ran=self._last_knowledge_loop_ran, usage=self._last_knowledge_usage)])
 
     def _reset_last_usage(self) -> None:
         self._last_main_usage = None

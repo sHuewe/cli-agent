@@ -87,7 +87,7 @@ class OllamaClient:
             f"configured limit: {self.context_length} Tokens; "
             f"safety margin: {CONTEXT_LIMIT_MARGIN} Tokens. "
             "The model response was discarded. No further "
-            "Modellanfragen gesendet. Bitte starte a new session."
+            "model requests will be sent. Start a new session."
         )
 
     def _check_context_limit(self) -> None:
