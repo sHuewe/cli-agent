@@ -345,11 +345,25 @@ async def process_tool_calls(
             raise
 
         if event_callback is not None:
-            await event_callback(
-                "tool_finished",
-                {"call_id": event_id, "tool": exposed_name,
-                 "status": "error" if getattr(result, "isError", False) else "success"},
-            )
+            finished_payload = {
+                "call_id": event_id, "tool": exposed_name,
+                "status": "error" if getattr(result, "isError", False) else "success",
+            }
+            if (
+                phase == "knowledge"
+                and exposed_name == "vector__knowledge_search"
+                and getattr(getattr(agent, "_vector_config", None), "mode", None) == "chroma"
+                and not getattr(result, "isError", False)
+            ):
+                from cli_agent.context.chroma_knowledge import chroma_search_event_summary
+                raw_search = getattr(result, "structuredContent", None)
+                if isinstance(raw_search, dict):
+                    finished_payload["search_summary"] = chroma_search_event_summary(
+                        raw_search,
+                        collection=agent._vector_config.collection,
+                        initial=False,
+                    )
+            await event_callback("tool_finished", finished_payload)
         user_message = _message_to_user(result)
         is_error = bool(getattr(result, "isError", False))
         if (
