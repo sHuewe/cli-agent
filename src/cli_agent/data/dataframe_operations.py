@@ -642,10 +642,10 @@ class DataFrameOperations:
         if len(candidates) == 1:
             return candidates[0]
         if not candidates:
-            raise DataOperationError("Keine Zeitspalte erkannt; time_column explizit angeben.")
+            raise DataOperationError("No time column detected; specify time_column explicitly.")
         raise DataOperationError(
             "Multiple possible time columns: " + ", ".join(map(repr, candidates))
-            + "; time_column explizit angeben."
+            + "; specify time_column explicitly."
         )
 
     def resample_data(
@@ -658,12 +658,12 @@ class DataFrameOperations:
         records_path: str | None = None,
     ) -> CallToolResult:
         if not isinstance(frequency, str) or not _FREQUENCY.fullmatch(frequency):
-            raise DataOperationError("frequency muss z.B. '5min', '30s', '1h' oder '1d' sein.")
+            raise DataOperationError("frequency must be a positive integer followed by s, min, h or d (e.g. '30s', '5min', '1h', '1d').")
         if not 1 <= len(aggregations) <= MAX_FRAME_TRANSFORMS:
-            raise DataOperationError("resample_data erwartet 1 bis 20 Aggregationen.")
+            raise DataOperationError("resample_data requires between 1 and 20 aggregations.")
         aliases = [spec.alias for spec in aggregations]
         if any(not alias or alias == "timestamp" for alias in aliases) or len(set(aliases)) != len(aliases):
-            raise DataOperationError("Aggregationsalias muss eindeutig und nicht 'timestamp' sein.")
+            raise DataOperationError("Aggregation aliases must be unique, nonempty and must not equal 'timestamp'.")
         frame = self._read_frame(path, records_path)
         if time_column is None:
             time_column = self._infer_time_column(frame)
@@ -680,7 +680,7 @@ class DataFrameOperations:
                 raise DataOperationError("Timestamps cannot be aggregated numerically.")
             frame[spec.column] = self._numeric(frame, spec.column)
             if spec.method not in {"mean", "min", "max", "sum", "count"}:
-                raise DataOperationError(f"Unbekannte Aggregation: {spec.method!r}.")
+                raise DataOperationError(f"Unknown resampling method: {spec.method!r}.")
             specs[spec.alias] = (spec.column, spec.method)
         try:
             if not frame.empty:
@@ -722,10 +722,10 @@ class DataFrameOperations:
                 # allowed, but computed infinities must be rejected.
                 values = grouped[alias].dropna()
                 if not values.empty and not values.map(math.isfinite).all():
-                    raise DataOperationError("Resampling erzeugte ein nichtendliches Ergebnis.")
+                    raise DataOperationError("Resampling produced a nonfinite result.")
             grouped = grouped.reset_index()
         except (ValueError, TypeError, OverflowError) as exc:
-            raise DataOperationError(f"Resampling fehlgeschlagen: {exc}") from exc
+            raise DataOperationError(f"Resampling failed: {exc}") from exc
         if time_column != "timestamp":
             grouped = grouped.rename(columns={time_column: "timestamp"})
         return self._result(
