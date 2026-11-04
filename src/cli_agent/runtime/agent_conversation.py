@@ -602,7 +602,7 @@ class ConversationMixin:
             selection = json.loads(result)
             if not isinstance(selection, dict):
                 raise RuntimeError(
-                    "Der OKF-Wissenslauf hat kein JSON-Objekt geliefert."
+                    "The OKF Knowledge run did not return a JSON object."
                 )
             self._dump_value("knowledge_selection.json", selection)
 
@@ -617,11 +617,11 @@ class ConversationMixin:
                     return None
                 if reason_code == "retrieval_incomplete":
                     raise RuntimeError(
-                        "Der OKF-Wissenslauf konnte die Repository-Recherche "
-                        "not reliably complete the repository search."
+                        "The OKF Knowledge run could "
+                        "not reliably complete repository research."
                     )
                 raise RuntimeError(
-                    "Der OKF-Wissenslauf lieferte einen unbekannten negativen "
+                    "The OKF Knowledge run returned an unknown negative "
                     f"Status: {reason_code!r}."
                 )
 

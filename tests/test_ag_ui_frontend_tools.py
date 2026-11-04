@@ -798,7 +798,7 @@ async def test_frontend_continuation_rejects_json_after_exhausted_repairs():
         async def _run_model_loop(self, **_kwargs): return "still invalid"
 
     agent = Agent()
-    with pytest.raises(ValueError, match="kein gültiges JSON"):
+    with pytest.raises(ValueError, match="valid JSON"):
         await agent.continue_after_frontend_tools([])
     assert agent.history == []
 
@@ -889,7 +889,7 @@ async def test_json_repair_budget_not_reset_by_frontend_handoff():
             return "still invalid"
 
     agent = Agent()
-    with pytest.raises(ValueError, match="kein gültiges JSON"):
+    with pytest.raises(ValueError, match="valid JSON"):
         await agent.continue_after_frontend_tools([
             {"role": "tool", "tool_call_id": "first", "content": "done"}
         ])
@@ -995,7 +995,7 @@ async def test_repair_budget_is_not_reset_by_repeated_frontend_handoffs():
             {"role": "tool", "tool_call_id": "frontend-2", "content": "ok"},
         ])
     assert agent._agui_pending_json_repairs == 2
-    with pytest.raises(ValueError, match="kein gültiges JSON"):
+    with pytest.raises(ValueError, match="valid JSON"):
         await agent.continue_after_frontend_tools([
             {"role": "tool", "tool_call_id": "frontend-4", "content": "ok"},
         ])

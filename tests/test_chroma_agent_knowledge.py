@@ -176,7 +176,7 @@ async def test_chroma_agent_knowledge_selection_reaches_main_context():
 @pytest.mark.asyncio
 async def test_chroma_required_missing_index_aborts_not_silently_skipped():
     agent = _agent_with_chroma(None)
-    with pytest.raises(RuntimeError, match="nicht verfügbar"):
+    with pytest.raises(RuntimeError, match="unavailable"):
         await agent._collect_knowledge("Anfrage")
 
 

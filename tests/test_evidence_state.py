@@ -140,7 +140,7 @@ def test_invalid_sources_and_payload_cannot_sneak_paths_into_evidence():
                           artifact_metadata={"workspace_path": "owned.json"})
     bad = _entry()
     bad["tool_calls"][0]["workspace_path"] = "../other.json"
-    with pytest.raises(EvidenceError, match="Quellen"):
+    with pytest.raises(EvidenceError, match="Sources"):
         state.update({"evidences": [bad]})
     with pytest.raises(EvidenceError, match="Evidence"):
         state.update({"evidences": [{**_entry(), "extra": "x"}]})
@@ -428,7 +428,7 @@ def test_evidence_requires_at_least_one_verified_source():
     state.register_result("known-1", tool_name="measure")
     entry = _entry("known-1")
     entry["tool_calls"] = []
-    with pytest.raises(EvidenceError, match="mindestens eine"):
+    with pytest.raises(EvidenceError, match="at least one"):
         state.update({"evidences": [entry]})
     assert not state.evidences
     assert EVIDENCE_TOOL_NAME == "agent__update_evidence"
@@ -516,7 +516,7 @@ def test_evidence_links_to_plan_and_status_can_progress():
 
 def test_invalid_plan_or_unlinked_evidence_rejected_atomically():
     state = EvidenceState()
-    with pytest.raises(EvidenceError, match="Doppelte Planschritt-ID"):
+    with pytest.raises(EvidenceError, match="duplicate"):
         invalid = _plan()
         invalid["steps"][1]["id"] = "identify"
         state.update({"plan": invalid})
@@ -547,7 +547,7 @@ def test_plan_cannot_orphan_existing_evidence():
         "steps": [{"id": "measure", "description": "Measure phase",
                    "status": "in_progress"}],
     }
-    with pytest.raises(EvidenceError, match="keinem gültigen Planschritt"):
+    with pytest.raises(EvidenceError, match="valid plan step"):
         state.update({"plan": new_plan})
     assert state.snapshot() == before
     state.update({"plan": new_plan, "remove_evidence_ids": ["e0"]})
@@ -560,13 +560,13 @@ def test_plan_is_bounded_and_does_not_force_trivial_tasks_to_plan():
     state.register_result("call-1", tool_name="sensor")
     state.update({"evidences": [_entry()]})
     assert "plan" not in state.snapshot()
-    with pytest.raises(EvidenceError, match="zwischen 1 und 16"):
+    with pytest.raises(EvidenceError, match="between 1 and 16"):
         state.update({"plan": {"goal": "many", "steps": [
             {"id": f"s{i}", "description": "Analyse", "status": "pending"}
             for i in range(17)
         ]}})
     assert "plan" not in state.snapshot()
-    with pytest.raises(EvidenceError, match="ohne Plan"):
+    with pytest.raises(EvidenceError, match="without a plan"):
         state.update({"evidences": [{**_entry(), "plan_step_id": "identify"}]})
 
 
@@ -577,7 +577,7 @@ def test_partial_plan_status_update_and_atomic_failures():
     assert state.plan["steps"][0]["status"] == "completed"
     assert state.plan["steps"][1]["status"] == "pending"
     before = state.snapshot()
-    with pytest.raises(EvidenceError, match="Unbekannte Planschritt-ID"):
+    with pytest.raises(EvidenceError, match="Unknown plan step ID"):
         state.update({"plan_step_updates": [{"id": "missing", "status": "skipped"}]})
     assert state.snapshot() == before
     with pytest.raises(EvidenceError, match="nicht gleichzeitig"):
@@ -627,12 +627,12 @@ def test_bounded_diagnostic_arguments_are_not_part_of_state_projection():
 
 def test_evidence_update_reports_unknown_fields_and_empty_arguments():
     state = EvidenceState()
-    with pytest.raises(EvidenceError, match="Unbekannte Evidence-Felder") as error:
+    with pytest.raises(EvidenceError, match="Unknown evidence fields") as error:
         state.update({"plan_steps": [], "evidences": []})
     assert "plan_steps" in str(error.value)
     assert "plan_step_updates" in str(error.value)
 
-    with pytest.raises(EvidenceError, match="leeres JSON-Objekt") as error:
+    with pytest.raises(EvidenceError, match="empty JSON object") as error:
         state.update({})
     assert '"plan"' in str(error.value)
     assert '"goal"' in str(error.value)

@@ -345,7 +345,7 @@ def test_optional_knowledge_failure_returns_none_and_records_error() -> None:
 def test_required_missing_knowledge_session_fails_closed() -> None:
     agent = ConversationHarness()
     agent._okf_options = SimpleNamespace(required=True, max_tool_calls=3, max_concept_reads=2)
-    with pytest.raises(RuntimeError, match="nicht verfügbar"):
+    with pytest.raises(RuntimeError, match="unavailable"):
         asyncio.run(agent._collect_knowledge("question"))
 
 
@@ -365,7 +365,7 @@ def test_compress_tool_result_rejects_empty_model_response() -> None:
             return {"content": "   "}
 
     agent.model_client = Model()
-    with pytest.raises(RuntimeError, match="lieferte keinen Text"):
+    with pytest.raises(RuntimeError, match="returned no text"):
         asyncio.run(
             agent._compress_tool_result(
                 current_turn_messages=[],
@@ -621,7 +621,7 @@ def test_collect_knowledge_required_retrieval_incomplete_fails_closed() -> None:
     with pytest.raises(RuntimeError, match="Wissensvorlauf fehlgeschlagen"):
         asyncio.run(agent._collect_knowledge("repository question"))
 
-    assert "nicht zuverlässig abschließen" in agent.dumped[-1][1]["error"]
+    assert "not reliably complete" in agent.dumped[-1][1]["error"]
 
 
 def test_required_not_found_is_transient_context_before_original_prompt() -> None:
@@ -680,7 +680,7 @@ def test_collect_knowledge_rejects_non_object_selection() -> None:
     with pytest.raises(RuntimeError, match="Wissensvorlauf fehlgeschlagen"):
         asyncio.run(agent._collect_knowledge("question"))
 
-    assert "kein JSON-Objekt" in agent.dumped[-1][1]["error"]
+    assert "not return a JSON object" in agent.dumped[-1][1]["error"]
 
 
 def test_collect_knowledge_fails_on_root_index_error() -> None:
