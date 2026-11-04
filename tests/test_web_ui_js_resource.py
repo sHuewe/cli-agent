@@ -9,30 +9,56 @@ def test_api_js_is_packaged_resource_without_transformation():
     assert source.lstrip().startswith("(() => {")
 
 
-def test_i18n_catalog_is_packaged_and_has_both_languages():
+def test_i18n_catalog_is_packaged_and_discovered_from_json():
     from cli_agent.interfaces.web_ui_api import API_I18N_JS
     from cli_agent.interfaces.web_ui import INDEX_HTML
-    import re
+    from cli_agent.interfaces.web_ui_locales import available_locales, get_locale
 
     source = files("cli_agent.interfaces").joinpath("static", "i18n.js").read_text(encoding="utf-8")
     assert source == API_I18N_JS
     assert '<script src="/assets/i18n.js" defer></script>' in INDEX_HTML
     assert INDEX_HTML.index("/assets/i18n.js") < INDEX_HTML.index("/assets/app.js")
     assert 'id="language-select"' in INDEX_HTML
-    assert 'value="en"' in INDEX_HTML and 'value="de"' in INDEX_HTML
-    assert 'window.localStorage.setItem(STORAGE_KEY, locale)' in source
-    assert 'document.documentElement.lang = locale' in source
-
-    english = source.split("en: Object.freeze({", 1)[1].split("}),\n    de:", 1)[0]
-    german = source.split("de: Object.freeze({", 1)[1].split("\n    })", 1)[0]
-    names = lambda block: set(re.findall(r'^\s*"([^"]+)":', block, re.MULTILINE))
-    assert names(english) == names(german)
-    assert len(names(english)) >= 70
+    assert 'value="de"' not in INDEX_HTML  # Languages come from the manifest.
+    assert "window.localStorage.setItem(STORAGE_KEY, locale)" in source
+    assert "document.documentElement.lang = locale" in source
+    assert "locales.json" in source
+    assert "new Option(displayName(code), code)" in source
+    assert "ready: initialize()" in source
+    assert "Object.freeze({" not in source  # No embedded translation catalog.
+    assert available_locales() == ["en", "de"]
+    english, german = get_locale("en"), get_locale("de")
+    assert english and german
+    assert english.keys() == german.keys()
+    assert len(english) >= 70
+    assert english["session.new"] == "New session in new tab"
+    assert german["session.new"] == "Neue Session in neuem Tab"
+    assert get_locale("../de") is None
+    assert get_locale("NOT-A-LANGUAGE") is None
+    assert get_locale("fr") is None
 
     app_source = files("cli_agent.interfaces").joinpath("static", "app.js").read_text(encoding="utf-8")
-    assert 'window.cliAgentI18n' in app_source
-    assert 'cli-agent-language-change' in app_source
+    assert "window.cliAgentI18n" in app_source
+    assert "void i18n.ready.then(() => {" in app_source
+    assert "cli-agent-language-change" in app_source
     assert "replaceState(null" in app_source  # Browser token handling is unchanged.
+
+
+def test_new_locale_json_becomes_available_without_code_changes(monkeypatch, tmp_path):
+    import json
+    from cli_agent.interfaces import web_ui_locales
+
+    (tmp_path / "en.json").write_text('{"hello": "Hello"}', encoding="utf-8")
+    (tmp_path / "fr.json").write_text('{"hello": "Bonjour"}', encoding="utf-8")
+    (tmp_path / "junk.json").write_text("invalid JSON", encoding="utf-8")
+    (tmp_path / "evil..json").write_text('{"hello": "bad"}', encoding="utf-8")
+    monkeypatch.setattr(web_ui_locales, "_catalog_dir", lambda: tmp_path)
+    assert web_ui_locales.available_locales() == ["en", "fr"]
+    assert web_ui_locales.get_locale("fr") == {"hello": "Bonjour"}
+    assert web_ui_locales.get_locale("fr-FR") is None
+    assert web_ui_locales.get_locale("../en") is None
+    (tmp_path / "fr.json").write_text('{"hello": 123}', encoding="utf-8")
+    assert web_ui_locales.available_locales() == ["en"]
 
 
 def test_browser_scripts_have_valid_javascript_syntax():
