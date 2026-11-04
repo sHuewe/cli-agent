@@ -1,18 +1,32 @@
-# Follow-up zum unabhängigen Security-Review
+# Follow-up to the independent security review
 
-Dieses Dokument hält technische Maßnahmen fest, die aus unabhängigen Reviews des `security-hardening-review`-Branches abgeleitet wurden. Die allgemeinen Sicherheitsgrenzen bleiben in `security.md` beschrieben.
+This document records technical mitigations derived from independent reviews of
+the `security-hardening-review` branch. General security boundaries are described
+in [security.md](security.md).
 
-## F-01: Workspace-Shadowing von built-in MCP-Modulen
+This is a **historical record of review findings and mitigations**. Some behavior
+has evolved since these reviews; in particular, the approval-preview redaction
+described in the September 13 follow-up was subsequently changed. Refer to
+[security.md](security.md) for the current policy, rather than interpreting older
+review entries as current normative behavior. The original German text is
+preserved as [security-review-followup.de.md](security-review-followup.de.md).
 
-**Status:** behoben.
+## F-01: Workspace shadowing of built-in MCP modules
 
-Built-in stdio-MCP-Prozesse setzen `PYTHONSAFEPATH=1` und erben kein `PYTHONPATH`. Ein Repository-lokales `cli_agent`-Paket kann damit nicht allein über das aktuelle Arbeitsverzeichnis den installierten built-in MCP-Code ersetzen. Regressionstests prüfen die Umgebung und einen echten Python-Child-Prozess.
+**Status:** Resolved.
 
-## F-02: MCP-Instructions als privilegierter Modellkontext
+Built-in stdio MCP processes set `PYTHONSAFEPATH=1` and do not inherit
+`PYTHONPATH`. Thus a repository-local `cli_agent` package cannot replace
+the installed built-in MCP implementation merely through the working directory.
+Regression tests cover the environment and a real Python subprocess.
 
-**Status:** gezielt behoben und funktional erweitert.
+## F-02: MCP instructions as privileged model context
 
-MCP-Instructions externer Server werden nicht automatisch in den Systemprompt übernommen. Ein Administrator kann die Instructions eines konkret identifizierten und geprüften MCP-Servers weiterhin explizit vertrauen:
+**Status:** Selectively resolved and functionally extended.
+
+External MCP server instructions are no longer automatically placed in the
+system prompt. An administrator may explicitly trust instructions from a
+specifically identified and reviewed MCP server:
 
 ```toml
 [[mcp.trusted_servers]]
@@ -22,17 +36,32 @@ url = "https://mcp.intern.firma.de/mcp"
 trust_instructions = true
 ```
 
-Diese privilegierte Vertrauensentscheidung ist an dieselbe konkrete Serveridentität gebunden wie permanente Auto-Approvals. Ein gleichnamiger HTTP-MCP mit anderem Endpoint oder anderen Headern erbt die Freigabe nicht. Bei stdio stammt die gesamte Launch-Identität ohnehin aus der Maschinenpolicy. Built-in MCPs bleiben als Teil der verwalteten Anwendung vertrauenswürdig.
+This privileged trust decision is bound to the same concrete server identity
+as permanent auto-approvals. An HTTP MCP with the same name but a different
+endpoint or headers does not inherit it. For stdio, the entire launch identity
+is already determined by machine-wide policy. Built-in MCPs remain trusted
+as part of the managed application.
 
-Nicht administrativ vertraute Instructions werden jedoch nicht mehr vollständig verworfen. Sie werden als explizit **nicht vertrauenswürdiger Referenzkontext** in einer separaten transienten `user`-Message unmittelbar vor der aktuellen echten Benutzeranfrage bereitgestellt. In derselben synthetischen Message befinden sich gegebenenfalls auch OKF-Wissen, Web-Kontext und explizit geladener lokaler Datei-Kontext. Der Systemprompt definiert, dass diese Inhalte als fachliche oder operative Referenz verwendet werden dürfen, aber weder System-/Benutzerregeln noch Berechtigungsgrenzen überschreiben dürfen.
+Instructions without administrative trust are not simply discarded. They are
+provided as explicit **untrusted reference context** in a separate transient
+`user` message immediately before the actual current user request. The same
+synthetic message may also contain OKF knowledge, web context and explicitly
+loaded local file context. The system prompt permits their domain or operational
+information to be used but forbids embedded instructions from overriding
+system/user rules or permission boundaries.
 
-Die synthetische Referenzmessage wird ausschließlich für den aktuellen Modelllauf erzeugt und **nicht in die Conversation History übernommen**. `self.history` enthält weiterhin nur die tatsächlichen Benutzeranfragen und Assistentenantworten; auch die aktuelle Benutzeranfrage bleibt in `working_messages` als separate, unveränderte `user`-Message erhalten.
+The synthetic reference message exists for the current model run only and
+is **not added to conversation history**. `self.history` retains only
+actual user requests and assistant replies; the current user request also
+remains a distinct, unmodified `user` message in `working_messages`.
 
-## F-04: Beliebige Prozess-Umgebungsvariable als Remote-LLM-Credential
+## F-04: Arbitrary process environment variable as remote LLM credential
 
-**Status:** behoben.
+**Status:** Resolved.
 
-Wenn für einen nichtlokalen OpenAI-kompatiblen Modell-Endpunkt `api_key_env` verwendet wird, muss die Maschinenpolicy die verwendbare Credential-Environment-Variable an Provider und Zielhost binden:
+When `api_key_env` is used for a nonlocal OpenAI-compatible model endpoint,
+machine policy must bind the eligible credential environment variable to
+the provider and destination host:
 
 ```toml
 [[model.credentials]]
@@ -41,21 +70,38 @@ host = "llm.intern.firma.de"
 allowed_api_key_envs = ["LLM_API_KEY"]
 ```
 
-Eine normale Projektkonfiguration kann damit nicht mehr beispielsweise `AWS_SECRET_ACCESS_KEY` als Credential für einen lediglich netzwerkseitig freigegebenen Remote-LLM-Host auswählen. `api_key_env` selbst bleibt optional: Ohne Angabe sendet der OpenAI-kompatible Client keinen `Authorization`-Header. Ist `api_key_env` dagegen konfiguriert, muss die benannte Environment-Variable vorhanden und nicht leer sein; andernfalls wird die Modellkonfiguration abgewiesen. Lokale Modellziele bleiben bewusst flexibel und können weiterhin ohne API-Key betrieben werden.
+Ordinary project configuration can no longer select a variable such as
+`AWS_SECRET_ACCESS_KEY` as credentials for a remote LLM host that was
+only approved as a network destination. `api_key_env` itself remains
+optional: without it, the OpenAI-compatible client sends no
+`Authorization` header. If configured, the named environment variable
+must exist and be nonempty; otherwise model configuration is rejected.
+Local model targets deliberately remain flexible and may run without an
+API key.
 
-## F-05: Trusted stdio und PATH-Auflösung
+## F-05: Trusted stdio and PATH resolution
 
-**Status:** behoben.
+**Status:** Resolved.
 
-Ein administrativ als `trusted` definierter stdio-MCP darf nicht über einen Bare Command wie `python`, `node` oder `my-mcp` identifiziert werden. Die Maschinenpolicy akzeptiert für solche Server nur einen absoluten Executable-Pfad oder den speziellen Platzhalter `{python}`, der deterministisch auf `sys.executable` der laufenden cli-agent-Installation aufgelöst wird.
+An administratively trusted stdio MCP cannot be identified using a bare
+command such as `python`, `node` or `my-mcp`. Machine policy accepts
+only an absolute executable path or the special `{python}` placeholder,
+deterministically resolved to `sys.executable` of the active cli-agent
+installation.
 
-## Zusätzliche Härtung: externe stdio-MCPs nur als Admin-Launchprofile
+## Additional hardening: external stdio MCPs require admin launch profiles
 
-**Status:** behoben.
+**Status:** Resolved.
 
-Die frühere globale Maschinenoption `allow_untrusted_stdio` wurde entfernt. Ein solcher Schalter war zu grob, weil seine Aktivierung normaler Projektkonfiguration grundsätzlich erlaubte, beliebige lokale Executables als stdio-MCP-Prozess zu starten. Tool-Approvals greifen erst nach dem Prozessstart und konnten diese Prozessausführung daher nicht absichern.
+The former global machine option `allow_untrusted_stdio` was removed.
+Such a switch was too broad because it would allow ordinary project
+configuration to launch arbitrary local executables as stdio MCP processes.
+Tool approvals happen only **after** process launch and therefore cannot
+protect that initial execution.
 
-Jeder externe stdio-MCP muss nun einzeln in `[[mcp.trusted_servers]]` der maschinenweiten Admin-Policy definiert werden. Die normale Benutzer-/Projektkonfiguration referenziert einen solchen Server ausschließlich über seinen Namen:
+Each external stdio MCP must instead have its own machine-wide
+`[[mcp.trusted_servers]]` definition. Ordinary user/project configuration
+references such a server solely by name:
 
 ```toml
 # config.toml
@@ -63,7 +109,7 @@ Jeder externe stdio-MCP muss nun einzeln in `[[mcp.trusted_servers]]` der maschi
 name = "compose"
 ```
 
-Die vollständige Launch-Konfiguration liegt ausschließlich in der Admin-Policy:
+Full launch configuration is stored exclusively in admin policy:
 
 ```toml
 # admin_config.toml
@@ -74,94 +120,162 @@ command = "C:/Program Files/Company/compose-mcp.exe"
 args = ["--project-directory", "{workspace_directory}"]
 ```
 
-`command`, `args` und `env` können dadurch nicht durch Projektkonfiguration verändert werden. Der Agent setzt kontrollierte Runtime-Platzhalter wie `{workspace_directory}` selbst ein. Das erhält den für workspacegebundene MCPs gewünschten 1:1-Zusammenhang aus Agent, Workspace und MCP-Prozess, ohne den Workspace als modellkontrollierten Tool-Parameter offenzulegen.
+`command`, `args` and `env` cannot be changed by project configuration.
+The agent resolves controlled runtime placeholders such as
+`{workspace_directory}`. This preserves the desired one-to-one mapping
+between agent, workspace and a workspace-bound MCP subprocess without
+exposing the workspace as a model-controlled tool parameter.
 
-Streamable-HTTP-MCPs benötigen dagegen weiterhin keinen `[[mcp.trusted_servers]]`-Eintrag, solange ihr Host in `network.mcp_allowed_hosts` erlaubt ist und weder permanente Auto-Approvals noch `trust_instructions = true` benötigt werden. Ihre Tool-Aufrufe bleiben standardmäßig interaktiv approval-pflichtig und ihre Instructions werden als untrusted Referenzkontext behandelt.
+Streamable HTTP MCPs still do not require a trusted-server entry as long
+as their host is allowed by `network.mcp_allowed_hosts` and neither
+permanent auto-approvals nor `trust_instructions = true` is required.
+Their tool calls still require interactive approval by default, and their
+instructions remain untrusted reference context.
 
-## F-06: Routingrelevante HTTP-Header
+## F-06: HTTP headers affecting routing
 
-**Status:** behoben für benutzerkonfigurierbare Header.
+**Status:** Resolved for user-configurable headers.
 
-Die normale Benutzerkonfiguration darf routing- und proxyrelevante Header wie `Host`, `:authority`, `Forwarded`, `X-Forwarded-*`, `X-Original-Host`, `Proxy-Authorization`, `Proxy-Connection`, `Connection` oder `Upgrade` nicht mehr für Modell- oder HTTP-MCP-Verbindungen setzen. Host und Routing werden damit ausschließlich aus der zuvor gegen die Admin-Allowlist geprüften URL abgeleitet.
+User configuration cannot set routing/proxy-related headers such as
+`Host`, `:authority`, `Forwarded`, `X-Forwarded-*`,
+`X-Original-Host`, `Proxy-Authorization`, `Proxy-Connection`,
+`Connection` or `Upgrade` for model or HTTP MCP connections.
+Host and routing therefore derive from the URL already checked against
+the administrative allowlist.
 
-Die Web-Redirect-Logik bleibt erlaubt, sofern jedes Redirect-Ziel selbst in `web_allowed_hosts` freigegeben ist. Eine zusätzliche DNS-/IP-basierte Netzpolicy bleibt optionales Defense-in-Depth.
+Web redirects remain possible only if **every** redirect destination
+is itself allowed by `web_allowed_hosts`. Additional DNS/IP-based
+network restrictions remain optional defense in depth.
 
-## F-07: Unbegrenzte MCP-Metadaten und Tool-Ergebnisse
+## F-07: Unbounded MCP metadata and tool results
 
-**Status:** behoben mit bewusst großzügigen Sicherheitsgrenzen.
+**Status:** Resolved with deliberately generous safety limits.
 
-MCP-Server werden gegen feste Obergrenzen für Toolanzahl, Instructions, einzelne Toolbeschreibungen und Schemas sowie die Gesamtmenge der Tool-Metadaten geprüft. Zusätzlich wird die Textgröße eines einzelnen Tool-Ergebnisses begrenzt, bevor es an das Modell beziehungsweise die Komprimierung weitergegeben wird.
+Fixed limits apply to tool counts, server instructions, individual tool
+descriptions/schemas, aggregate server metadata and the text size of a
+single tool result before it is forwarded to a model or compression stage.
 
-Die Defaults sind absichtlich weit oberhalb normaler MCP-Nutzung angesetzt und dienen als Notbremse gegen defekte oder kompromittierte Server:
+These intentionally generous upper bounds are designed as an emergency
+brake against broken or compromised servers:
 
-- maximal 1.024 Tools pro MCP-Server,
-- maximal 2.000.000 Zeichen Server-Instructions,
-- maximal 250.000 Zeichen Beschreibung pro Tool,
-- maximal 2.000.000 Zeichen Input-Schema pro Tool,
-- maximal 20.000.000 Zeichen Tool-Metadaten pro Server insgesamt,
-- maximal 10.000.000 Zeichen pro Tool-Ergebnis.
+- At most **1,024** tools per MCP server.
+- At most **2,000,000** characters of server instructions.
+- At most **250,000** characters per tool description.
+- At most **2,000,000** characters per tool input schema.
+- At most **20,000,000** characters of total metadata per server.
+- At most **10,000,000** characters per tool result.
 
-## F-08: Frei konfigurierbarer Logpfad
+## F-08: Freely configurable log file path
 
-**Status:** pragmatisch behoben.
+**Status:** Pragmatically resolved.
 
-Ein Projekt kann den Logpfad nicht auf eine beliebige absolute Datei umlenken. Falls `[logging].file` gesetzt wird, muss der Wert relativ zum normalen cli-agent-State-Verzeichnis sein. Absolute Windows-/POSIX-Pfade, `..`-Traversal und aufgelöste Ziele außerhalb des State-Verzeichnisses werden abgewiesen.
+Project configuration cannot redirect logging to an arbitrary absolute path.
+When `[logging].file` is set, it must be relative to the normal cli-agent
+state directory. Absolute Windows/POSIX paths, `..` traversal and resolved
+destinations outside that directory are rejected.
 
-## F-10: Lockfile wird in CI nicht erzwungen
+## F-10: CI did not enforce the lockfile
 
-**Status:** behoben für den CI-/Review-Pfad.
+**Status:** Resolved for CI/review.
 
-Die CI installiert eine fest angegebene `uv`-Version, prüft `uv.lock` mit `uv lock --check`, synchronisiert Projekt- und Testabhängigkeiten mit `uv sync --frozen --extra dev` und führt pytest aus genau dieser gesperrten Umgebung aus.
+CI installs an exact `uv` version, validates `uv.lock` using
+`uv lock --check`, synchronizes project and test dependencies with
+`uv sync --frozen --extra dev`, then runs pytest in this locked
+environment.
 
-## Zusätzliche Härtung: Contract-Pinning für permanente MCP-Auto-Approvals
+## Additional hardening: contract pinning for permanent MCP auto-approvals
 
-**Status:** umgesetzt und um Toolbeschreibungen erweitert.
+**Status:** Implemented and extended to tool descriptions.
 
-Eine permanente MCP-Auto-Freigabe ist an Serveridentität und den vollständigen modell-sichtbaren Tool-Contract gebunden. Der Contract-Fingerprint wird als SHA-256 über eine kanonische JSON-Darstellung aus nativem Toolnamen, normalisierter Toolbeschreibung und vollständigem aktuellem `inputSchema` des MCP-Tools gebildet.
+Permanent MCP auto-approval is bound to server identity and the entire
+model-visible tool contract. The contract fingerprint is a SHA-256 hash
+over canonical JSON containing the native tool name, normalized tool
+description and complete current `inputSchema`.
 
-Die Toolbeschreibung ist sicherheitsrelevant, weil sie dem Modell erklärt, wofür und wie ein Tool eingesetzt werden soll. Eine inhaltlich veränderte Beschreibung kann daher das Modellverhalten beeinflussen, obwohl Name und technisch aufrufbares Schema unverändert bleiben. Eine solche Änderung invalidiert nun ebenfalls die bestehende permanente Auto-Freigabe und führt zurück zur normalen interaktiven Benutzerfreigabe.
+A description is security-relevant because it tells the model how and why
+to use the tool. A semantic description change can alter model behavior
+even when the name and callable schema remain identical. Such changes
+invalidate prior permanent approval and require ordinary interactive
+approval again.
 
-Um rein technische beziehungsweise redaktionell irrelevante Unterschiede nicht unnötig als Contract-Drift zu behandeln, wird die Beschreibung vor dem Hashen eng normalisiert: `CRLF` und `CR` werden zu `LF`, Spaces und Tabs am Zeilenende entfernt und abschließende Leerzeilen ignoriert. Führende Whitespaces, interne Leerzeilen, Groß-/Kleinschreibung, Satzzeichen, Markdown und sonstige inhaltliche Änderungen bleiben dagegen unverändert und beeinflussen den Fingerprint.
+To avoid treating irrelevant text formatting as contract drift, descriptions
+are narrowly normalized before hashing: `CRLF` and `CR` become `LF`,
+trailing spaces/tabs on lines are removed, and blank lines at the end
+are ignored. Leading indentation, internal blank lines, capitalization,
+punctuation, Markdown and all other content differences remain significant.
 
-Damit verliert eine bestehende Auto-Freigabe automatisch ihre Wirkung, wenn ein MCP-Update beispielsweise die Toolbeschreibung inhaltlich ändert, einen neuen Parameter ergänzt, Parametertypen verändert oder Required-Felder ändert. Der Contract verwendet hierfür die aktuelle Contract-Version 2; ältere Fingerprints gelten nicht weiter.
+Therefore a prior approval automatically becomes ineffective after an
+MCP update that changes the tool's meaning, adds a parameter, changes
+parameter types, or modifies required fields. The contract uses version
+**2**; older fingerprints no longer apply.
 
-Die CLI bietet dafür read-only Hilfsbefehle:
+The CLI offers read-only helper commands:
 
 ```text
 cli-agent admin inspect-tool <server> <tool> --config <config.toml>
 cli-agent admin trust-tool <server> <tool> --config <config.toml>
 ```
 
-`inspect-tool` zeigt den aktuell angebotenen Tool-Contract einschließlich Toolbeschreibung und Input-Schema. `trust-tool` gibt nach derselben Prüfung einen kopierbaren TOML-Block aus. Keiner der Befehle schreibt in `admin_config.toml`; die administrative Vertrauensentscheidung bleibt ein manueller Copy-/Review-Schritt. Mit `--update` kann ein bestehender gepinnter Contract mit dem aktuell angebotenen Contract verglichen und ein Ersatzblock erzeugt werden.
+`inspect-tool` shows the currently exposed contract, including description
+and input schema. After the same checks, `trust-tool` prints a copyable
+TOML block. Neither command writes to `admin_config.toml`; the
+administrator's trust decision remains an explicit copy/review step.
+`--update` compares an existing pinned contract with the current version
+and creates an updated replacement block.
 
-Regressionstests prüfen neben Schema- und Toolnamenänderungen insbesondere, dass inhaltliche Änderungen der Toolbeschreibung den Contract ändern und eine vorhandene Auto-Freigabe ungültig machen, während reine Unterschiede bei Line-Endings, Trailing Whitespace oder abschließenden Leerzeilen denselben Fingerprint ergeben.
+Regression tests confirm that changes to the tool schema, tool name or
+description invalidate approval, while line ending, trailing whitespace
+and final blank-line variations produce the same fingerprint.
 
-# Follow-up zum Review vom 13.09.2026
+# Follow-up to the September 13, 2026 review
 
-## Hardlink-Aliasing in Workspace und OKF
+## Hardlink aliasing in workspace and OKF
 
-**Status:** behoben.
+**Status:** Resolved.
 
-Bestehende reguläre Dateien mit mehr als einem Hardlink (`st_nlink > 1`) werden bei sicherheitsrelevanten Workspace-Operationen abgewiesen. Das gilt für Lesen, Schreiben, Löschen, Copy-Quellen und bestehende Copy-Ziele. Der OKF-Reader lehnt hardlinkte Markdown-Dateien ebenfalls ab. Dadurch kann ein harmlos benannter Pfad im Workspace nicht als Alias auf dasselbe Dateisystemobjekt einer sensitiven oder außerhalb liegenden Datei verwendet werden.
+Existing regular files with more than one hardlink (`st_nlink > 1`)
+are rejected for security-relevant workspace operations, including
+reads, writes, deletes, copy sources and existing copy targets.
+The OKF reader likewise rejects hardlinked Markdown. A harmless-looking
+workspace path therefore cannot serve as an alias for the same filesystem
+object as a sensitive or external file.
 
-Regressionstests erzeugen echte Hardlinks und prüfen Read, Write, Copy und OKF-Zugriff fail-closed.
+Regression tests create real hardlinks and check fail-closed behavior for
+read, write, copy and OKF access.
 
-## Context-Dumps unter `.cli-agent`
+## Context dumps under `.cli-agent`
 
-**Status:** behoben.
+**Status:** Resolved.
 
-`dump_llm_context` prüft das Dump-Verzeichnis und bestehende Dump-Dateien vor jedem Schreiben. `.cli-agent` darf weder Symlink noch Windows-Reparse-Point sein und muss nach Auflösung innerhalb des Workspaces liegen. Bestehende Dump-Dateien dürfen ebenfalls weder Symlink/Reparse-Point noch mehrfach hardgelinkt sein. Manipulierte Projektstrukturen können Context-Dumps damit nicht mehr auf andere Dateisystemziele umlenken.
+`dump_llm_context` validates both the dump directory and existing dump
+files before every write. `.cli-agent` must not be a symlink or Windows
+reparse point, and must resolve inside the workspace. Existing dump files
+must not be symlinks/reparse points or multiply hardlinked. Manipulated
+project structures thus cannot redirect context dumps to other paths.
 
-## Informationsgehalt der Tool-Approval-Anzeige
+## Information displayed in tool approval
 
-**Status:** behoben.
+**Status at this review:** Resolved. **Superseded by later policy.**
 
-Die Approval-Anzeige maskiert nur noch credentialartige Felder wie `token`, `password`, `api_key`, `authorization`, `credential`, `secret` oder entsprechende verschachtelte Schlüssel. Generische Nutzdatenfelder wie `content`, `body`, `data` oder `payload` bleiben sichtbar, damit der Benutzer die tatsächlich freizugebende Schreib- oder Datenübertragungsoperation beurteilen kann.
+At the time of this review, approval previews masked credential-like
+fields such as `token`, `password`, `api_key`, `authorization`,
+`credential` and `secret`, including nested keys. Generic payload
+fields such as `content`, `body`, `data` or `payload` stayed visible
+so users could assess the write or transfer they were approving.
 
-Um das Terminal trotzdem nicht mit beliebig großen Payloads zu fluten, werden lange Strings begrenzt dargestellt: bis 2.000 Zeichen vollständig, darüber mit Anfang und Ende sowie expliziter Angabe der gekürzten Zeichenanzahl. Große Collections werden ebenfalls auf eine begrenzte Anzahl von Elementen reduziert. Dadurch bleibt die sicherheitsrelevante Information sichtbar, ohne unbeschränkte Ausgabe zuzulassen.
+Long strings were bounded: up to **2,000** characters were shown in full;
+longer strings displayed their start and end with an explicit count of
+omitted characters. Large collections were likewise limited. The goal
+was to preserve relevant approval information without unlimited output.
 
-## Web-URLs im INFO-Log
+**Current behavior differs:** See [security.md](security.md), which documents
+the subsequent decision not to hide values based on MCP-controlled field names.
 
-**Status:** behoben.
+## Web URLs in INFO logs
 
-Beim Laden von Web-Kontext protokolliert das INFO-Log für `requested_url` und `final_url` nur noch Schema, Host/Port und Pfad. Query und Fragment werden entfernt. Tokens, Signaturen oder andere vertrauliche Werte in Queryparametern gelangen damit nicht mehr über diese Logzeile in die lokale Logdatei.
+**Status:** Resolved.
+
+When loading web context, INFO logs include only scheme, host/port and path
+for `requested_url` and `final_url`. Query and fragment are omitted.
+Tokens, signatures or other secrets in query parameters therefore do not
+leak through this log entry.
