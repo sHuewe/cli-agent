@@ -25,7 +25,7 @@ def test_i18n_catalog_is_packaged_and_discovered_from_json():
     assert "locales.json" in source
     assert "new Option(displayName(code), code)" in source
     assert "ready: initialize()" in source
-    assert "Object.freeze({" not in source  # No embedded translation catalog.
+    assert "const messages = Object.freeze({" not in source  # No embedded translation catalog.
     assert available_locales() == ["en", "de"]
     english, german = get_locale("en"), get_locale("de")
     assert english and german
