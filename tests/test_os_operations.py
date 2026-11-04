@@ -133,10 +133,10 @@ def test_write_preserves_cr_line_endings(tmp_path):
 @pytest.mark.parametrize("operation,args,target,method,message", [
     ("read_file", ("file.txt",), Path, "read_bytes", "gelesen"),
     ("write_file", ("file.txt", "replacement"), Path, "write_text", "geschrieben"),
-    ("delete_file", ("file.txt",), Path, "unlink", "gelöscht"),
+    ("delete_file", ("file.txt",), Path, "unlink", "deleted"),
     ("copy_file", ("file.txt", "copy.txt"), os_operations.shutil, "copy2", "kopiert"),
     ("make_directory", ("new",), Path, "mkdir", "erstellt"),
-    ("read_file", ("file.txt",), os_operations, "regular_file_has_multiple_links", "Dateimetadaten"),
+    ("read_file", ("file.txt",), os_operations, "regular_file_has_multiple_links", "File metadata"),
 ])
 def test_io_failures_are_workspace_errors(tmp_path, monkeypatch, operation, args, target, method, message):
     path = tmp_path / "file.txt"
@@ -642,7 +642,7 @@ def test_read_file_range_can_read_large_text_file(tmp_path) -> None:
         (True, None, "start_line"),
         (None, 0, "end_line"),
         (None, False, "end_line"),
-        (4, 3, "größer"),
+        (4, 3, "exceed"),
     ],
 )
 def test_read_file_rejects_invalid_line_ranges(

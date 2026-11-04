@@ -10,10 +10,10 @@ from cli_agent.security import mcp_schema_guard as guard
 @pytest.mark.parametrize(
     ("raw", "message"),
     [
-        (b"", "keine gültige Antwort"),
-        (b"not-json", "keine gültige Antwort"),
-        (b"[]", "keine gültige Antwort"),
-        (b'{"ok":"yes"}', "keine gültige Antwort"),
+        (b"", "valid response"),
+        (b"not-json", "valid response"),
+        (b"[]", "valid response"),
+        (b'{"ok":"yes"}', "valid response"),
         (b'{"ok":false}', "ist fehlgeschlagen"),
         (b'{"ok":false,"error":42}', "ist fehlgeschlagen"),
         (b'{"ok":false,"error":"rejected"}', "rejected"),

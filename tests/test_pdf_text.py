@@ -136,7 +136,7 @@ def test_pdf_keeps_sensitive_path_protection(tmp_path, name):
     path = tmp_path / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_pdf("secret"))
-    with pytest.raises(WorkspaceError, match="Secret-/Credential"):
+    with pytest.raises(WorkspaceError, match="secret|credential"):
         _workspace(tmp_path).read_file(name)
 
 
@@ -146,11 +146,11 @@ def test_pdf_keeps_path_and_hardlink_protection(tmp_path):
     path = tmp_path / "document.pdf"
     path.write_bytes(_pdf("secret"))
     os.link(path, tmp_path / "linked.pdf")
-    with pytest.raises(WorkspaceError, match="Hardlinks"):
+    with pytest.raises(WorkspaceError, match="hardlinks"):
         _workspace(tmp_path).read_file("linked.pdf")
-    with pytest.raises(WorkspaceError, match="relativ"):
+    with pytest.raises(WorkspaceError, match="relative"):
         _workspace(tmp_path).read_file(str(path))
-    with pytest.raises(WorkspaceError, match="enthalten"):
+    with pytest.raises(WorkspaceError, match="contain"):
         _workspace(tmp_path).read_file("../document.pdf")
 
 

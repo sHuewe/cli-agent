@@ -28,7 +28,7 @@ def tool(name="read", *, description="", schema=None):
         ("MAX_MCP_INSTRUCTIONS_CHARS", 2, "abc", [], "Instructions"),
         ("MAX_MCP_TOOLS_PER_SERVER", 1, None, [tool("one"), tool("two")], "zu viele Tools"),
         ("MAX_MCP_TOOL_NAME_CHARS", 2, None, [tool("long")], "Toolnamen"),
-        ("MAX_MCP_TOOL_SCHEMA_CHARS", 2, None, [tool()], "zu großes Schema"),
+        ("MAX_MCP_TOOL_SCHEMA_CHARS", 2, None, [tool()], "oversized schema"),
         ("MAX_MCP_TOTAL_TOOL_METADATA_CHARS", 2, None, [tool()], "Tool-Metadaten"),
     ],
 )
@@ -50,9 +50,9 @@ def test_metadata_limits_fail_before_subprocess(
     ("tools", "message"),
     [
         ([tool("duplicate"), tool("duplicate")], "mehrfach"),
-        ([tool("\ud800")], "Surrogate"),
+        ([tool("\ud800")], "surrogate"),
         ([tool(schema=[])], "JSON-Objekt"),
-        ([tool(schema={"type": object()})], "serialisierbares Schema"),
+        ([tool(schema={"type": object()})], "serializable schema"),
     ],
 )
 def test_invalid_mcp_tool_metadata_is_rejected_before_worker(
@@ -126,14 +126,14 @@ def test_arguments_are_bounded_before_schema_worker(monkeypatch):
 @pytest.mark.parametrize(
     ("worker_request", "error"),
     [
-        (None, "Ungültige"),
-        ({"operation": "validate_schemas", "schemas": {}}, "Ungültige"),
-        ({"operation": "validate_schemas", "schemas": [None]}, "Ungültige"),
-        ({"operation": "validate_schemas", "schemas": [{}]}, "Ungültige"),
-        ({"operation": "validate_schemas", "schemas": [{"tool_name": 42, "schema": {}}]}, "Ungültige"),
-        ({"operation": "validate_arguments", "tool_name": 42, "schema": {}, "arguments": {}}, "Ungültige"),
-        ({"operation": "validate_arguments", "tool_name": "safe", "schema": [], "arguments": {}}, "Ungültige"),
-        ({"operation": "validate_arguments", "tool_name": "safe", "schema": {}, "arguments": []}, "Ungültige"),
+        (None, "Invalid"),
+        ({"operation": "validate_schemas", "schemas": {}}, "Invalid"),
+        ({"operation": "validate_schemas", "schemas": [None]}, "Invalid"),
+        ({"operation": "validate_schemas", "schemas": [{}]}, "Invalid"),
+        ({"operation": "validate_schemas", "schemas": [{"tool_name": 42, "schema": {}}]}, "Invalid"),
+        ({"operation": "validate_arguments", "tool_name": 42, "schema": {}, "arguments": {}}, "Invalid"),
+        ({"operation": "validate_arguments", "tool_name": "safe", "schema": [], "arguments": {}}, "Invalid"),
+        ({"operation": "validate_arguments", "tool_name": "safe", "schema": {}, "arguments": []}, "Invalid"),
         ({"operation": "unknown"}, "Unbekannte"),
     ],
 )

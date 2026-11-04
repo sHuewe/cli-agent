@@ -182,17 +182,17 @@ def test_flow_rejects_oversized_static_conversation_items(
 @pytest.mark.parametrize(
     ("flow_text", "message"),
     [
-        ("version = 1\nunknown = true", "Unbekannte Flow-Schlüssel"),
+        ("version = 1\nunknown = true", "Unknown flow keys"),
         (
             "version = 1\nconfig = 123\n[[steps]]\nid = \"one\"\nprompt_file = \"prompt.md\"",
-            "config muss ein nichtleerer String",
+            "config must be a nonempty string",
         ),
         (
             "version = 1\nmodel = \"\"\n[[steps]]\nid = \"one\"\nprompt_file = \"prompt.md\"",
-            "model muss ein nichtleerer String",
+            "model must be a nonempty string",
         ),
         ("version = 2\nsteps = []", "version = 1"),
-        ("version = 1\nsteps = []", "mindestens einen"),
+        ("version = 1\nsteps = []", "at least one"),
         (
             """
 version = 1
@@ -203,7 +203,7 @@ prompt_file = "prompt.md"
 id = "one"
 prompt_file = "prompt.md"
 """.strip(),
-            "Doppelte Step-ID",
+            "Duplicate step ID",
         ),
         (
             """
@@ -213,7 +213,7 @@ id = "one"
 prompt_file = "prompt.md"
 add_file_context = []
 """.strip(),
-            "nichtleerer String",
+            "nonempty string",
         ),
         (
             """
@@ -233,7 +233,7 @@ id = "one"
 prompt_file = "prompt.md"
 retry = "invalid"
 """.strip(),
-            "retry muss eine Tabelle",
+            "retry must be a table",
         ),
         (
             """
@@ -638,7 +638,7 @@ max_delay_seconds = 4
         ("initial_delay_seconds = -1", "initial_delay_seconds"),
         ("backoff_multiplier = 0", "backoff_multiplier"),
         ("max_delay_seconds = 301", "max_delay_seconds"),
-        ("unknown = 1", "unbekannte Schlüssel"),
+        ("unknown = 1", "unknown keys"),
     ],
 )
 def test_flow_rejects_invalid_retry_policy(
@@ -1634,7 +1634,7 @@ output = "./result.txt"
     [
         (
             '{"items":[{"path":"ok.md"},{"path":"process.md"}]}',
-            "reservierten Flow-Eingabe",
+            "reserved flow input",
         ),
         (
             '{"items":[{"path":"ok.md"},{"path":"existing.md"}]}',
