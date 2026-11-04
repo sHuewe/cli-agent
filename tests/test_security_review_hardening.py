@@ -96,7 +96,7 @@ def test_context_dump_rejects_symlink_directory(tmp_path: Path) -> None:
 
     agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
     agent._exit_stack = SimpleNamespace()
-    with pytest.raises(RuntimeError, match="Symlink|Reparse"):
+    with pytest.raises(RuntimeError, match="symlink|reparse"):
         asyncio.run(agent.ask("Hallo"))
     assert list(outside.iterdir()) == []
 
@@ -114,7 +114,7 @@ def test_context_dump_rejects_dangling_symlink_file(tmp_path: Path) -> None:
     assert not link.exists()
     agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
     agent._exit_stack = SimpleNamespace()
-    with pytest.raises(RuntimeError, match="Symlink|Reparse"):
+    with pytest.raises(RuntimeError, match="symlink|reparse"):
         asyncio.run(agent.ask("Hallo"))
     assert not outside.exists()
 
