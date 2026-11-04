@@ -166,7 +166,7 @@ def validate_sub_result(answer: str, available: set[str]) -> dict[str, Any]:
     if not isinstance(result, dict) or set(result) != {
         "status", "summary", "evidence_ids", "confidence", "uncertainties"
     }:
-        raise ValueError("Sub-Run JSON hat nicht die geforderte Struktur.")
+        raise ValueError("Sub-run JSON does not have the required structure.")
     if result["status"] not in {"completed", "partial", "blocked", "failed"}:
         raise ValueError("Invalid sub-run status.")
     if result["confidence"] not in {"high", "medium", "low"}:
@@ -205,13 +205,13 @@ async def execute_sub_run(
     if not isinstance(task, str) or not 20 <= len(task) <= 2500:
         raise ValueError("Sub-run requires a concrete subtask.")
     if len(agent._sub_runs) >= MAX_SUB_RUNS_PER_TASK:
-        raise ValueError("Sub-Run-Limit dieser Aufgabe erreicht.")
+        raise ValueError("Sub-run limit for this task has been reached.")
     parent = agent._evidence_state
     step = args.get("plan_step_id")
     if step is not None and (parent.plan is None or step not in {
         item["id"] for item in parent.plan["steps"]
     }):
-        raise ValueError("Unbekannter Planschritt.")
+        raise ValueError("Unknown plan step.")
     ids = args.get("evidence_ids", [])
     if (not isinstance(ids, list) or len(ids) > 16
             or any(not isinstance(i, str) or len(i) > 80 for i in ids)):
