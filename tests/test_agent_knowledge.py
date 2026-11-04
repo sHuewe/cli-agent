@@ -219,5 +219,5 @@ def test_assemble_payload_rejects_invalid_selection(selection: dict, match: str)
 
 def test_knowledge_system_prompt_forbids_repository_hallucination() -> None:
     assert "Erfinde keine Repository-Fakten" in KNOWLEDGE_SYSTEM_PROMPT
-    assert "Thematische Plausibilität" in KNOWLEDGE_SYSTEM_PROMPT
-    assert "Fülle Wissenslücken niemals durch Vermutungen" in KNOWLEDGE_SYSTEM_PROMPT
+    assert "Topical plausibility" in KNOWLEDGE_SYSTEM_PROMPT
+    assert "Do not fill knowledge gaps with guesses" in KNOWLEDGE_SYSTEM_PROMPT
