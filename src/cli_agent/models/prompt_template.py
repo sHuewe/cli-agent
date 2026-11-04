@@ -108,7 +108,7 @@ def _iter_template_segments(content: str) -> Iterator[tuple[bool, str]]:
         if placeholder_count > MAX_PROMPT_TEMPLATE_PLACEHOLDERS:
             raise ValueError(
                 "Prompt template exceeds the safety limit of "
-                f"{MAX_PROMPT_TEMPLATE_PLACEHOLDERS} Platzhaltern."
+                f"{MAX_PROMPT_TEMPLATE_PLACEHOLDERS} placeholders."
             )
 
         is_escaped = (

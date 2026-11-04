@@ -187,7 +187,7 @@ def read_bounded_regular_file(
         if not stat.S_ISREG(opened.st_mode):
             raise ValueError("File is not a regular file.")
         if opened.st_nlink != 1:
-            raise ValueError("Dateien mit mehreren Hardlinks werden nicht gelesen.")
+            raise ValueError("Files with multiple hardlinks cannot be read.")
         if expected_identity is not None and (
             opened.st_dev, opened.st_ino
         ) != expected_identity:

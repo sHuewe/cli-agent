@@ -738,7 +738,7 @@ def test_flow_rejects_dynamic_or_duplicate_approve_tools(tmp_path: Path) -> None
 
     for value, message in (
         ('["os__write_file", "os__write_file"]', "doppelten"),
-        ('["${item.tool}"]', "parametrisiert"),
+        ('["${item.tool}"]', "parameterized"),
     ):
         (tmp_path / "flow.toml").write_text(
             f"""

@@ -272,7 +272,7 @@ def test_trust_tool_prints_admin_path_server_example_before_auto_approval(
     asyncio.run(cli_module.run_admin(args))
     output = capsys.readouterr().out
 
-    path_heading = output.index("Pfad zur Admin-Konfiguration:")
+    path_heading = output.index("Admin configuration path:")
     server_heading = output.index("Beispiel für den Trusted-Server-Eintrag:")
     approval_heading = output.index("Auto-Approval für dieses Tool:")
     assert path_heading < server_heading < approval_heading

@@ -198,7 +198,7 @@ def test_pdf_worker_and_file_failures(tmp_path, monkeypatch, failure):
 
 
 @pytest.mark.parametrize("data,status,expected", [
-    (_pdf("hello"), 0, "--- Page 1 von 1 ---\nhello"),
+    (_pdf("hello"), 0, "--- Page 1 of 1 ---\nhello"),
     (b"broken", 2, "PDF could not be fully extracted as text."),
 ])
 def test_worker_stdio_protocol(monkeypatch, data, status, expected):
@@ -231,8 +231,8 @@ def test_pdf_page_range_preserves_original_page_numbers(tmp_path):
     assert "--- Page 3 of 4 ---\nthree" in result
     assert "Page 1" not in result
     assert "Page 4" not in result
-    assert workspace.read_file("long.pdf", end_page=2).count("--- Seite") == 2
-    assert workspace.read_file("long.pdf", start_page=4).count("--- Seite") == 1
+    assert workspace.read_file("long.pdf", end_page=2).count("--- Page") == 2
+    assert workspace.read_file("long.pdf", start_page=4).count("--- Page") == 1
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -274,8 +274,8 @@ def test_worker_page_options_round_trip(monkeypatch):
             patch.setattr(pdf_text.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(_pdf("one", "two", "three"))))
             patch.setattr(pdf_text.sys, "stdout", SimpleNamespace(buffer=output))
             assert pdf_text._main(["--max-pages", "2", "--start-page", "2", "--end-page", "3"]) == 0
-        assert "Page 2 von 3" in output.getvalue().decode("utf-8")
-        assert "Page 1 von 3" not in output.getvalue().decode("utf-8")
+        assert "Page 2 of 3" in output.getvalue().decode("utf-8")
+        assert "Page 1 of 3" not in output.getvalue().decode("utf-8")
     finally:
         __import__("logging").disable(old_disable)
 

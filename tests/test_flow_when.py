@@ -777,7 +777,7 @@ concept = "concept.md"
 
     # Each individual scan remains bounded, including nested descendants.
     monkeypatch.setattr(flow_module, "MAX_SUBFLOW_GRAPH_EXPANSIONS", 1)
-    with pytest.raises(ValueError, match="Subflow Checkpoint-Eingabereservierung exceeds the expansion limit of 1 Flo"):
+    with pytest.raises(ValueError, match="exceeds the expansion limit"):
         flow_module._reserve_future_child_checkpoint_inputs(
             root, workspace=tmp_path, cache=cache,
             flow_input={}, outputs={}, output_json={}, statuses={},

@@ -87,7 +87,7 @@ def test_rejects_protected_and_unsafe_image_paths(tmp_path):
 
 def test_rejects_large_file_and_invalid_question(tmp_path):
     (tmp_path / "large.png").write_bytes(_png() + b"x" * vision_analysis.MAX_IMAGE_BYTES)
-    with pytest.raises(WorkspaceError, match="Limit"):
+    with pytest.raises(WorkspaceError, match="limit"):
         vision_analysis._read_image(_workspace(tmp_path), "large.png")
     (tmp_path / "good.png").write_bytes(_png())
     with pytest.raises(WorkspaceError, match="question"):
