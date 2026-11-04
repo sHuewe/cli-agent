@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from cli_agent.security.mcp_path_policy import read_path_policy
 from cli_agent.settings.config import AppConfig, McpServerConfig, default_config_file, load_config
@@ -47,6 +47,29 @@ class DataFilter:
     column: str
     op: FilterOperator
     value: FilterValue = None
+
+
+class DataAggregation(BaseModel):
+    """A typed aggregation specification exposed in the MCP JSON schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    column: Annotated[str, Field(description="Existing input column to aggregate.")]
+    function: Annotated[
+        Literal["count", "sum", "mean", "min", "max", "median", "nunique", "std"],
+        Field(description="Aggregation function. count counts non-null column values."),
+    ]
+    alias: Annotated[str | None, Field(description="Optional output column name; defaults to <column>_<function>.")] = None
+
+
+def _serialize_aggregations(
+    aggregations: list[DataAggregation],
+) -> list[dict[str, str]]:
+    """Pass typed MCP arguments to the unchanged DataOperations validator."""
+    return [
+        item.model_dump(exclude_none=True) if isinstance(item, DataAggregation) else dict(item)
+        for item in aggregations
+    ]
 
 
 def _serialize_filters(
@@ -341,7 +364,7 @@ def create_server(
 
     @mcp.tool(structured_output=False)
     def aggregate_data(
-        aggregations: list[dict[str, str]],
+        aggregations: list[DataAggregation],
         path: str,
         table_index: int = 0,
         group_by: list[str] | None = None,
@@ -350,14 +373,29 @@ def create_server(
         descending: bool = False,
         records_path: str | None = None,
     ) -> CallToolResult:
-        """Group and aggregate workspace data with deterministic operations.
+        """Group or aggregate rows from an existing workspace dataset.
 
-        Propagate the source records_path, including for generated tables.
-        The complete result becomes a structured session artifact.
-        Functions: count, sum, mean, min, max, median, nunique, std.
+        Required: path and a nonempty list of aggregations. Every item must
+        provide "column" (existing input column) and "function" (count, sum,
+        mean, min, max, median, nunique, std); "alias" is optional and defaults
+        to "<column>_<function>". Do not use "op", "agg", "operation" or "func"
+        in place of "function". Alias names must be unique, including group_by.
+
+        Example arguments:
+          {"path": "measurements.csv", "group_by": ["day"],
+           "aggregations": [{"column": "power", "function": "sum",
+                             "alias": "total_power"}]}
+
+        count counts non-null values of the chosen column, not every row.
+        nunique counts distinct non-null values. sum, mean, median and std
+        require numeric (non-boolean) column values. Without group_by, all
+        filtered rows form one group. Filters use column/op/value and AND logic.
+        Preserve the source records_path, including for generated tables.
+        The full result is a structured session artifact; pass its
+        workspace_path and records_path for subsequent data operations.
         """
         result_columns, result_rows = operations._aggregate_records(
-            path, data=None, data_format=None, table_index=table_index, aggregations=aggregations,
+            path, data=None, data_format=None, table_index=table_index, aggregations=_serialize_aggregations(aggregations),
             group_by=group_by, filters=_serialize_filters(filters),
             sort_by=sort_by, descending=descending, records_path=records_path,
         )
