@@ -190,7 +190,7 @@ prompt_file = "prompt.md"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="dynamischen Flow-Platzhalter"):
+    with pytest.raises(ValueError, match="Global variable 'value' must not contain dynamic flow placeholders\\."):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -208,7 +208,7 @@ prompt_file = "prompt.md"
 """.strip(),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="vars muss eine Tabelle"):
+    with pytest.raises(ValueError, match="vars must be a table\\."):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
     (tmp_path / "flow.toml").write_text(
@@ -244,7 +244,7 @@ prompt_file = "prompt.md"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Ungültiger globaler Variablenname"):
+    with pytest.raises(ValueError, match="Invalid global variable name 'bad\\.name'; allowed characters are ASCII lette"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 

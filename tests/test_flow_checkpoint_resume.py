@@ -180,7 +180,7 @@ def test_null_primary_without_available_fallback_is_an_error(tmp_path):
         encoding="utf-8",
     )
     flow = load_flow(source, workspace=tmp_path)
-    with pytest.raises(ValueError, match="Kein verfügbarer Flow-Result-Selector"):
+    with pytest.raises(ValueError, match="No available flow result selector for"):
         flow_module._flow_result_value(
             flow, outputs={"primary": "null"}, output_json={"primary": True},
         )

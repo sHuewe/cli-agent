@@ -191,7 +191,7 @@ response_format = "json"
 path = "some.json"
 """)
     _fake_model(monkeypatch, [], [])
-    with pytest.raises(ValueError, match="bereits abgeschlossenen"):
+    with pytest.raises(ValueError, match="JSON input 'data' may reference only a completed flow JSON output:"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
 
@@ -251,7 +251,7 @@ def test_json_input_total_size_is_limited(
         json_inputs={"data": flow_module.JsonInputSpec(path="state.json")},
     )
     monkeypatch.setattr(flow_module, "MAX_JSON_INPUT_TOTAL_BYTES", 4)
-    with pytest.raises(ValueError, match="Gesamtlimit"):
+    with pytest.raises(ValueError, match="json_inputs exceeds the total limit of 4 Bytes\\."):
         flow_module._resolve_json_inputs(
             step, workspace=tmp_path, flow_input={}, item=None,
             iteration_id=None,
