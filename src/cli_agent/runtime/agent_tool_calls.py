@@ -243,10 +243,9 @@ async def process_tool_calls(
                     messages,
                     tool_call,
                     exposed_name,
-                    "Dieser mutierende Tool-Aufruf wurde nicht durch "
-                    "eine explizite Benutzerfreigabe autorisiert. "
-                    "Führe ihn nicht erneut aus, bevor der Benutzer "
-                    "die Aktion freigegeben hat.",
+                    "This mutating tool call was not authorized by an explicit "
+                    "user approval. Do not retry it unless the user explicitly "
+                    "approves the action.",
                 )
                 transient_rejections.append(
                     (assistant_message, tool_call, tool_message)
@@ -266,9 +265,8 @@ async def process_tool_calls(
                     messages,
                     tool_call,
                     exposed_name,
-                    "Dieser identische OKF-Aufruf wurde bereits "
-                    "erfolgreich ausgeführt. Verwende das vorhandene "
-                    "Ergebnis und rufe ihn nicht erneut auf.",
+                    "This identical OKF call has already completed successfully. "
+                    "Use its existing result rather than calling it again.",
                 )
                 transient_rejections.append(
                     (assistant_message, tool_call, tool_message)
@@ -293,12 +291,11 @@ async def process_tool_calls(
                     messages,
                     tool_call,
                     exposed_name,
-                    "Dieser Pfad wurde vom OKF-Repository nicht für "
-                    f"{original_name!r} angeboten: {requested_path!r}. "
-                    "Verwende ausschließlich einen exakten Pfad und "
-                    "das zugehörige `next_tool` aus `root_index` oder "
-                    "`internal_links` eines erhaltenen "
-                    "Tool-Ergebnisses.",
+                    "The OKF repository did not offer this path for "
+                    f"{original_name!r}: {requested_path!r}. "
+                    "Use only exact paths and corresponding `next_tool` entries "
+                    "from `root_index` or the `internal_links` of a received "
+                    "tool result.",
                 )
                 transient_rejections.append(
                     (assistant_message, tool_call, tool_message)
