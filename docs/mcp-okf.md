@@ -1,11 +1,8 @@
 # OKF MCP Server
 
-Der OKF-MCP-Server ist ein interner, read-only Knowledge-Server für ein
-Open-Knowledge-Format-Repository. Er wird nicht wie normale MCP-Server über
-`[[mcp_servers]]` in die Main-Phase eingebunden, sondern über den separaten
-`[okf]`-Block aktiviert.
+The OKF MCP server is a built-in, read-only knowledge server for an Open Knowledge Format (OKF) repository. Unlike ordinary MCP servers, it is not included in the main phase through `[[mcp_servers]]`; it is enabled separately through `[okf]`.
 
-## Konfiguration
+## Configuration
 
 ```toml
 [okf]
@@ -16,152 +13,88 @@ compress_min_chars = 20000
 required = true
 ```
 
-`repository` kann absolut oder relativ zur Konfigurationsdatei angegeben werden.
-Der OKF-Root darf dabei **bewusst außerhalb des Projekt-Workspaces liegen**. Ein
-OKF-Repository ist keine Erweiterung der Workspace-OS-Grenze, sondern eine
-separat vom Benutzer ausgewählte, read-only Knowledge-Quelle mit einer eigenen
-Dateisystemgrenze.
+`repository` may be an absolute path or relative to the configuration file. The OKF root may **intentionally reside outside the project workspace**. This does not extend the workspace OS boundary; OKF is a separate user-selected read-only knowledge source with its own filesystem containment boundary.
 
-Nach dem Start des OKF-MCP ist genau dieser aufgelöste Repository-Root die feste
-Grenze für alle Knowledge-Dateizugriffe. Repository-Inhalte und das
-Retrieval-Modell dürfen diese Grenze weder über relative Escapes noch über
-absolute Pfade oder Symlinks verlassen. Die Möglichkeit, einen externen
-Knowledge-Root auszuwählen, ist damit eine vorgesehene Funktion und keine
-Freigabe für beliebige Dateizugriffe außerhalb dieses Roots.
+After starting the OKF MCP, the resolved repository root is the fixed boundary for all knowledge file accesses. Neither repository content nor the retrieval model can escape it through relative traversal, absolute paths or symlinks. Selecting an external knowledge root is an intended capability, **not** a general grant to access arbitrary files outside that root.
 
-### Sicherheits- und Betriebsbedeutung des gewählten Roots
+### Security and operational implications of the chosen root
 
-Die Wahl des OKF-Roots selbst ist **keine administrativ erzwungene
-Security-Policy**. `[okf].repository` gehört zur normalen Benutzer- bzw.
-Projektkonfiguration. Es existiert derzeit keine `okf_allowed_roots`-Liste in
-`admin_config.toml`, die diese Auswahl auf zentral freigegebene lokale
-Verzeichnisse beschränkt.
+The root selection itself is **not an administratively enforced security policy**. `[okf].repository` is ordinary user/project configuration. There is currently no `okf_allowed_roots` list in `admin_config.toml` limiting the selection to centrally approved local directories.
 
-Daraus folgt bewusst ein anderes Vertrauensmodell als beim Workspace-OS-MCP:
+This establishes a deliberately different trust model from workspace OS MCP:
 
-- der Workspace-OS-MCP darf seinen administrativ/hostseitig festgelegten
-  Workspace nicht verlassen;
-- der OKF-MCP darf den **vom Benutzer konfigurierten** Repository-Root nicht
-  verlassen;
-- ein außerhalb des Workspaces liegender OKF-Root erweitert deshalb die Menge
-  lokaler Knowledge-/Markdown-Inhalte, die der Agent lesen kann;
-- gelesene und ausgewählte OKF-Inhalte können als Referenzkontext an das
-  konfigurierte LLM übertragen werden.
+- Workspace OS MCP cannot leave its administratively/host-defined workspace.
+- OKF MCP cannot leave the **user-configured** repository root.
+- An OKF root outside the workspace expands which local knowledge/Markdown material the agent may read.
+- Selected and read OKF content may be passed as reference context to the configured LLM.
 
-Das ist beabsichtigter Funktionsumfang und gilt unabhängig davon, ob der
-Agent lokal individuell oder gemanagt bereitgestellt wird. Die Root-Auswahl ist
-eine **explizite lokale Datenfreigabeentscheidung des Benutzers**: Durch
-`[okf].repository` wählt er eine Knowledge-Quelle aus, deren relevante Inhalte
-dem konfigurierten LLM als Kontext bereitgestellt werden dürfen. Das entspricht
-der allgemeinen Annahme, dass der Benutzer dem freigegebenen LLM auch selbst
-lokale Informationen als Kontext geben darf. Eine zusätzliche administrative
-`okf_allowed_roots`-Allowlist ist deshalb im aktuellen Design nicht vorgesehen.
+This behavior is intentional, both in individually installed and managed deployments. Root selection is an **explicit local data-sharing decision by the user**: configuring `[okf].repository` selects a knowledge source whose relevant contents may be provided to the configured LLM. The design assumes users are allowed to provide locally available information as context to their approved LLM themselves. An additional administrator `okf_allowed_roots` allowlist is therefore not planned in the current design.
 
-Eine manipulierte oder versehentlich falsch ausgewählte Benutzerkonfiguration
-kann zwar **nicht aus dem konfigurierten Root ausbrechen**, aber einen anderen
-gültigen OKF-Root auswählen. Das ist keine Capability-Eskalation: Die Auswahl
-bestimmt die vom Benutzer freigegebene Knowledge-Quelle; die technischen
-Knowledge-Tools bleiben anschließend read-only und auf genau diesen Root
-begrenzt.
+A tampered or accidentally incorrect user configuration cannot escape the configured root, but can select a **different valid OKF root**. This is not a capability escalation: the selection defines the user-approved knowledge source, and the technical tools remain read-only and bounded to exactly that root.
 
-Ein konfiguriertes Verzeichnis wird **nicht automatisch zu einem OKF-Repository**. Direkt im konfigurierten Root muss eine lesbare `index.md` vorhanden sein. Genau diese Datei ist der explizite Repository-Marker und Einstiegspunkt der Knowledge-Phase. Der Agent durchsucht den konfigurierten Root beim Start **nicht rekursiv**, um irgendwo in tieferen Unterverzeichnissen ein vermeintliches OKF zu finden. Fehlt die Root-`index.md`, startet der OKF-MCP fail-closed nicht und gibt keine Verzeichnis- oder Markdown-Inhalte an den Retrieval-Lauf weiter.
+A configured directory is **not automatically recognized as an OKF repository**. A readable `index.md` must exist directly in its root. This file is the explicit repository marker and entry point to retrieval. Startup **does not recursively search** for nested OKF repositories. If the root `index.md` is missing, the OKF MCP fails closed and exposes no directory or Markdown contents to retrieval.
 
-Auch in einem gültigen OKF-Root fungieren die Knowledge-Tools nicht als allgemeiner Markdown-Browser: nicht OKF-konforme Concept-Dateien werden nicht als Knowledge angeboten und `knowledge_read` verweigert sie. Weitere Verzeichnisse oder Dokumente werden nur über die normale OKF-Navigation erreicht, ausgehend von der Root-`index.md` und anschließend von explizit angebotenen `internal_links` bzw. Indizes.
+Even a valid OKF repository does not provide a general-purpose Markdown browser: non-OKF-conforming concept files are not offered as knowledge, and `knowledge_read` refuses them. Additional documents and directories are reached only through normal OKF navigation from the root `index.md`, following explicitly offered `internal_links` and indices.
 
-Mit `required = true` wird die Benutzeraufgabe nicht weiterbearbeitet, wenn die
-Knowledge-Phase nicht gestartet werden kann oder fehlschlägt. Mit
-`required = false` darf die Main-Phase ohne OKF-Kontext fortfahren. Das gilt insbesondere auch für einen versehentlich konfigurierten normalen Ordner, der kein gültiges OKF enthält.
+With `required = true`, the task does not continue if the knowledge phase cannot start or fails. With `required = false`, the main phase may proceed without OKF context. This includes mistakenly configuring an ordinary directory that is not a valid OKF repository.
 
 ## Tools
 
-Der interne Server muss exakt diese beiden Tools bereitstellen:
+The internal server must expose **exactly two tools**:
 
-| Tool | Funktion |
+| Tool | Function |
 | --- | --- |
-| `knowledge_index(path=".")` | Liefert den progressiven Index eines Repository-Verzeichnisses. |
-| `knowledge_read(path)` | Liest ein einzelnes OKF-Markdown-Dokument vollständig. |
+| `knowledge_index(path=".")` | Return the progressive index of a repository directory. |
+| `knowledge_read(path)` | Read a single OKF Markdown document in full. |
 
-Pfade sind relativ zum OKF-Repository-Root. Absolute Pfade, Windows-Drive-Pfade
-und `..` sind nicht erlaubt. Pfade werden aufgelöst und müssen nach der
-Auflösung innerhalb des festgelegten Repository-Roots bleiben; dadurch werden
-auch Symlinks beziehungsweise Reparse-Verweise nach außerhalb abgewiesen.
-`knowledge_read` liest ausschließlich Markdown-Dateien und verweigert zusätzlich
-Dateien mit mehreren Hardlinks.
+Paths are relative to the repository root. Absolute paths, Windows drive paths and `..` are forbidden. Resolved paths must remain inside the fixed repository root, also rejecting symlink/reparse-point escapes. `knowledge_read` only reads Markdown files and additionally rejects multiply hard-linked files.
 
-## Rolle im Agenten
+## Role in the agent
 
-Die OKF-Tools werden nicht dem normalen Main-Agenten angeboten. Stattdessen
-startet der Agent vor der eigentlichen Bearbeitung einen separaten
-Retrieval-Lauf:
+The OKF tools are not offered to the normal main agent. Instead, a separate retrieval run takes place before task execution:
 
 ```text
-User Request
+User request
     |
     v
 knowledge_index(".")
     |
     v
-separater LLM-Retrieval-Loop <-> knowledge_index / knowledge_read
+Separate LLM retrieval loop <-> knowledge_index / knowledge_read
     |
     v
-validierte Auswahl gelesener Concepts
+Validated selection of read concepts
     |
     v
-Main-Phase mit ausgewähltem OKF-Kontext
+Main phase with selected OKF context
 ```
 
-Der Knowledge-Lauf erhält ausschließlich die separat registrierten OKF-Tools.
-Normale Main-Agent-Tools wie Workspace-OS-, HTTP-MCP-, Compose-, Validator- oder
-andere externe MCP-Tools werden in dieser Phase nicht angeboten und besitzen
-keine Route im Knowledge-Toolset. Zusätzlich akzeptiert der Agent den internen
-OKF-MCP nur, wenn dieser **exakt** `knowledge_index` und `knowledge_read`
-anbietet; zusätzliche Tools führen beim Start der Knowledge-Phase zu einem
-Fehler.
+Retrieval receives only the separately registered OKF tools. Workspace OS, HTTP MCP, Compose, validators and all other external tools are absent and have no route in the Knowledge tool set. The agent also accepts the internal OKF MCP only when it exposes **exactly** `knowledge_index` and `knowledge_read`; any extra tools cause startup of the Knowledge phase to fail.
 
-Der Agent lädt den Root-Index selbst. Das Retrieval-Modell entscheidet danach,
-welchen angebotenen Links es folgen möchte. Dabei setzt der Agent zusätzliche
-Grenzen durch:
+The agent itself loads the root index. The retrieval model then chooses which offered links to follow, subject to additional deterministic restrictions:
 
-- pro Modellantwort ist genau ein OKF-Tool-Aufruf zulässig,
-- identische erfolgreiche Aufrufe werden nicht erneut ausgeführt,
-- ein Pfad darf nur verwendet werden, wenn er zuvor im Root-Index oder in
-  `internal_links` eines Ergebnisses angeboten wurde,
-- `not_found` ist erst zulässig, nachdem mindestens ein Concept gelesen wurde,
-- Tool- und Concept-Limits begrenzen den Lauf.
+- Exactly one OKF tool call per model response.
+- Repeated identical successful calls are not executed again.
+- A path is allowed only if previously offered by the root index or a result's `internal_links`.
+- `not_found` is allowed only after reading at least one concept.
+- Tool-call and concept-read limits bound the run.
 
-## Auswahl über Agent-Tokens
+## Selection using agent tokens
 
-Ein erfolgreich gelesenes Concept erhält vom Agenten einen zufälligen
-Selection-Token. Das Retrieval-Modell darf am Ende nur bereits vergebene Tokens
-zurückgeben. Damit kann es keine ungelesenen Repository-Pfade oder erfundenen
-Concept-IDs auswählen.
+Every successfully read concept receives a random selection token generated by the agent. The retrieval model may return only previously issued tokens, preventing selection of unread repository paths or invented concept IDs.
 
-Die finale Retrieval-Antwort wird vom Agenten validiert. Bei einer gültigen
-Auswahl werden die vollständigen Originalinhalte der gewählten Concepts in
-einen Knowledge-Payload übernommen. Dieser Knowledge-Payload wird in der
-Main-Phase als Teil des transienten, nicht vertrauenswürdigen Referenzkontexts
-bereitgestellt; die echte aktuelle Benutzeranfrage bleibt eine separate
-`user`-Message.
+The agent validates the final retrieval response. On valid selection, it transfers the full original contents of the chosen concepts into the knowledge payload. During the main phase that payload is provided as part of the transient **untrusted reference context**. The original current user request remains a separate `user` message.
 
-## Vertrauensgrenze
+## Trust boundary
 
-OKF-Inhalte gelten unabhängig von ihrem Speicherort als nicht vertrauenswürdige
-Referenzdaten. Anweisungen in Dokumenten dürfen nicht als System- oder
-Benutzeranweisung interpretiert und nicht ausgeführt werden.
+OKF documents remain untrusted reference data regardless of storage location. Instructions embedded in documents must not be interpreted or executed as system or user instructions.
 
-Die technische Sicherheitsgrenze beruht deshalb nicht darauf, dass das
-Retrieval-Modell solche Inhalte zuverlässig ignoriert. Deterministisch gelten
-stattdessen insbesondere:
+Security therefore does not depend on retrieval-model compliance alone. Deterministic guarantees include:
 
-- der beim Start festgelegte OKF-Repository-Root kann über Knowledge-Tools nicht
-  verlassen werden,
-- der Knowledge-Lauf besitzt ausschließlich `knowledge_index` und
-  `knowledge_read`,
-- Folgepfade müssen zuvor vom Repository angeboten worden sein,
-- nur tatsächlich gelesene Concepts können über Agent-Tokens ausgewählt werden,
-- ausgewählter OKF-Inhalt erhält in der Main-Phase keine zusätzlichen
-  Berechtigungen und bleibt untrusted Referenzkontext.
+- Knowledge tools cannot escape the OKF repository root fixed at startup.
+- The Knowledge run has only `knowledge_index` and `knowledge_read`.
+- Follow-up paths must have been offered previously by the repository.
+- Only concepts actually read can be selected with agent tokens.
+- Selected OKF material gains no privileges in the main phase and remains untrusted reference context.
 
-Auch die `instructions` des internen OKF-MCP-Servers sind den zentralen
-Knowledge-Regeln untergeordnet und stellen keine eigenständige Security Boundary
-dar.
+Even the internal OKF MCP server's `instructions` are subordinate to the central Knowledge rules and are not a separate security boundary.
