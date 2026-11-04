@@ -156,7 +156,7 @@ def test_flow_cli_reports_validation_error(
         flow_module.main()
 
     assert exc_info.value.code == 1
-    assert "Fehler: ValueError:" in capsys.readouterr().err
+    assert "Error: ValueError:" in capsys.readouterr().err
 
 
 def test_flow_rejects_oversized_static_conversation_items(
@@ -4448,7 +4448,7 @@ directory = "${conversation.item}"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="ohne conversation_items"):
+    with pytest.raises(ValueError, match="without conversation_items"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -7206,7 +7206,7 @@ def test_flow_logging_setup_failure_does_not_leak_traceback(
         flow_module.main()
     assert exit_info.value.code == 1
     stderr = capsys.readouterr().err
-    assert "Fehler: RuntimeError" in stderr
+    assert "Error: RuntimeError" in stderr
     assert "\\u001b" in stderr and "\\u202e" in stderr
     assert "Traceback (most recent call last)" not in stderr
     assert "\x1b" not in stderr and "\u202e" not in stderr
@@ -7231,7 +7231,7 @@ def test_flow_logging_configure_failure_does_not_leak_traceback(
         flow_module.main()
     assert exit_info.value.code == 1
     stderr = capsys.readouterr().err
-    assert "Fehler: RuntimeError" in stderr
+    assert "Error: RuntimeError" in stderr
     assert "\\u001b" in stderr and "\\u202e" in stderr
     assert "Traceback (most recent call last)" not in stderr
     assert "\x1b" not in stderr and "\u202e" not in stderr
@@ -7313,7 +7313,7 @@ def test_flow_cli_checks_effective_logging_after_step_reconfiguration(
         with pytest.raises(SystemExit):
             flow_module.main()
         assert any("flow_failed" in event and "step=work" in event for event in events)
-        assert "Fehler: RuntimeError" in capsys.readouterr().err
+        assert "Error: RuntimeError" in capsys.readouterr().err
     finally:
         existing_logger.handlers = original_handlers
         existing_logger.disabled = original_disabled
