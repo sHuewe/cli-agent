@@ -659,7 +659,7 @@ def test_run_conversation_rejects_empty_or_blank_prompts(
             )
         )
 
-    with pytest.raises(ValueError, match="dürfen nicht leer sein"):
+    with pytest.raises(ValueError, match="must not be empty"):
         asyncio.run(
             run_conversation(
                 ConversationRunOptions(

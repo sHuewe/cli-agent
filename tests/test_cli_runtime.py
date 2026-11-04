@@ -297,8 +297,8 @@ def test_run_admin_rejects_unknown_server(tmp_path, monkeypatch) -> None:
 @pytest.mark.parametrize(
     ("trusted", "existing", "message"),
     [
-        (False, None, "identitätsgleichen"),
-        (True, None, "bereits eine gepinnte Auto-Freigabe"),
+        (False, None, "identity-matching"),
+        (True, None, "existing pinned auto-approval"),
     ],
 )
 def test_run_admin_update_requires_trusted_server_and_existing_pin(

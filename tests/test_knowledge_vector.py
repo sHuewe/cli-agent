@@ -337,7 +337,7 @@ def test_okf_verified_read_enforces_configured_limit(tmp_path):
     (tmp_path / "concept.md").write_text(
         "---\ntype: concept\n---\n# A\n" + "content " * 100, encoding="utf-8"
     )
-    with pytest.raises(ValueError, match="Leselimit"):
+    with pytest.raises(ValueError, match="read limit"):
         _read_source(tmp_path, "concept.md", mode="okf", max_read_bytes=64)
     assert "content" in _read_source(
         tmp_path, "concept.md", mode="okf", max_read_bytes=4096

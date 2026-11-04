@@ -227,7 +227,7 @@ def test_json_input_rejects_modified_output(
     basic = _flow(tmp_path, 'version = 1\n[[steps]]\nid = "one"\nprompt_file = "prompt.md"')
     step = replace(basic.steps[0], json_inputs={"data": spec})
     fingerprint = flow_module._checkpoint_fingerprint('{"id":2}')
-    with pytest.raises(ValueError, match="verändert"):
+    with pytest.raises(ValueError, match="modified"):
         flow_module._resolve_json_inputs(
             step,
             workspace=tmp_path,

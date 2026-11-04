@@ -224,7 +224,7 @@ prompt_file = "prompt.md"
 """.strip(),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="String-zu-String"):
+    with pytest.raises(ValueError, match="string-to-string"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 

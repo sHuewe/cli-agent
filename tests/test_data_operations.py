@@ -529,7 +529,7 @@ def test_filters_reject_unknown_operator_without_evaluation(tmp_path: Path) -> N
 def test_aggregation_rejects_non_numeric_sum(tmp_path: Path) -> None:
     _write_csv(tmp_path)
 
-    with pytest.raises(DataOperationError, match="numerische"):
+    with pytest.raises(DataOperationError, match="numeric column"):
         _operations(tmp_path).aggregate_data(
             [{"column": "country", "function": "sum"}],
             "sales.csv",

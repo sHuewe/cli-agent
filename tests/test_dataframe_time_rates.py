@@ -171,7 +171,7 @@ def test_rate_rejects_irrelevant_binary_arguments_and_unknown_units(tmp_path):
         _rate(_frames(tmp_path), max_gap_seconds=3600, constant=5)
     with pytest.raises(DataOperationError, match="time_unit"):
         _rate(_frames(tmp_path), max_gap_seconds=3600, time_unit="weeks")
-    with pytest.raises(DataOperationError, match="nur für diff_per_time"):
+    with pytest.raises(DataOperationError, match="only for diff_per_time"):
         _frames(tmp_path).derive_columns("series.json", [
             DerivedColumn("ordinary_diff", "diff", "value", max_gap_seconds=3600),
         ], records_path="/measurements")

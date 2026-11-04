@@ -59,7 +59,7 @@ def test_missing_or_duplicate_concepts_rejected():
     item = {"id": "a", "evidence_ranges": [
         {"doctrine": "sources/doc.md", "start_line": 1, "end_line": 2}
     ]}
-    with pytest.raises(ValueError, match="not all"):
+    with pytest.raises(ValueError, match="contain all"):
         assemble_doctrine_concept_plan(plan, {"iterations": [
             {"id": "b0001", "output": {"status": "ok", "concepts": [item]}}
         ]}, prepare_doctrine_concept_batches(plan, analyses(), batch_size=2))
@@ -77,7 +77,7 @@ def test_bad_section_refs_and_source_are_rejected():
     plan = outline()
     wrong = analyses()
     wrong["iterations"][0]["output"]["source_path"] = "other.md"
-    with pytest.raises(ValueError, match="Abschnittsanalyse"):
+    with pytest.raises(ValueError, match="section analysis"):
         prepare_doctrine_concept_batches(plan, wrong)
 
 

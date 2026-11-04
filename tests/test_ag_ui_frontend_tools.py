@@ -32,10 +32,10 @@ def test_frontend_tools_validate_schema_names_bounds_and_collisions():
     assert translated["show_view"]["function"]["parameters"]["required"] == ["view"]
     with pytest.raises(ValueError, match="MCP"):
         normalize_frontend_tools([definition("os__write_file")], server_names={"os__write_file"})
-    with pytest.raises(ValueError, match="Doppelter"):
+    with pytest.raises(ValueError, match="Duplicate"):
         normalize_frontend_tools([definition(), definition()], server_names=set())
     for bad in ("", "with space", "symbol!", "é", "a" * 129):
-        with pytest.raises(ValueError, match="Name"):
+        with pytest.raises(ValueError, match="frontend tool name"):
             normalize_frontend_tools([definition(bad)], server_names=set())
     with pytest.raises(ValueError, match="Zu viele"):
         normalize_frontend_tools([definition(str(n)) for n in range(33)], server_names=set())
@@ -85,7 +85,7 @@ def test_frontend_results_require_exactly_once_and_original_call():
         checked_frontend_results(completed_messages(include_assistant=False), pending)
     with pytest.raises(ValueError, match="Not all"):
         checked_frontend_results(completed_messages(result=False), pending)
-    with pytest.raises(ValueError, match="mehrfach"):
+    with pytest.raises(ValueError, match="more than once"):
         checked_frontend_results(completed_messages(repeat=True), pending)
     with pytest.raises(ValueError, match="Doppelte"):
         checked_frontend_results(completed_messages(), pending * 2)
