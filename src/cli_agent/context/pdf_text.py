@@ -67,34 +67,34 @@ def _bounded_page_count(reader: object) -> int:
             else id(entry)
         )
         if key in visited:
-            raise PdfTextError("PDF enthält einen zyklischen Seitenbaum.")
+            raise PdfTextError("PDF contains a cyclic page tree.")
         visited.add(key)
         nodes += 1
         if nodes > max_nodes:
-            raise PdfTextError("PDF-Seitenbaum überschreitet das Sicherheitslimit.")
+            raise PdfTextError("PDF page tree exceeds the safety limit.")
         node = entry.get_object() if hasattr(entry, "get_object") else entry
         if not isinstance(node, DictionaryObject):
-            raise PdfTextError("PDF enthält einen ungültigen Seitenbaum.")
+            raise PdfTextError("PDF contains an invalid page tree.")
         if str(node.get("/Type")) == "/Page":
             pages += 1
             if pages > MAX_TOTAL_PDF_PAGES:
                 raise PdfTextError(
-                    f"PDF überschreitet das Sicherheitslimit von {MAX_TOTAL_PDF_PAGES} Gesamtseiten."
+                    f"PDF exceeds the safety limit of {MAX_TOTAL_PDF_PAGES} total pages."
                 )
             continue
         if str(node.get("/Type")) != "/Pages":
-            raise PdfTextError("PDF enthält einen ungültigen Seitenbaum.")
+            raise PdfTextError("PDF contains an invalid page tree.")
         count = node.get("/Count")
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-            raise PdfTextError("PDF enthält eine ungültige Seitenanzahl.")
+            raise PdfTextError("PDF contains an invalid page count.")
         if count > MAX_TOTAL_PDF_PAGES:
             raise PdfTextError(
-                f"PDF überschreitet das Sicherheitslimit von {MAX_TOTAL_PDF_PAGES} Gesamtseiten."
+                f"PDF exceeds the safety limit of {MAX_TOTAL_PDF_PAGES} total pages."
             )
         kids = node.get("/Kids")
         kids = kids.get_object() if hasattr(kids, "get_object") else kids
         if not isinstance(kids, ArrayObject):
-            raise PdfTextError("PDF enthält einen ungültigen Seitenbaum.")
+            raise PdfTextError("PDF contains an invalid page tree.")
         # Count *all* scheduled entries: processed nodes, entries already
         # waiting in the LIFO stack, and the children about to be enqueued.
         # Checking only nodes + len(kids) misses the cumulative pending queue
@@ -103,7 +103,7 @@ def _bounded_page_count(reader: object) -> int:
             len(kids) > MAX_TOTAL_PDF_PAGES
             or nodes + len(pending) + len(kids) > max_nodes
         ):
-            raise PdfTextError("PDF-Seitenbaum überschreitet das Sicherheitslimit.")
+            raise PdfTextError("PDF page tree exceeds the safety limit.")
         pending.extend(kids)
     return pages
 
@@ -125,9 +125,9 @@ def _validate_page_options(
         if number is not None and (
             isinstance(number, bool) or not isinstance(number, int) or number < 1
         ):
-            raise PdfTextError(f"{name} muss eine positive ganze Zahl sein.")
+            raise PdfTextError(f"{name} must be a positive integer.")
     if start_page is not None and end_page is not None and start_page > end_page:
-        raise PdfTextError("start_page darf nicht größer als end_page sein.")
+        raise PdfTextError("start_page must not exceed end_page.")
 
 
 def _extract_text(
@@ -142,30 +142,30 @@ def _extract_text(
     page_limit = MAX_PDF_PAGES if max_pages is None else max_pages
     _validate_page_options(start_page, end_page, page_limit)
     if len(data) > MAX_PDF_BYTES:
-        raise PdfTextError(f"PDF überschreitet das Leselimit von {MAX_PDF_BYTES} Bytes.")
+        raise PdfTextError(f"PDF exceeds the read limit of {MAX_PDF_BYTES} Bytes.")
     try:
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted:
-            raise PdfTextError("Verschlüsselte PDFs werden nicht unterstützt.")
+            raise PdfTextError("Encrypted PDFs are not supported.")
         page_count = _bounded_page_count(reader)
         # Reject conflicting declared counts before asking pypdf to flatten.
         if len(reader.pages) != page_count:
-            raise PdfTextError("PDF-Seitenanzahl ist widersprüchlich.")
+            raise PdfTextError("PDF page count is inconsistent.")
         if page_count == 0:
             if start_page is not None or end_page is not None:
-                raise PdfTextError("PDF enthält keine Seiten für den angeforderten Bereich.")
-            return "(PDF enthält keine Seiten.)"
+                raise PdfTextError("PDF has no pages in the requested range.")
+            return "(PDF contains no pages.)"
         first = 1 if start_page is None else start_page
         last = page_count if end_page is None else end_page
         if first > page_count or last > page_count:
             raise PdfTextError(
-                f"Angeforderter Seitenbereich liegt außerhalb des PDFs "
-                f"mit {page_count} Seiten."
+                f"Requested page range is outside the PDF "
+                f"mit {page_count} pages."
             )
         selected_pages = last - first + 1
         if selected_pages > page_limit:
             raise PdfTextError(
-                f"PDF-Seitenbereich überschreitet das Limit von {page_limit} Seiten."
+                f"PDF page range exceeds the limit of {page_limit} pages."
             )
         sections = []
         total_chars = 0
@@ -173,12 +173,12 @@ def _extract_text(
             page = reader.pages[number - 1]
             text = (page.extract_text() or "").strip()
             if not text:
-                text = "[Kein extrahierbarer Text auf dieser Seite; OCR ist nicht verfügbar.]"
+                text = "[No extractable text on this page; OCR is not available.]"
             section = f"--- Seite {number} von {page_count} ---\n{text}"
             total_chars += len(section) + (2 if sections else 0)
             if total_chars > MAX_PDF_TEXT_CHARS:
                 raise PdfTextError(
-                    f"PDF-Text überschreitet das Ausgabelimit von {MAX_PDF_TEXT_CHARS} Zeichen."
+                    f"PDF text exceeds the output limit of {MAX_PDF_TEXT_CHARS} characters."
                 )
             sections.append(section)
         return "\n\n".join(sections)
@@ -186,7 +186,7 @@ def _extract_text(
         raise
     except Exception as exc:
         # Parser exceptions can contain document content. Do not expose them.
-        raise PdfTextError("PDF konnte nicht vollständig als Text gelesen werden.") from exc
+        raise PdfTextError("PDF could not be fully extracted as text.") from exc
 
 
 def read_pdf_text(
@@ -200,11 +200,11 @@ def read_pdf_text(
     _validate_page_options(start_page, end_page, page_limit)
     try:
         if path.stat().st_size > MAX_PDF_BYTES:
-            raise PdfTextError(f"PDF überschreitet das Leselimit von {MAX_PDF_BYTES} Bytes.")
+            raise PdfTextError(f"PDF exceeds the read limit of {MAX_PDF_BYTES} Bytes.")
         with path.open("rb") as stream:
             data = stream.read(MAX_PDF_BYTES + 1)
         if len(data) > MAX_PDF_BYTES:
-            raise PdfTextError(f"PDF überschreitet das Leselimit von {MAX_PDF_BYTES} Bytes.")
+            raise PdfTextError(f"PDF exceeds the read limit of {MAX_PDF_BYTES} Bytes.")
         result = subprocess.run(
             [
                 sys.executable, "-m", "cli_agent.context.pdf_text",
@@ -221,14 +221,14 @@ def read_pdf_text(
         )
     except subprocess.TimeoutExpired as exc:
         raise PdfTextError(
-            f"PDF-Verarbeitung überschreitet das Zeitlimit von {PDF_TIMEOUT_SECONDS} Sekunden."
+            f"PDF processing exceeds the time limit of {PDF_TIMEOUT_SECONDS} seconds."
         ) from exc
     except OSError as exc:
-        raise PdfTextError("PDF konnte nicht gelesen oder die Extraktion nicht gestartet werden.") from exc
+        raise PdfTextError("PDF could not be read or extraction could not be started.") from exc
     if result.returncode == 2:
         raise PdfTextError(result.stdout.decode("utf-8"))
     if result.returncode != 0:
-        raise PdfTextError("PDF-Verarbeitung wurde unerwartet beendet.")
+        raise PdfTextError("PDF processing terminated unexpectedly.")
     return result.stdout.decode("utf-8")
 
 
