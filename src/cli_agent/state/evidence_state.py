@@ -477,14 +477,14 @@ class EvidenceState(EvidenceOperationsMixin):
                     raise EvidenceError(
                         f"Unknown or unfinished source: {call_id!r}. "
                         "Use an actual call ID from a completed "
-                        "Toolantwort, statt tool_calls leer zu lassen. "
-                        "Zuletzt registrierte Quellen: "
-                        + (", ".join(available) if available else "(keine)")
+                        "tool result; do not leave tool_calls empty. "
+                        "Most recently registered sources: "
+                        + (", ".join(available) if available else "(none)")
                     )
                 if call_id in source_ids:
                     raise EvidenceError("Duplicate source in evidence.")
                 if not isinstance(description, str) or not description.strip() or len(description) > 300:
-                    raise EvidenceError("Quellenbeschreibung fehlt oder ist zu lang.")
+                    raise EvidenceError("Source description is missing or too long.")
                 source_ids.add(call_id)
                 referenced.add(call_id)
                 stored_sources.append({
