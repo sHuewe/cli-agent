@@ -375,8 +375,8 @@ def test_run_admin_update_warns_when_contract_changed(tmp_path, monkeypatch, cap
 
     output = capsys.readouterr().out
     assert "Bisheriger Contract: old-contract" in output
-    assert "Tool-Contract hat sich geändert" in output
-    assert "Admin-Konfiguration wurde NICHT geändert" in output
+    assert "tool contract has changed" in output
+    assert "admin configuration was NOT modified" in output
     assert "contract_sha256 = \"new-contract\"" in output
 
 
@@ -412,7 +412,7 @@ def test_run_admin_reports_unchanged_contract(tmp_path, monkeypatch, capsys) -> 
         )
     )
 
-    assert "Tool-Contract ist unverändert" in capsys.readouterr().out
+    assert "tool contract is unchanged" in capsys.readouterr().out
 
 
 def test_run_rejects_missing_workspace_before_agent_construction(tmp_path, monkeypatch) -> None:

@@ -234,7 +234,7 @@ def test_oversize_embedded_verification_rejected_before_status_write(
         (len(raw.encode("utf-8")) + len(wrapper.encode("utf-8"))) // 2,
     )
     (tmp_path / "old-v2.json").write_text(raw, encoding="utf-8")
-    with pytest.raises(ValueError, match="checkpoint_status überschreitet"):
+    with pytest.raises(ValueError, match="checkpoint_status exceeds"):
         asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
     assert not (tmp_path / "resume.json").exists()
     assert (tmp_path / "old-v2.json").read_text(encoding="utf-8") == raw

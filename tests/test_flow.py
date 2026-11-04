@@ -58,7 +58,7 @@ prompt_file = "prompt.md"
     flow_module.main()
 
     output = capsys.readouterr().out
-    assert "Flow gültig:" in output
+    assert "Flow valid:" in output
     assert "1 Schritte" in output
 
 
@@ -977,7 +977,7 @@ path = "${item.path}"
         tmp_path / "flow.toml",
         workspace=tmp_path,
     )
-    with pytest.raises(ValueError, match="darf '..' nicht enthalten"):
+    with pytest.raises(ValueError, match="must not contain"):
         asyncio.run(
             run_flow(
                 definition,
@@ -1470,7 +1470,7 @@ output = "../escape.txt"
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="darf '..' nicht enthalten"):
+    with pytest.raises(ValueError, match="must not contain"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -3041,7 +3041,7 @@ id = "${item.id}"
     )
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="nach dem Preflight verändert"):
+    with pytest.raises(ValueError, match="Preflight changed"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
@@ -3529,7 +3529,7 @@ value = "${steps.first.output.missing}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="enthält kein Feld 'missing'"):
+    with pytest.raises(ValueError, match="has no field 'missing'"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
 
@@ -5643,7 +5643,7 @@ value = "${input.value}"
 
     definition = load_flow(tmp_path / "child.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="nicht direkt"):
+    with pytest.raises(ValueError, match="cannot run directly"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
 
@@ -5793,7 +5793,7 @@ flow = "../outside.toml"
         workspace=tmp_path,
     )
 
-    with pytest.raises(ValueError, match="darf '..' nicht enthalten"):
+    with pytest.raises(ValueError, match="must not contain"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -7183,7 +7183,7 @@ def test_subflow_preflight_reports_later_bad_iteration_input(
     assert "phase=preflight-render-subflow-inputs" in error
     assert "step=nested" in error
     assert "iteration=second" in error
-    assert "enthält kein Feld" in error
+    assert "has no field" in error
     assert calls == ["seed"]
 
 
@@ -7266,7 +7266,7 @@ def test_flow_cli_uses_explicit_config_without_loading_default(
     )
     flow_module.main()
     assert seen_paths == [tmp_path / "config.toml"]
-    assert "Flow gültig:" in capsys.readouterr().out
+    assert "Flow valid:" in capsys.readouterr().out
 
 
 def test_flow_cli_checks_effective_logging_after_step_reconfiguration(
@@ -7338,7 +7338,7 @@ def test_flow_logging_preload_invalid_step_config_reports_step(
     with pytest.raises(SystemExit):
         flow_module.main()
     error = capsys.readouterr().err
-    assert "Konfiguration von Schritt 'broken' ist ungültig" in error
+    assert "Configuration for step 'broken' is invalid" in error
     assert "phase=configure-step-logging" in error
     assert "step=broken" in error
 
@@ -7365,7 +7365,7 @@ def test_flow_logging_preload_nested_invalid_step_config_reports_child(
     with pytest.raises(SystemExit):
         flow_module.main()
     error = capsys.readouterr().err
-    assert "Konfiguration von Schritt 'child' ist ungültig" in error
+    assert "Configuration for step 'child' is invalid" in error
     assert "phase=configure-step-logging" in error
     assert "step=child" in error
     assert "child.toml" in error

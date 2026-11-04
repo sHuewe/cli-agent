@@ -761,11 +761,11 @@ def test_sensitive_named_directories_protect_descendants_recursively(
         workspace.file_info(f"{directory}/service.json")
     with pytest.raises(WorkspaceError, match="Reading secret, credential or protected agent files is not allowed through "):
         workspace.copy_file(f"{directory}/service.json", "copy.json")
-    with pytest.raises(WorkspaceError, match="Ändern|geschützten"):
+    with pytest.raises(WorkspaceError, match="Modifying|protected"):
         workspace.write_file(f"{directory}/service.json", '{"changed":true}')
-    with pytest.raises(WorkspaceError, match="Ändern|geschützten"):
+    with pytest.raises(WorkspaceError, match="Modifying|protected"):
         workspace.copy_file("source.json", f"{directory}/copy.json")
-    with pytest.raises(WorkspaceError, match="Ändern|geschützten"):
+    with pytest.raises(WorkspaceError, match="Modifying|protected"):
         workspace.move_file(f"{directory}/service.json", "moved.json")
 
     assert secret.read_text(encoding="utf-8") == '{"token":"secret"}'

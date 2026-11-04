@@ -49,7 +49,7 @@ def test_dynamic_nested_resume_rejects_mutated_or_new_file(tmp_path, monkeypatch
             return SimpleNamespace(answer='{"items":[{"id":"one"}]}', web_context_statuses=())
         raise AssertionError("must not execute child")
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
-    with pytest.raises(ValueError, match="existiert bereits" if created else "verändert"):
+    with pytest.raises(ValueError, match="already exists" if created else "changed"):
         asyncio.run(run_flow(load_flow(tmp_path / "parent.toml", workspace=tmp_path), workspace=tmp_path))
 
 def test_dynamic_nested_path_components_resume(tmp_path, monkeypatch):
@@ -122,7 +122,7 @@ def test_unrelated_dynamic_template_cannot_authorize_static_child(
         raise AssertionError("static child must not adopt another step's checkpoint")
 
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
-    with pytest.raises(ValueError, match="existiert bereits"):
+    with pytest.raises(ValueError, match="already exists"):
         asyncio.run(
             run_flow(
                 load_flow(parent, workspace=tmp_path),
