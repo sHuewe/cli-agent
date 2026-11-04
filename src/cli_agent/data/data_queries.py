@@ -134,9 +134,8 @@ class DataQueryMixin:
                         return False
                 except TypeError as exc:
                     raise DataOperationError(
-                        "Filter comparison for column "
-                        f"{column!r} cannot be performed with the existing data types for "
-                        "cannot be performed."
+                        f"Filter comparison for column {column!r} cannot be "
+                        "performed with the existing data types."
                     ) from exc
             return True
 
