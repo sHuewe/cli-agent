@@ -9,7 +9,7 @@ def doctrine(concepts=None):
 
 
 def test_doctrine_validation_rejects_duplicate_ids():
-    with pytest.raises(ValueError,match="doppelt"):
+    with pytest.raises(ValueError,match="is duplicated"):
         validate_okf_plan(doctrine([
             {"id":"same","path":"doctrines/source-123/one.md"},
             {"id":"same","path":"doctrines/source-123/two.md"}]), plan_kind="doctrine")
