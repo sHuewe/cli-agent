@@ -254,7 +254,7 @@ def test_add_web_context_is_session_command_not_history(
 
     answer = asyncio.run(agent.ask("add_web_context http://localhost:8080/docs"))
 
-    assert "Web-Kontext hinzugefügt" in answer
+    assert "Web context added" in answer
     assert len(agent._web_contexts) == 1
     assert agent.history == []
 
@@ -294,7 +294,7 @@ def test_clear_web_context_removes_all_contexts_without_history(tmp_path: Path) 
 
     answer = asyncio.run(agent.ask("clear_web_context"))
 
-    assert answer == "Web-Kontext gelöscht (2 Einträge)."
+    assert answer == "Web context cleared (2 entries)."
     assert agent._web_contexts == []
     assert agent.history == []
 
@@ -372,7 +372,7 @@ def test_tokens_command_reports_main_and_knowledge_usage(tmp_path: Path) -> None
     answer = asyncio.run(agent.ask("tokens"))
 
     assert "Main-Loop:" in answer
-    assert "Usage verfügbar: 1/1" in answer
+    assert "Usage available: 1/1" in answer
     assert "Input gesamt: 3.000 Tokens" in answer
     assert "Output gesamt: 200 Tokens" in answer
     assert "Max. gemeldeter Input eines Aufrufs: 3.000 Tokens" in answer
@@ -398,10 +398,10 @@ def test_tokens_command_marks_mixed_usage_as_incomplete(tmp_path: Path) -> None:
     )
 
     assert "Modellaufrufe: 3" in text
-    assert "Usage verfügbar: 2/3" in text
+    assert "Usage available: 2/3" in text
     assert "Input gesamt: mindestens 3.000 Tokens" in text
-    assert "Input letzter Aufruf: nicht verfügbar" in text
-    assert "Usage-Daten sind unvollständig" in text
+    assert "Last input: unavailable" in text
+    assert "usage data are incomplete" in text
 
 
 def test_tokens_command_reports_all_missing_usage(tmp_path: Path) -> None:
@@ -415,7 +415,7 @@ def test_tokens_command_reports_all_missing_usage(tmp_path: Path) -> None:
     )
 
     assert "Modellaufrufe: 2" in text
-    assert "Usage verfügbar: 0/2" in text
+    assert "Usage available: 0/2" in text
     assert "keine Usage-Daten geliefert" in text
 
 
@@ -431,7 +431,7 @@ def test_tokens_command_does_not_clear_previous_usage(tmp_path: Path) -> None:
 
     assert first == second
     assert "Main-Loop:" in first
-    assert "Knowledge-Loop: nicht ausgeführt." in first
+    assert "Knowledge-Loop: not executed." in first
 
 
 def test_add_web_context_typo_does_not_call_model(tmp_path: Path) -> None:
@@ -453,7 +453,7 @@ def test_add_web_context_missing_url_does_not_call_model(tmp_path: Path) -> None
 
     answer = asyncio.run(agent.ask("add_web_context"))
 
-    assert "Verwendung: add_web_context <URL>" in answer
+    assert "Usage: add_web_context <URL>" in answer
     assert model.calls == []
     assert agent.history == []
 

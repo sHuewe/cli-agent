@@ -18,7 +18,7 @@ def test_openai_client_uses_configured_api_key_env_for_localhost(monkeypatch) ->
 
 def test_openai_client_rejects_missing_configured_api_key_env(monkeypatch) -> None:
     monkeypatch.delenv("LLM_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="nicht gesetzt oder leer"):
+    with pytest.raises(ValueError, match="not set or is empty"):
         create_model_client(
             ModelConfig(
                 provider="openai",
@@ -36,7 +36,7 @@ def test_openai_client_uses_no_api_key_without_api_key_env() -> None:
 
 def test_remote_model_rejects_unapproved_api_key_environment(monkeypatch) -> None:
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-leak")
-    with pytest.raises(PermissionError, match="nicht administrativ freigegeben"):
+    with pytest.raises(PermissionError, match="not administratively approved"):
         create_model_client(
             ModelConfig(provider="openai", model="test", base_url="https://llm.internal/v1", api_key_env="AWS_SECRET_ACCESS_KEY"),
             network=NetworkConfig(model_allowed_hosts=("llm.internal",)),
@@ -60,7 +60,7 @@ def test_remote_model_rejects_missing_or_empty_approved_api_key_environment(monk
     else:
         monkeypatch.setenv("LLM_API_KEY", value)
 
-    with pytest.raises(ValueError, match="nicht gesetzt oder leer"):
+    with pytest.raises(ValueError, match="not set or is empty"):
         create_model_client(
             ModelConfig(
                 provider="openai",

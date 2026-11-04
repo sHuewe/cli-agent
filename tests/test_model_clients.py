@@ -313,7 +313,7 @@ def test_openai_chat_discards_response_when_usage_reaches_context_limit(monkeypa
         context_length=1500 + CONTEXT_LIMIT_MARGIN,
     )
 
-    with pytest.raises(ContextLimitReachedError, match="Modellantwort wurde verworfen"):
+    with pytest.raises(ContextLimitReachedError, match="model response was discarded"):
         asyncio.run(client.chat([], []))
 
     assert client._context_limit_reached is True
@@ -429,7 +429,7 @@ def test_ollama_chat_discards_response_at_context_limit(monkeypatch) -> None:
         context_length=2000 + CONTEXT_LIMIT_MARGIN,
     )
 
-    with pytest.raises(ContextLimitReachedError, match="Modellantwort wurde verworfen"):
+    with pytest.raises(ContextLimitReachedError, match="model response was discarded"):
         asyncio.run(client.chat([], []))
 
     assert client._context_limit_reached is True

@@ -105,5 +105,5 @@ def test_http_error_detail_is_bounded_and_terminal_safe() -> None:
     assert "\\x00" in detail
     assert "\x00" not in detail
     assert "\r" not in detail
-    assert "Zeichen gekürzt" in detail
+    assert "characters truncated" in detail
     assert len(detail) < MAX_HTTP_ERROR_DETAIL_CHARS + 100

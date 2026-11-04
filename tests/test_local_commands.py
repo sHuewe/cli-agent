@@ -18,7 +18,7 @@ def test_bare_add_web_context_is_treated_as_incomplete_command() -> None:
     assert result.is_local is True
     assert result.command == "add_web_context"
     assert result.error is not None
-    assert "Verwendung: add_web_context <URL>" in result.error
+    assert "Usage: add_web_context <URL>" in result.error
 
 
 def test_distinctive_command_typo_gets_suggestion() -> None:

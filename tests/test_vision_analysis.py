@@ -120,7 +120,7 @@ def test_vision_remote_host_requires_approved_credential(monkeypatch):
         vision_analysis, "load_admin_config",
         lambda: AdminConfig(network=NetworkConfig(model_allowed_hosts=("openrouter.ai",))),
     )
-    with pytest.raises(PermissionError, match="nicht administrativ freigegeben"):
+    with pytest.raises(PermissionError, match="not administratively approved"):
         vision_analysis.vision_config_from_environment()
 
 
