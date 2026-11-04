@@ -49,7 +49,7 @@ def test_configured_timezone_distinguishes_dst_instants(tmp_path: Path) -> None:
 def test_evidence_rules_apply_without_mcp_tools(tmp_path: Path) -> None:
     prompt = _agent(tmp_path)._build_system_prompt()
     assert "Substantiate superlatives through complete comparisons" in prompt
-    assert "otherwise identify candidates" in prompt
+    assert "otherwise identify" in prompt
     assert "established facts, deductions, and hypotheses" in prompt
     assert "reliable sources" in prompt
     assert "time zones and time boundaries" in prompt

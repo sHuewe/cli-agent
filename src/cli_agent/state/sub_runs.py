@@ -223,9 +223,9 @@ async def execute_sub_run(
             "Unbekannte Evidence-ID(s): " + ", ".join(repr(i) for i in unknown_ids)
             + ". evidence_ids akzeptiert nur IDs bereits mit agent__add_evidence "
             "gespeicherter Evidences. S1/S2/... aus Toolantworten sind source_refs, "
-            "keine Evidence-IDs. Speichere einen relevanten Befund zunächst mit "
+            "no evidence IDs. Save a relevant finding first with "
             "agent__add_evidence und dessen source_refs oder lasse evidence_ids weg; "
-            "der Sub-Run kann Daten selbst abfragen. Verfügbare Evidence-IDs: "
+            "the sub-run can query data independently. Available evidence IDs: "
             + available
         )
     run_id = "sub-" + uuid.uuid4().hex[:12]

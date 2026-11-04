@@ -153,7 +153,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
                 or "\\" in dump_file_prefix
                 or dump_file_prefix in {".", ".."}
             ):
-                raise ValueError("dump_file_prefix muss ein einfacher Dateipräfix sein.")
+                raise ValueError("dump_file_prefix must be a simple file prefix.")
         self.dump_file_prefix = dump_file_prefix
         self.network = network or NetworkConfig()
         self.mcp_policy = mcp_policy or McpPolicy()
@@ -195,7 +195,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
 
         if not isinstance(question, str) or not question.strip() or len(question) > 2000:
             return SimpleNamespace(
-                structuredContent={"status": "error", "reason": "Ungültige Knowledge-Frage."},
+                structuredContent={"status": "error", "reason": "Invalid Knowledge question."},
                 content=[], isError=True,
             )
         normalized = " ".join(question.casefold().split())
@@ -206,7 +206,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
             )
         if self._knowledge_reentry_calls >= 2:
             return SimpleNamespace(
-                structuredContent={"status": "limit_reached", "reason": "Maximal zwei zusätzliche Knowledge-Abfragen pro Anfrage."},
+                structuredContent={"status": "limit_reached", "reason": "At most two additional Knowledge queries per request."},
                 content=[], isError=False,
             )
         self._knowledge_reentry_calls += 1
@@ -220,7 +220,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         except Exception:
             logger.exception("additional_knowledge_failed")
             return SimpleNamespace(
-                structuredContent={"status": "error", "reason": "Zusätzliche Knowledge-Recherche fehlgeschlagen."},
+                structuredContent={"status": "error", "reason": "Additional Knowledge retrieval failed."},
                 content=[], isError=True,
             )
 
@@ -276,9 +276,9 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         if unsupported:
             placeholders = ", ".join(unsupported)
             raise ValueError(
-                "HTTP-MCP-Werte unterstützen nur die verwalteten Runtime-Platzhalter "
+                "HTTP MCP values support only managed runtime placeholders "
                 "{workspace_directory} und {project_directory}; "
-                f"nicht zulässig: {placeholders}."
+                f"not allowed: {placeholders}."
             )
         return (
             value.replace("{workspace_directory}", str(self.workspace_directory))

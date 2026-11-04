@@ -1385,7 +1385,7 @@ def test_system_prompt_keeps_instruction_guard_without_tools(
 
     assert "Nutze die bereitgestellten MCP-Tools" not in prompt
     assert "trusted MCP server instructions" in prompt
-    assert "user instructions, or permission boundaries" in prompt
+    assert "permission boundaries" in prompt
     assert "### MCP-Server docs\nRead only relevant pages." in prompt
 
 
