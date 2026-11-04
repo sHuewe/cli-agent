@@ -781,7 +781,7 @@ def test_derived_schema_documents_diff_and_resample_inference(tmp_path):
     assert fields["alias"]["minLength"] == 1
     assert set(fields["method"]["enum"]) == {"mean", "min", "max", "sum", "count"}
     assert "non-null numeric" in fields["method"]["description"]
-    assert "not 'function'" in server._tool_manager.get_tool("resample_data").description
+    assert 'not "function"' in server._tool_manager.get_tool("resample_data").description
 
     model = server._tool_manager.get_tool("resample_data").fn_metadata.arg_model
     valid = model.model_validate({
