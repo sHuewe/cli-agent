@@ -44,7 +44,7 @@ def test_foreach_input_rejects_missing_or_nonlist(tmp_path: Path) -> None:
     flow = _flow(tmp_path)
     with pytest.raises(ValueError, match="folders"):
         _foreach_items(flow.steps[0], outputs={}, flow_input={"structure": {}})
-    with pytest.raises(ValueError, match="keine Liste"):
+    with pytest.raises(ValueError, match="foreach source 'input\\.structure\\.folders' is not a list\\."):
         _foreach_items(
             flow.steps[0], outputs={},
             flow_input={"structure": {"folders": {}}},

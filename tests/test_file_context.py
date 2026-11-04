@@ -76,7 +76,7 @@ def test_multiple_context_files_have_aggregate_size_limit(
     (tmp_path / "one.txt").write_text("1234", encoding="utf-8")
     (tmp_path / "two.txt").write_text("5678", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="zusammen das Sicherheitslimit"):
+    with pytest.raises(ValueError, match="The selected context files together exceed the safety limit of 6 Bytes\\."):
         prepare_file_options(
             tmp_path,
             context_files=(Path("one.txt"), Path("two.txt")),
@@ -136,7 +136,7 @@ def test_context_agent_rejects_legacy_and_multi_context_arguments_together(
 ) -> None:
     context = FileContext("one.txt", "one", tmp_path / "one.txt", 3)
 
-    with pytest.raises(ValueError, match="nicht gleichzeitig"):
+    with pytest.raises(ValueError, match="simultaneously"):
         ContextFileCliAgent(
             tmp_path,
             object(),
@@ -178,7 +178,7 @@ def test_context_file_rejects_sensitive_workspace_file(tmp_path: Path) -> None:
     context = tmp_path / ".env"
     context.write_text("API_KEY=secret", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Secret-/Credential"):
+    with pytest.raises(ValueError, match="credential or"):
         prepare_context_file(tmp_path, Path(".env"))
 
 
@@ -217,7 +217,7 @@ def test_context_file_limit_is_generous_but_bounded(
     context = tmp_path / "repository.txt"
     context.write_bytes(b"x" * 17)
 
-    with pytest.raises(ValueError, match="Sicherheitslimit"):
+    with pytest.raises(ValueError, match="safety limit"):
         prepare_context_file(tmp_path, Path("repository.txt"))
 
 
@@ -252,7 +252,7 @@ def test_prompt_file_uses_same_bounded_reader(
     prompt = tmp_path / "prompt.md"
     prompt.write_bytes(b"x" * 9)
 
-    with pytest.raises(ValueError, match="Sicherheitslimit"):
+    with pytest.raises(ValueError, match="safety limit"):
         prepare_prompt_file(tmp_path, Path("prompt.md"))
 
 
@@ -270,7 +270,7 @@ def test_prompt_file_rejects_sensitive_file(tmp_path: Path) -> None:
     prompt = tmp_path / ".env"
     prompt.write_text("secret", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Secret-/Credential"):
+    with pytest.raises(ValueError, match="credential or"):
         prepare_prompt_file(tmp_path, Path(".env"))
 
 
@@ -316,7 +316,7 @@ def test_output_rejects_sensitive_workspace_path(
     target = tmp_path / path
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    with pytest.raises(ValueError, match="Secret-/Credential- oder interner"):
+    with pytest.raises(ValueError, match="Output-Datei is protected as a secret/credential or internal workspace path"):
         prepare_output_target(tmp_path, path, overwrite=False)
 
 
@@ -326,7 +326,7 @@ def test_output_rejects_sensitive_existing_file_even_with_overwrite(
     output = tmp_path / ".env"
     output.write_text("OLD=value", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Secret-/Credential- oder interner"):
+    with pytest.raises(ValueError, match="Output-Datei is protected as a secret/credential or internal workspace path"):
         prepare_output_target(tmp_path, Path(".env"), overwrite=True)
 
     assert output.read_text(encoding="utf-8") == "OLD=value"
@@ -359,7 +359,7 @@ def test_context_and_output_must_not_be_same_file(tmp_path: Path) -> None:
     path = tmp_path / "repository.txt"
     path.write_text("repo", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="dieselbe Datei"):
+    with pytest.raises(ValueError, match="must not refer to the same file\\."):
         prepare_file_options(
             tmp_path,
             context_files=(Path("repository.txt"),),
@@ -373,7 +373,7 @@ def test_prompt_and_output_must_not_be_same_file(tmp_path: Path) -> None:
     path = tmp_path / "review.md"
     path.write_text("review prompt", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="dieselbe Datei"):
+    with pytest.raises(ValueError, match="must not refer to the same file\\."):
         prepare_file_options(
             tmp_path,
             context_file=None,
@@ -387,7 +387,7 @@ def test_context_and_prompt_must_not_be_same_file(tmp_path: Path) -> None:
     path = tmp_path / "input.txt"
     path.write_text("input", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="dieselbe Datei"):
+    with pytest.raises(ValueError, match="must not refer to the same file\\."):
         prepare_file_options(
             tmp_path,
             context_files=(Path("input.txt"),),
@@ -444,7 +444,7 @@ def test_aggregate_context_limit_stops_before_loading_later_files(
         recording_prepare,
     )
 
-    with pytest.raises(ValueError, match="zusammen das Sicherheitslimit"):
+    with pytest.raises(ValueError, match="The selected context files together exceed the safety limit of 6 Bytes\\."):
         prepare_file_options(
             tmp_path,
             context_files=(
@@ -490,11 +490,11 @@ def test_direct_file_options_reject_sensitive_workspace_root_name(
     (workspace / "context.txt").write_text("context", encoding="utf-8")
     (workspace / "prompt.md").write_text("prompt", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Secret-/Credential"):
+    with pytest.raises(ValueError, match="credential or"):
         prepare_context_file(workspace, Path("context.txt"))
-    with pytest.raises(ValueError, match="Secret-/Credential"):
+    with pytest.raises(ValueError, match="credential or"):
         prepare_prompt_file(workspace, Path("prompt.md"))
-    with pytest.raises(ValueError, match="Secret-/Credential"):
+    with pytest.raises(ValueError, match="credential or"):
         prepare_output_target(workspace, Path("output.md"), overwrite=False)
 
 
