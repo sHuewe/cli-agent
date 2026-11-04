@@ -783,3 +783,35 @@ def test_derived_schema_documents_diff_and_resample_inference(tmp_path):
     assert "non-null numeric" in fields["method"]["description"]
     assert "not 'function'" in server._tool_manager.get_tool("resample_data").description
 
+    model = server._tool_manager.get_tool("resample_data").fn_metadata.arg_model
+    valid = model.model_validate({
+        "path": "measurements.json", "records_path": "/points",
+        "time_column": "time", "frequency": "5min",
+        "aggregations": [{"column": "value", "method": "mean", "alias": "average"}],
+    })
+    assert valid.aggregations[0].method == "mean"
+    for bad_frequency in ("0min", "1D", "5minutes", "1 min", "10000s"):
+        with pytest.raises(ValueError):
+            model.model_validate({
+                "path": "measurements.json", "frequency": bad_frequency,
+                "aggregations": [{"column": "value", "method": "mean", "alias": "average"}],
+            })
+    for bad_aggregation in (
+        {"column": "value", "function": "mean", "alias": "average"},
+        {"column": "value", "method": "mean"},
+        {"column": "value", "method": "average", "alias": "average"},
+        {"column": "value", "method": "mean", "alias": ""},
+    ):
+        with pytest.raises(ValueError):
+            model.model_validate({
+                "path": "measurements.json", "frequency": "5min",
+                "aggregations": [bad_aggregation],
+            })
+    for size in (0, 21):
+        with pytest.raises(ValueError):
+            model.model_validate({
+                "path": "measurements.json", "frequency": "5min",
+                "aggregations": [{"column": "value", "method": "mean", "alias": "average"}] * size,
+            })
+
+
