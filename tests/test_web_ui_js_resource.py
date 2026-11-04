@@ -142,7 +142,7 @@ def test_connection_status_survives_language_changes():
     assert 'setSessionStatus("session.bindingLost")' in API_APP_JS
     assert 'setSessionStatus("session.openFailed")' in API_APP_JS
     assert 'setSessionStatus("session.meta")' in API_APP_JS
-    assert 'window.addEventListener("cli-agent-language-change", () => {\n    renderSessionMeta();' in API_APP_JS
+    assert 'window.addEventListener("cli-agent-language-change", renderSessionMeta);' in API_APP_JS
 
     node = shutil.which("node")
     if not node:
