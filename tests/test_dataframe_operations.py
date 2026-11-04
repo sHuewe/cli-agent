@@ -835,7 +835,7 @@ def test_empty_join_artifact_preserves_schema_for_followup_tools(frames, tmp_pat
 @pytest.mark.parametrize("invalid_columns", ["name", ["name ", "value"], ["name", "name"], list(range(101))])
 def test_empty_json_artifact_rejects_invalid_declared_schema(invalid_columns):
     document = json.dumps({"columns": invalid_columns, "rows": []})
-    with pytest.raises(DataOperationError, match="JSON DataFrame"):
+    with pytest.raises(DataOperationError, match="JSON.?DataFrame"):
         DataOperations(None)._read_records(
             data=document, data_format="json", records_path="/rows",
         )

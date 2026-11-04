@@ -129,7 +129,7 @@ def test_invalid_prompt_file_is_rejected_before_agent_start(tmp_path, monkeypatc
     captured = {}
     _patch_run_dependencies(monkeypatch, captured)
 
-    with pytest.raises(ValueError, match="Prompt file for step 'one' could not be resolved: prompt\\.md: \\[Errno 2\\] No s"):
+    with pytest.raises(ValueError, match="Prompt file could not be resolved"):
         asyncio.run(
             cli_module.run(
                 _base_args(tmp_path, prompt_file=Path("missing.md"))

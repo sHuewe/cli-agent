@@ -390,7 +390,7 @@ def assemble_doctrine_concept_plan(
             concept = _obj(detail, "detail_results[].concepts[]")
             identity = concept.get("id")
             if identity not in expected or identity not in allowed_group_ids or identity in received:
-                raise ValueError("Unbekanntes oder mehrfach geplantes Konzept.")
+                raise ValueError("Unknown or multiply planned concept.")
             original = expected[identity]
             for field in ("path", "title", "description", "type", "tags"):
                 if field in concept and concept[field] != original.get(field):

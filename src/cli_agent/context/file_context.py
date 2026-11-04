@@ -293,10 +293,10 @@ def prepare_prompt_file(workspace: Path, path: Path) -> PromptFile:
     relative, resolved, content, _ = _prepare_llm_input_file(
         workspace,
         path,
-        purpose="Prompt-Datei",
+        purpose="Prompt file",
     )
     if not content.strip():
-        raise ValueError("Prompt-Datei darf nicht leer sein.")
+        raise ValueError("Prompt file must not be empty.")
     return PromptFile(
         relative_path=relative,
         content=content,

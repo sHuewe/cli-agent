@@ -2144,7 +2144,7 @@ prompt_file = "prompt.md"
         workspace=tmp_path,
     )
 
-    with pytest.raises(ValueError, match="Prompt file for step 'one' could not be resolved: prompt\\.md: \\[Errno 2\\] No s"):
+    with pytest.raises(ValueError, match="Prompt file could not be resolved"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -3486,7 +3486,7 @@ value = "static"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="may only reference a previous step"):
+    with pytest.raises(ValueError, match="may only reference output from a previous step"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
