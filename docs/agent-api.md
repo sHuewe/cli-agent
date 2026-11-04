@@ -1,90 +1,83 @@
-# Lokale Agent-API (experimentell)
+# Local Agent API (experimental)
 
-`cli-agent-api` verwaltet mehrere unabhängige lokale `CliAgent`-Sessions.
-Der CLI-Modus `cli-agent` bleibt unverändert. Jede API-Session verwendet
-dieselbe *serverseitig beim Start* definierte Konfiguration (Modell, MCP-Server,
-Workspace, Capabilities, Admin-Policy), führt aber eine eigene Conversation History,
-MCP-Lebensdauer und Tool-Freigaben.
+`cli-agent-api` manages independent local `CliAgent` sessions. The CLI mode
+remains unchanged. Each API session shares the configuration fixed at server
+startup (model, MCP servers, workspace, capabilities and admin policy), but has
+its own conversation history, MCP lifecycle and tool approvals.
 
-## Start
+## Startup
 
 ```powershell
 pipx install "cli-agent[web]"
 cli-agent-api --config config.toml --with-os-read --port 8765
 ```
 
-Für ausdrücklich vertrauenswürdige Automatisierung können einzelne Tools
-prozessweit vorab freigegeben werden, beispielsweise:
+For explicitly trusted automation, selected tools may be preapproved
+process-wide:
 
 ```powershell
 cli-agent-api --with-os-write --approve-tool os__write_file --approve-tool external__search
 ```
 
-`--approve-tool` kann mehrfach angegeben werden und prüft den **exakten
-exponierten Toolnamen** (keine Wildcards). Anders als eine Freigabe innerhalb
-einer einzelnen Session gilt sie für **alle API-Sessions bis zum Server-Neustart**
-und alle Argumente des betreffenden Tools. Andere zustimmungspflichtige Tools
-verwenden unverändert die API-Freigabe über den Client. Die Option aktiviert
-weder OS-Zugriff noch MCP-Server und umgeht keine Admin-, Netzwerk-, Workspace-
-oder Sensitive-Path-Beschränkung.
+`--approve-tool` may occur repeatedly; each entry matches an **exact exposed
+tool name**, never wildcards. Unlike a session-scoped approval, it applies to
+**all API sessions and arguments for that tool until server restart**. Other
+tools continue to require API client approval. It does not enable OS access or
+MCP servers, nor bypass admin, network, workspace or sensitive-path policy.
 
-Der Server bindet **hart an 127.0.0.1**. Es gibt keine `--host`-Option.
-Es wird beim Start ein zufälliger Bearer-Token auf stdout ausgegeben.
-Er muss von Clients in `Authorization: Bearer <token>` gesendet werden.
-API und Token sind nicht als Remote-Service ausgelegt. Den Token vertraulich
-behandeln, insbesondere nicht in Skripten oder Logs veröffentlichen.
+The server binds **only to 127.0.0.1** (no `--host` option). Startup prints a
+random bearer token to stdout, required in the
+`Authorization: Bearer <token>` header. Neither API nor token is intended as
+a remote service; protect the token from disclosure in scripts or logs.
 
-**Sicherheitsgrenze:** Die Loopback-Bindung ist keine Garantie gegen lokale
-Proxys, Tunnel, Prozesse mit denselben OS-Rechten oder ein separat aus dem Netz
-erreichbares Web-UI, das API-Requests vermittelt. Der API-Server lehnt
-Browser-Origin-Header ab, führt nur den konfigurierten Agenten aus und akzeptiert
-keine vom Client angegebenen Workspaces, MCP-Server oder Rechte. Falls Open WebUI
-als Container mit `network_mode: host` betrieben wird, muss **Open WebUI selbst**
-separat auf localhost beschränkt werden. Host-Networking ist keine
-Sicherheitsmaßnahme.
+**Security boundary:** Loopback binding does not protect against local
+proxies/tunnels, processes with equivalent OS permissions, or separate
+network-exposed frontends proxying requests. The API rejects browser
+Origin headers, permits only the configured agent, and rejects client-supplied
+workspaces, MCP servers or permissions. If Open WebUI uses
+`network_mode: host`, **Open WebUI itself** must be restricted to localhost.
+Host networking does not provide a security boundary.
 
-## Endpunkte (v1)
+## Endpoints (v1)
 
-| Methode | Pfad | Bedeutung |
+| Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/sessions` | Session erzeugen |
-| DELETE | `/sessions/{session_id}` | Session und MCP-Verbindungen schließen |
-| POST | `/sessions/{session_id}/runs` | `{"prompt":"..."}` einreichen; Run-ID zurückgeben |
-| GET | `/sessions/{session_id}/runs/{run_id}` | Run-Status/finale Antwort |
-| GET | `/sessions/{session_id}/runs/{run_id}/events` | SSE-Events (optional `Last-Event-ID`) |
-| POST | `/sessions/{session_id}/runs/{run_id}/approvals/{approval_id}` | `{"decision":"yes"\|"no"\|"session"}` |
-| GET | `/sessions/{session_id}/context` | aktive Tools und Kontexte |
-| PATCH | `/sessions/{session_id}/context` | vorhandene Tools/Kontexte deaktivieren oder wieder aktivieren |
-| GET | `/health` | authentifizierter Health-Check |
+| POST | `/sessions` | Create session |
+| DELETE | `/sessions/{session_id}` | Close session and MCP connections |
+| POST | `/sessions/{session_id}/runs` | Submit `{"prompt":"..."}`; receive run ID |
+| GET | `/sessions/{session_id}/runs/{run_id}` | Run status and final answer |
+| GET | `/sessions/{session_id}/runs/{run_id}/events` | SSE events, optional `Last-Event-ID` |
+| POST | `/sessions/{session_id}/runs/{run_id}/approvals/{approval_id}` | `{"decision":"yes"|"no"|"session"}` |
+| GET | `/sessions/{session_id}/context` | Active tools and contexts |
+| PATCH | `/sessions/{session_id}/context` | Enable or disable existing tools/contexts |
+| GET | `/health` | Authenticated health check |
 
-Alle Endpunkte erfordern denselben Bearer-Token und den Host
-`127.0.0.1`. Maximal acht Sessions gleichzeitig; pro Session ein aktiver Run.
-Der Server arbeitet mit vollständigen LLM-Antworten **ohne Token-Streaming**.
+All endpoints require the same bearer token and the `127.0.0.1` host.
+Up to eight sessions are allowed simultaneously, with one active run per
+session. Model responses are processed whole; **no token streaming**.
 
 ### SSE
 
-V1 verwendet die AG-UI-Ereignisnamen `RUN_STARTED`, `RUN_FINISHED`,
+Version 1 uses AG-UI event names `RUN_STARTED`, `RUN_FINISHED`,
 `RUN_ERROR`, `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`,
-`TEXT_MESSAGE_END`, `TOOL_CALL_START`, `TOOL_CALL_END` und
-`CUSTOM` für Freigaben. Tool-Argumente und Tool-Ergebnisse werden nicht
-generell in den Event-Stream übertragen, um keine internen Daten unnötig
-preiszugeben. Nicht vorab freigegebene Tool-Aufrufe verwenden weiterhin den
-`WebUiApprovalBroker`: Benutzerfreigaben sind an Werkzeug und Lauf gebunden
-und werden ohne aktiven Event-Subscriber verweigert.
+`TEXT_MESSAGE_END`, `TOOL_CALL_START`, `TOOL_CALL_END` and
+`CUSTOM` for approvals. Tool arguments and results are not generally
+streamed, to minimize internal data disclosure. Unapproved tools use
+`WebUiApprovalBroker`; approval is linked to the tool and run and is
+denied without an active event subscriber.
 
-**AG-UI-Kompatibilitätsgrenze:** Das ist ein erstes AG-UI-inspiriertes Eventprofil,
-**kein** vollständiger AG-UI-`RunAgentInput`-Endpunkt. Insbesondere fehlen
-standardisiertes Interrupt/Resume, kanonische Tool-Argument-Events sowie
-allgemeine Frontend-State-Synchronisierung. Die Open-WebUI-Pipe ist ebenfalls
-noch nicht enthalten. Das aktuelle Profil dient dem Aufbau der lokalen
-Agenten-API und der Absicherung ihrer Session-Lifecycle/Approval-Grenzen.
+**Compatibility:** This is an initial AG-UI-inspired event profile, not a
+full AG-UI `RunAgentInput` endpoint. Standardized interrupt/resume,
+canonical tool-argument events and generalized frontend state sync are
+not supported. An Open WebUI pipe is not included. The purpose is to
+establish local API and session lifecycle/approval boundaries.
 
-## Nicht-Ziele der ersten Version
+## Initial non-goals
 
-- Keine öffentliche Netzwerkbindung, kein Remote-Multiuser-Betrieb.
-- Keine Token-Streaming- oder OpenAI-Completions-API.
-- Keine dauerhafte Session-Persistenz oder Wiederaufnahme nach Neustart.
-- Keine API-Änderung an Workspace, Admin-Policy, MCP-Server-Konfiguration.
-- Kein direktes Starten von Flows oder beliebigen Subprozessen.
+- No public binding or remote multiuser deployment.
+- No token streaming or OpenAI Completions API.
+- No durable sessions or restart recovery.
+- No API changes to workspace, admin policy or MCP server configuration.
+- No direct flows or arbitrary subprocess launches.
 
-Die API-Tests liegen in `tests/test_agent_api.py`.
+Tests: `tests/test_agent_api.py`.
