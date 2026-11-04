@@ -45,6 +45,9 @@
     renderSessionMeta();
   }
   renderSessionMeta();
+  // Register before validating the browser token: even an invalid start link
+  // must remain accurately translated when the user changes language.
+  window.addEventListener("cli-agent-language-change", renderSessionMeta);
   function renderSelectedWorkingMessages() {
     if (!currentContextPayload) return;
     const selected = contextRunSelect.value;
@@ -1178,7 +1181,6 @@
     }
   }
   window.addEventListener("cli-agent-language-change", () => {
-    renderSessionMeta();
     if (!pendingCommand) {
       prompt.placeholder = t("composer.placeholder");
     } else {
