@@ -128,7 +128,7 @@ def test_unknown_source_rejected_atomically():
     state.register_result("call-1", tool_name="sensor")
     state.update({"evidences": [_entry()]})
     before = state.snapshot()
-    with pytest.raises(EvidenceError, match="Unbekannte"):
+    with pytest.raises(EvidenceError, match="Unknown"):
         state.update({"evidences": [_entry("missing", "e1")],
                       "discard_tool_call_ids": ["call-1"]})
     assert state.snapshot() == before
@@ -516,7 +516,7 @@ def test_evidence_links_to_plan_and_status_can_progress():
 
 def test_invalid_plan_or_unlinked_evidence_rejected_atomically():
     state = EvidenceState()
-    with pytest.raises(EvidenceError, match="duplicate"):
+    with pytest.raises(EvidenceError, match="Duplicate"):
         invalid = _plan()
         invalid["steps"][1]["id"] = "identify"
         state.update({"plan": invalid})

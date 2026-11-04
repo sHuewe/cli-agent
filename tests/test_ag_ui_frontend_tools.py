@@ -1100,7 +1100,7 @@ async def test_failed_frontend_result_cannot_be_used_as_evidence():
             assert "front-fail" not in self._evidence_state.tool_results
             assert "FEHLER: denied" in kwargs["messages"][-1]["content"]
             assert "_meta" not in messages_for_model(kwargs["messages"])[-1]
-            with pytest.raises(EvidenceError, match="Unbekannte"):
+            with pytest.raises(EvidenceError, match="Unknown"):
                 self._evidence_state.update({
                     "evidences": [{
                         "id": "invalid", "type": "observation", "statement": "Succeeded",
