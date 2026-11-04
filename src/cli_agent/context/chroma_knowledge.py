@@ -20,6 +20,24 @@ MAX_CHROMA_CHUNK_CHARS = 16_000
 MAX_CHROMA_RESULT_CHARS = 90_000
 
 
+def chroma_search_event_summary(
+    result: dict[str, Any], *, collection: str, initial: bool,
+) -> dict[str, Any]:
+    """Summarize a search for UI telemetry without exposing its source data.
+
+    Never include query text, record IDs, chunk text, metadata or file paths.
+    The API boundary will separately validate these fields before emission.
+    """
+    entries = result.get("entries")
+    if not isinstance(entries, list):
+        raise ValueError("Chroma-Suchergebnis enthält keine gültige Trefferliste.")
+    return {
+        "matches": len(entries),
+        "collection": collection,
+        "initial": initial,
+    }
+
+
 @dataclass
 class ChromaKnowledgeSession:
     config: VectorKnowledgeConfig
