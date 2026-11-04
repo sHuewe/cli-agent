@@ -24,9 +24,9 @@ class OkfRepository(RepositoryMetadataMixin):
         max_index_entries: int = 200,
     ) -> OkfRepository:
         if max_read_bytes < 1:
-            raise OkfRepositoryError("max_read_bytes muss größer als 0 sein.")
+            raise OkfRepositoryError("max_read_bytes must be greater than zero.")
         if max_index_entries < 1:
-            raise OkfRepositoryError("max_index_entries muss größer als 0 sein.")
+            raise OkfRepositoryError("max_index_entries must be greater than zero.")
         try:
             workspace = WorkspaceRoot.from_directory(directory)
         except WorkspacePathError as exc:
@@ -41,13 +41,13 @@ class OkfRepository(RepositoryMetadataMixin):
             root_index = workspace.resolve("index.md")
         except WorkspacePathError as exc:
             raise OkfRepositoryError(
-                "Der konfigurierte Pfad ist kein gültiges OKF-Repository: "
-                "Im Repository-Root muss eine index.md vorhanden sein."
+                "The configured path is not a valid OKF repository: "
+                "An index.md must exist at the repository root."
             ) from exc
         if not root_index.is_file():
             raise OkfRepositoryError(
-                "Der konfigurierte Pfad ist kein gültiges OKF-Repository: "
-                "Im Repository-Root muss eine index.md vorhanden sein."
+                "The configured path is not a valid OKF repository: "
+                "An index.md must exist at the repository root."
             )
         # Validate only the explicit root marker. Do not walk the configured
         # directory tree merely to decide whether this is an OKF repository.
@@ -74,10 +74,10 @@ class OkfRepository(RepositoryMetadataMixin):
             links, links_truncated = self._safe_internal_links(content, index_path)
             if links_truncated:
                 warnings.append(
-                    "Index enthält mehr als "
-                    f"{self.max_index_entries} interne Links. "
-                    "Der freie Index-Inhalt wird ausgeblendet, damit nur "
-                    "tatsächlich angebotene Folgepfade sichtbar sind."
+                    "Index contains more than "
+                    f"{self.max_index_entries} internal links. "
+                    "The full index content is hidden so that only "
+                    "actually offered follow-up paths remain visible."
                 )
             return {
                 "directory": relative_directory,
@@ -100,7 +100,7 @@ class OkfRepository(RepositoryMetadataMixin):
                 safe_entry = self.workspace.resolve(relative_path)
             except WorkspacePathError:
                 warnings.append(
-                    "Unsicherer oder nach außen führender Link wurde ausgelassen."
+                    "Unsafe or escaping link was omitted."
                 )
                 continue
 
@@ -115,8 +115,8 @@ class OkfRepository(RepositoryMetadataMixin):
 
             if inspected_candidates >= self.max_index_entries:
                 warnings.append(
-                    "Index-Prüfung wurde nach "
-                    f"{self.max_index_entries} Kandidaten abgeschnitten."
+                    "Index inspection was truncated after "
+                    f"{self.max_index_entries} candidates."
                 )
                 break
             inspected_candidates += 1
@@ -162,10 +162,10 @@ class OkfRepository(RepositoryMetadataMixin):
         """Read one validated OKF concept, index, or log document."""
         file_path = self._resolve(path)
         if not file_path.is_file():
-            raise OkfRepositoryError(f"Pfad ist keine Datei: {path!r}")
+            raise OkfRepositoryError(f"Path is not a file: {path!r}")
         if file_path.suffix.casefold() != ".md":
             raise OkfRepositoryError(
-                "knowledge_read liest ausschließlich OKF-Markdown-Dateien (.md)."
+                "knowledge_read reads only OKF Markdown files (.md)."
             )
 
         relative_path = self.workspace.relative(file_path)
@@ -179,9 +179,9 @@ class OkfRepository(RepositoryMetadataMixin):
                 metadata = self._parse_frontmatter(content)
             except OkfRepositoryError as exc:
                 raise OkfRepositoryError(
-                    "knowledge_read verweigert nicht konformes Markdown; "
-                    "OKF-Concepts benötigen gültiges YAML-Frontmatter mit "
-                    "nicht-leerem Feld 'type'."
+                    "knowledge_read refuses nonconforming Markdown; "
+                    "OKF concepts require valid YAML frontmatter with "
+                    "a nonempty 'type' field."
                 ) from exc
             kind = "concept"
             summary = self._concept_summary(relative_path, metadata)
@@ -192,8 +192,8 @@ class OkfRepository(RepositoryMetadataMixin):
             "kind": kind,
             "summary": self._json_safe(summary),
             "warning": (
-                "Interne Links wurden auf "
-                f"{self.max_index_entries} Einträge begrenzt."
+                "Internal links were limited to "
+                f"{self.max_index_entries} entries."
                 if links_truncated
                 else None
             ),
@@ -283,5 +283,5 @@ class OkfRepository(RepositoryMetadataMixin):
             return data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise OkfRepositoryError(
-                f"OKF-Datei ist kein gültiger UTF-8-Text: {relative}"
+                f"OKF file is not valid UTF-8 text: {relative}"
             ) from exc
