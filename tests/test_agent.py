@@ -1616,7 +1616,7 @@ def test_windows_dump_filename_reports_workspace_path_when_impossible(
 ) -> None:
     agent = CliAgent(tmp_path, RecordingModel(), (), dump_file_prefix="x" * 50)
     monkeypatch.setattr(agent, "_dump_filename_budget", lambda: 10)
-    with pytest.raises(RuntimeError, match="Workspace-Pfad"):
+    with pytest.raises(RuntimeError, match="LLM context dump filename does not fit the workspace path\\. The storage dire"):
         agent._dump_filename("main_working_messages.json")
 
 

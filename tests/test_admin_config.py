@@ -307,7 +307,7 @@ def test_user_config_rejects_stdio_launch_configuration(tmp_path: Path) -> None:
 name = "external"
 command = "external-mcp"
 '''.strip(), encoding="utf-8")
-    with pytest.raises(ValueError, match="Admin-Policy|nur.*Namen|nur.*referenziert"):
+    with pytest.raises(ValueError, match="The stdio MCP server 'external' may be referenced in user configuration onl"):
         load_config(path)
 
 
@@ -389,7 +389,7 @@ required_workspace_access = "read"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="nur für stdio"):
+    with pytest.raises(ValueError, match="\\[\\[mcp\\.trusted_servers\\]\\] #1\\.required_workspace_access is currently supported"):
         load_admin_config(path)
 
 

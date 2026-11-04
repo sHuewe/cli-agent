@@ -352,7 +352,7 @@ def test_tool_call_times_out(
     routes = {"server__read": (SlowSession(), "read", config)}
     call = _tool_call("server__read", {})
 
-    with pytest.raises(RuntimeError, match="MCP-Tool.*Timeout"):
+    with pytest.raises(RuntimeError, match="MCP-Tool 'server__read' exceeded the timeout of 0\\.01 seconds\\."):
         _run(agent=agent, tool_calls=[call], routes=routes)
 
 

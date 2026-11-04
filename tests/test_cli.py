@@ -648,5 +648,5 @@ def test_run_rejects_exclude_path_without_os_access(
         debug=False,
     )
 
-    with pytest.raises(ValueError, match="--exclude-path benötigt"):
+    with pytest.raises(ValueError, match="--exclude-path requires --with-os-read or --with-os-write\\."):
         asyncio.run(cli_module.run(args))

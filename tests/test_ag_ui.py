@@ -478,7 +478,7 @@ async def test_agui_session_run_buffers_are_bounded_and_lifecycle_is_isolated():
         assert run.listeners == 1
         session.unsubscribe(run)
         assert run.listeners == 0
-        with pytest.raises(RuntimeError, match="untergelaufen"):
+        with pytest.raises(RuntimeError, match="SSE listener counter underflow\\."):
             session.unsubscribe(run)
         run.status = "failed"
         run.error = "simulated"
