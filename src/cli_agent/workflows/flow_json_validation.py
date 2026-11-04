@@ -17,28 +17,28 @@ _WINDOWS_RESERVED = {
 
 def _obj(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError(f"{name} muss ein JSON-Objekt sein.")
+        raise ValueError(f"{name} must be a JSON object.")
     return value
 
 
 def _array(value: Any, name: str) -> list[Any]:
     if not isinstance(value, list):
-        raise ValueError(f"{name} muss eine JSON-Liste sein.")
+        raise ValueError(f"{name} must be a JSON list.")
     return value
 
 
 def _slug(value: Any, name: str) -> str:
     if not isinstance(value, str) or not _SLUG.fullmatch(value):
-        raise ValueError(f"{name} muss ein lowercase kebab-case Slug sein.")
+        raise ValueError(f"{name} must be a lowercase kebab-case slug.")
     if value.casefold() in _WINDOWS_RESERVED:
-        raise ValueError(f"{name} ist ein reservierter Windows-Dateiname.")
+        raise ValueError(f"{name} is a reserved Windows filename.")
     return value
 
 
 def _unique(seen: set[str], value: str, name: str) -> None:
     key = value.casefold()
     if key in seen:
-        raise ValueError(f"{name} ist doppelt: {value!r}.")
+        raise ValueError(f"{name} is duplicated: {value!r}.")
     seen.add(key)
 
 
@@ -61,9 +61,9 @@ def _canonical_source_path(value: Any) -> str:
         or segment.split(".", 1)[0].casefold() in _WINDOWS_RESERVED
         for segment in segments
     ):
-        raise ValueError("source_path muss ein kanonischer Workspace-Pfad sein.")
+        raise ValueError("source_path must be a canonical workspace path.")
     if not segments[-1].casefold().endswith((".md", ".markdown")):
-        raise ValueError("source_path muss auf eine Markdown-Datei verweisen.")
+        raise ValueError("source_path must reference a Markdown file.")
     return value
 
 
@@ -108,7 +108,7 @@ def _validate_doctrine(plan: dict[str, Any]) -> None:
         filename = parts[-1][:-3]
         _slug(filename, "concept filename")
         if filename in {"index", "log"}:
-            raise ValueError("index.md und log.md sind keine Concept-Dateien.")
+            raise ValueError("index.md and log.md are not concept files.")
         parent = "/".join(parts[:-1])
         if (parent != base if not subfolders else parent not in child_paths):
             raise ValueError("Concept is outside the planned doctrine folder.")
@@ -118,7 +118,7 @@ def _validate_doctrine(plan: dict[str, Any]) -> None:
 def _validate_themes(plan: dict[str, Any]) -> None:
     themes = _array(plan.get("themes"), "themes")
     if len(themes) > 20:
-        raise ValueError("Zu viele globale Themen (maximal 20).")
+        raise ValueError("Too many global themes (maximum 20).")
     ids: set[str] = set()
     for raw in themes:
         theme = _obj(raw, "themes[]")
@@ -138,7 +138,7 @@ def _validate_themes(plan: dict[str, Any]) -> None:
         doctrine_ids: set[str] = set()
         for member in members:
             if not isinstance(member, str) or "\\" in member:
-                raise ValueError("Unsicherer Theme-Concept-Link.")
+                raise ValueError("Unsafe theme-to-concept link.")
             parts = member.split("/")
             if len(parts) not in (3, 4) or parts[0] != "doctrines":
                 raise ValueError("Theme link escapes the doctrine concepts.")
@@ -146,10 +146,10 @@ def _validate_themes(plan: dict[str, Any]) -> None:
             for segment in parts[2:-1]:
                 _slug(segment, "Theme concept folder")
             if not parts[-1].endswith(".md"):
-                raise ValueError("Theme-Link ohne .md-Endung.")
+                raise ValueError("Theme link is missing the .md extension.")
             _slug(parts[-1][:-3], "Theme concept name")
             if parts[-1] in {"index.md", "log.md"}:
-                raise ValueError("Theme darf keine Navigation als Concept verlinken.")
+                raise ValueError("A theme must not link navigation files as concepts.")
             _unique(linked, member, "themes[].concept_paths")
             doctrine_ids.add(parts[1])
         if len(doctrine_ids) < 2:
@@ -163,7 +163,7 @@ def validate_okf_plan(
     """Return the original plan after bounded, structural path validation."""
     plan = _obj(value, "OKF-Plan")
     if plan.get("status") != "ok":
-        raise ValueError("OKF-Plan ist nicht erfolgreich; kein Schreibschritt erlaubt.")
+        raise ValueError("OKF plan was not successful; writing is not permitted.")
     if plan_kind == "doctrine":
         _validate_doctrine(plan)
         source_path = _canonical_source_path(plan.get("source_path"))
@@ -216,7 +216,7 @@ def build_okf_manifest(
     folder = _obj(validated["folder"], "folder")
     folder_path = folder["path"]
     if outcome.get("status") not in {"ok", "needs_attention"}:
-        raise ValueError("navigation.status muss ok|needs_attention sein.")
+        raise ValueError("navigation.status must be ok or needs_attention.")
     if outcome.get("module_path") != folder_path:
         raise ValueError("navigation.module_path does not match the plan.")
 
@@ -224,7 +224,7 @@ def build_okf_manifest(
     if not isinstance(warnings, list) or not all(
         isinstance(warning, str) for warning in warnings
     ):
-        raise ValueError("navigation.warnings muss eine String-Liste sein.")
+        raise ValueError("navigation.warnings must be a list of strings.")
     complete = outcome["status"] == "ok"
     if complete:
         indexes = _array(outcome.get("index_paths"), "navigation.index_paths")
@@ -233,7 +233,7 @@ def build_okf_manifest(
         }
         if len(indexes) != len(required) or set(indexes) != required:
             raise ValueError(
-                "navigation.index_paths deckt nicht genau die geplanten Indizes ab."
+                "navigation.index_paths does not match the planned indexes exactly."
             )
     source_path = _canonical_source_path(validated.get("source_path"))
 
@@ -261,9 +261,9 @@ def build_okf_manifest(
     title = folder.get("title")
     description = folder.get("description")
     if not isinstance(title, str) or not title.strip():
-        raise ValueError("folder.title fehlt im Doctrine-Plan.")
+        raise ValueError("folder.title is missing from the doctrine plan.")
     if not isinstance(description, str) or not description.strip():
-        raise ValueError("folder.description fehlt im Doctrine-Plan.")
+        raise ValueError("folder.description is missing from the doctrine plan.")
 
     return {
         "status": "ok" if complete else "needs_attention",
@@ -283,9 +283,9 @@ def prepare_doctrine_concept_batches(
     from cli_agent.workflows.flow_json_operations import _serialized_size
     plan = _obj(structure, "structure")
     if plan.get("status") != "ok":
-        raise ValueError("Globale Konzeptstruktur ist was unsuccessful.")
+        raise ValueError("Global concept structure was not successful.")
     if type(batch_size) is not int or not 1 <= batch_size <= 10:
-        raise ValueError("batch_size muss zwischen 1 und 10 liegen.")
+        raise ValueError("batch_size must be between 1 and 10.")
     # Run path/identity checks before allowing a writer to consume the structure.
     _validate_doctrine(plan)
     source = _canonical_source_path(plan.get("source_path"))
@@ -350,7 +350,7 @@ def assemble_doctrine_concept_plan(
     """Merge exact, complete evidence for each globally planned concept."""
     plan = _obj(structure, "structure")
     if plan.get("status") != "ok":
-        raise ValueError("Globale Konzeptstruktur ist was unsuccessful.")
+        raise ValueError("Global concept structure was not successful.")
     _validate_doctrine(plan)
     records = _array(
         _obj(results, "detail_results").get("iterations"),
@@ -366,7 +366,7 @@ def assemble_doctrine_concept_plan(
         if not isinstance(gid, str) or gid in expected_groups:
             raise ValueError("Invalid or duplicate batch ID.")
         if group.get("source_path") != source:
-            raise ValueError("Batch verweist auf eine andere Doktrin.")
+            raise ValueError("Batch references a different doctrine.")
         expected_groups[gid] = group
     seen_groups: set[str] = set()
     for entry in records:
@@ -397,7 +397,7 @@ def assemble_doctrine_concept_plan(
                     raise ValueError("Detail plan must not alter concept structure.")
             ranges = _array(concept.get("evidence_ranges"), "evidence_ranges")
             if not ranges:
-                raise ValueError("Konzept ohne Quellenbelege.")
+                raise ValueError("Concept has no source evidence.")
             for evidence in ranges:
                 ref = _obj(evidence, "evidence_ranges[]")
                 if ref.get("doctrine") != source:
@@ -439,12 +439,12 @@ def _section_concept_metadata(
     tags field, or legitimately longer descriptive text. Preserve their
     semantic content without silently inventing missing descriptions.
     """
-    origin = f"Abschnitt {section_id!r}, Konzept {index}"
+    origin = f"Section {section_id!r}, concept {index}"
     title = raw.get("title")
     if title is None:
         title = raw.get("name")
     if not isinstance(title, str) or not title.strip():
-        raise ValueError(f"{origin}: title muss ein nichtleerer String sein.")
+        raise ValueError(f"{origin}: title must be a nonempty string.")
     title = title.strip()
     if len(title) > 500:
         raise ValueError(
@@ -456,7 +456,7 @@ def _section_concept_metadata(
         description = raw.get("summary")
     if not isinstance(description, str) or not description.strip():
         raise ValueError(
-            f"{origin}: description muss ein nichtleerer String sein."
+            f"{origin}: description must be a nonempty string."
         )
     description = description.strip()
     if len(description) > 4000:
@@ -472,7 +472,7 @@ def _section_concept_metadata(
         tags = [tags]
     elif not isinstance(tags, list):
         raise ValueError(
-            f"{origin}: tags muss eine Liste von Strings sein."
+            f"{origin}: tags must be a list of strings."
         )
     if len(tags) > 40:
         raise ValueError(
@@ -483,7 +483,7 @@ def _section_concept_metadata(
     for tag_index, value in enumerate(tags, start=1):
         if not isinstance(value, str):
             raise ValueError(
-                f"{origin}: tags[{tag_index}] muss ein String sein."
+                f"{origin}: tags[{tag_index}] must be a string."
             )
         tag = value.strip()
         if not tag:
@@ -512,7 +512,7 @@ def assemble_section_outlines(
     task_list = _array(_obj(tasks, "outline_tasks").get("tasks"), "outline_tasks.tasks")
     iteration_list = _array(_obj(results, "outlines").get("iterations"), "outlines.iterations")
     if not 1 <= len(task_list) <= 100 or len(iteration_list) != len(task_list):
-        raise ValueError("Abschnitts-Outlines fehlen oder sind zu zahlreich.")
+        raise ValueError("Section outlines are missing or too numerous.")
     expected = {}
     for task in task_list:
         task = _obj(task, "tasks[]")
@@ -527,7 +527,7 @@ def assemble_section_outlines(
         envelope = _obj(iteration, "outlines.iterations[]")
         tid = envelope.get("id")
         if tid not in expected or tid in seen:
-            raise ValueError("Unbekannte oder doppelte Abschnitts-Iteration.")
+            raise ValueError("Unknown or duplicate section iteration.")
         seen.add(tid)
         output = _obj(envelope.get("output"), "outlines.iterations[].output")
         if output.get("status") != "ok" or output.get("section_id") != tid:
@@ -539,7 +539,7 @@ def assemble_section_outlines(
             concept = _obj(entry, f"outlines[{tid}].concepts[{concept_index}]")
             key = _slug(
                 concept.get("topic_key"),
-                f"Abschnitt {tid!r}, Konzept {concept_index}: topic_key",
+                f"Section {tid!r}, concept {concept_index}: topic_key",
             )
             title, description, tags = _section_concept_metadata(
                 concept, section_id=tid, index=concept_index,
@@ -558,7 +558,7 @@ def assemble_section_outlines(
                 original["tags"] = list(dict.fromkeys([*original["tags"], *tags]))[:20]
         warnings.extend(str(w)[:300] for w in _array(output.get("warnings", []), "warnings")[:20])
     if seen != set(expected) or not merged:
-        raise ValueError("Abschnitts-Outlines fehlen oder enthalten keine Konzepte.")
+        raise ValueError("Section outlines are missing or contain no concepts.")
     result = {
         "status": "ok", "source_path": source_path,
         "folder": {
@@ -585,7 +585,7 @@ def prepare_section_outline_tasks(sections: Any, analyses: Any) -> dict[str, Any
     if (direct and (items or iterations)) or (
         not direct and (not items or len(items) != len(iterations))
     ):
-        raise ValueError("Abschnittsanalysen fehlen oder sind inkonsistent.")
+        raise ValueError("Section analyses are missing or inconsistent.")
     if direct:
         return {"tasks": [{"id": "direct", "direct": True, "source_path": source_path}]}
     indexed = {}
@@ -648,7 +648,7 @@ def _doctrine_folder_scheme(
     if concept_count > 15 and not 2 <= len(folders) <= 8:
         raise ValueError("Large doctrines require 2 to 8 subfolders.")
     if concept_count <= 15 and len(folders) not in (0, 2, 3, 4, 5, 6, 7, 8):
-        raise ValueError("Unterordner: entweder 0 oder 2 bis 8.")
+        raise ValueError("Subfolders: either 0 or between 2 and 8.")
     seen: set[str] = set()
     normalized = []
     for entry in folders:
@@ -675,7 +675,7 @@ def prepare_doctrine_consolidation_batches(
     plan = _obj(outline, "outline")
     _validate_doctrine(plan)
     if type(batch_size) is not int or not 4 <= batch_size <= 16:
-        raise ValueError("Consolidation batch_size muss 4 bis 16 sein.")
+        raise ValueError("Consolidation batch_size must be between 4 and 16.")
     concepts = _array(plan["concepts"], "concepts")
     folders = _doctrine_folder_scheme(taxonomy, concept_count=len(concepts))
     stop = {"und", "der", "die", "das", "ein", "eine", "von", "für", "mit",
@@ -761,7 +761,7 @@ def assemble_doctrine_consolidation(
         record = _obj(envelope, "results.iterations[]")
         bid = record.get("id")
         if bid not in expected or bid in seen_batches:
-            raise ValueError("Unbekannte oder doppelte Konsolidierungsantwort.")
+            raise ValueError("Unknown or duplicate consolidation response.")
         seen_batches.add(bid)
         response = _obj(record.get("output"), "results.output")
         if response.get("status") != "ok":
@@ -777,7 +777,7 @@ def assemble_doctrine_consolidation(
                 not isinstance(m, str) or m not in expected[bid] or m in used
                 for m in members
             ):
-                raise ValueError(f"{bid}: unbekanntes oder doppeltes Quellkonzept.")
+                raise ValueError(f"{bid}: unknown or duplicate source concept.")
             used.update(members)
             title = value.get("title")
             desc = value.get("description")
@@ -829,7 +829,7 @@ def assemble_doctrine_consolidation(
     output["concepts"] = consolidated
     output["summary"] = (
         f"{len(original)} concept candidates fully consolidated into "
-        f"{len(consolidated)} Konzepte konsolidiert."
+        f"{len(consolidated)} concepts consolidated."
     )
     _validate_doctrine(output)
     return output
