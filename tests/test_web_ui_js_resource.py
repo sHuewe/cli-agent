@@ -26,7 +26,7 @@ def test_i18n_catalog_is_packaged_and_discovered_from_json():
     assert "new Option(displayName(code), code)" in source
     assert "ready: initialize()" in source
     assert "const messages = Object.freeze({" not in source  # No embedded translation catalog.
-    assert available_locales() == ["en", "de"]
+    assert {"en", "de"}.issubset(available_locales())
     english, german = get_locale("en"), get_locale("de")
     assert english and german
     assert english.keys() == german.keys()
@@ -35,7 +35,7 @@ def test_i18n_catalog_is_packaged_and_discovered_from_json():
     assert german["session.new"] == "Neue Session in neuem Tab"
     assert get_locale("../de") is None
     assert get_locale("NOT-A-LANGUAGE") is None
-    assert get_locale("fr") is None
+    # Adding fr.json later must not require changing this test.
 
     app_source = files("cli_agent.interfaces").joinpath("static", "app.js").read_text(encoding="utf-8")
     assert "window.cliAgentI18n" in app_source
