@@ -35,18 +35,18 @@ def _validated_user_headers(
     for raw_name, raw_value in values.items():
         name = str(raw_name).strip()
         if not name:
-            raise ValueError(f"{section} enthält einen leeren Headernamen.")
+            raise ValueError(f"{section} contains an empty header name.")
         normalized = name.casefold()
         if normalized in _FORBIDDEN_ROUTING_HEADERS or normalized.startswith("x-forwarded-"):
             raise ValueError(
-                f"{section} darf den routing-/proxyrelevanten Header {name!r} nicht setzen. "
-                "Host und Routing werden ausschließlich aus der geprüften URL abgeleitet."
+                f"{section} may not set the routing/proxy-sensitive header {name!r}. "
+                "Host and routing are derived solely from the validated URL."
             )
         if normalized == "authorization" and not allow_authorization:
             raise ValueError(
-                f"{section} darf Authorization nicht statisch setzen. "
-                "Verwende den dafür vorgesehenen Credential-Mechanismus, "
-                "statt Secrets in der Benutzerkonfiguration abzulegen."
+                f"{section} may not set a static Authorization header. "
+                "Use the designated credential mechanism "
+                "instead of storing secrets in user configuration."
             )
         result[name] = str(raw_value)
     return result
@@ -177,16 +177,16 @@ def _agent_config(values: Any) -> AgentConfig:
     if not isinstance(values, dict):
         raise ValueError("[agent] muss eine Tabelle sein.")
     if set(values) - {"timezone"}:
-        raise ValueError("[agent] enthält unbekannte Optionen.")
+        raise ValueError("[agent] contains unknown options.")
     timezone = values.get("timezone")
     if timezone is None:
         return AgentConfig()
     if not isinstance(timezone, str) or not timezone or timezone != timezone.strip():
-        raise ValueError("agent.timezone muss eine gültige IANA-Zeitzone sein.")
+        raise ValueError("agent.timezone must be a valid IANA time zone.")
     try:
         ZoneInfo(timezone)
     except (ValueError, ZoneInfoNotFoundError) as exc:
-        raise ValueError(f"Ungültige IANA-Zeitzone in agent.timezone: {timezone!r}") from exc
+        raise ValueError(f"Invalid IANA time zone in agent.timezone: {timezone!r}") from exc
     return AgentConfig(timezone=timezone)
 
 
@@ -235,7 +235,7 @@ def _model_config(values: dict[str, Any]) -> ModelConfig:
     defaults = ModelConfig()
     provider = str(values.get("provider", defaults.provider)).strip().lower()
     if provider not in {"ollama", "openai"}:
-        raise ValueError(f"Nicht unterstützter Modell-Provider: {provider!r}.")
+        raise ValueError(f"Unsupported model provider: {provider!r}.")
     model = str(values.get("model", defaults.model)).strip()
     base_url = str(values.get("base_url", defaults.base_url)).strip()
     if not model:
@@ -288,7 +288,7 @@ def _vector_config(values: dict[str, Any], *, has_okf: bool) -> VectorKnowledgeC
         "search_limit", "max_files", "required",
     }
     if set(values) - allowed:
-        raise ValueError("[knowledge.vector] enthält unbekannte Optionen.")
+        raise ValueError("[knowledge.vector] contains unknown options.")
     backend = values.get("backend", "sqlite")
     if backend not in {"sqlite", "chroma"}:
         raise ValueError("knowledge.vector.backend muss 'sqlite' oder 'chroma' sein.")
@@ -298,16 +298,16 @@ def _vector_config(values: dict[str, Any], *, has_okf: bool) -> VectorKnowledgeC
         raise ValueError("knowledge.vector.provider muss 'ollama' oder 'openai' sein.")
     if backend == "sqlite":
         if mode != "okf":
-            raise ValueError("SQLite-Vektor-RAG unterstützt ausschließlich mode='okf'.")
+            raise ValueError("SQLite vector RAG supports only mode='okf'.")
         if not has_okf:
-            raise ValueError("Vektor-RAG erfordert eine [okf]-Konfiguration.")
+            raise ValueError("Vector RAG requires an [okf] configuration.")
         if "collection" in values:
-            raise ValueError("knowledge.vector.collection ist nur für Chroma zulässig.")
+            raise ValueError("knowledge.vector.collection is allowed only for Chroma.")
     else:
         if "mode" in values:
             raise ValueError("Chroma verwendet backend='chroma' ohne mode.")
         if "max_files" in values:
-            raise ValueError("knowledge.vector.max_files ist für Chroma nicht relevant.")
+            raise ValueError("knowledge.vector.max_files is not applicable to Chroma.")
         mode = "chroma"
     if values.get("source") is not None:
         raise ValueError("knowledge.vector.source ist nicht erlaubt.")
@@ -339,19 +339,19 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     name = str(values.get("name", "")).strip()
     transport = str(values.get("transport", "stdio")).strip().lower()
     if not name:
-        raise ValueError("Jeder [[mcp_servers]]-Eintrag benötigt einen Namen.")
+        raise ValueError("Every [[mcp_servers]] entry requires a name.")
     if name.casefold() == "knowledge_reentry":
-        raise ValueError("Der MCP-Servername 'knowledge_reentry' ist für ein internes Agent-Tool reserviert.")
+        raise ValueError("MCP server name 'knowledge_reentry' is reserved for an internal agent tool.")
     if transport not in {"stdio", "streamable_http"}:
-        raise ValueError(f"Nicht unterstützter MCP-Transport für {name!r}: {transport!r}.")
+        raise ValueError(f"Unsupported MCP transport for {name!r}: {transport!r}.")
 
     if transport == "stdio":
         extra_keys = set(values) - {"name"}
         if extra_keys:
             raise ValueError(
-                f"Der stdio-MCP-Server {name!r} darf in der Benutzerkonfiguration nur "
-                "über seinen Namen referenziert werden. Launch-Konfiguration liegt ausschließlich "
-                "in [[mcp.trusted_servers]] der Admin-Policy."
+                f"The stdio MCP server {name!r} may be referenced in user configuration only "
+                "by name. Launch configuration is defined exclusively "
+                "in [[mcp.trusted_servers]] of admin policy."
             )
         return McpServerConfig(name=name)
 
@@ -375,9 +375,9 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     url_value = values.get("url")
     url = str(url_value).strip() if url_value is not None else None
     if not url:
-        raise ValueError(f"Der HTTP-MCP-Server {name!r} benötigt eine url.")
+        raise ValueError(f"The HTTP MCP server {name!r} requires a url.")
     if command or raw_args or raw_env:
-        raise ValueError(f"Der HTTP-MCP-Server {name!r} darf command, args und env nicht enthalten.")
+        raise ValueError(f"The HTTP MCP server {name!r} must not contain command, args or env.")
     compress_result = values.get("compress_result", False)
     if not isinstance(compress_result, bool):
         raise ValueError(f"compress_result von MCP-Server {name!r} muss true oder false sein.")
@@ -410,8 +410,8 @@ def load_config(path: Path | None = None) -> AppConfig:
         values = tomllib.load(handle)
     if "network" in values:
         raise ValueError(
-            "[network] ist keine Benutzerkonfiguration mehr. Netzwerk-Allowlists "
-            "werden ausschließlich aus der maschinenweiten admin_config.toml geladen."
+            "[network] is no longer user configuration. Network allowlists "
+            "are loaded only from machine-wide admin_config.toml."
         )
     model_values = values.get("model", {})
     if not isinstance(model_values, dict):
@@ -428,12 +428,12 @@ def load_config(path: Path | None = None) -> AppConfig:
         mcp_servers = tuple(_mcp_server_config(value) for value in raw_servers)
         names = [server.name for server in mcp_servers]
         if len(names) != len(set(names)):
-            raise ValueError("Die Namen der MCP-Server müssen eindeutig sein.")
+            raise ValueError("MCP server names must be unique.")
     pdf_values = values.get("pdf", {})
     if not isinstance(pdf_values, dict):
         raise ValueError("[pdf] muss eine Tabelle sein.")
     if set(pdf_values) - {"max_pdf_pages"}:
-        raise ValueError("[pdf] enthält unbekannte Optionen.")
+        raise ValueError("[pdf] contains unknown options.")
     max_pdf_pages = pdf_values.get("max_pdf_pages", 100)
     if isinstance(max_pdf_pages, bool) or not isinstance(max_pdf_pages, int) or not 1 <= max_pdf_pages <= 2_000:
         raise ValueError("pdf.max_pdf_pages muss zwischen 1 und 2000 liegen.")
@@ -446,7 +446,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         )
     knowledge_values = values.get("knowledge", {})
     if not isinstance(knowledge_values, dict) or set(knowledge_values) - {"vector"}:
-        raise ValueError("[knowledge] enthält unbekannte Optionen.")
+        raise ValueError("[knowledge] contains unknown options.")
     vector_values = knowledge_values.get("vector")
     if vector_values is not None and not isinstance(vector_values, dict):
         raise ValueError("[knowledge.vector] muss eine Tabelle sein.")
