@@ -350,6 +350,72 @@ async def test_new_dataframe_tools_expose_typed_mcp_schemas_and_chain_artifacts(
     assert sorted(path.name for path in tmp_path.iterdir()) == [".cli-agent", "day1.json", "day2.json"]
 
 
+def test_aggregate_tool_exposes_typed_function_contract(monkeypatch) -> None:
+    """Model-visible MCP schema must identify function, never invite guesses."""
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(_operations([]), access="read")
+    handler = server.tools["aggregate_data"]
+    tool = Tool.from_function(handler)
+
+    descriptions = (handler.__doc__ or "") + "\n" + tool.description
+    for required in ('"column"', '"function"', '"alias"', '"op"', '"agg"', '"operation"', '"func"', "non-null"):
+        assert required in descriptions
+
+    schema = tool.parameters
+    assert "aggregations" in schema["properties"]
+    aggregation = schema["$defs"]["DataAggregation"]
+    assert set(aggregation["required"]) == {"column", "function"}
+    assert aggregation["additionalProperties"] is False
+    assert set(aggregation["properties"]["function"]["enum"]) == {
+        "count", "sum", "mean", "min", "max", "median", "nunique", "std",
+    }
+    assert "function" in schema["properties"]["aggregations"]["items"]["$ref"]
+
+    valid = tool.fn_metadata.arg_model.model_validate({
+        "path": "measurements.csv",
+        "aggregations": [{"column": "value", "function": "mean", "alias": "avg"}],
+    })
+    assert valid.aggregations[0].function == "mean"
+    assert valid.aggregations[0].alias == "avg"
+
+    for incorrect_key in ("op", "agg", "operation", "func"):
+        with pytest.raises(ValueError):
+            tool.fn_metadata.arg_model.model_validate({
+                "path": "measurements.csv",
+                "aggregations": [{"column": "value", incorrect_key: "mean"}],
+            })
+    with pytest.raises(ValueError):
+        tool.fn_metadata.arg_model.model_validate({
+            "path": "measurements.csv",
+            "aggregations": [{"column": "value", "function": "average"}],
+        })
+
+
+def test_aggregate_tool_normalizes_schema_objects_without_changing_core_calls(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(_operations(calls), access="read")
+    spec = data_mcp_server.DataAggregation(column="value", function="mean", alias="average")
+    result = server.tools["aggregate_data"](
+        path="input.json", records_path="/points", aggregations=[spec],
+    )
+    assert result.structuredContent["rows"] == [{"total": 3}]
+    assert calls[-1] == (
+        "aggregate_records", "input.json",
+        {
+            "data": None, "data_format": None, "table_index": 0,
+            "aggregations": [{"column": "value", "function": "mean", "alias": "average"}],
+            "group_by": None, "filters": None, "sort_by": None,
+            "descending": False, "records_path": "/points",
+        },
+    )
+    # The validator still accepts dictionaries in direct Python calls.
+    server.tools["aggregate_data"](
+        path="input.json", aggregations=[{"column": "value", "function": "count"}],
+    )
+    assert calls[-1][2]["aggregations"] == [{"column": "value", "function": "count"}]
+
+
 def test_wrap_tool_description_covers_all_formats(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
