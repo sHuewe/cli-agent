@@ -369,7 +369,7 @@ def test_aggregate_tool_exposes_typed_function_contract(monkeypatch) -> None:
     assert set(aggregation["properties"]["function"]["enum"]) == {
         "count", "sum", "mean", "min", "max", "median", "nunique", "std",
     }
-    assert "function" in schema["properties"]["aggregations"]["items"]["$ref"]
+    assert schema["properties"]["aggregations"]["items"]["$ref"] == "#/$defs/DataAggregation"
     assert schema["properties"]["aggregations"]["minItems"] == 1
 
     valid = tool.fn_metadata.arg_model.model_validate({
@@ -770,3 +770,16 @@ def test_derived_schema_documents_diff_and_resample_inference(tmp_path):
     assert "diff_per_time" in fields["max_gap_seconds"]["description"]
     schema = server._tool_manager.get_tool("resample_data").parameters
     assert schema["properties"]["time_column"]["default"] is None
+    assert schema["properties"]["frequency"]["pattern"] == r"^[1-9][0-9]{0,3}(?:s|min|h|d)$"
+    aggregate_list = schema["properties"]["aggregations"]
+    assert aggregate_list["minItems"] == 1
+    assert aggregate_list["maxItems"] == 20
+    assert aggregate_list["items"]["$ref"] == "#/$defs/ResampleAggregation"
+    fields = schema["$defs"]["ResampleAggregation"]["properties"]
+    assert set(schema["$defs"]["ResampleAggregation"]["required"]) == {"column", "method", "alias"}
+    assert fields["column"]["minLength"] == 1
+    assert fields["alias"]["minLength"] == 1
+    assert set(fields["method"]["enum"]) == {"mean", "min", "max", "sum", "count"}
+    assert "non-null numeric" in fields["method"]["description"]
+    assert "not 'function'" in server._tool_manager.get_tool("resample_data").description
+
