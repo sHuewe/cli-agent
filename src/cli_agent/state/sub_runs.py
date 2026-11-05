@@ -271,7 +271,7 @@ async def execute_sub_run(
     ]
     reference_context = agent._build_reference_context_message(knowledge=None)
     parts = [
-        BASE_SYSTEM_PROMPT,
+        getattr(agent, "base_system_prompt", BASE_SYSTEM_PROMPT),
         agent._format_current_time(datetime.datetime.now(datetime.UTC)),
     ]
     if names:
