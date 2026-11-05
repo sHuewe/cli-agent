@@ -24,6 +24,23 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         from cli_agent.interfaces.web_ui import APP_CSS
         return browser_security_headers(PlainTextResponse(APP_CSS, media_type="text/css"))
 
+    async def ui_theme_css(request: Request) -> Response:
+        from importlib.resources import files
+        theme = request.path_params["theme"]
+        if theme not in {"bright", "dark"}:
+            return browser_security_headers(PlainTextResponse("Not found", status_code=404))
+        resource = files("cli_agent.interfaces").joinpath("static", "themes", theme + ".css")
+        return browser_security_headers(PlainTextResponse(
+            resource.read_text(encoding="utf-8"), media_type="text/css",
+        ))
+
+    async def ui_project_css(request: Request) -> Response:
+        name = request.path_params["name"] + ".css"
+        data = ui.get("ui_stylesheets", {}).get(name)
+        if data is None:
+            return browser_security_headers(PlainTextResponse("Not found", status_code=404))
+        return browser_security_headers(PlainTextResponse(data, media_type="text/css"))
+
     async def ui_js(_request: Request) -> Response:
         from cli_agent.interfaces.web_ui_api import API_APP_JS
         return browser_security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
@@ -214,6 +231,8 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         ("browser_security_headers", browser_security_headers),
         ("ui_index", ui_index),
         ("ui_css", ui_css),
+        ("ui_theme_css", ui_theme_css),
+        ("ui_project_css", ui_project_css),
         ("ui_js", ui_js),
         ("ui_i18n", ui_i18n),
         ("ui_locales", ui_locales),

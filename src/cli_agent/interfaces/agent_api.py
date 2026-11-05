@@ -95,7 +95,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         # ? characters as URL delimiters and truncate the real path.
         path = request.scope["path"]
         origin = request.headers.get("origin")
-        if ui is not None and (path in {"/", "/assets/app.css", "/assets/app.js", "/assets/i18n.js", "/assets/i18n/locales.json"} or path.startswith("/assets/i18n/")):
+        if ui is not None and (path in {"/", "/assets/app.css", "/assets/app.js", "/assets/i18n.js", "/assets/i18n/locales.json"} or path.startswith("/assets/i18n/") or path.startswith("/assets/themes/") or path.startswith("/assets/ui/")):
             if request.method != "GET" or origin is not None:
                 return error(403, "Disallowed browser request.")
             return await call_next(request)
@@ -151,6 +151,8 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         ] + ([
             Route("/", browser["ui_index"], methods=["GET"]),
             Route("/assets/app.css", browser["ui_css"], methods=["GET"]),
+            Route("/assets/themes/{theme}.css", browser["ui_theme_css"], methods=["GET"]),
+            Route("/assets/ui/{name}.css", browser["ui_project_css"], methods=["GET"]),
             Route("/assets/app.js", browser["ui_js"], methods=["GET"]),
             Route("/assets/i18n.js", browser["ui_i18n"], methods=["GET"]),
             Route("/assets/i18n/locales.json", browser["ui_locales"], methods=["GET"]),

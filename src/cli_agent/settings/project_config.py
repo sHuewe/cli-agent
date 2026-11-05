@@ -129,3 +129,39 @@ def read_project_ui_template(workspace: Path, filename: str | None) -> str | Non
     if not content.strip():
         raise ValueError("UI templates must not be empty.")
     return content
+
+
+_UI_STYLESHEET_RE = __import__("re").compile(r"ui/[a-zA-Z0-9_-]+\.css\Z")
+MAX_UI_STYLESHEET_BYTES = 128 * 1024
+MAX_UI_STYLESHEETS_TOTAL_BYTES = 512 * 1024
+
+
+def validate_project_ui_stylesheet_name(filename: str) -> None:
+    """Allow CSS files directly within .cli-agent/ui, with no traversal."""
+    if not isinstance(filename, str) or not _UI_STYLESHEET_RE.fullmatch(filename):
+        raise ValueError("ui.stylesheets entries must look like 'ui/custom.css'.")
+
+
+def read_project_ui_stylesheets(workspace: Path, filenames: tuple[str, ...]) -> dict[str, str]:
+    """Load bounded CSS snapshots via the host, not through workspace MCP."""
+    if not filenames:
+        return {}
+    if len(filenames) > 8 or len(set(filenames)) != len(filenames):
+        raise ValueError("ui.stylesheets must contain at most 8 distinct CSS files.")
+    folder = _project_directory(workspace) / "ui"
+    if path_entry_is_symlink_or_reparse(folder) or not folder.is_dir():
+        raise ValueError(".cli-agent/ui must be a real directory.")
+    result: dict[str, str] = {}
+    total_bytes = 0
+    for filename in filenames:
+        validate_project_ui_stylesheet_name(filename)
+        name = filename.removeprefix("ui/")
+        data = _read_private_file(folder / name, limit=MAX_UI_STYLESHEET_BYTES)
+        total_bytes += len(data)
+        if total_bytes > MAX_UI_STYLESHEETS_TOTAL_BYTES:
+            raise ValueError("Project UI stylesheets exceed the total size limit.")
+        try:
+            result[name] = data.decode("utf-8-sig")
+        except UnicodeError as exc:
+            raise ValueError("Project UI stylesheets must use UTF-8.") from exc
+    return result

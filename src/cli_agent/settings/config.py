@@ -123,6 +123,8 @@ class UiConfig:
     title: str = "cli-agent"
     default_language: str | None = None
     template: str | None = None
+    theme: str = "bright"
+    stylesheets: tuple[str, ...] = ()
     buttons: UiButtonsConfig = field(default_factory=UiButtonsConfig)
 
 
@@ -431,7 +433,7 @@ def _ui_config(values: Any) -> UiConfig:
     """Parse presentation-only browser settings, with strict field validation."""
     if not isinstance(values, dict):
         raise ValueError("[ui] must be a table.")
-    if set(values) - {"title", "default_language", "template", "buttons"}:
+    if set(values) - {"title", "default_language", "template", "theme", "stylesheets", "buttons"}:
         raise ValueError("[ui] contains unknown options.")
 
     title = values.get("title", "cli-agent")
@@ -458,6 +460,19 @@ def _ui_config(values: Any) -> UiConfig:
     if template is not None:
         from cli_agent.settings.project_config import validate_project_ui_template_name
         validate_project_ui_template_name(template)
+
+    theme = values.get("theme", "bright")
+    if not isinstance(theme, str) or theme not in {"bright", "dark"}:
+        raise ValueError("ui.theme must be 'bright' or 'dark'.")
+
+    stylesheets = values.get("stylesheets", [])
+    if not isinstance(stylesheets, list) or len(stylesheets) > 8:
+        raise ValueError("ui.stylesheets must be a list of at most 8 CSS files.")
+    from cli_agent.settings.project_config import validate_project_ui_stylesheet_name
+    for stylesheet in stylesheets:
+        validate_project_ui_stylesheet_name(stylesheet)
+    if len(stylesheets) != len(set(stylesheets)):
+        raise ValueError("ui.stylesheets must not contain duplicates.")
 
     buttons = values.get("buttons", {})
     if not isinstance(buttons, dict):
@@ -490,7 +505,8 @@ def _ui_config(values: Any) -> UiConfig:
         commands=command_config,
     )
     return UiConfig(
-        title=title, default_language=default_language, template=template, buttons=button_config,
+        title=title, default_language=default_language, template=template,
+        theme=theme, stylesheets=tuple(stylesheets), buttons=button_config,
     )
 
 
