@@ -357,3 +357,47 @@ def test_project_ui_rejects_invalid_settings(tmp_path: Path, definition: str):
     _project(tmp_path, definition)
     with pytest.raises(ValueError, match="ui"):
         load_config(global_config, workspace=tmp_path)
+
+
+
+def test_project_ui_template_is_loaded_as_trusted_private_file(tmp_path: Path):
+    from cli_agent.settings.project_config import read_project_ui_template
+
+    global_config = tmp_path / "config.toml"
+    global_config.write_text("", encoding="utf-8")
+    folder = _project(tmp_path, '[ui]\ntemplate = "ui/overview.html"\n')
+    ui_dir = folder / "ui"
+    ui_dir.mkdir()
+    template = '{% extends "cli_agent/index.html" %}\n{% block footer %}My project{% endblock %}'
+    (ui_dir / "overview.html").write_text(template, encoding="utf-8")
+    effective = load_config(global_config, workspace=tmp_path)
+    assert effective.ui.template == "ui/overview.html"
+    assert read_project_ui_template(tmp_path, effective.ui.template) == template
+
+
+@pytest.mark.parametrize("value", [
+    "../secret.html", "/tmp/secret.html", "ui/../../secret.html",
+    "ui/subdir/file.html", "ui/file.txt", "ui\\\\file.html", "",
+])
+def test_project_ui_rejects_unsafe_template_names(tmp_path: Path, value: str):
+    global_config = tmp_path / "config.toml"
+    global_config.write_text("", encoding="utf-8")
+    _project(tmp_path, '[ui]\ntemplate = ' + __import__("json").dumps(value) + '\n')
+    with pytest.raises(ValueError, match="ui.template"):
+        load_config(global_config, workspace=tmp_path)
+
+
+def test_project_ui_template_mcp_access_is_protected(tmp_path: Path):
+    from cli_agent.settings.project_config import read_project_ui_template
+
+    ui_dir = tmp_path / ".cli-agent" / "ui"
+    ui_dir.mkdir(parents=True)
+    (ui_dir / "custom.html").write_text("Hello", encoding="utf-8")
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True}),
+    )
+    assert read_project_ui_template(tmp_path, "ui/custom.html") == "Hello"
+    with pytest.raises(WorkspaceError):
+        workspace.read_file(".cli-agent/ui/custom.html")
+    with pytest.raises(WorkspaceError):
+        workspace.write_file(".cli-agent/ui/custom.html", "Modified")

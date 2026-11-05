@@ -579,7 +579,7 @@ def test_chroma_search_summaries_render_only_from_standard_agui_tool_results():
 def test_configured_ui_title_and_controls_are_rendered_safely() -> None:
     from cli_agent.settings.config import UiButtonsConfig, UiCommandButtonsConfig, UiConfig
 
-    assert web_ui.render_index_html() == web_ui.INDEX_HTML
+    assert "<title>cli-agent</title>" in web_ui.render_index_html()
     configured = UiConfig(
         title="<SignalDeck & Assistant>",
         default_language="de",
@@ -623,6 +623,65 @@ def test_configured_ui_title_and_controls_are_rendered_safely() -> None:
 def test_default_ui_title_and_buttons_remain_unchanged() -> None:
     from cli_agent.settings.config import UiConfig
 
-    assert web_ui.render_index_html(UiConfig()) == web_ui.INDEX_HTML
-    assert '<title>cli-agent</title>' in web_ui.INDEX_HTML
+    assert "<title>cli-agent</title>" in web_ui.render_index_html(UiConfig())
+    assert '{{ ui.title }}' in web_ui.INDEX_HTML
     assert 'id="new-session"' in web_ui.INDEX_HTML
+
+
+
+def test_jinja_nested_ui_blocks_can_be_overridden_and_reordered():
+    from cli_agent.settings.config import UiConfig
+
+    project = """{% extends "cli_agent/index.html" %}
+{% block app_info %}
+  <div class="project-info">
+    {{ self.app_title() }}
+    <span>Welcome to the project</span>
+    {{ self.session_meta() }}
+  </div>
+{% endblock %}
+{% block header_buttons %}
+  <div class="header-actions">
+    {{ self.button_show_working_context() }}
+    <span id="project-label">Control panel</span>
+    {{ self.button_new_session() }}
+    {{ self.button_language_selector() }}
+    {{ self.button_list_sessions() }}
+    {{ self.button_reset_history() }}
+    {{ self.button_end_session() }}
+  </div>
+{% endblock %}
+"""
+    rendered = web_ui.render_index_html(UiConfig(title="My Project"), project_template=project)
+    assert "<h1>My Project</h1>" in rendered
+    assert "Welcome to the project" in rendered
+    assert rendered.index('id="show-working-context"') < rendered.index('id="new-session"')
+    assert rendered.index('id="new-session"') < rendered.index('id="list-sessions"')
+    assert rendered.index('id="project-label"') < rendered.index('id="new-session"')
+    assert 'id="chat"' in rendered
+    assert 'id="composer"' in rendered
+    assert 'id="session-meta"' in rendered
+
+
+def test_nested_jinja_app_info_can_be_overridden_without_touching_header():
+    from cli_agent.settings.config import UiConfig
+
+    project = """{% extends "cli_agent/index.html" %}
+{% block app_info %}<div>{{ self.app_title() }}<p>Project subtitle</p>{{ self.session_meta() }}</div>{% endblock %}
+"""
+    rendered = web_ui.render_index_html(UiConfig(), project_template=project)
+    assert "Project subtitle" in rendered
+    assert 'id="new-session"' in rendered
+    assert 'id="session-meta"' in rendered
+
+
+@pytest.mark.parametrize("template", [
+    '{% extends "cli_agent/index.html" %}{% block app_info %}<div>Missing session meta</div>{% endblock %}',
+    '{% extends "cli_agent/index.html" %}{% block header_buttons %}<div>Only text</div>{% endblock %}',
+    '{% extends "cli_agent/index.html" %}{% block extra_head %}<script src="/assets/app.js"></script>{% endblock %}',
+])
+def test_jinja_rejects_broken_javascript_structure(template):
+    from cli_agent.settings.config import UiConfig
+
+    with pytest.raises(ValueError, match="UI template"):
+        web_ui.render_index_html(UiConfig(), project_template=template)

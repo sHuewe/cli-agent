@@ -29,7 +29,7 @@ class _UiStructure(HTMLParser):
 def _validate_rendered_ui(html: str) -> None:
     """Fail closed if a project override removes JavaScript-owned elements."""
     js = files("cli_agent.interfaces").joinpath("static", "app.js").read_text(encoding="utf-8")
-    required_ids = set(findall(r'getElementById\\("([^"]+)"\\)', js))
+    required_ids = set(findall(r'getElementById\("([^"]+)"\)', js))
     required_ids.update({"language-select", "commands", "session-meta"})
     dom = _UiStructure()
     dom.feed(html)
