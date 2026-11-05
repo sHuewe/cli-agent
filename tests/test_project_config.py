@@ -183,10 +183,11 @@ def test_one_shot_preparation_receives_merged_config_and_prompt(tmp_path: Path):
         agent_type=Agent,
     )
     prepared = prepare_agent(
-        OneShotRunOptions(workspace=tmp_path, prompt="work", config_file=global_config),
+        OneShotRunOptions(workspace=tmp_path, prompt="work", config_file=global_config, model="cli-model"),
         dependencies=deps,
     )
-    assert prepared.config.model.model == "project-model"
+    assert prepared.config.model.model == "cli-model"  # CLI > project > global.
+    assert load_config(global_config, workspace=tmp_path).model.model == "project-model"
     assert prepared.config.model.provider == "openai"
     assert captured["system_prompt"] == "You are a project analyst."
 
