@@ -128,6 +128,8 @@ def test_private_root_files_remain_hidden_with_allowed_data_checkpoints(tmp_path
         allowed_paths=(AllowedPath(data, "write"),),
     )
     assert '"value": 7' in workspace.read_file(".cli-agent/mcp-data-123/checkpoint.json")
+    workspace.write_file(".cli-agent/mcp-data-123/checkpoint.json", '{"value": 8}')
+    assert '"value": 8' in workspace.read_file(".cli-agent/mcp-data-123/checkpoint.json")
     with pytest.raises(WorkspaceError):
         workspace.read_file(".cli-agent/project.toml")
     with pytest.raises(WorkspaceError):
