@@ -398,6 +398,6 @@ def test_project_ui_template_mcp_access_is_protected(tmp_path: Path):
     )
     assert read_project_ui_template(tmp_path, "ui/custom.html") == "Hello"
     with pytest.raises(WorkspaceError):
-        workspace.read_file(".cli-agent/ui/custom.html")
+        workspace._reject_protected_read(ui_dir / "custom.html")
     with pytest.raises(WorkspaceError):
-        workspace.write_file(".cli-agent/ui/custom.html", "Modified")
+        workspace._reject_protected_mutation(ui_dir / "custom.html")
