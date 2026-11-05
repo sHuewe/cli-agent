@@ -99,7 +99,7 @@ def test_project_toml_invalid_utf8_or_unexpected_agent_field_fails(tmp_path: Pat
     global_config.write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="unknown options"):
         load_config(global_config, workspace=tmp_path)
-    (folder / "project.toml").write_bytes(b"\\xff")
+    (folder / "project.toml").write_bytes(bytes([255]))
     with pytest.raises(ValueError, match="UTF-8"):
         load_config(global_config, workspace=tmp_path)
 
