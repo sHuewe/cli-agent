@@ -173,6 +173,16 @@ class Workspace(WorkspaceIoMixin):
         except (OSError, RuntimeError):
             return True
 
+        # .cli-agent is private except for deliberately granted data directories.
+        # A direct child (project.toml, system.md, etc.) may never be exposed,
+        # even by an allowed_paths exception for the parent directory.
+        try:
+            relative = resolved.relative_to(self.directory)
+        except ValueError:
+            return True
+        if len(relative.parts) == 2 and relative.parts[0].casefold() == ".cli-agent":
+            return True
+
         # Explicit exclusions always win over an allowed-path exception.
         # Only built-in sensitivity of ancestor directories is overridden.
         if any(resolved == protected or protected in resolved.parents
