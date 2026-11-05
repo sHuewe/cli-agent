@@ -556,9 +556,10 @@ async def run(args: argparse.Namespace) -> None:
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
     project_file = workspace / ".cli-agent" / "project.toml"
+    project_config_active = project_file.exists() or project_file.is_symlink()
     config = (
         load_config(args.config, workspace=workspace)
-        if project_file.exists() or project_file.is_symlink()
+        if project_config_active
         else load_config(args.config)
     )
     admin_config: AdminConfig = load_admin_config()
@@ -642,6 +643,8 @@ async def run(args: argparse.Namespace) -> None:
 
     print(_status_text(f"Arbeitsordner: {workspace}"))
     print(_status_text(f"Admin-Policy: {default_admin_config_file()}"))
+    if project_config_active:
+        print(_status_text(f"Projekt-Konfiguration: {project_file} (geladen)"))
     print(
         _status_text(
             "MCP-Server: "

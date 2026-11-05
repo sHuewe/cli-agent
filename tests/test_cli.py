@@ -650,3 +650,72 @@ def test_run_rejects_exclude_path_without_os_access(
 
     with pytest.raises(ValueError, match="--exclude-path requires --with-os-read or --with-os-write\\."):
         asyncio.run(cli_module.run(args))
+
+
+
+@pytest.mark.parametrize("with_project", [False, True])
+def test_run_reports_loaded_project_config_at_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    with_project: bool,
+) -> None:
+    config = AppConfig(model=ModelConfig(model="startup-test"))
+    config_calls = []
+
+    def load_config_stub(_path, *, workspace=None):
+        config_calls.append(workspace)
+        return config
+
+    monkeypatch.setattr(cli_module, "load_config", load_config_stub)
+    monkeypatch.setattr(cli_module, "load_admin_config", lambda: AdminConfig())
+
+    async def fake_run_once(_options, *, dependencies=None):
+        return SimpleNamespace(answer="ok", usage="tokens", web_context_statuses=())
+
+    monkeypatch.setattr(cli_module, "run_once", fake_run_once)
+    project_file = tmp_path / ".cli-agent" / "project.toml"
+    if with_project:
+        project_file.parent.mkdir()
+        project_file.write_text('[ui]\ntitle = "Project"\n', encoding="utf-8")
+
+    args = build_parser().parse_args(["--workspace", str(tmp_path), "hello"])
+    asyncio.run(cli_module.run(args))
+    output = capsys.readouterr().out
+
+    assert f"Arbeitsordner: {tmp_path}" in output
+    assert "Admin-Policy:" in output
+    if with_project:
+        assert config_calls == [tmp_path.resolve()]
+        assert f"Projekt-Konfiguration: {project_file} (geladen)" in output
+        assert output.index("Admin-Policy:") < output.index("Projekt-Konfiguration:")
+        assert output.index("Projekt-Konfiguration:") < output.index("MCP-Server:")
+    else:
+        assert config_calls == [None]
+        assert "Projekt-Konfiguration:" not in output
+
+
+def test_run_project_config_startup_path_is_sanitized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Project filenames may include terminal formatting controls on Unix.
+    # No terminal control characters should enter the startup banner.
+    config = AppConfig()
+    monkeypatch.setattr(cli_module, "load_config", lambda _path, *, workspace=None: config)
+    monkeypatch.setattr(cli_module, "load_admin_config", lambda: AdminConfig())
+
+    async def fake_run_once(_options, *, dependencies=None):
+        return SimpleNamespace(answer="ok", usage="tokens", web_context_statuses=())
+
+    monkeypatch.setattr(cli_module, "run_once", fake_run_once)
+    project_file = tmp_path / ".cli-agent" / "project.toml"
+    project_file.parent.mkdir()
+    project_file.write_text("", encoding="utf-8")
+    args = build_parser().parse_args(["--workspace", str(tmp_path), "hello"])
+    asyncio.run(cli_module.run(args))
+
+    output = capsys.readouterr().out
+    assert "Projekt-Konfiguration:" in output
+    assert " (geladen)" in output
