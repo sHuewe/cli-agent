@@ -101,3 +101,31 @@ def read_project_system_prompt(workspace: Path, filename: str | None) -> str | N
     if not content.strip():
         raise ValueError("The system prompt must not be empty.")
     return content
+
+
+_UI_TEMPLATE_RE = __import__("re").compile(r"ui/[a-zA-Z0-9_-]+\.html\Z")
+MAX_UI_TEMPLATE_BYTES = 128 * 1024
+
+
+def validate_project_ui_template_name(filename: str) -> None:
+    """Allow one HTML file immediately beneath the project's UI folder."""
+    if not isinstance(filename, str) or not _UI_TEMPLATE_RE.fullmatch(filename):
+        raise ValueError("ui.template must name a file such as 'ui/custom.html'.")
+
+
+def read_project_ui_template(workspace: Path, filename: str | None) -> str | None:
+    """Read a project UI template without traversing links or arbitrary paths."""
+    if filename is None:
+        return None
+    validate_project_ui_template_name(filename)
+    ui_dir = _project_directory(workspace) / "ui"
+    if path_entry_is_symlink_or_reparse(ui_dir) or not ui_dir.is_dir():
+        raise ValueError(".cli-agent/ui must be a real directory.")
+    data = _read_private_file(ui_dir / filename.removeprefix("ui/"), limit=MAX_UI_TEMPLATE_BYTES)
+    try:
+        content = data.decode("utf-8-sig")
+    except UnicodeError as exc:
+        raise ValueError("UI templates must use UTF-8.") from exc
+    if not content.strip():
+        raise ValueError("UI templates must not be empty.")
+    return content

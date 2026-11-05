@@ -197,6 +197,51 @@ Button settings control *visibility only*. They do not revoke server-side
 permissions, remove API endpoints, or disable agent tools. Approval and
 security policy remain enforced separately.
 
+### Project-specific Jinja2 templates
+
+The built-in UI is a packaged Jinja2 template. Set
+`template = "ui/custom.html"` under `[ui]` in `.cli-agent/project.toml`,
+and create `.cli-agent/ui/custom.html` (a UTF-8 regular file with no links).
+
+Example:
+```jinja2
+{% extends "cli_agent/index.html" %}
+
+{% block app_info %}
+  <div class="project-info">
+    {{ self.app_title() }}
+    <p>Specialized AI assistant</p>
+    {{ self.session_meta() }}
+  </div>
+{% endblock %}
+
+{% block header_buttons %}
+  <div class="header-actions">
+    {{ self.button_language_selector() }}
+    {{ self.button_show_working_context() }}
+    <span>Project controls</span>
+    {{ self.button_new_session() }}
+    {{ self.button_list_sessions() }}
+    {{ self.button_reset_history() }}
+    {{ self.button_end_session() }}
+  </div>
+{% endblock %}
+```
+
+Nested extension blocks include `header_row`, `app_info`, `app_title`,
+`session_meta`, `header_buttons`, `button_*`, `commands`,
+`command_*`, `chat`, `composer`, `dialogs` and its individual
+dialog blocks, as well as `extra_head` and `footer`. Use
+`{{ self.name_of_block() }}` to reuse a component in a different order,
+or `{{ super() }}` to retain and extend a parent block.
+
+The JavaScript still relies on certain DOM elements being present exactly
+once, even if a control is hidden. Rendered pages are validated before
+serving. The normal Content-Security-Policy is preserved, so arbitrary
+inline scripts and styles are not permitted. These project templates are
+trusted local application configuration, not a safe way to render
+untrusted user/LLM-controlled template source.
+
 ## Optional local browser UI
 
 Install the optional web dependencies:

@@ -122,6 +122,7 @@ class UiButtonsConfig:
 class UiConfig:
     title: str = "cli-agent"
     default_language: str | None = None
+    template: str | None = None
     buttons: UiButtonsConfig = field(default_factory=UiButtonsConfig)
 
 
@@ -430,7 +431,7 @@ def _ui_config(values: Any) -> UiConfig:
     """Parse presentation-only browser settings, with strict field validation."""
     if not isinstance(values, dict):
         raise ValueError("[ui] must be a table.")
-    if set(values) - {"title", "default_language", "buttons"}:
+    if set(values) - {"title", "default_language", "template", "buttons"}:
         raise ValueError("[ui] contains unknown options.")
 
     title = values.get("title", "cli-agent")
@@ -452,6 +453,11 @@ def _ui_config(values: Any) -> UiConfig:
             or default_language not in available_locales()
         ):
             raise ValueError("ui.default_language must name an available UI translation.")
+
+    template = values.get("template")
+    if template is not None:
+        from cli_agent.settings.project_config import validate_project_ui_template_name
+        validate_project_ui_template_name(template)
 
     buttons = values.get("buttons", {})
     if not isinstance(buttons, dict):
@@ -484,7 +490,7 @@ def _ui_config(values: Any) -> UiConfig:
         commands=command_config,
     )
     return UiConfig(
-        title=title, default_language=default_language, buttons=button_config,
+        title=title, default_language=default_language, template=template, buttons=button_config,
     )
 
 
