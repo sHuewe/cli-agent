@@ -360,7 +360,10 @@ def test_project_ui_rejects_invalid_settings(tmp_path: Path, definition: str):
 
 
 
-def test_project_ui_template_is_loaded_as_trusted_private_file(tmp_path: Path):
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_project_ui_template_is_loaded_as_trusted_private_file(
+    tmp_path: Path, line_ending: str,
+):
     from cli_agent.settings.project_config import read_project_ui_template
 
     global_config = tmp_path / "config.toml"
@@ -368,8 +371,13 @@ def test_project_ui_template_is_loaded_as_trusted_private_file(tmp_path: Path):
     folder = _project(tmp_path, '[ui]\ntemplate = "ui/overview.html"\n')
     ui_dir = folder / "ui"
     ui_dir.mkdir()
-    template = '{% extends "cli_agent/index.html" %}\n{% block footer %}My project{% endblock %}'
-    (ui_dir / "overview.html").write_text(template, encoding="utf-8")
+    template = (
+        '{% extends "cli_agent/index.html" %}' + line_ending +
+        '{% block footer %}My project{% endblock %}'
+    )
+    # Write exact bytes: Path.write_text() translates LF to CRLF on Windows,
+    # whereas the project template reader intentionally preserves newlines.
+    (ui_dir / "overview.html").write_bytes(template.encode("utf-8"))
     effective = load_config(global_config, workspace=tmp_path)
     assert effective.ui.template == "ui/overview.html"
     assert read_project_ui_template(tmp_path, effective.ui.template) == template
