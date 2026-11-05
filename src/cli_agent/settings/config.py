@@ -94,6 +94,7 @@ class ModelConfig:
 @dataclass(frozen=True)
 class AgentConfig:
     timezone: str | None = None
+    system_prompt: str | None = None
 
 
 
@@ -175,19 +176,21 @@ def _bool_value(values: dict[str, Any], key: str, default: bool, *, section: str
 
 def _agent_config(values: Any) -> AgentConfig:
     if not isinstance(values, dict):
-        raise ValueError("[agent] muss eine Tabelle sein.")
-    if set(values) - {"timezone"}:
+        raise ValueError("[agent] must be a table.")
+    if set(values) - {"timezone", "system_prompt"}:
         raise ValueError("[agent] contains unknown options.")
     timezone = values.get("timezone")
-    if timezone is None:
-        return AgentConfig()
-    if not isinstance(timezone, str) or not timezone or timezone != timezone.strip():
-        raise ValueError("agent.timezone must be a valid IANA time zone.")
-    try:
-        ZoneInfo(timezone)
-    except (ValueError, ZoneInfoNotFoundError) as exc:
-        raise ValueError(f"Invalid IANA time zone in agent.timezone: {timezone!r}") from exc
-    return AgentConfig(timezone=timezone)
+    if timezone is not None:
+        if not isinstance(timezone, str) or not timezone or timezone != timezone.strip():
+            raise ValueError("agent.timezone must be a valid IANA time zone.")
+        try:
+            ZoneInfo(timezone)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValueError(f"Invalid IANA time zone in agent.timezone: {timezone!r}") from exc
+    system_prompt = values.get("system_prompt")
+    if system_prompt is not None and (not isinstance(system_prompt, str) or not system_prompt.strip()):
+        raise ValueError("agent.system_prompt must be a nonempty filename.")
+    return AgentConfig(timezone=timezone, system_prompt=system_prompt)
 
 
 def _logging_file(values: dict[str, Any], defaults: LoggingConfig) -> Path:
@@ -395,19 +398,8 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     )
 
 
-def load_config(path: Path | None = None) -> AppConfig:
-    if path is None:
-        config_file = ensure_default_config_file()
-    else:
-        config_file = path.expanduser()
-        if not config_file.exists():
-            raise FileNotFoundError(
-                f"Explizit angegebene Konfigurationsdatei existiert nicht: {config_file}"
-            )
-    if not config_file.exists():
-        return AppConfig()
-    with config_file.open("rb") as handle:
-        values = tomllib.load(handle)
+def _parse_config_values(values: dict[str, Any]) -> AppConfig:
+    """Validate the effective configuration after field-level overrides."""
     if "network" in values:
         raise ValueError(
             "[network] is no longer user configuration. Network allowlists "
@@ -461,3 +453,24 @@ def load_config(path: Path | None = None) -> AppConfig:
         okf=okf,
         max_pdf_pages=max_pdf_pages,
     )
+
+def load_config(path: Path | None = None, *, workspace: Path | None = None) -> AppConfig:
+    """Read global config and optionally overlay workspace/.cli-agent/project.toml."""
+    if path is None:
+        config_file = ensure_default_config_file()
+    else:
+        config_file = path.expanduser()
+        if not config_file.exists():
+            raise FileNotFoundError(
+                f"Explicit configuration file does not exist: {config_file}"
+            )
+    values: dict[str, Any] = {}
+    if config_file.exists():
+        with config_file.open("rb") as handle:
+            values = tomllib.load(handle)
+    if workspace is not None:
+        from cli_agent.settings.project_config import (
+            merge_project_overrides, read_project_overrides,
+        )
+        values = merge_project_overrides(values, read_project_overrides(workspace))
+    return _parse_config_values(values)
