@@ -552,13 +552,14 @@ async def run_admin(args: argparse.Namespace) -> None:
 
 
 async def run(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
-    admin_config: AdminConfig = load_admin_config()
-    config = apply_model_cli_override(config, model=args.model)
-
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
+    config = load_config(args.config, workspace=workspace)
+    admin_config: AdminConfig = load_admin_config()
+    config = apply_model_cli_override(config, model=args.model)
+    from cli_agent.settings.project_config import read_project_system_prompt
+    project_system_prompt = read_project_system_prompt(workspace, config.agent.system_prompt)
 
     excluded_paths = tuple(getattr(args, "exclude_path", ()) or ())
     if excluded_paths and args.os_access not in {"read", "write"}:
@@ -688,6 +689,7 @@ async def run(args: argparse.Namespace) -> None:
             config=config,
             admin_config=admin_config,
             workspace=workspace,
+            system_prompt=project_system_prompt,
             file_contexts=file_contexts,
             output_target=output_target,
             excluded_paths=resolved_excluded_paths,
@@ -738,6 +740,7 @@ async def run(args: argparse.Namespace) -> None:
         config.mcp_servers,
         logging_config=config.logging,
         agent_timezone=config.agent.timezone,
+        system_prompt=project_system_prompt,
         config_file=args.config or default_config_file(),
         dump_llm_context=config.dump_llm_context,
         network=admin_config.network,
