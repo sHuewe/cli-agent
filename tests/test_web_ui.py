@@ -685,3 +685,26 @@ def test_jinja_rejects_broken_javascript_structure(template):
 
     with pytest.raises(ValueError, match="UI template"):
         web_ui.render_index_html(UiConfig(), project_template=template)
+
+
+
+def test_built_in_ui_has_modern_styles_and_theme_links():
+    from importlib.resources import files
+    from cli_agent.settings.config import UiConfig
+
+    rendered = web_ui.render_index_html(
+        UiConfig(theme="bright", stylesheets=("ui/branding.css",)),
+    )
+    assert 'href="/assets/themes/bright.css"' in rendered
+    assert 'href="/assets/ui/branding.css"' in rendered
+    assert 'class="app-brand"' in rendered
+    for theme in ("bright", "dark"):
+        data = files("cli_agent.interfaces").joinpath(
+            "static", "themes", theme + ".css",
+        ).read_text(encoding="utf-8")
+        assert "--ui-panel:" in data
+        assert "--ui-text:" in data
+        assert "--ui-accent:" in data
+    assert "100dvh" in web_ui.APP_CSS
+    assert "#composer:focus-within" in web_ui.APP_CSS
+    assert "[hidden] { display: none !important; }" in web_ui.APP_CSS

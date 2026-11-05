@@ -409,3 +409,72 @@ def test_project_ui_template_mcp_access_is_protected(tmp_path: Path):
         workspace._reject_protected_read(ui_dir / "custom.html")
     with pytest.raises(WorkspaceError):
         workspace._reject_protected_mutation(ui_dir / "custom.html")
+
+
+
+def test_ui_theme_and_stylesheets_project_overrides(tmp_path: Path):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text(
+        '[ui]\ntheme = "bright"\nstylesheets = ["ui/global.css"]\n',
+        encoding="utf-8",
+    )
+    _project(tmp_path, '[ui]\ntheme = "dark"\nstylesheets = ["ui/brand.css", "ui/layout.css"]\n')
+    effective = load_config(global_config, workspace=tmp_path)
+    assert effective.ui.theme == "dark"
+    assert effective.ui.stylesheets == ("ui/brand.css", "ui/layout.css")
+
+
+@pytest.mark.parametrize("value", [
+    'theme = "auto"',
+    'theme = "Dark"',
+    'theme = true',
+    'stylesheets = "ui/custom.css"',
+    'stylesheets = ["../evil.css"]',
+    'stylesheets = ["/etc/passwd"]',
+    'stylesheets = ["ui/nested/custom.css"]',
+    'stylesheets = ["ui/custom.css", "ui/custom.css"]',
+    'stylesheets = [false]',
+    'stylesheets = [' + ', '.join('"ui/file%d.css"' % x for x in range(9)) + ']',
+])
+def test_ui_theme_rejects_invalid_project_configuration(tmp_path: Path, value: str):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("", encoding="utf-8")
+    _project(tmp_path, "[ui]\n" + value + "\n")
+    with pytest.raises(ValueError, match="ui.theme|ui.stylesheets"):
+        load_config(cfg, workspace=tmp_path)
+
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_project_ui_stylesheets_preserve_bytes_and_order(tmp_path: Path, line_ending: str):
+    from cli_agent.settings.project_config import read_project_ui_stylesheets
+
+    ui_dir = tmp_path / ".cli-agent" / "ui"
+    ui_dir.mkdir(parents=True)
+    theme = (":root {" + line_ending + "  --app-accent: #345;" + line_ending + "}")
+    (ui_dir / "branding.css").write_bytes(theme.encode("utf-8"))
+    (ui_dir / "overrides.css").write_bytes(b"header { border: 0; }")
+    stylesheets = read_project_ui_stylesheets(
+        tmp_path, ("ui/branding.css", "ui/overrides.css"),
+    )
+    assert list(stylesheets) == ["branding.css", "overrides.css"]
+    assert stylesheets["branding.css"] == theme
+    assert stylesheets["overrides.css"] == "header { border: 0; }"
+
+
+def test_project_ui_stylesheet_is_protected_from_workspace_mcp(tmp_path: Path):
+    from cli_agent.settings.project_config import read_project_ui_stylesheets
+
+    ui_dir = tmp_path / ".cli-agent" / "ui"
+    ui_dir.mkdir(parents=True)
+    filename = ui_dir / "custom.css"
+    filename.write_bytes(b"body { color: red; }")
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True}),
+    )
+    assert read_project_ui_stylesheets(tmp_path, ("ui/custom.css",)) == {
+        "custom.css": "body { color: red; }",
+    }
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_read(filename)
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_mutation(filename)
