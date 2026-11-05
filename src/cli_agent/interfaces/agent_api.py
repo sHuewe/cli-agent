@@ -153,6 +153,7 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/assets/app.css", browser["ui_css"], methods=["GET"]),
             Route("/assets/themes/{theme}.css", browser["ui_theme_css"], methods=["GET"]),
             Route("/assets/ui/{name}.css", browser["ui_project_css"], methods=["GET"]),
+            Route("/assets/ui/icon/{filename}", browser["ui_icon_image"], methods=["GET"]),
             Route("/assets/app.js", browser["ui_js"], methods=["GET"]),
             Route("/assets/i18n.js", browser["ui_i18n"], methods=["GET"]),
             Route("/assets/i18n/locales.json", browser["ui_locales"], methods=["GET"]),

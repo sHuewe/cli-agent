@@ -21,7 +21,11 @@
       <div class="app-brand">
         {% block app_icon %}
         {% if ui.icon != "" %}
+        {% if ui.icon is not none and ui.icon.startswith("ui/") %}
+        <span class="app-icon app-icon-custom app-icon-image" aria-hidden="true"><img src="/assets/ui/icon/{{ ui.icon[3:] }}" alt="" decoding="async"></span>
+        {% else %}
         <span class="app-icon{% if ui.icon is not none %} app-icon-custom{% endif %}" aria-hidden="true">{% if ui.icon is not none %}{{ ui.icon }}{% endif %}</span>
+        {% endif %}
         {% endif %}
         {% endblock app_icon %}
         <div class="app-brand-copy">

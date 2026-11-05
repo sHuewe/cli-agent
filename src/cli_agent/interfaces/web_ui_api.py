@@ -52,6 +52,10 @@ async def run_web_ui_via_api(
     project_stylesheets = read_project_ui_stylesheets(
         workspace, getattr(getattr(config, "ui", None), "stylesheets", ()),
     )
+    from cli_agent.settings.project_config import read_project_ui_icon
+    project_icon = read_project_ui_icon(
+        workspace, getattr(getattr(config, "ui", None), "icon", None),
+    )
     config_file = args.config or default_config_file()
     exclusions = tuple(excluded_paths)
     preview_workspace = (
@@ -127,6 +131,7 @@ async def run_web_ui_via_api(
             "ui_config": getattr(config, "ui", None),
             "ui_template": project_template,
             "ui_stylesheets": project_stylesheets,
+            "ui_icon_asset": project_icon,
             "info": {
                 "workspace": str(workspace),
                 "model": config.model.model,

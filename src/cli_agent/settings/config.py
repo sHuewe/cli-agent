@@ -447,16 +447,19 @@ def _ui_config(values: Any) -> UiConfig:
     ):
         raise ValueError("ui.title must be a nonempty title of at most 120 characters without control characters.")
 
-    # None retains the built-in CSS logo; "" hides the logo entirely.
-    # Other strings are rendered as HTML-escaped text (e.g. an emoji or initial).
+    # None uses the built-in CSS icon, "" hides it, other strings are glyphs
+    # or a private project image under .cli-agent/ui/.
     icon = values.get("icon")
-    if icon is not None and (
-        not isinstance(icon, str)
-        or len(icon) > 16
-        or icon != icon.strip()
-        or any(ord(char) < 32 or ord(char) == 127 for char in icon)
-    ):
-        raise ValueError("ui.icon must be a short symbol (at most 16 characters), or an empty string.")
+    if icon is not None:
+        if not isinstance(icon, str) or icon != icon.strip() or any(
+            ord(char) < 32 or ord(char) == 127 for char in icon
+        ):
+            raise ValueError("ui.icon must be a symbol or an image under ui/.")
+        if icon.startswith("ui/"):
+            from cli_agent.settings.project_config import validate_project_ui_image_name
+            validate_project_ui_image_name(icon)
+        elif len(icon) > 16 or "/" in icon or "\\" in icon:
+            raise ValueError("ui.icon must be a short symbol (at most 16 characters), or a supported image under ui/.")
 
     default_language = values.get("default_language")
     if default_language is not None:

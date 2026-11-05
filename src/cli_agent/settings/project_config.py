@@ -165,3 +165,54 @@ def read_project_ui_stylesheets(workspace: Path, filenames: tuple[str, ...]) -> 
         except UnicodeError as exc:
             raise ValueError("Project UI stylesheets must use UTF-8.") from exc
     return result
+
+
+_UI_IMAGE_RE = __import__("re").compile(r"ui/[a-zA-Z0-9_-]+\.(?:png|jpg|jpeg|webp)\Z")
+MAX_UI_ICON_BYTES = 1024 * 1024
+
+
+def validate_project_ui_image_name(filename: str) -> None:
+    """Allow only local raster images directly beneath .cli-agent/ui."""
+    if not isinstance(filename, str) or not _UI_IMAGE_RE.fullmatch(filename):
+        raise ValueError("ui.icon must name a PNG, JPEG or WebP file like 'ui/logo.png'.")
+
+
+def read_project_ui_icon(workspace: Path, filename: str | None) -> tuple[str, bytes, str] | None:
+    """Read the configured image once via the private host reader.
+
+    Do not serve files by user-supplied path or expose them through OS MCP.
+    """
+    if filename is None or not filename.startswith("ui/"):
+        return None
+    validate_project_ui_image_name(filename)
+    folder = _project_directory(workspace) / "ui"
+    if path_entry_is_symlink_or_reparse(folder) or not folder.is_dir():
+        raise ValueError(".cli-agent/ui must be a real directory.")
+    name = filename.removeprefix("ui/")
+    data = _read_private_file(folder / name, limit=MAX_UI_ICON_BYTES)
+    lower = name.rsplit(".", 1)[-1]
+    if lower == "png":
+        valid = (
+            len(data) >= 33
+            and data.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+            and data[12:16] == b"IHDR"
+            and int.from_bytes(data[8:12], "big") == 13
+            and 0 < int.from_bytes(data[16:20], "big") <= 4096
+            and 0 < int.from_bytes(data[20:24], "big") <= 4096
+        )
+        mime_type = "image/png"
+    elif lower in {"jpg", "jpeg"}:
+        valid = len(data) >= 16 and data.startswith(b"\\xff\\xd8\\xff") and data.endswith(b"\\xff\\xd9")
+        mime_type = "image/jpeg"
+    else:
+        valid = (
+            len(data) >= 20
+            and data.startswith(b"RIFF")
+            and data[8:12] == b"WEBP"
+            and data[12:16] in {b"VP8 ", b"VP8L", b"VP8X"}
+            and int.from_bytes(data[4:8], "little") + 8 == len(data)
+        )
+        mime_type = "image/webp"
+    if not valid:
+        raise ValueError("ui.icon image contents do not match the configured file format.")
+    return name, data, mime_type

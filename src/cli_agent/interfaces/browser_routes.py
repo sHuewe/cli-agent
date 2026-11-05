@@ -41,6 +41,14 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
             return browser_security_headers(PlainTextResponse("Not found", status_code=404))
         return browser_security_headers(PlainTextResponse(data, media_type="text/css"))
 
+    async def ui_icon_image(request: Request) -> Response:
+        # Serve only the exact image read from private project configuration
+        # at startup. Unknown filenames are never resolved from disk.
+        asset = ui.get("ui_icon_asset")
+        if asset is None or request.path_params["filename"] != asset[0]:
+            return browser_security_headers(PlainTextResponse("Not found", status_code=404))
+        return browser_security_headers(Response(asset[1], media_type=asset[2]))
+
     async def ui_js(_request: Request) -> Response:
         from cli_agent.interfaces.web_ui_api import API_APP_JS
         return browser_security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
@@ -233,6 +241,7 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         ("ui_css", ui_css),
         ("ui_theme_css", ui_theme_css),
         ("ui_project_css", ui_project_css),
+        ("ui_icon_image", ui_icon_image),
         ("ui_js", ui_js),
         ("ui_i18n", ui_i18n),
         ("ui_locales", ui_locales),

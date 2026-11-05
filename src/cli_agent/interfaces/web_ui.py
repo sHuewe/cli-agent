@@ -731,6 +731,8 @@ header .app-brand-copy { flex: 1 1 auto; min-width: 0; }
   transform: rotate(-14deg);
 }
 .app-icon-custom::after { content: none; }
+.app-icon-image { overflow: hidden; padding: 0; background: transparent; box-shadow: none; }
+.app-icon-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
 h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.52rem); font-weight: 740; letter-spacing: -.035em; line-height: 1.28; }
 .meta { font-size: .83rem; line-height: 1.5; color: var(--ui-muted, #64748b); opacity: 1; overflow-wrap: anywhere; }
 .header-actions { display: flex; flex: 0 1 630px; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 7px; }
@@ -947,7 +949,7 @@ def _security_headers(response: Any) -> Any:
         "script-src 'self'; "
         "style-src 'self'; "
         "connect-src 'self'; "
-        "img-src 'none'; "
+        "img-src 'self'; "
         "object-src 'none'; "
         "frame-ancestors 'none'; "
         "base-uri 'none'; "
