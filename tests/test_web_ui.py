@@ -574,3 +574,55 @@ def test_chroma_search_summaries_render_only_from_standard_agui_tool_results():
     assert german["vector.initial"] == "Initiale Suche"
     assert "summary.textContent =" in script
     assert "summary.innerHTML" not in script
+
+
+def test_configured_ui_title_and_controls_are_rendered_safely() -> None:
+    from cli_agent.settings.config import UiButtonsConfig, UiCommandButtonsConfig, UiConfig
+
+    assert web_ui.render_index_html() == web_ui.INDEX_HTML
+    configured = UiConfig(
+        title="<SignalDeck & Assistant>",
+        default_language="de",
+        buttons=UiButtonsConfig(
+            new_session=False,
+            list_sessions=False,
+            reset_history=False,
+            show_working_context=False,
+            end_session=False,
+            language_selector=False,
+            commands=UiCommandButtonsConfig(
+                tokens=False,
+                add_web_context=False,
+                clear_web_context=False,
+                enable=False,
+                disable=False,
+            ),
+        ),
+    )
+    rendered = web_ui.render_index_html(configured)
+    assert "<title>&lt;SignalDeck &amp; Assistant&gt;</title>" in rendered
+    assert "<h1>&lt;SignalDeck &amp; Assistant&gt;</h1>" in rendered
+    assert "<SignalDeck & Assistant>" not in rendered
+    assert 'data-default-language="de"' in rendered
+    assert 'data-language-selector="false"' in rendered
+    assert 'class="language-picker" hidden' in rendered
+    assert 'id="new-session" hidden' in rendered
+    assert 'id="list-sessions" hidden' in rendered
+    assert 'id="reset-history" hidden' in rendered
+    assert 'id="show-working-context" hidden' in rendered
+    assert 'id="quit" hidden' in rendered
+    assert 'id="commands" hidden' in rendered
+    for command in ("tokens", "add_web_context", "clear_web_context", "enable", "disable"):
+        assert f'data-command="{command}" hidden' in rendered
+    assert '[hidden] { display: none !important; }' in web_ui.APP_CSS
+    assert 'id="prompt"' in rendered
+    assert 'id="send"' in rendered
+    assert 'data-decision="yes"' in rendered
+
+
+def test_default_ui_title_and_buttons_remain_unchanged() -> None:
+    from cli_agent.settings.config import UiConfig
+
+    assert web_ui.render_index_html(UiConfig()) == web_ui.INDEX_HTML
+    assert '<title>cli-agent</title>' in web_ui.INDEX_HTML
+    assert 'id="new-session"' in web_ui.INDEX_HTML

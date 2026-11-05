@@ -965,3 +965,34 @@ def test_approval_cancel_and_click_keep_interrupt_until_response():
     assert 'approval.close();' not in handlers
     assert 'event.preventDefault();' in handlers
     assert 'approvalSubmitting' in handlers
+
+
+@pytest.mark.asyncio
+async def test_browser_index_uses_ui_configuration():
+    from cli_agent.settings.config import UiConfig, UiButtonsConfig
+
+    service = AgentApiService(lambda session: BrowserAgent(session))
+    session = await service.create()
+    ui = {
+        "token": "browser-secret", "session_id": session.id,
+        "registry": BrowserSessionRegistry(service, session.id),
+        "origin": "http://127.0.0.1:9191",
+        "info": {"model": "test", "workspace": "/workspace", "mcp_servers": []},
+        "ui_config": UiConfig(
+            title="Project Dashboard",
+            default_language="de",
+            buttons=UiButtonsConfig(new_session=False, language_selector=False),
+        ),
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+        base_url="http://127.0.0.1:9191",
+    ) as client:
+        response = await client.get("/")
+        assert response.status_code == 200
+        assert "<title>Project Dashboard</title>" in response.text
+        assert 'data-default-language="de"' in response.text
+        assert 'data-language-selector="false"' in response.text
+        assert 'id="new-session" hidden' in response.text
+        assert "script-src 'self'" in response.headers["content-security-policy"]
+    await service.shutdown()
