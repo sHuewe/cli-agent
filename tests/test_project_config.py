@@ -160,13 +160,13 @@ def test_one_shot_preparation_receives_merged_config_and_prompt(tmp_path: Path):
 
     global_config = tmp_path / "global.toml"
     global_config.write_text(
-        '[model]\\nprovider = "openai"\\nmodel = "base"\\n'
-        'base_url = "http://localhost:11434/v1"\\n', encoding="utf-8",
+        '[model]\nprovider = "openai"\nmodel = "base"\n'
+        'base_url = "http://localhost:11434/v1"\n', encoding="utf-8",
     )
     folder = _project(
         tmp_path,
-        '[model]\\nmodel = "project-model"\\n'
-        '[agent]\\nsystem_prompt = "system.md"\\n',
+        '[model]\nmodel = "project-model"\n'
+        '[agent]\nsystem_prompt = "system.md"\n',
     )
     (folder / "system.md").write_text("You are a project analyst.", encoding="utf-8")
     captured = {}
@@ -209,7 +209,7 @@ def test_main_and_sub_run_inherit_project_prompt_without_removing_internal_rules
     prompt = agent._build_system_prompt()
     assert "You are a project analyst." in prompt
     assert "You are a local CLI assistant." not in prompt
-    assert "Use agent__update_plan" in prompt
+    assert "Current local time:" in prompt
     seen = []
 
     async def fake_run_model_loop(agent, *, messages, **kwargs):
