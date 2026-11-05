@@ -144,7 +144,7 @@ def test_direct_private_files_cannot_be_exposed_even_when_parent_allowed(tmp_pat
     (data / "rows.json").write_text('{"x": 1}', encoding="utf-8")
     workspace = Workspace.from_directory(
         tmp_path, McpServerConfig(name="os", config={"allow_write_files": True}),
-        allowed_paths=(AllowedPath(folder, "write"),),
+        allowed_paths=(AllowedPath(folder, "write"), AllowedPath(data, "write")),
     )
     with pytest.raises(WorkspaceError):
         workspace.read_file(".cli-agent/system.md")
