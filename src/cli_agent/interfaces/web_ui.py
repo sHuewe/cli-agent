@@ -562,163 +562,17 @@ class WebUiApprovalBroker:
             self._blocked_approvals.discard(request_id)
 
 
-INDEX_HTML = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>cli-agent</title>
-  <link rel="stylesheet" href="/assets/app.css">
-  <script src="/assets/i18n.js" defer></script>
-  <script src="/assets/app.js" defer></script>
-</head>
-<body>
-  <main class="shell">
-    <header>
-      <div>
-        <h1>cli-agent</h1>
-        <div id="session-meta" class="meta">Connecting …</div>
-      </div>
-      <div class="header-actions">
-        <label class="language-picker" for="language-select"><span data-i18n="language.label">Language</span><select id="language-select"><option value="en">English</option></select></label>
-        <button id="new-session" class="secondary" type="button" data-i18n="session.new">New session in new tab</button>
-        <button id="list-sessions" class="secondary" type="button" data-i18n="session.list">Sessions</button>
-        <button id="reset-history" class="secondary" type="button" data-i18n="history.reset">Reset history</button>
-        <button id="show-working-context" class="secondary" type="button" data-i18n="context.open">LLM Context</button>
-        <button id="quit" class="secondary" type="button" data-i18n="session.end">End session</button>
-      </div>
-    </header>
-    <section id="chat" class="chat" aria-live="polite"></section>
-    <div id="commands" class="commands" data-i18n-aria-label="commands.label" aria-label="Local commands">
-      <button class="secondary" data-command="tokens" type="button" data-i18n="commands.tokens">Tokens</button>
-      <button class="secondary" data-command="add_web_context" type="button" data-i18n="commands.addWeb">Add web context</button>
-      <button class="secondary" data-command="clear_web_context" type="button" data-i18n="commands.clearWeb">Clear web context</button>
-      <button class="secondary" data-command="enable" type="button" data-i18n="commands.enableMcp">Enable MCP</button>
-      <button class="secondary" data-command="disable" type="button" data-i18n="commands.disableMcp">Disable MCP</button>
-      <button id="cancel-command" class="secondary hidden" type="button" data-i18n="commands.cancel">Cancel</button>
-    </div>
-    <form id="composer">
-      <textarea id="prompt" rows="3" data-i18n-placeholder="composer.placeholder" placeholder="Message to cli-agent" required></textarea>
-      <button id="send" type="submit" data-i18n="composer.send">Send</button>
-      <button id="stop-run" class="secondary" type="button" hidden data-i18n="composer.stop">Stop</button>
-    </form>
-  </main>
-  <dialog id="sessions-dialog" class="working-context-dialog">
-    <div class="dialog-header">
-      <h2 data-i18n="session.list">Sessions</h2>
-      <button id="close-sessions" class="secondary" type="button" data-i18n="actions.close">Close</button>
-    </div>
-    <p class="meta" data-i18n="session.description">Each session can only be open in one active browser tab. Available sessions may be reopened or ended.</p>
-    <div id="sessions-list" class="state-list"></div>
-    <button id="refresh-sessions" class="secondary" type="button" data-i18n="actions.refresh">Refresh</button>
-  </dialog>
-  <dialog id="working-context-dialog" class="working-context-dialog">
-    <div class="dialog-header">
-      <div>
-        <h2 data-i18n="context.open">LLM Context</h2>
-        <div class="meta" data-i18n="context.description">Messages from the last main loop, plus currently active tools and reference contexts.</div>
-      </div>
-      <div class="dialog-actions">
-        <button id="refresh-working-context" class="secondary" type="button" data-i18n="actions.refresh">Refresh</button>
-        <button id="close-working-context" class="secondary" type="button" data-i18n="actions.close">Close</button>
-      </div>
-    </div>
-    <div class="dialog-actions"><label for="context-run-select" data-i18n="context.runLabel">Agent run:</label><select id="context-run-select"><option value="main" data-i18n="context.mainRun">Main run</option></select></div>
-    <div class="context-tabs" role="tablist" aria-label="LLM Context">
-      <button id="context-tab-messages" class="secondary active" type="button" role="tab" aria-selected="true" aria-controls="context-panel-messages" data-i18n="context.messages">Messages</button>
-      <button id="context-tab-tools" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-tools" data-i18n="context.tools">Tools</button>
-      <button id="context-tab-contexts" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-contexts" data-i18n="context.contexts">Context</button>
-    </div>
-    <div id="context-panel-messages" class="context-panel" role="tabpanel" aria-labelledby="context-tab-messages">
-      <div id="cleanup-processing-result" class="cleanup-processing-result hidden" aria-live="polite"></div>
-      <pre id="working-messages-json">[]</pre>
-    </div>
-    <div id="context-panel-tools" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-tools">
-      <div id="working-tools-list" class="state-list"></div>
-    </div>
-    <div id="context-panel-contexts" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-contexts">
-      <div id="okf-state"></div>
-      <div id="working-contexts-list" class="state-list"></div>
-    </div>
-  </dialog>
-  <dialog id="approval">
-    <h2 data-i18n="approval.title">Tool approval required</h2>
-    <div id="approval-tool" class="tool"></div>
-    <div id="approval-diff-section" class="hidden"><h3 data-i18n="approval.diff">Change preview</h3><pre id="approval-diff"></pre></div>
-    <pre id="approval-arguments"></pre>
-    <p id="approval-warning" class="hidden" role="alert"></p>
-    <div class="approval-actions">
-      <button data-decision="no" class="secondary" type="button" data-i18n="approval.no">No</button>
-      <button data-decision="session" class="secondary" type="button" data-i18n="approval.session">For session</button>
-      <button data-decision="yes" type="button" data-i18n="approval.yes">Yes</button>
-    </div>
-  </dialog>
-</body>
-</html>
-"""
+from importlib.resources import files as resource_files
 
-def render_index_html(config: UiConfig | None = None) -> str:
-    """Render configured labels and visibility without removing JS-owned nodes."""
-    config = config if config is not None else UiConfig()
-    if config == UiConfig():
-        return INDEX_HTML
+# Keep an importable template source for existing clients and tests.
+INDEX_HTML = resource_files("cli_agent.interfaces").joinpath(
+    "templates", "cli_agent", "index.html"
+).read_text(encoding="utf-8")
 
-    html = INDEX_HTML.replace(
-        "<title>cli-agent</title>", f"<title>{escape(config.title)}</title>", 1,
-    ).replace(
-        "<h1>cli-agent</h1>", f"<h1>{escape(config.title)}</h1>", 1,
-    )
 
-    root_attributes = []
-    if config.default_language is not None:
-        root_attributes.append(
-            f'data-default-language="{escape(config.default_language, quote=True)}"'
-        )
-    if not config.buttons.language_selector:
-        root_attributes.append('data-language-selector="false"')
-        html = html.replace(
-            '<label class="language-picker"',
-            '<label class="language-picker" hidden',
-            1,
-        )
-    if root_attributes:
-        html = html.replace(
-            '<html lang="en">',
-            '<html lang="en" ' + ' '.join(root_attributes) + '>',
-            1,
-        )
-
-    visible_elements = {
-        "new-session": config.buttons.new_session,
-        "list-sessions": config.buttons.list_sessions,
-        "reset-history": config.buttons.reset_history,
-        "show-working-context": config.buttons.show_working_context,
-        "quit": config.buttons.end_session,
-        "tokens": config.buttons.commands.tokens,
-        "add_web_context": config.buttons.commands.add_web_context,
-        "clear_web_context": config.buttons.commands.clear_web_context,
-        "enable": config.buttons.commands.enable,
-        "disable": config.buttons.commands.disable,
-    }
-    for element_id, visible in visible_elements.items():
-        if visible:
-            continue
-        marker = (
-            f'data-command="{element_id}"'
-            if element_id in {"tokens", "add_web_context", "clear_web_context", "enable", "disable"}
-            else f'id="{element_id}"'
-        )
-        html = html.replace(marker, marker + " hidden", 1)
-
-    if not any((
-        config.buttons.commands.tokens,
-        config.buttons.commands.add_web_context,
-        config.buttons.commands.clear_web_context,
-        config.buttons.commands.enable,
-        config.buttons.commands.disable,
-    )):
-        html = html.replace('id="commands"', 'id="commands" hidden', 1)
-    return html
+def render_index_html(config: UiConfig | None = None, *, project_template: str | None = None) -> str:
+    from cli_agent.interfaces.ui_templates import render_ui_template
+    return render_ui_template(config if config is not None else UiConfig(), project_template=project_template)
 
 
 APP_CSS = """
