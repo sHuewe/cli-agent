@@ -269,6 +269,10 @@ independently. For a quick change without overriding templates, configure:
 icon = "⚡"  # A short symbol or emoji
 ```
 
+Set `icon = "ui/logo.png"` to use a project image from
+`.cli-agent/ui/logo.png` instead. PNG, JPEG and WebP are supported,
+up to 1 MiB. SVG, external URLs and nested paths are not accepted.
+
 Omit `icon` for the built-in CSS logo, or set `icon = ""` to hide
 the icon. A Jinja2 override of `app_icon` may instead render custom
 markup, including an inline SVG. The existing CSP blocks external images,

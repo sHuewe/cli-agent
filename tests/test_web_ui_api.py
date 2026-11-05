@@ -1046,3 +1046,35 @@ async def test_browser_ui_theme_assets_are_scoped_and_delivered_with_csp():
         assert (await client.get("/assets/ui/branding.css", headers={"Host": "evil.example"})).status_code == 403
         assert (await client.get("/assets/ui/branding.css", headers={"Origin": "https://example.com"})).status_code == 403
     await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_local_ui_icon_route_only_serves_configured_image():
+    from cli_agent.settings.config import UiConfig
+    service = AgentApiService(lambda session: BrowserAgent(session))
+    session = await service.create()
+    data = b"image-bytes"
+    ui = {
+        "token": "browser-secret", "session_id": session.id,
+        "registry": BrowserSessionRegistry(service, session.id),
+        "origin": "http://127.0.0.1:9191",
+        "info": {"model": "test", "workspace": "/workspace", "mcp_servers": []},
+        "ui_config": UiConfig(icon="ui/logo.png"),
+        "ui_icon_asset": ("logo.png", data, "image/png"),
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+        base_url="http://127.0.0.1:9191",
+    ) as client:
+        assert 'src="/assets/ui/icon/logo.png"' in (await client.get("/")).text
+        response = await client.get("/assets/ui/icon/logo.png")
+        assert response.status_code == 200
+        assert response.content == data
+        assert response.headers["content-type"].startswith("image/png")
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert "img-src 'self'" in response.headers["content-security-policy"]
+        assert (await client.get("/assets/ui/icon/other.png")).status_code == 404
+        assert (await client.get("/assets/ui/icon/logo.svg")).status_code == 404
+        assert (await client.get("/assets/ui/icon/logo.png", headers={"Origin": "https://example.org"})).status_code == 403
+    await service.shutdown()

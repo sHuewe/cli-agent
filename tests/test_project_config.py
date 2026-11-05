@@ -501,3 +501,63 @@ def test_project_ui_app_icon_override(tmp_path: Path):
     global_config.write_text('[ui]\nicon = "X"\n', encoding="utf-8")
     _project(tmp_path, '[ui]\nicon = "⚡"\n')
     assert load_config(global_config, workspace=tmp_path).ui.icon == "⚡"
+
+
+def test_image_icon_file_validation_and_workspace_privacy(tmp_path: Path):
+    import base64
+    from cli_agent.settings.project_config import read_project_ui_icon
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("", encoding="utf-8")
+    folder = _project(tmp_path, '[ui]\nicon = "ui/logo.png"\n')
+    ui_dir = folder / "ui"
+    ui_dir.mkdir()
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6lCkAAAAASUVORK5CYII="
+    )
+    image = ui_dir / "logo.png"
+    image.write_bytes(png)
+    assert load_config(cfg, workspace=tmp_path).ui.icon == "ui/logo.png"
+    assert read_project_ui_icon(tmp_path, "ui/logo.png") == ("logo.png", png, "image/png")
+    assert read_project_ui_icon(tmp_path, "⚡") is None
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True}),
+    )
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_read(image)
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_mutation(image)
+
+
+@pytest.mark.parametrize("name", [
+    "ui/../secret.png", "ui/a/b.png", "/tmp/a.png", "ui/a.svg",
+    "ui/a.gif", "ui/a.html", "ui/a.PNG", "ui/a.png?x=1",
+    "https://example.org/a.png",
+])
+def test_image_icon_rejects_unsafe_config_paths(tmp_path: Path, name: str):
+    import json
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("", encoding="utf-8")
+    _project(tmp_path, "[ui]\nicon = " + json.dumps(name) + "\n")
+    with pytest.raises(ValueError, match="ui.icon"):
+        load_config(cfg, workspace=tmp_path)
+
+
+def test_image_icon_rejects_invalid_file_and_links(tmp_path: Path):
+    from cli_agent.settings.project_config import read_project_ui_icon
+    ui_dir = tmp_path / ".cli-agent" / "ui"
+    ui_dir.mkdir(parents=True)
+    image = ui_dir / "logo.png"
+    image.write_bytes(b"not-a-png")
+    with pytest.raises(ValueError, match="contents do not match"):
+        read_project_ui_icon(tmp_path, "ui/logo.png")
+    image.write_bytes(b"x" * (1024 * 1024 + 1))
+    with pytest.raises(ValueError, match="exceeds"):
+        read_project_ui_icon(tmp_path, "ui/logo.png")
+    image.unlink()
+    try:
+        image.symlink_to(tmp_path / "another.png")
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks not available")
+    with pytest.raises(ValueError, match="symlink|junction"):
+        read_project_ui_icon(tmp_path, "ui/logo.png")

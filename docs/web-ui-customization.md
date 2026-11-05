@@ -141,6 +141,13 @@ When replacing a parent such as `app_info`, explicitly render any nested
 children you still need with `{{ self.app_icon() }}` etc. Use
 `{{ super() }}` to retain the parent block's complete contents.
 
+To use a PNG, JPEG or WebP image directly under `.cli-agent/ui/`, set
+`[ui] icon = "ui/logo.png"`. The image is limited to 1 MiB, validated
+at startup and served only at `/assets/ui/icon/logo.png`. Other files
+in the directory are not exposed. SVG and external image URLs are not
+supported. The CSP permits only local same-origin images. Restart the UI
+after changing the file.
+
 The default icon is a CSS-drawn shape. Override only `app_icon` for a
 different icon, for example:
 

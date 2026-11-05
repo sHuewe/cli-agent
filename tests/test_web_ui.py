@@ -744,3 +744,12 @@ def test_configurable_app_icon_and_nested_block():
     assert '>Project</span>' in override
     assert '<h1>cli-agent</h1>' in override
     assert 'id="session-meta"' in override
+
+
+def test_project_image_icon_rendering_and_css():
+    from cli_agent.settings.config import UiConfig
+    rendered = web_ui.render_index_html(UiConfig(icon="ui/logo.png"))
+    assert 'src="/assets/ui/icon/logo.png"' in rendered
+    assert 'class="app-icon app-icon-custom app-icon-image"' in rendered
+    assert ".app-icon-image img" in web_ui.APP_CSS
+    assert 'id="session-meta"' in rendered
