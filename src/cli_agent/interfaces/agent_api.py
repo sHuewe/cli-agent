@@ -210,9 +210,16 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
         raise ValueError("--exclude-path requires OS access.")
 
     config_file = args.config or default_config_file()
-    config = load_config(args.config, workspace=workspace)
     from cli_agent.settings.project_config import read_project_system_prompt
-    project_system_prompt = read_project_system_prompt(workspace, config.agent.system_prompt)
+    project_file = workspace / ".cli-agent" / "project.toml"
+    config = (
+        load_config(args.config, workspace=workspace)
+        if project_file.exists() or project_file.is_symlink()
+        else load_config(args.config)
+    )
+    project_system_prompt = read_project_system_prompt(
+        workspace, getattr(config.agent, "system_prompt", None)
+    )
     admin = load_admin_config()
     if args.model is not None:
         from dataclasses import replace
