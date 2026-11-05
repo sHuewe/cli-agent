@@ -113,6 +113,7 @@ async def run_web_ui_via_api(
             "token": browser_token,
             "origin": origin,
             "session_id": session.id,
+            "ui_config": getattr(config, "ui", None),
             "info": {
                 "workspace": str(workspace),
                 "model": config.model.model,

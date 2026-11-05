@@ -135,26 +135,35 @@
     // Fetch the English fallback first, then the preferred language.
     try { await fetchCatalog("en"); }
     catch (_error) { /* Static HTML remains in English. */ }
+    const settings = document.documentElement.dataset || {};
+    const selectorEnabled = settings.languageSelector !== "false";
+    const configuredDefault = matchLocale(settings.defaultLanguage);
     let saved = null;
-    try { saved = window.localStorage.getItem(STORAGE_KEY); }
-    catch (_error) { /* Storage may be unavailable. */ }
-    const preferred = matchLocale(saved) || browserLocale();
+    if (selectorEnabled) {
+      try { saved = window.localStorage.getItem(STORAGE_KEY); }
+      catch (_error) { /* Storage may be unavailable. */ }
+    }
+    // With a hidden selector, enforce the project language instead of a
+    // previously saved preference from some other project.
+    const preferred = matchLocale(saved) || configuredDefault || browserLocale();
     if (preferred !== "en") {
       try { await fetchCatalog(preferred); locale = preferred; }
       catch (_error) { locale = "en"; }
     }
     populateSelector();
     apply();
-    if (select) {
+    if (select && selectorEnabled) {
       select.addEventListener("change", event => {
         void setLocale(event.target.value).then(success => {
           if (!success) select.value = locale;
         });
       });
     }
-    window.addEventListener("storage", event => {
-      if (event.key === STORAGE_KEY) void setLocale(event.newValue || browserLocale(), false);
-    });
+    if (selectorEnabled) {
+      window.addEventListener("storage", event => {
+        if (event.key === STORAGE_KEY) void setLocale(event.newValue || configuredDefault || browserLocale(), false);
+      });
+    }
   }
 
   window.cliAgentI18n = Object.freeze({

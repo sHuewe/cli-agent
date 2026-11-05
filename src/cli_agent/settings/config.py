@@ -99,6 +99,33 @@ class AgentConfig:
 
 
 @dataclass(frozen=True)
+class UiCommandButtonsConfig:
+    tokens: bool = True
+    add_web_context: bool = True
+    clear_web_context: bool = True
+    enable: bool = True
+    disable: bool = True
+
+
+@dataclass(frozen=True)
+class UiButtonsConfig:
+    new_session: bool = True
+    list_sessions: bool = True
+    reset_history: bool = True
+    show_working_context: bool = True
+    end_session: bool = True
+    language_selector: bool = True
+    commands: UiCommandButtonsConfig = field(default_factory=UiCommandButtonsConfig)
+
+
+@dataclass(frozen=True)
+class UiConfig:
+    title: str = "cli-agent"
+    default_language: str | None = None
+    buttons: UiButtonsConfig = field(default_factory=UiButtonsConfig)
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     enabled: bool = True
     level: str = "INFO"
@@ -159,6 +186,7 @@ class McpServerConfig:
 class AppConfig:
     dump_llm_context: bool = False
     agent: AgentConfig = AgentConfig()
+    ui: UiConfig = field(default_factory=UiConfig)
     model: ModelConfig = ModelConfig()
     logging: LoggingConfig = LoggingConfig()
     mcp_servers: tuple[McpServerConfig, ...] = ()
@@ -398,6 +426,68 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     )
 
 
+def _ui_config(values: Any) -> UiConfig:
+    """Parse presentation-only browser settings, with strict field validation."""
+    if not isinstance(values, dict):
+        raise ValueError("[ui] must be a table.")
+    if set(values) - {"title", "default_language", "buttons"}:
+        raise ValueError("[ui] contains unknown options.")
+
+    title = values.get("title", "cli-agent")
+    if (
+        not isinstance(title, str)
+        or not title
+        or title != title.strip()
+        or len(title) > 120
+        or any(ord(char) < 32 or ord(char) == 127 for char in title)
+    ):
+        raise ValueError("ui.title must be a nonempty title of at most 120 characters without control characters.")
+
+    default_language = values.get("default_language")
+    if default_language is not None:
+        from cli_agent.interfaces.web_ui_locales import available_locales
+        if (
+            not isinstance(default_language, str)
+            or default_language != default_language.strip()
+            or default_language not in available_locales()
+        ):
+            raise ValueError("ui.default_language must name an available UI translation.")
+
+    buttons = values.get("buttons", {})
+    if not isinstance(buttons, dict):
+        raise ValueError("[ui.buttons] must be a table.")
+    button_fields = (
+        "new_session", "list_sessions", "reset_history",
+        "show_working_context", "end_session", "language_selector",
+    )
+    if set(buttons) - {*button_fields, "commands"}:
+        raise ValueError("[ui.buttons] contains unknown options.")
+
+    commands = buttons.get("commands", {})
+    if not isinstance(commands, dict):
+        raise ValueError("[ui.buttons.commands] must be a table.")
+    command_fields = (
+        "tokens", "add_web_context", "clear_web_context", "enable", "disable",
+    )
+    if set(commands) - set(command_fields):
+        raise ValueError("[ui.buttons.commands] contains unknown options.")
+
+    command_config = UiCommandButtonsConfig(**{
+        name: _bool_value(commands, name, True, section="ui.buttons.commands")
+        for name in command_fields
+    })
+    button_config = UiButtonsConfig(
+        **{
+            name: _bool_value(buttons, name, True, section="ui.buttons")
+            for name in button_fields
+        },
+        commands=command_config,
+    )
+    return UiConfig(
+        title=title, default_language=default_language, buttons=button_config,
+    )
+
+
 def _parse_config_values(values: dict[str, Any]) -> AppConfig:
     """Validate the effective configuration after field-level overrides."""
     if "network" in values:
@@ -447,6 +537,7 @@ def _parse_config_values(values: dict[str, Any]) -> AppConfig:
         knowledge_vector=knowledge_vector,
         dump_llm_context=_bool_value(values, "dump_llm_context", False, section="Root-Konfiguration"),
         agent=_agent_config(values.get("agent", {})),
+        ui=_ui_config(values.get("ui", {})),
         model=_model_config(model_values),
         logging=_logging_config(logging_values),
         mcp_servers=mcp_servers,
