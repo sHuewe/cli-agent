@@ -562,163 +562,17 @@ class WebUiApprovalBroker:
             self._blocked_approvals.discard(request_id)
 
 
-INDEX_HTML = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>cli-agent</title>
-  <link rel="stylesheet" href="/assets/app.css">
-  <script src="/assets/i18n.js" defer></script>
-  <script src="/assets/app.js" defer></script>
-</head>
-<body>
-  <main class="shell">
-    <header>
-      <div>
-        <h1>cli-agent</h1>
-        <div id="session-meta" class="meta">Connecting …</div>
-      </div>
-      <div class="header-actions">
-        <label class="language-picker" for="language-select"><span data-i18n="language.label">Language</span><select id="language-select"><option value="en">English</option></select></label>
-        <button id="new-session" class="secondary" type="button" data-i18n="session.new">New session in new tab</button>
-        <button id="list-sessions" class="secondary" type="button" data-i18n="session.list">Sessions</button>
-        <button id="reset-history" class="secondary" type="button" data-i18n="history.reset">Reset history</button>
-        <button id="show-working-context" class="secondary" type="button" data-i18n="context.open">LLM Context</button>
-        <button id="quit" class="secondary" type="button" data-i18n="session.end">End session</button>
-      </div>
-    </header>
-    <section id="chat" class="chat" aria-live="polite"></section>
-    <div id="commands" class="commands" data-i18n-aria-label="commands.label" aria-label="Local commands">
-      <button class="secondary" data-command="tokens" type="button" data-i18n="commands.tokens">Tokens</button>
-      <button class="secondary" data-command="add_web_context" type="button" data-i18n="commands.addWeb">Add web context</button>
-      <button class="secondary" data-command="clear_web_context" type="button" data-i18n="commands.clearWeb">Clear web context</button>
-      <button class="secondary" data-command="enable" type="button" data-i18n="commands.enableMcp">Enable MCP</button>
-      <button class="secondary" data-command="disable" type="button" data-i18n="commands.disableMcp">Disable MCP</button>
-      <button id="cancel-command" class="secondary hidden" type="button" data-i18n="commands.cancel">Cancel</button>
-    </div>
-    <form id="composer">
-      <textarea id="prompt" rows="3" data-i18n-placeholder="composer.placeholder" placeholder="Message to cli-agent" required></textarea>
-      <button id="send" type="submit" data-i18n="composer.send">Send</button>
-      <button id="stop-run" class="secondary" type="button" hidden data-i18n="composer.stop">Stop</button>
-    </form>
-  </main>
-  <dialog id="sessions-dialog" class="working-context-dialog">
-    <div class="dialog-header">
-      <h2 data-i18n="session.list">Sessions</h2>
-      <button id="close-sessions" class="secondary" type="button" data-i18n="actions.close">Close</button>
-    </div>
-    <p class="meta" data-i18n="session.description">Each session can only be open in one active browser tab. Available sessions may be reopened or ended.</p>
-    <div id="sessions-list" class="state-list"></div>
-    <button id="refresh-sessions" class="secondary" type="button" data-i18n="actions.refresh">Refresh</button>
-  </dialog>
-  <dialog id="working-context-dialog" class="working-context-dialog">
-    <div class="dialog-header">
-      <div>
-        <h2 data-i18n="context.open">LLM Context</h2>
-        <div class="meta" data-i18n="context.description">Messages from the last main loop, plus currently active tools and reference contexts.</div>
-      </div>
-      <div class="dialog-actions">
-        <button id="refresh-working-context" class="secondary" type="button" data-i18n="actions.refresh">Refresh</button>
-        <button id="close-working-context" class="secondary" type="button" data-i18n="actions.close">Close</button>
-      </div>
-    </div>
-    <div class="dialog-actions"><label for="context-run-select" data-i18n="context.runLabel">Agent run:</label><select id="context-run-select"><option value="main" data-i18n="context.mainRun">Main run</option></select></div>
-    <div class="context-tabs" role="tablist" aria-label="LLM Context">
-      <button id="context-tab-messages" class="secondary active" type="button" role="tab" aria-selected="true" aria-controls="context-panel-messages" data-i18n="context.messages">Messages</button>
-      <button id="context-tab-tools" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-tools" data-i18n="context.tools">Tools</button>
-      <button id="context-tab-contexts" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-contexts" data-i18n="context.contexts">Context</button>
-    </div>
-    <div id="context-panel-messages" class="context-panel" role="tabpanel" aria-labelledby="context-tab-messages">
-      <div id="cleanup-processing-result" class="cleanup-processing-result hidden" aria-live="polite"></div>
-      <pre id="working-messages-json">[]</pre>
-    </div>
-    <div id="context-panel-tools" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-tools">
-      <div id="working-tools-list" class="state-list"></div>
-    </div>
-    <div id="context-panel-contexts" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-contexts">
-      <div id="okf-state"></div>
-      <div id="working-contexts-list" class="state-list"></div>
-    </div>
-  </dialog>
-  <dialog id="approval">
-    <h2 data-i18n="approval.title">Tool approval required</h2>
-    <div id="approval-tool" class="tool"></div>
-    <div id="approval-diff-section" class="hidden"><h3 data-i18n="approval.diff">Change preview</h3><pre id="approval-diff"></pre></div>
-    <pre id="approval-arguments"></pre>
-    <p id="approval-warning" class="hidden" role="alert"></p>
-    <div class="approval-actions">
-      <button data-decision="no" class="secondary" type="button" data-i18n="approval.no">No</button>
-      <button data-decision="session" class="secondary" type="button" data-i18n="approval.session">For session</button>
-      <button data-decision="yes" type="button" data-i18n="approval.yes">Yes</button>
-    </div>
-  </dialog>
-</body>
-</html>
-"""
+from importlib.resources import files as resource_files
 
-def render_index_html(config: UiConfig | None = None) -> str:
-    """Render configured labels and visibility without removing JS-owned nodes."""
-    config = config if config is not None else UiConfig()
-    if config == UiConfig():
-        return INDEX_HTML
+# Keep an importable template source for existing clients and tests.
+INDEX_HTML = resource_files("cli_agent.interfaces").joinpath(
+    "templates", "cli_agent", "index.html"
+).read_text(encoding="utf-8")
 
-    html = INDEX_HTML.replace(
-        "<title>cli-agent</title>", f"<title>{escape(config.title)}</title>", 1,
-    ).replace(
-        "<h1>cli-agent</h1>", f"<h1>{escape(config.title)}</h1>", 1,
-    )
 
-    root_attributes = []
-    if config.default_language is not None:
-        root_attributes.append(
-            f'data-default-language="{escape(config.default_language, quote=True)}"'
-        )
-    if not config.buttons.language_selector:
-        root_attributes.append('data-language-selector="false"')
-        html = html.replace(
-            '<label class="language-picker"',
-            '<label class="language-picker" hidden',
-            1,
-        )
-    if root_attributes:
-        html = html.replace(
-            '<html lang="en">',
-            '<html lang="en" ' + ' '.join(root_attributes) + '>',
-            1,
-        )
-
-    visible_elements = {
-        "new-session": config.buttons.new_session,
-        "list-sessions": config.buttons.list_sessions,
-        "reset-history": config.buttons.reset_history,
-        "show-working-context": config.buttons.show_working_context,
-        "quit": config.buttons.end_session,
-        "tokens": config.buttons.commands.tokens,
-        "add_web_context": config.buttons.commands.add_web_context,
-        "clear_web_context": config.buttons.commands.clear_web_context,
-        "enable": config.buttons.commands.enable,
-        "disable": config.buttons.commands.disable,
-    }
-    for element_id, visible in visible_elements.items():
-        if visible:
-            continue
-        marker = (
-            f'data-command="{element_id}"'
-            if element_id in {"tokens", "add_web_context", "clear_web_context", "enable", "disable"}
-            else f'id="{element_id}"'
-        )
-        html = html.replace(marker, marker + " hidden", 1)
-
-    if not any((
-        config.buttons.commands.tokens,
-        config.buttons.commands.add_web_context,
-        config.buttons.commands.clear_web_context,
-        config.buttons.commands.enable,
-        config.buttons.commands.disable,
-    )):
-        html = html.replace('id="commands"', 'id="commands" hidden', 1)
-    return html
+def render_index_html(config: UiConfig | None = None, *, project_template: str | None = None) -> str:
+    from cli_agent.interfaces.ui_templates import render_ui_template
+    return render_ui_template(config if config is not None else UiConfig(), project_template=project_template)
 
 
 APP_CSS = """
@@ -807,6 +661,297 @@ pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: an
   .message { max-width: 96%; }
   .state-row { grid-template-columns: 1fr; }
 }
+/* Modern application layout. Themes below supply all color tokens. */
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+body {
+  min-height: 100vh;
+  background: var(--ui-page, #f4f6fb);
+  color: var(--ui-text, #17243b);
+}
+.shell {
+  max-width: 1240px;
+  width: 100%;
+  height: 100dvh;
+  min-height: 520px;
+  padding: 18px clamp(14px, 3vw, 36px) 22px;
+  gap: 0;
+  overflow: hidden;
+}
+header { position: sticky; top: 0;
+  flex: 0 0 auto;
+  z-index: 30;
+  padding: 19px 24px;
+  align-items: center;
+  background: var(--ui-panel, #fff);
+  border: 1px solid var(--ui-border, #e3e8f0);
+  border-radius: 20px;
+  box-shadow: var(--ui-shadow, 0 8px 28px rgb(25 38 69 / .06));
+  gap: 26px;
+}
+/* Preserve a fallback for custom headers without app-brand.
+   The :first-child selector must not override app-brand's row layout. */
+header > div:first-child:not(.app-brand) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 290px;
+}
+header .app-brand {
+  display: flex;
+  flex: 1 1 290px;
+  min-width: 0;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+}
+header .app-brand-copy {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+.app-icon {
+  display: inline-flex;
+  position: relative;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  color: #fff;
+  font-size: 1.3rem;
+  line-height: 1;
+  background: linear-gradient(135deg, var(--ui-accent, #4169e1), var(--ui-accent-alt, #708bf5));
+  box-shadow: 0 7px 17px var(--ui-accent-shadow, rgb(65 105 225 / .22));
+}
+.app-icon::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border: 3px solid #fff;
+  border-radius: 5px;
+  transform: rotate(-14deg);
+}
+.app-icon-custom::after { content: none; }
+.app-icon-image { overflow: hidden; padding: 0; background: transparent; box-shadow: none; }
+.app-icon-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
+h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.52rem); font-weight: 740; letter-spacing: -.035em; line-height: 1.28; }
+.meta { font-size: .83rem; line-height: 1.5; color: var(--ui-muted, #64748b); opacity: 1; overflow-wrap: anywhere; }
+.header-actions { display: flex; flex: 0 1 630px; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 7px; }
+.language-picker { display: inline-flex; align-items: center; gap: 7px; padding: 0 8px; font-size: .81rem; color: var(--ui-muted, #64748b); }
+.language-picker select, .dialog-actions select {
+  font: inherit; color: var(--ui-text, #17243b);
+  padding: 7px 9px; border: 1px solid var(--ui-border, #e3e8f0);
+  border-radius: 10px; background: var(--ui-panel, #fff);
+}
+button {
+  border-radius: 10px;
+  font-weight: 590;
+  font-size: .86rem;
+  padding: 9px 12px;
+  line-height: 1.3;
+  border: 1px solid transparent;
+  transition: background-color .14s ease, box-shadow .14s ease, transform .14s ease;
+}
+button.secondary {
+  background: var(--ui-subtle, #f3f6fc);
+  border: 1px solid var(--ui-border, #e3e8f0);
+  color: var(--ui-text, #17243b);
+}
+button:hover:not(:disabled) { filter: brightness(.98); }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+  outline: 3px solid var(--ui-focus, #8da6ff);
+  outline-offset: 2px;
+}
+.header-actions #new-session {
+  background: var(--ui-accent-soft, #e8edff);
+  color: var(--ui-accent-text, #2444b0);
+  border-color: transparent;
+}
+.header-actions #quit { color: var(--ui-muted, #64748b); }
+.chat {
+  flex: 1 1 auto;
+  min-height: 120px;
+  padding: 28px clamp(4px, 2.5vw, 28px) 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-color: var(--ui-scroll, #bcc9de) transparent;
+  scrollbar-width: thin;
+  gap: 15px;
+}
+/* The chat is the scroll container. Flex children must retain their
+   natural heights; otherwise long answers are compressed into tiny
+   independently scrolling message boxes once the viewport fills. */
+.chat > * { flex-shrink: 0; }
+.chat:empty::before {
+  content: "";
+  display: block;
+  align-self: center;
+  margin: auto 0;
+  width: min(380px, 70%);
+  height: 150px;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 50% 35%, var(--ui-empty-accent, rgb(65 105 225 / .09)), transparent 56%),
+    linear-gradient(130deg, transparent, var(--ui-empty-line, rgb(65 105 225 / .025)), transparent);
+  pointer-events: none;
+}
+.message {
+  max-width: min(82%, 840px);
+  border: 1px solid var(--ui-border, #e3e8f0);
+  border-radius: 16px;
+  padding: 15px 18px;
+  font-size: .94rem;
+  line-height: 1.64;
+  box-shadow: 0 2px 8px var(--ui-message-shadow, rgb(25 38 69 / .025));
+}
+.message.user {
+  background: var(--ui-user-bg, #e9eeff);
+  color: var(--ui-user-text, #223c83);
+  border-color: var(--ui-user-border, #d6dfff);
+  border-bottom-right-radius: 5px;
+}
+.message.assistant, .message.system {
+  background: var(--ui-panel, #fff);
+  color: var(--ui-text, #17243b);
+  border-bottom-left-radius: 5px;
+}
+.message.system { background: var(--ui-subtle, #f3f6fc); color: var(--ui-muted, #64748b); }
+.message.error { border-color: var(--ui-danger, #d94c55); }
+.message.mcp-user {
+  background: var(--ui-accent-soft, #e8edff);
+  border-color: var(--ui-accent-border, #ccd7ff);
+  max-width: 85%;
+}
+.message.assistant :not(pre) > code {
+  background: var(--ui-code-inline, #edf1fa);
+  color: var(--ui-code-text, #31487e);
+  padding: .16em .34em;
+}
+.message.assistant blockquote { border-left-color: var(--ui-accent, #4169e1); }
+.message.assistant th, .message.assistant td { border-color: var(--ui-border, #e3e8f0); }
+.tool-call-group {
+  border-color: var(--ui-border, #e3e8f0);
+  background: var(--ui-panel, #fff);
+  border-radius: 14px;
+  box-shadow: 0 2px 10px var(--ui-message-shadow, rgb(25 38 69 / .025));
+}
+.tool-call-list, .tool-call-row + .tool-call-row { border-color: var(--ui-border, #e3e8f0); }
+.commands {
+  flex: 0 0 auto;
+  padding: 13px 8px 10px;
+  border-top: 1px solid var(--ui-border, #e3e8f0);
+  gap: 8px;
+}
+.commands button {
+  font-size: .79rem;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: var(--ui-panel, #fff);
+  color: var(--ui-muted, #64748b);
+  border: 1px solid var(--ui-border, #e3e8f0);
+}
+.commands button:hover:not(:disabled) {
+  background: var(--ui-accent-soft, #e8edff);
+  color: var(--ui-accent-text, #2444b0);
+}
+#composer {
+  flex: 0 0 auto;
+  position: relative;
+  bottom: auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  padding: 9px;
+  gap: 9px;
+  background: var(--ui-panel, #fff);
+  border: 1px solid var(--ui-border, #e3e8f0);
+  border-radius: 17px;
+  box-shadow: var(--ui-shadow-strong, 0 10px 34px rgb(25 38 69 / .09));
+}
+#prompt {
+  min-height: 72px;
+  max-height: 35vh;
+  padding: 12px 13px;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  color: var(--ui-text, #17243b);
+  background: transparent;
+  font-size: .92rem;
+  line-height: 1.5;
+}
+#prompt::placeholder { color: var(--ui-muted, #64748b); opacity: .85; }
+#prompt:focus-visible { outline: none; }
+#composer:focus-within { border-color: var(--ui-accent-border, #ccd7ff); box-shadow: 0 0 0 3px var(--ui-focus-ring, rgb(65 105 225 / .12)), var(--ui-shadow-strong, 0 10px 34px rgb(25 38 69 / .09)); }
+#send {
+  background: var(--ui-accent, #4169e1);
+  color: var(--ui-button-text, #fff);
+  border: 0;
+  min-width: 96px;
+  font-size: .9rem;
+}
+#stop-run { min-width: 82px; align-self: center; }
+dialog {
+  background: var(--ui-panel, #fff);
+  color: var(--ui-text, #17243b);
+  border-color: var(--ui-border, #e3e8f0);
+  border-radius: 20px;
+  box-shadow: var(--ui-shadow-strong, 0 10px 34px rgb(25 38 69 / .09));
+}
+dialog::backdrop { background: rgb(9 16 34 / .52); backdrop-filter: blur(4px); }
+pre, .state-content {
+  background: var(--ui-code-bg, #f2f5fb);
+  color: var(--ui-text, #17243b);
+  border: 1px solid var(--ui-border, #e3e8f0);
+}
+.state-row { border-color: var(--ui-border, #e3e8f0); border-radius: 12px; }
+.state-description, .state-source { color: var(--ui-muted, #64748b); }
+.context-tabs { border-color: var(--ui-border, #e3e8f0); }
+.context-tabs button.active { background: var(--ui-accent, #4169e1); color: var(--ui-button-text, #fff); }
+.cleanup-processing-result { background: var(--ui-subtle, #f3f6fc); border-color: var(--ui-border, #e3e8f0); }
+@media (min-width: 1450px) {
+  .shell { max-width: 1340px; }
+}
+@media (max-width: 850px) {
+  .shell { padding: 12px 12px 16px; }
+  header { align-items: stretch; flex-direction: column; gap: 15px; padding: 15px 16px; }
+  header .app-brand, header > div:first-child:not(.app-brand) { flex-basis: auto; }
+  .header-actions { justify-content: flex-start; flex-basis: auto; }
+  .chat { padding: 20px 5px; }
+}
+@media (max-width: 640px) {
+  .shell { height: 100dvh; min-height: 400px; padding: 8px 8px 12px; }
+  header { padding: 12px; border-radius: 15px; }
+  header .app-brand { gap: 12px; }
+  .app-icon { flex-basis: 34px; width: 34px; height: 34px; border-radius: 11px; font-size: 1.12rem; }
+  .app-icon::after { width: 12px; height: 12px; }
+  .header-actions { gap: 6px; }
+  .header-actions button { font-size: .78rem; padding: 7px 9px; }
+  .language-picker { padding: 0 4px; }
+  .chat { min-height: 100px; }
+  .message { max-width: 95%; padding: 12px 13px; }
+  .commands { padding: 9px 0; gap: 6px; }
+  .commands button { font-size: .74rem; padding: 6px 9px; }
+  #composer { grid-template-columns: minmax(0, 1fr) auto; gap: 4px; padding: 6px; }
+  #prompt { min-height: 60px; }
+  #send { min-width: 67px; padding: 9px 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  button { transition: none; }
+}
+
 """
 
 def _security_headers(response: Any) -> Any:
@@ -816,7 +961,7 @@ def _security_headers(response: Any) -> Any:
         "script-src 'self'; "
         "style-src 'self'; "
         "connect-src 'self'; "
-        "img-src 'none'; "
+        "img-src 'self'; "
         "object-src 'none'; "
         "frame-ancestors 'none'; "
         "base-uri 'none'; "

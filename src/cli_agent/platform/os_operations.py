@@ -182,6 +182,13 @@ class Workspace(WorkspaceIoMixin):
             relative = resolved.relative_to(self.directory)
         except ValueError:
             return True
+        # UI templates execute server-side Jinja expressions. Deny all
+        # workspace MCP access even if a broader path grant was provided.
+        # Unrelated .cli-agent/mcp-data-* exceptions remain unaffected.
+        if (len(relative.parts) >= 2
+                and relative.parts[0].casefold() == ".cli-agent"
+                and relative.parts[1].casefold() == "ui"):
+            return True
         if (len(relative.parts) == 2
                 and relative.parts[0].casefold() == ".cli-agent"
                 and (resolved.name.casefold() == "project.toml" or resolved.is_file())):

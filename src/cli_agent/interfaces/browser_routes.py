@@ -18,11 +18,36 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
 
     async def ui_index(_request: Request) -> Response:
         from cli_agent.interfaces.web_ui import render_index_html
-        return browser_security_headers(HTMLResponse(render_index_html(ui.get("ui_config"))))
+        return browser_security_headers(HTMLResponse(render_index_html(ui.get("ui_config"), project_template=ui.get("ui_template"))))
 
     async def ui_css(_request: Request) -> Response:
         from cli_agent.interfaces.web_ui import APP_CSS
         return browser_security_headers(PlainTextResponse(APP_CSS, media_type="text/css"))
+
+    async def ui_theme_css(request: Request) -> Response:
+        from importlib.resources import files
+        theme = request.path_params["theme"]
+        if theme not in {"bright", "dark"}:
+            return browser_security_headers(PlainTextResponse("Not found", status_code=404))
+        resource = files("cli_agent.interfaces").joinpath("static", "themes", theme + ".css")
+        return browser_security_headers(PlainTextResponse(
+            resource.read_text(encoding="utf-8"), media_type="text/css",
+        ))
+
+    async def ui_project_css(request: Request) -> Response:
+        name = request.path_params["name"] + ".css"
+        data = ui.get("ui_stylesheets", {}).get(name)
+        if data is None:
+            return browser_security_headers(PlainTextResponse("Not found", status_code=404))
+        return browser_security_headers(PlainTextResponse(data, media_type="text/css"))
+
+    async def ui_icon_image(request: Request) -> Response:
+        # Serve only the exact image read from private project configuration
+        # at startup. Unknown filenames are never resolved from disk.
+        asset = ui.get("ui_icon_asset")
+        if asset is None or request.path_params["filename"] != asset[0]:
+            return browser_security_headers(PlainTextResponse("Not found", status_code=404))
+        return browser_security_headers(Response(asset[1], media_type=asset[2]))
 
     async def ui_js(_request: Request) -> Response:
         from cli_agent.interfaces.web_ui_api import API_APP_JS
@@ -214,6 +239,9 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         ("browser_security_headers", browser_security_headers),
         ("ui_index", ui_index),
         ("ui_css", ui_css),
+        ("ui_theme_css", ui_theme_css),
+        ("ui_project_css", ui_project_css),
+        ("ui_icon_image", ui_icon_image),
         ("ui_js", ui_js),
         ("ui_i18n", ui_i18n),
         ("ui_locales", ui_locales),

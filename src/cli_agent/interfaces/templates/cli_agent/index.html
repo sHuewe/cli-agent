@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en"{% if ui.default_language %} data-default-language="{{ ui.default_language }}"{% endif %}{% if not ui.buttons.language_selector %} data-language-selector="false"{% endif %}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ ui.title }}</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/themes/{{ ui.theme }}.css">
+  {% for stylesheet in ui.stylesheets %}
+  <link rel="stylesheet" href="/assets/{{ stylesheet }}">
+  {% endfor %}
+  <script src="/assets/i18n.js" defer></script>
+  <script src="/assets/app.js" defer></script>
+{% block extra_head %}{% endblock extra_head %}
+</head>
+<body>
+  <main class="shell">
+    {% block header_row %}
+    <header>
+      {% block app_info %}
+      <div class="app-brand">
+        {% block app_icon %}
+        {% if ui.icon != "" %}
+        {% if ui.icon is not none and ui.icon.startswith("ui/") %}
+        <span class="app-icon app-icon-custom app-icon-image" aria-hidden="true"><img src="/assets/ui/icon/{{ ui.icon[3:] }}" alt="" decoding="async"></span>
+        {% else %}
+        <span class="app-icon{% if ui.icon is not none %} app-icon-custom{% endif %}" aria-hidden="true">{% if ui.icon is not none %}{{ ui.icon }}{% endif %}</span>
+        {% endif %}
+        {% endif %}
+        {% endblock app_icon %}
+        <div class="app-brand-copy">
+          {% block app_title %}<h1>{{ ui.title }}</h1>{% endblock app_title %}
+          {% block session_meta %}<div id="session-meta" class="meta">Connecting …</div>{% endblock session_meta %}
+        </div>
+      </div>
+      {% endblock app_info %}
+      {% block header_buttons %}
+      <div class="header-actions">
+        {% block button_language_selector %}<label class="language-picker"{% if not ui.buttons.language_selector %} hidden{% endif %} for="language-select"><span data-i18n="language.label">Language</span><select id="language-select"><option value="en">English</option></select></label>{% endblock button_language_selector %}
+        {% block button_new_session %}<button id="new-session"{% if not ui.buttons.new_session %} hidden{% endif %} class="secondary" type="button" data-i18n="session.new">New session in new tab</button>{% endblock button_new_session %}
+        {% block button_list_sessions %}<button id="list-sessions"{% if not ui.buttons.list_sessions %} hidden{% endif %} class="secondary" type="button" data-i18n="session.list">Sessions</button>{% endblock button_list_sessions %}
+        {% block button_reset_history %}<button id="reset-history"{% if not ui.buttons.reset_history %} hidden{% endif %} class="secondary" type="button" data-i18n="history.reset">Reset history</button>{% endblock button_reset_history %}
+        {% block button_show_working_context %}<button id="show-working-context"{% if not ui.buttons.show_working_context %} hidden{% endif %} class="secondary" type="button" data-i18n="context.open">LLM Context</button>{% endblock button_show_working_context %}
+        {% block button_end_session %}<button id="quit"{% if not ui.buttons.end_session %} hidden{% endif %} class="secondary" type="button" data-i18n="session.end">End session</button>{% endblock button_end_session %}
+      </div>
+      {% endblock header_buttons %}
+    </header>
+    {% endblock header_row %}
+    {% block chat %}<section id="chat" class="chat" aria-live="polite"></section>{% endblock chat %}
+    {% block commands %}
+    <div id="commands"{% if not (ui.buttons.commands.tokens or ui.buttons.commands.add_web_context or ui.buttons.commands.clear_web_context or ui.buttons.commands.enable or ui.buttons.commands.disable) %} hidden{% endif %} class="commands" data-i18n-aria-label="commands.label" aria-label="Local commands">
+      {% block command_tokens %}<button class="secondary" data-command="tokens"{% if not ui.buttons.commands.tokens %} hidden{% endif %} type="button" data-i18n="commands.tokens">Tokens</button>{% endblock command_tokens %}
+      {% block command_add_web_context %}<button class="secondary" data-command="add_web_context"{% if not ui.buttons.commands.add_web_context %} hidden{% endif %} type="button" data-i18n="commands.addWeb">Add web context</button>{% endblock command_add_web_context %}
+      {% block command_clear_web_context %}<button class="secondary" data-command="clear_web_context"{% if not ui.buttons.commands.clear_web_context %} hidden{% endif %} type="button" data-i18n="commands.clearWeb">Clear web context</button>{% endblock command_clear_web_context %}
+      {% block command_enable %}<button class="secondary" data-command="enable"{% if not ui.buttons.commands.enable %} hidden{% endif %} type="button" data-i18n="commands.enableMcp">Enable MCP</button>{% endblock command_enable %}
+      {% block command_disable %}<button class="secondary" data-command="disable"{% if not ui.buttons.commands.disable %} hidden{% endif %} type="button" data-i18n="commands.disableMcp">Disable MCP</button>{% endblock command_disable %}
+      <button id="cancel-command" class="secondary hidden" type="button" data-i18n="commands.cancel">Cancel</button>
+    </div>
+    {% endblock commands %}
+    {% block composer %}
+    <form id="composer">
+      <textarea id="prompt" rows="3" data-i18n-placeholder="composer.placeholder" placeholder="Message to cli-agent" required></textarea>
+      <button id="send" type="submit" data-i18n="composer.send">Send</button>
+      <button id="stop-run" class="secondary" type="button" hidden data-i18n="composer.stop">Stop</button>
+    </form>
+    {% endblock composer %}
+  </main>
+  {% block dialogs %}
+  {% block sessions_dialog %}
+  <dialog id="sessions-dialog" class="working-context-dialog">
+    <div class="dialog-header">
+      <h2 data-i18n="session.list">Sessions</h2>
+      <button id="close-sessions" class="secondary" type="button" data-i18n="actions.close">Close</button>
+    </div>
+    <p class="meta" data-i18n="session.description">Each session can only be open in one active browser tab. Available sessions may be reopened or ended.</p>
+    <div id="sessions-list" class="state-list"></div>
+    <button id="refresh-sessions" class="secondary" type="button" data-i18n="actions.refresh">Refresh</button>
+  </dialog>
+  {% endblock sessions_dialog %}
+  {% block working_context_dialog %}
+  <dialog id="working-context-dialog" class="working-context-dialog">
+    <div class="dialog-header">
+      <div>
+        <h2 data-i18n="context.open">LLM Context</h2>
+        <div class="meta" data-i18n="context.description">Messages from the last main loop, plus currently active tools and reference contexts.</div>
+      </div>
+      <div class="dialog-actions">
+        <button id="refresh-working-context" class="secondary" type="button" data-i18n="actions.refresh">Refresh</button>
+        <button id="close-working-context" class="secondary" type="button" data-i18n="actions.close">Close</button>
+      </div>
+    </div>
+    <div class="dialog-actions"><label for="context-run-select" data-i18n="context.runLabel">Agent run:</label><select id="context-run-select"><option value="main" data-i18n="context.mainRun">Main run</option></select></div>
+    <div class="context-tabs" role="tablist" aria-label="LLM Context">
+      <button id="context-tab-messages" class="secondary active" type="button" role="tab" aria-selected="true" aria-controls="context-panel-messages" data-i18n="context.messages">Messages</button>
+      <button id="context-tab-tools" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-tools" data-i18n="context.tools">Tools</button>
+      <button id="context-tab-contexts" class="secondary" type="button" role="tab" aria-selected="false" aria-controls="context-panel-contexts" data-i18n="context.contexts">Context</button>
+    </div>
+    <div id="context-panel-messages" class="context-panel" role="tabpanel" aria-labelledby="context-tab-messages">
+      <div id="cleanup-processing-result" class="cleanup-processing-result hidden" aria-live="polite"></div>
+      <pre id="working-messages-json">[]</pre>
+    </div>
+    <div id="context-panel-tools" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-tools">
+      <div id="working-tools-list" class="state-list"></div>
+    </div>
+    <div id="context-panel-contexts" class="context-panel hidden" role="tabpanel" aria-labelledby="context-tab-contexts">
+      <div id="okf-state"></div>
+      <div id="working-contexts-list" class="state-list"></div>
+    </div>
+  </dialog>
+  {% endblock working_context_dialog %}
+  {% block approval_dialog %}
+  <dialog id="approval">
+    <h2 data-i18n="approval.title">Tool approval required</h2>
+    <div id="approval-tool" class="tool"></div>
+    <div id="approval-diff-section" class="hidden"><h3 data-i18n="approval.diff">Change preview</h3><pre id="approval-diff"></pre></div>
+    <pre id="approval-arguments"></pre>
+    <p id="approval-warning" class="hidden" role="alert"></p>
+    <div class="approval-actions">
+      <button data-decision="no" class="secondary" type="button" data-i18n="approval.no">No</button>
+      <button data-decision="session" class="secondary" type="button" data-i18n="approval.session">For session</button>
+      <button data-decision="yes" type="button" data-i18n="approval.yes">Yes</button>
+    </div>
+  </dialog>
+  {% endblock approval_dialog %}
+  {% endblock dialogs %}
+  {% block footer %}{% endblock footer %}
+</body>
+</html>

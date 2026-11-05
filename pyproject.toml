@@ -25,11 +25,13 @@ rag = [
     "chromadb>=1.3,<2",
 ]
 web = [
+    "jinja2>=3.1.6,<4",
     "starlette>=1.6,<2",
     "uvicorn>=0.35,<1",
     "websockets>=17,<18",
 ]
 dev = [
+    "jinja2>=3.1.6,<4",
     "pytest>=9.0.3,<10",
     "pytest-asyncio>=1,<2",
     "pytest-cov>=6,<8",
@@ -47,6 +49,9 @@ packages = ["src/cli_agent"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/cli_agent/settings/config.example.toml" = "cli_agent/settings/config.example.toml"
+"src/cli_agent/interfaces/templates/cli_agent/index.html" = "cli_agent/interfaces/templates/cli_agent/index.html"
+"src/cli_agent/interfaces/static/themes/bright.css" = "cli_agent/interfaces/static/themes/bright.css"
+"src/cli_agent/interfaces/static/themes/dark.css" = "cli_agent/interfaces/static/themes/dark.css"
 "src/cli_agent/interfaces/static/app.js" = "cli_agent/interfaces/static/app.js"
 "src/cli_agent/interfaces/static/i18n.js" = "cli_agent/interfaces/static/i18n.js"
 

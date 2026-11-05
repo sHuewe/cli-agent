@@ -996,3 +996,85 @@ async def test_browser_index_uses_ui_configuration():
         assert 'id="new-session" hidden' in response.text
         assert "script-src 'self'" in response.headers["content-security-policy"]
     await service.shutdown()
+
+
+
+@pytest.mark.asyncio
+async def test_browser_ui_theme_assets_are_scoped_and_delivered_with_csp():
+    from cli_agent.settings.config import UiConfig
+
+    service = AgentApiService(lambda session: BrowserAgent(session))
+    session = await service.create()
+    ui = {
+        "token": "browser-secret",
+        "session_id": session.id,
+        "registry": BrowserSessionRegistry(service, session.id),
+        "origin": "http://127.0.0.1:9191",
+        "info": {"model": "test", "workspace": "/workspace", "mcp_servers": []},
+        "ui_config": UiConfig(theme="dark", stylesheets=("ui/branding.css", "ui/extra.css")),
+        "ui_stylesheets": {
+            "branding.css": ":root { --ui-accent: #abc; }",
+            "extra.css": "header { border-radius: 0; }",
+        },
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+        base_url="http://127.0.0.1:9191",
+    ) as client:
+        page = await client.get("/")
+        assert page.status_code == 200
+        assert 'href="/assets/app.css"' in page.text
+        assert 'href="/assets/themes/dark.css"' in page.text
+        assert 'href="/assets/ui/branding.css"' in page.text
+        assert 'href="/assets/ui/extra.css"' in page.text
+        assert page.text.index("/assets/app.css") < page.text.index("/assets/themes/dark.css")
+        assert page.text.index("/assets/themes/dark.css") < page.text.index("/assets/ui/branding.css")
+        assert page.text.index("/assets/ui/branding.css") < page.text.index("/assets/ui/extra.css")
+        for mode in ("bright", "dark"):
+            response = await client.get(f"/assets/themes/{mode}.css")
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/css")
+            assert response.headers["cache-control"] == "no-store"
+            assert "style-src 'self'" in response.headers["content-security-policy"]
+            assert "--ui-accent" in response.text
+        custom = await client.get("/assets/ui/branding.css")
+        assert custom.status_code == 200
+        assert custom.text == ":root { --ui-accent: #abc; }"
+        assert custom.headers["x-content-type-options"] == "nosniff"
+        for path in ("/assets/themes/unknown.css", "/assets/ui/unknown.css", "/assets/ui/secrets.toml"):
+            assert (await client.get(path)).status_code == 404
+        assert (await client.get("/assets/ui/branding.css", headers={"Host": "evil.example"})).status_code == 403
+        assert (await client.get("/assets/ui/branding.css", headers={"Origin": "https://example.com"})).status_code == 403
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_local_ui_icon_route_only_serves_configured_image():
+    from cli_agent.settings.config import UiConfig
+    service = AgentApiService(lambda session: BrowserAgent(session))
+    session = await service.create()
+    data = b"image-bytes"
+    ui = {
+        "token": "browser-secret", "session_id": session.id,
+        "registry": BrowserSessionRegistry(service, session.id),
+        "origin": "http://127.0.0.1:9191",
+        "info": {"model": "test", "workspace": "/workspace", "mcp_servers": []},
+        "ui_config": UiConfig(icon="ui/logo.png"),
+        "ui_icon_asset": ("logo.png", data, "image/png"),
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service, ui=ui)),
+        base_url="http://127.0.0.1:9191",
+    ) as client:
+        assert 'src="/assets/ui/icon/logo.png"' in (await client.get("/")).text
+        response = await client.get("/assets/ui/icon/logo.png")
+        assert response.status_code == 200
+        assert response.content == data
+        assert response.headers["content-type"].startswith("image/png")
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert "img-src 'self'" in response.headers["content-security-policy"]
+        assert (await client.get("/assets/ui/icon/other.png")).status_code == 404
+        assert (await client.get("/assets/ui/icon/logo.svg")).status_code == 404
+        assert (await client.get("/assets/ui/icon/logo.png", headers={"Origin": "https://example.org"})).status_code == 403
+    await service.shutdown()

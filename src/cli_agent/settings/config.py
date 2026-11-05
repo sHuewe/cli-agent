@@ -121,7 +121,11 @@ class UiButtonsConfig:
 @dataclass(frozen=True)
 class UiConfig:
     title: str = "cli-agent"
+    icon: str | None = None
     default_language: str | None = None
+    template: str | None = None
+    theme: str = "bright"
+    stylesheets: tuple[str, ...] = ()
     buttons: UiButtonsConfig = field(default_factory=UiButtonsConfig)
 
 
@@ -430,7 +434,7 @@ def _ui_config(values: Any) -> UiConfig:
     """Parse presentation-only browser settings, with strict field validation."""
     if not isinstance(values, dict):
         raise ValueError("[ui] must be a table.")
-    if set(values) - {"title", "default_language", "buttons"}:
+    if set(values) - {"title", "icon", "default_language", "template", "theme", "stylesheets", "buttons"}:
         raise ValueError("[ui] contains unknown options.")
 
     title = values.get("title", "cli-agent")
@@ -443,6 +447,20 @@ def _ui_config(values: Any) -> UiConfig:
     ):
         raise ValueError("ui.title must be a nonempty title of at most 120 characters without control characters.")
 
+    # None uses the built-in CSS icon, "" hides it, other strings are glyphs
+    # or a private project image under .cli-agent/ui/.
+    icon = values.get("icon")
+    if icon is not None:
+        if not isinstance(icon, str) or icon != icon.strip() or any(
+            ord(char) < 32 or ord(char) == 127 for char in icon
+        ):
+            raise ValueError("ui.icon must be a symbol or an image under ui/.")
+        if icon.startswith("ui/"):
+            from cli_agent.settings.project_config import validate_project_ui_image_name
+            validate_project_ui_image_name(icon)
+        elif len(icon) > 16 or "/" in icon or "\\" in icon:
+            raise ValueError("ui.icon must be a short symbol (at most 16 characters), or a supported image under ui/.")
+
     default_language = values.get("default_language")
     if default_language is not None:
         from cli_agent.interfaces.web_ui_locales import available_locales
@@ -452,6 +470,24 @@ def _ui_config(values: Any) -> UiConfig:
             or default_language not in available_locales()
         ):
             raise ValueError("ui.default_language must name an available UI translation.")
+
+    template = values.get("template")
+    if template is not None:
+        from cli_agent.settings.project_config import validate_project_ui_template_name
+        validate_project_ui_template_name(template)
+
+    theme = values.get("theme", "bright")
+    if not isinstance(theme, str) or theme not in {"bright", "dark"}:
+        raise ValueError("ui.theme must be 'bright' or 'dark'.")
+
+    stylesheets = values.get("stylesheets", [])
+    if not isinstance(stylesheets, list) or len(stylesheets) > 8:
+        raise ValueError("ui.stylesheets must be a list of at most 8 CSS files.")
+    from cli_agent.settings.project_config import validate_project_ui_stylesheet_name
+    for stylesheet in stylesheets:
+        validate_project_ui_stylesheet_name(stylesheet)
+    if len(stylesheets) != len(set(stylesheets)):
+        raise ValueError("ui.stylesheets must not contain duplicates.")
 
     buttons = values.get("buttons", {})
     if not isinstance(buttons, dict):
@@ -484,7 +520,8 @@ def _ui_config(values: Any) -> UiConfig:
         commands=command_config,
     )
     return UiConfig(
-        title=title, default_language=default_language, buttons=button_config,
+        title=title, icon=icon, default_language=default_language, template=template,
+        theme=theme, stylesheets=tuple(stylesheets), buttons=button_config,
     )
 
 

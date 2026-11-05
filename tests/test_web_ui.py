@@ -579,7 +579,7 @@ def test_chroma_search_summaries_render_only_from_standard_agui_tool_results():
 def test_configured_ui_title_and_controls_are_rendered_safely() -> None:
     from cli_agent.settings.config import UiButtonsConfig, UiCommandButtonsConfig, UiConfig
 
-    assert web_ui.render_index_html() == web_ui.INDEX_HTML
+    assert "<title>cli-agent</title>" in web_ui.render_index_html()
     configured = UiConfig(
         title="<SignalDeck & Assistant>",
         default_language="de",
@@ -623,6 +623,151 @@ def test_configured_ui_title_and_controls_are_rendered_safely() -> None:
 def test_default_ui_title_and_buttons_remain_unchanged() -> None:
     from cli_agent.settings.config import UiConfig
 
-    assert web_ui.render_index_html(UiConfig()) == web_ui.INDEX_HTML
-    assert '<title>cli-agent</title>' in web_ui.INDEX_HTML
+    assert "<title>cli-agent</title>" in web_ui.render_index_html(UiConfig())
+    assert '{{ ui.title }}' in web_ui.INDEX_HTML
     assert 'id="new-session"' in web_ui.INDEX_HTML
+
+
+
+def test_jinja_nested_ui_blocks_can_be_overridden_and_reordered():
+    from cli_agent.settings.config import UiConfig
+
+    project = """{% extends "cli_agent/index.html" %}
+{% block app_info %}
+  <div class="project-info">
+    {{ self.app_title() }}
+    <span>Welcome to the project</span>
+    {{ self.session_meta() }}
+  </div>
+{% endblock %}
+{% block header_buttons %}
+  <div class="header-actions">
+    {{ self.button_show_working_context() }}
+    <span id="project-label">Control panel</span>
+    {{ self.button_new_session() }}
+    {{ self.button_language_selector() }}
+    {{ self.button_list_sessions() }}
+    {{ self.button_reset_history() }}
+    {{ self.button_end_session() }}
+  </div>
+{% endblock %}
+"""
+    rendered = web_ui.render_index_html(UiConfig(title="My Project"), project_template=project)
+    assert "<h1>My Project</h1>" in rendered
+    assert "Welcome to the project" in rendered
+    assert rendered.index('id="show-working-context"') < rendered.index('id="new-session"')
+    assert rendered.index('id="new-session"') < rendered.index('id="list-sessions"')
+    assert rendered.index('id="project-label"') < rendered.index('id="new-session"')
+    assert 'id="chat"' in rendered
+    assert 'id="composer"' in rendered
+    assert 'id="session-meta"' in rendered
+
+
+def test_nested_jinja_app_info_can_be_overridden_without_touching_header():
+    from cli_agent.settings.config import UiConfig
+
+    project = """{% extends "cli_agent/index.html" %}
+{% block app_info %}<div>{{ self.app_title() }}<p>Project subtitle</p>{{ self.session_meta() }}</div>{% endblock %}
+"""
+    rendered = web_ui.render_index_html(UiConfig(), project_template=project)
+    assert "Project subtitle" in rendered
+    assert 'id="new-session"' in rendered
+    assert 'id="session-meta"' in rendered
+
+
+@pytest.mark.parametrize("template", [
+    '{% extends "cli_agent/index.html" %}{% block app_info %}<div>Missing session meta</div>{% endblock %}',
+    '{% extends "cli_agent/index.html" %}{% block header_buttons %}<div>Only text</div>{% endblock %}',
+    '{% extends "cli_agent/index.html" %}{% block extra_head %}<script src="/assets/app.js"></script>{% endblock %}',
+])
+def test_jinja_rejects_broken_javascript_structure(template):
+    from cli_agent.settings.config import UiConfig
+
+    with pytest.raises(ValueError, match="UI template"):
+        web_ui.render_index_html(UiConfig(), project_template=template)
+
+
+
+def test_built_in_ui_has_modern_styles_and_theme_links():
+    from importlib.resources import files
+    from cli_agent.settings.config import UiConfig
+
+    rendered = web_ui.render_index_html(
+        UiConfig(theme="bright", stylesheets=("ui/branding.css",)),
+    )
+    assert 'href="/assets/themes/bright.css"' in rendered
+    assert 'href="/assets/ui/branding.css"' in rendered
+    assert 'class="app-brand"' in rendered
+    for theme in ("bright", "dark"):
+        data = files("cli_agent.interfaces").joinpath(
+            "static", "themes", theme + ".css",
+        ).read_text(encoding="utf-8")
+        assert "--ui-panel:" in data
+        assert "--ui-text:" in data
+        assert "--ui-accent:" in data
+    assert "100dvh" in web_ui.APP_CSS
+    assert "#composer:focus-within" in web_ui.APP_CSS
+    assert ".chat > * { flex-shrink: 0; }" in web_ui.APP_CSS
+    assert "[hidden] { display: none !important; }" in web_ui.APP_CSS
+
+
+
+def test_configurable_app_icon_and_nested_block():
+    from cli_agent.settings.config import UiConfig
+
+    default = web_ui.render_index_html(UiConfig())
+    assert 'class="app-icon"' in default
+    assert "app-icon-custom" not in default
+    assert ".app-icon::after {" in web_ui.APP_CSS
+    assert "header .app-brand::before {" not in web_ui.APP_CSS
+
+    custom = web_ui.render_index_html(UiConfig(icon="⚡"))
+    assert 'class="app-icon app-icon-custom" aria-hidden="true">⚡</span>' in custom
+    assert '<h1>cli-agent</h1>' in custom
+    assert 'id="session-meta"' in custom
+
+    escaped = web_ui.render_index_html(UiConfig(icon="<&>"))
+    assert '>&lt;&amp;&gt;</span>' in escaped
+    assert '<&>' not in escaped
+
+    hidden = web_ui.render_index_html(UiConfig(icon=""))
+    assert 'class="app-icon"' not in hidden
+    assert 'class="app-icon app-icon-custom"' not in hidden
+    assert 'id="session-meta"' in hidden
+
+    project = """{% extends "cli_agent/index.html" %}
+{% block app_icon %}
+<span class="app-icon app-icon-custom" aria-hidden="true">Project</span>
+{% endblock app_icon %}
+"""
+    override = web_ui.render_index_html(UiConfig(), project_template=project)
+    assert '>Project</span>' in override
+    assert '<h1>cli-agent</h1>' in override
+    assert 'id="session-meta"' in override
+
+
+def test_project_image_icon_rendering_and_css():
+    from cli_agent.settings.config import UiConfig
+    rendered = web_ui.render_index_html(UiConfig(icon="ui/logo.png"))
+    assert 'src="/assets/ui/icon/logo.png"' in rendered
+    assert 'class="app-icon app-icon-custom app-icon-image"' in rendered
+    assert ".app-icon-image img" in web_ui.APP_CSS
+    assert 'id="session-meta"' in rendered
+
+
+def test_default_header_icon_is_left_of_title_and_metadata():
+    from cli_agent.settings.config import UiConfig
+
+    rendered = web_ui.render_index_html(UiConfig())
+    brand = rendered.index('class="app-brand"')
+    icon = rendered.index('class="app-icon"', brand)
+    copy = rendered.index('class="app-brand-copy"', icon)
+    title = rendered.index('<h1>cli-agent</h1>', copy)
+    meta = rendered.index('id="session-meta"', title)
+    assert brand < icon < copy < title < meta
+
+    # The old :first-child selector overrode header .app-brand due to specificity.
+    assert "header > div:first-child:not(.app-brand)" in web_ui.APP_CSS
+    assert "header .app-brand, header > div:first-child {" not in web_ui.APP_CSS
+    assert "header .app-brand-copy {" in web_ui.APP_CSS
+    assert "flex-direction: row;" in web_ui.APP_CSS

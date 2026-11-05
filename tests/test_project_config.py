@@ -357,3 +357,207 @@ def test_project_ui_rejects_invalid_settings(tmp_path: Path, definition: str):
     _project(tmp_path, definition)
     with pytest.raises(ValueError, match="ui"):
         load_config(global_config, workspace=tmp_path)
+
+
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_project_ui_template_is_loaded_as_trusted_private_file(
+    tmp_path: Path, line_ending: str,
+):
+    from cli_agent.settings.project_config import read_project_ui_template
+
+    global_config = tmp_path / "config.toml"
+    global_config.write_text("", encoding="utf-8")
+    folder = _project(tmp_path, '[ui]\ntemplate = "ui/overview.html"\n')
+    ui_dir = folder / "ui"
+    ui_dir.mkdir()
+    template = (
+        '{% extends "cli_agent/index.html" %}' + line_ending +
+        '{% block footer %}My project{% endblock %}'
+    )
+    # Write exact bytes: Path.write_text() translates LF to CRLF on Windows,
+    # whereas the project template reader intentionally preserves newlines.
+    (ui_dir / "overview.html").write_bytes(template.encode("utf-8"))
+    effective = load_config(global_config, workspace=tmp_path)
+    assert effective.ui.template == "ui/overview.html"
+    assert read_project_ui_template(tmp_path, effective.ui.template) == template
+
+
+@pytest.mark.parametrize("value", [
+    "../secret.html", "/tmp/secret.html", "ui/../../secret.html",
+    "ui/subdir/file.html", "ui/file.txt", "ui\\\\file.html", "",
+])
+def test_project_ui_rejects_unsafe_template_names(tmp_path: Path, value: str):
+    global_config = tmp_path / "config.toml"
+    global_config.write_text("", encoding="utf-8")
+    _project(tmp_path, '[ui]\ntemplate = ' + __import__("json").dumps(value) + '\n')
+    with pytest.raises(ValueError, match="ui.template"):
+        load_config(global_config, workspace=tmp_path)
+
+
+def test_project_ui_template_mcp_access_is_protected(tmp_path: Path):
+    from cli_agent.settings.project_config import read_project_ui_template
+
+    ui_dir = tmp_path / ".cli-agent" / "ui"
+    ui_dir.mkdir(parents=True)
+    (ui_dir / "custom.html").write_text("Hello", encoding="utf-8")
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True}),
+    )
+    assert read_project_ui_template(tmp_path, "ui/custom.html") == "Hello"
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_read(ui_dir / "custom.html")
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_mutation(ui_dir / "custom.html")
+
+
+
+def test_ui_theme_and_stylesheets_project_overrides(tmp_path: Path):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text(
+        '[ui]\ntheme = "bright"\nstylesheets = ["ui/global.css"]\n',
+        encoding="utf-8",
+    )
+    _project(tmp_path, '[ui]\ntheme = "dark"\nstylesheets = ["ui/brand.css", "ui/layout.css"]\n')
+    effective = load_config(global_config, workspace=tmp_path)
+    assert effective.ui.theme == "dark"
+    assert effective.ui.stylesheets == ("ui/brand.css", "ui/layout.css")
+
+
+@pytest.mark.parametrize("value", [
+    'theme = "auto"',
+    'theme = "Dark"',
+    'theme = true',
+    'stylesheets = "ui/custom.css"',
+    'stylesheets = ["../evil.css"]',
+    'stylesheets = ["/etc/passwd"]',
+    'stylesheets = ["ui/nested/custom.css"]',
+    'stylesheets = ["ui/custom.css", "ui/custom.css"]',
+    'stylesheets = [false]',
+    'stylesheets = [' + ', '.join('"ui/file%d.css"' % x for x in range(9)) + ']',
+])
+def test_ui_theme_rejects_invalid_project_configuration(tmp_path: Path, value: str):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("", encoding="utf-8")
+    _project(tmp_path, "[ui]\n" + value + "\n")
+    with pytest.raises(ValueError, match="ui.theme|ui.stylesheets"):
+        load_config(cfg, workspace=tmp_path)
+
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_project_ui_stylesheets_preserve_bytes_and_order(tmp_path: Path, line_ending: str):
+    from cli_agent.settings.project_config import read_project_ui_stylesheets
+
+    ui_dir = tmp_path / ".cli-agent" / "ui"
+    ui_dir.mkdir(parents=True)
+    theme = (":root {" + line_ending + "  --app-accent: #345;" + line_ending + "}")
+    (ui_dir / "branding.css").write_bytes(theme.encode("utf-8"))
+    (ui_dir / "overrides.css").write_bytes(b"header { border: 0; }")
+    stylesheets = read_project_ui_stylesheets(
+        tmp_path, ("ui/branding.css", "ui/overrides.css"),
+    )
+    assert list(stylesheets) == ["branding.css", "overrides.css"]
+    assert stylesheets["branding.css"] == theme
+    assert stylesheets["overrides.css"] == "header { border: 0; }"
+
+
+def test_project_ui_stylesheet_is_protected_from_workspace_mcp(tmp_path: Path):
+    from cli_agent.settings.project_config import read_project_ui_stylesheets
+
+    ui_dir = tmp_path / ".cli-agent" / "ui"
+    ui_dir.mkdir(parents=True)
+    filename = ui_dir / "custom.css"
+    filename.write_bytes(b"body { color: red; }")
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True}),
+    )
+    assert read_project_ui_stylesheets(tmp_path, ("ui/custom.css",)) == {
+        "custom.css": "body { color: red; }",
+    }
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_read(filename)
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_mutation(filename)
+
+
+
+@pytest.mark.parametrize("value", [
+    'icon = 7',
+    'icon = false',
+    'icon = " too much "',
+    'icon = "this label is much too long"',
+    'icon = "bad\\nicon"',
+])
+def test_ui_rejects_invalid_app_icons(tmp_path: Path, value: str):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text("", encoding="utf-8")
+    _project(tmp_path, "[ui]\n" + value + "\n")
+    with pytest.raises(ValueError, match="ui.icon"):
+        load_config(global_config, workspace=tmp_path)
+
+
+def test_project_ui_app_icon_override(tmp_path: Path):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text('[ui]\nicon = "X"\n', encoding="utf-8")
+    _project(tmp_path, '[ui]\nicon = "⚡"\n')
+    assert load_config(global_config, workspace=tmp_path).ui.icon == "⚡"
+
+
+def test_image_icon_file_validation_and_workspace_privacy(tmp_path: Path):
+    import base64
+    from cli_agent.settings.project_config import read_project_ui_icon
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("", encoding="utf-8")
+    folder = _project(tmp_path, '[ui]\nicon = "ui/logo.png"\n')
+    ui_dir = folder / "ui"
+    ui_dir.mkdir()
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6lCkAAAAASUVORK5CYII="
+    )
+    image = ui_dir / "logo.png"
+    image.write_bytes(png)
+    assert load_config(cfg, workspace=tmp_path).ui.icon == "ui/logo.png"
+    assert read_project_ui_icon(tmp_path, "ui/logo.png") == ("logo.png", png, "image/png")
+    assert read_project_ui_icon(tmp_path, "⚡") is None
+    workspace = Workspace.from_directory(
+        tmp_path, McpServerConfig(name="os", config={"allow_write_files": True}),
+    )
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_read(image)
+    with pytest.raises(WorkspaceError):
+        workspace._reject_protected_mutation(image)
+
+
+@pytest.mark.parametrize("name", [
+    "ui/../secret.png", "ui/a/b.png", "/tmp/a.png", "ui/a.svg",
+    "ui/a.gif", "ui/a.html", "ui/a.PNG", "ui/a.png?x=1",
+    "https://example.org/a.png",
+])
+def test_image_icon_rejects_unsafe_config_paths(tmp_path: Path, name: str):
+    import json
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("", encoding="utf-8")
+    _project(tmp_path, "[ui]\nicon = " + json.dumps(name) + "\n")
+    with pytest.raises(ValueError, match="ui.icon"):
+        load_config(cfg, workspace=tmp_path)
+
+
+def test_image_icon_rejects_invalid_file_and_links(tmp_path: Path):
+    from cli_agent.settings.project_config import read_project_ui_icon
+    ui_dir = tmp_path / ".cli-agent" / "ui"
+    ui_dir.mkdir(parents=True)
+    image = ui_dir / "logo.png"
+    image.write_bytes(b"not-a-png")
+    with pytest.raises(ValueError, match="contents do not match"):
+        read_project_ui_icon(tmp_path, "ui/logo.png")
+    image.write_bytes(b"x" * (1024 * 1024 + 1))
+    with pytest.raises(ValueError, match="exceeds"):
+        read_project_ui_icon(tmp_path, "ui/logo.png")
+    image.unlink()
+    try:
+        image.symlink_to(tmp_path / "another.png")
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks not available")
+    with pytest.raises(ValueError, match="symlink|junction"):
+        read_project_ui_icon(tmp_path, "ui/logo.png")

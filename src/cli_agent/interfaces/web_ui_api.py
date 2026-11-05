@@ -41,6 +41,21 @@ async def run_web_ui_via_api(
     from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 
     configure_logging(config.logging)
+    from cli_agent.settings.project_config import read_project_ui_template
+    from cli_agent.interfaces.web_ui import render_index_html
+    project_template = read_project_ui_template(
+        workspace, getattr(getattr(config, "ui", None), "template", None),
+    )
+    # Validate custom layouts before entering the API server.
+    render_index_html(getattr(config, "ui", None), project_template=project_template)
+    from cli_agent.settings.project_config import read_project_ui_stylesheets
+    project_stylesheets = read_project_ui_stylesheets(
+        workspace, getattr(getattr(config, "ui", None), "stylesheets", ()),
+    )
+    from cli_agent.settings.project_config import read_project_ui_icon
+    project_icon = read_project_ui_icon(
+        workspace, getattr(getattr(config, "ui", None), "icon", None),
+    )
     config_file = args.config or default_config_file()
     exclusions = tuple(excluded_paths)
     preview_workspace = (
@@ -114,6 +129,9 @@ async def run_web_ui_via_api(
             "origin": origin,
             "session_id": session.id,
             "ui_config": getattr(config, "ui", None),
+            "ui_template": project_template,
+            "ui_stylesheets": project_stylesheets,
+            "ui_icon_asset": project_icon,
             "info": {
                 "workspace": str(workspace),
                 "model": config.model.model,
