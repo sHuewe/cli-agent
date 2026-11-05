@@ -509,7 +509,16 @@ def prepare_agent(
             "excluded_paths requires workspace_access='read' or 'write'."
         )
 
-    config = project_config if project_config is not None else deps.load_config(options.config_file)
+    if project_config is not None:
+        # Explicit SDK configurations remain authoritative over workspace settings.
+        config = project_config
+    else:
+        from cli_agent.settings.project_config import read_project_overrides
+        overrides = read_project_overrides(workspace)
+        config = (
+            load_config(options.config_file, workspace=workspace)
+            if overrides else deps.load_config(options.config_file)
+        )
     policy = admin_config if admin_config is not None else deps.load_admin_config()
     if project_config is not None and options.config_file is None and config.okf is not None:
         # An in-memory SDK project has no config-file directory. Resolve
@@ -598,12 +607,15 @@ def prepare_agent(
     )
     if options.retry_policy is not None:
         model_client = RetryingModelClient(model_client, options.retry_policy)
+    from cli_agent.settings.project_config import read_project_system_prompt
+    project_system_prompt = read_project_system_prompt(workspace, config.agent.system_prompt)
     agent = deps.agent_type(
         workspace,
         model_client,
         config.mcp_servers,
         logging_config=config.logging,
         agent_timezone=config.agent.timezone,
+        system_prompt=project_system_prompt,
         config_file=options.config_file or default_config_file(),
         dump_llm_context=config.dump_llm_context,
         dump_file_prefix=options.dump_file_prefix,
