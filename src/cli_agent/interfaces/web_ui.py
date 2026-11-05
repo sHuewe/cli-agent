@@ -7,6 +7,7 @@ import os
 import stat
 import secrets
 from collections.abc import Awaitable, Callable
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from cli_agent.interfaces.approval_display import approval_arguments
 from cli_agent.platform.local_commands import classify_local_command
 from cli_agent.platform.os_operations import Workspace, WorkspaceError
 from cli_agent.interfaces.terminal_output import sanitize_terminal_text
+from cli_agent.settings.config import UiConfig
 
 MAX_APPROVAL_DIFF_BYTES = 128_000
 MAX_APPROVAL_DIFF_CHARS = 30_000
@@ -655,12 +657,77 @@ INDEX_HTML = """<!doctype html>
 </html>
 """
 
+def render_index_html(config: UiConfig | None = None) -> str:
+    """Render configured labels and visibility without removing JS-owned nodes."""
+    config = config if config is not None else UiConfig()
+    if config == UiConfig():
+        return INDEX_HTML
+
+    html = INDEX_HTML.replace(
+        "<title>cli-agent</title>", f"<title>{escape(config.title)}</title>", 1,
+    ).replace(
+        "<h1>cli-agent</h1>", f"<h1>{escape(config.title)}</h1>", 1,
+    )
+
+    root_attributes = []
+    if config.default_language is not None:
+        root_attributes.append(
+            f'data-default-language="{escape(config.default_language, quote=True)}"'
+        )
+    if not config.buttons.language_selector:
+        root_attributes.append('data-language-selector="false"')
+        html = html.replace(
+            '<label class="language-picker"',
+            '<label class="language-picker" hidden',
+            1,
+        )
+    if root_attributes:
+        html = html.replace(
+            '<html lang="en">',
+            '<html lang="en" ' + ' '.join(root_attributes) + '>',
+            1,
+        )
+
+    visible_elements = {
+        "new-session": config.buttons.new_session,
+        "list-sessions": config.buttons.list_sessions,
+        "reset-history": config.buttons.reset_history,
+        "show-working-context": config.buttons.show_working_context,
+        "quit": config.buttons.end_session,
+        "tokens": config.buttons.commands.tokens,
+        "add_web_context": config.buttons.commands.add_web_context,
+        "clear_web_context": config.buttons.commands.clear_web_context,
+        "enable": config.buttons.commands.enable,
+        "disable": config.buttons.commands.disable,
+    }
+    for element_id, visible in visible_elements.items():
+        if visible:
+            continue
+        marker = (
+            f'data-command="{element_id}"'
+            if element_id in {"tokens", "add_web_context", "clear_web_context", "enable", "disable"}
+            else f'id="{element_id}"'
+        )
+        html = html.replace(marker, marker + " hidden", 1)
+
+    if not any((
+        config.buttons.commands.tokens,
+        config.buttons.commands.add_web_context,
+        config.buttons.commands.clear_web_context,
+        config.buttons.commands.enable,
+        config.buttons.commands.disable,
+    )):
+        html = html.replace('id="commands"', 'id="commands" hidden', 1)
+    return html
+
+
 APP_CSS = """
 :root {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color-scheme: light dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: Canvas; color: CanvasText; }
 .shell { max-width: 960px; min-height: 100vh; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 18px; }
 header { position: sticky; top: 0; z-index: 20; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent); padding: 14px 0; background: Canvas; }

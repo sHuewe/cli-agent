@@ -157,6 +157,46 @@ The Data MCP keeps table-producing results in temporary session artifacts.
 The model receives bounded metadata and previews rather than entire raw
 datasets, along with verified artifact paths.
 
+## Project-specific browser UI settings
+
+The optional browser UI can be customized without changing its HTML or
+JavaScript. Put the following in the workspace's
+`.cli-agent/project.toml` (or in the ordinary user configuration):
+
+```toml
+[ui]
+title = "SignalDeck AI"
+default_language = "de"
+
+[ui.buttons]
+new_session = false
+list_sessions = false
+reset_history = false
+show_working_context = false
+end_session = true
+language_selector = false
+
+[ui.buttons.commands]
+tokens = false
+add_web_context = false
+clear_web_context = false
+enable = false
+disable = false
+```
+
+All fields are optional. The default title is `cli-agent`; all controls
+remain visible unless explicitly disabled. Without a configured default
+language the browser's preferred language is used, as before. When the
+language selector is visible, a previously saved manual selection takes
+precedence over `default_language`. When the selector is hidden, the
+configured default is used regardless of saved preferences (or the browser
+language when no default is set). Languages must have a packaged translation
+catalog (currently English and German).
+
+Button settings control *visibility only*. They do not revoke server-side
+permissions, remove API endpoints, or disable agent tools. Approval and
+security policy remain enforced separately.
+
 ## Optional local browser UI
 
 Install the optional web dependencies:

@@ -310,3 +310,50 @@ def test_sdk_configless_os_subprocess_ignores_project_overlay(tmp_path: Path, mo
     )
     os_mcp_server.main()
     assert captured["mcp_config"].config["max_pdf_pages"] == 350
+
+
+def test_project_ui_settings_are_merged_field_by_field(tmp_path: Path):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text(
+        '[ui]\ntitle = "Global title"\ndefault_language = "en"\n'
+        '[ui.buttons]\nnew_session = false\nend_session = false\n'
+        '[ui.buttons.commands]\ntokens = false\n',
+        encoding="utf-8",
+    )
+    _project(
+        tmp_path,
+        '[ui]\ntitle = "Projektübersicht"\ndefault_language = "de"\n'
+        '[ui.buttons]\nend_session = true\nlanguage_selector = false\n'
+        '[ui.buttons.commands]\nclear_web_context = false\n',
+    )
+    ui = load_config(global_config, workspace=tmp_path).ui
+    assert ui.title == "Projektübersicht"
+    assert ui.default_language == "de"
+    assert not ui.buttons.new_session
+    assert ui.buttons.end_session
+    assert not ui.buttons.language_selector
+    assert not ui.buttons.commands.tokens
+    assert not ui.buttons.commands.clear_web_context
+    assert ui.buttons.commands.enable
+
+
+@pytest.mark.parametrize("definition", [
+    '[ui]\ntitle = ""',
+    '[ui]\ntitle = " unsafe "',
+    '[ui]\ntitle = 3',
+    '[ui]\ntitle = "a\\nb"',
+    '[ui]\ndefault_language = "not-a-language"',
+    '[ui]\ndefault_language = 2',
+    '[ui]\nunknown = true',
+    '[ui.buttons]\nnew_session = "false"',
+    '[ui.buttons]\nlanguage_selector = 1',
+    '[ui.buttons]\nunknown = false',
+    '[ui.buttons.commands]\ntokens = "false"',
+    '[ui.buttons.commands]\nunknown = false',
+])
+def test_project_ui_rejects_invalid_settings(tmp_path: Path, definition: str):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text("", encoding="utf-8")
+    _project(tmp_path, definition)
+    with pytest.raises(ValueError, match="ui"):
+        load_config(global_config, workspace=tmp_path)

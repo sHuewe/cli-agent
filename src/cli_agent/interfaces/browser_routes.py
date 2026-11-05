@@ -17,8 +17,8 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         return response
 
     async def ui_index(_request: Request) -> Response:
-        from cli_agent.interfaces.web_ui import INDEX_HTML
-        return browser_security_headers(HTMLResponse(INDEX_HTML))
+        from cli_agent.interfaces.web_ui import render_index_html
+        return browser_security_headers(HTMLResponse(render_index_html(ui.get("ui_config"))))
 
     async def ui_css(_request: Request) -> Response:
         from cli_agent.interfaces.web_ui import APP_CSS
