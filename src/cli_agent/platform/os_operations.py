@@ -173,14 +173,18 @@ class Workspace(WorkspaceIoMixin):
         except (OSError, RuntimeError):
             return True
 
-        # .cli-agent is private except for deliberately granted data directories.
-        # A direct child (project.toml, system.md, etc.) may never be exposed,
-        # even by an allowed_paths exception for the parent directory.
+        # Direct files inside .cli-agent (project.toml and system prompts)
+        # remain private, even when a broader path grant exists. Directories
+        # must NOT be rejected here: internal session artifact directories
+        # (mcp-data-*) are created under .cli-agent and may be allowed
+        # individually by Data MCP. Rejecting their creation breaks checkpoints.
         try:
             relative = resolved.relative_to(self.directory)
         except ValueError:
             return True
-        if len(relative.parts) == 2 and relative.parts[0].casefold() == ".cli-agent":
+        if (len(relative.parts) == 2
+                and relative.parts[0].casefold() == ".cli-agent"
+                and (resolved.name.casefold() == "project.toml" or resolved.is_file())):
             return True
 
         # Explicit exclusions always win over an allowed-path exception.
