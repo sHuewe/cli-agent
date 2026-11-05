@@ -197,6 +197,8 @@ Button settings control *visibility only*. They do not revoke server-side
 permissions, remove API endpoints, or disable agent tools. Approval and
 security policy remain enforced separately.
 
+See the [complete UI customization and Jinja block reference](docs/web-ui-customization.md).
+
 ### Themes and additional stylesheets
 
 The built-in UI provides two complete color themes, selected via the workspace's
