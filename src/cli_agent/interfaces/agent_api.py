@@ -210,7 +210,9 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
         raise ValueError("--exclude-path requires OS access.")
 
     config_file = args.config or default_config_file()
-    config = load_config(args.config)
+    config = load_config(args.config, workspace=workspace)
+    from cli_agent.settings.project_config import read_project_system_prompt
+    project_system_prompt = read_project_system_prompt(workspace, config.agent.system_prompt)
     admin = load_admin_config()
     if args.model is not None:
         from dataclasses import replace
@@ -244,6 +246,7 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
             workspace, model_client, config.mcp_servers,
             logging_config=config.logging,
             agent_timezone=config.agent.timezone,
+            system_prompt=project_system_prompt,
             config_file=config_file,
             # API sessions never write LLM context dumps, even when enabled
             # in config.toml for CLI or flow execution.
