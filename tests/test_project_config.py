@@ -227,3 +227,85 @@ def test_main_and_sub_run_inherit_project_prompt_without_removing_internal_rules
     assert "You are a project analyst." in seen[0]
     assert "You are a local CLI assistant." not in seen[0]
     assert "Sub-runs have NO local plan." in seen[0]
+
+
+def test_os_mcp_subprocess_reads_effective_project_pdf_limit(tmp_path: Path, monkeypatch):
+    """The spawned OS MCP process must not fall back to global PDF settings."""
+    from types import SimpleNamespace
+    from cli_agent.platform import os_mcp_server
+
+    global_config = tmp_path / "global.toml"
+    global_config.write_text("[pdf]\nmax_pdf_pages = 100\n", encoding="utf-8")
+    _project(tmp_path, "[pdf]\nmax_pdf_pages = 200\n")
+    captured = {}
+
+    monkeypatch.setattr(os_mcp_server, "parse_args", lambda: SimpleNamespace(
+        project_directory=tmp_path, config_file=global_config, access="read",
+        protected_path=[], mutation_protected_path=[], path_policy_file=None,
+        max_pdf_pages=None, sdk_configless=False,
+    ))
+    monkeypatch.setattr(os_mcp_server, "configure_logging", lambda *_a, **_k: None)
+    monkeypatch.setattr(os_mcp_server, "vision_config_from_environment", lambda: None)
+    monkeypatch.setattr(
+        os_mcp_server.Workspace, "from_directory",
+        lambda directory, mcp_config, **_kwargs:
+            captured.setdefault("mcp_config", mcp_config) or object(),
+    )
+    monkeypatch.setattr(
+        os_mcp_server, "create_server",
+        lambda *_a, **_k: SimpleNamespace(run=lambda **_options: None),
+    )
+    os_mcp_server.main()
+    assert captured["mcp_config"].config["max_pdf_pages"] == 200
+
+
+def test_data_mcp_subprocess_reads_effective_project_logging(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+    from cli_agent.data import data_mcp_server
+
+    global_config = tmp_path / "global.toml"
+    global_config.write_text("[logging]\nenabled = true\n", encoding="utf-8")
+    _project(tmp_path, "[logging]\nenabled = false\n")
+    observed = []
+    monkeypatch.setattr(data_mcp_server, "parse_args", lambda: SimpleNamespace(
+        project_directory=tmp_path, config_file=global_config, access="none",
+        protected_path=[], mutation_protected_path=[], path_policy_file=None,
+        sdk_configless=False,
+    ))
+    monkeypatch.setattr(
+        data_mcp_server, "configure_logging",
+        lambda logging, **_kwargs: observed.append(logging.enabled),
+    )
+    monkeypatch.setattr(data_mcp_server, "DataOperations", lambda workspace: object())
+    monkeypatch.setattr(
+        data_mcp_server, "create_server",
+        lambda *_a, **_k: SimpleNamespace(run=lambda **_options: None),
+    )
+    data_mcp_server.main()
+    assert observed == [False]
+
+
+def test_sdk_configless_os_subprocess_ignores_project_overlay(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+    from cli_agent.platform import os_mcp_server
+
+    _project(tmp_path, "[pdf]\nmax_pdf_pages = 200\n")
+    captured = {}
+    monkeypatch.setattr(os_mcp_server, "parse_args", lambda: SimpleNamespace(
+        project_directory=tmp_path, config_file=None, access="read",
+        protected_path=[], mutation_protected_path=[], path_policy_file=None,
+        max_pdf_pages=350, sdk_configless=True,
+    ))
+    monkeypatch.setattr(os_mcp_server, "configure_logging", lambda *_a, **_k: None)
+    monkeypatch.setattr(os_mcp_server, "vision_config_from_environment", lambda: None)
+    monkeypatch.setattr(
+        os_mcp_server.Workspace, "from_directory",
+        lambda _directory, mcp_config, **_kwargs:
+            captured.setdefault("mcp_config", mcp_config) or object(),
+    )
+    monkeypatch.setattr(
+        os_mcp_server, "create_server",
+        lambda *_a, **_k: SimpleNamespace(run=lambda **_options: None),
+    )
+    os_mcp_server.main()
+    assert captured["mcp_config"].config["max_pdf_pages"] == 350
