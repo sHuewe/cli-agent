@@ -769,6 +769,10 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focu
   scrollbar-width: thin;
   gap: 15px;
 }
+/* The chat is the scroll container. Flex children must retain their
+   natural heights; otherwise long answers are compressed into tiny
+   independently scrolling message boxes once the viewport fills. */
+.chat > * { flex-shrink: 0; }
 .chat:empty::before {
   content: "";
   display: block;

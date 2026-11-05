@@ -707,4 +707,5 @@ def test_built_in_ui_has_modern_styles_and_theme_links():
         assert "--ui-accent:" in data
     assert "100dvh" in web_ui.APP_CSS
     assert "#composer:focus-within" in web_ui.APP_CSS
+    assert ".chat > * { flex-shrink: 0; }" in web_ui.APP_CSS
     assert "[hidden] { display: none !important; }" in web_ui.APP_CSS
