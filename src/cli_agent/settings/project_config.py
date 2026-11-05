@@ -194,7 +194,7 @@ def read_project_ui_icon(workspace: Path, filename: str | None) -> tuple[str, by
     if lower == "png":
         valid = (
             len(data) >= 33
-            and data.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+            and data.startswith(b"\x89PNG\r\n\x1a\n")
             and data[12:16] == b"IHDR"
             and int.from_bytes(data[8:12], "big") == 13
             and 0 < int.from_bytes(data[16:20], "big") <= 4096
@@ -202,7 +202,7 @@ def read_project_ui_icon(workspace: Path, filename: str | None) -> tuple[str, by
         )
         mime_type = "image/png"
     elif lower in {"jpg", "jpeg"}:
-        valid = len(data) >= 16 and data.startswith(b"\\xff\\xd8\\xff") and data.endswith(b"\\xff\\xd9")
+        valid = len(data) >= 16 and data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9")
         mime_type = "image/jpeg"
     else:
         valid = (
