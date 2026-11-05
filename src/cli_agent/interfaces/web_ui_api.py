@@ -17,6 +17,7 @@ async def run_web_ui_via_api(
     file_contexts,
     output_target,
     excluded_paths,
+    system_prompt=None,
 ):
     """Keep cli-agent --with-web-ui a one-command localhost launch.
 
@@ -63,6 +64,7 @@ async def run_web_ui_via_api(
             workspace, client, config.mcp_servers,
             logging_config=config.logging,
             agent_timezone=config.agent.timezone,
+            system_prompt=system_prompt,
             config_file=config_file,
             dump_llm_context=False,
             network=admin_config.network,

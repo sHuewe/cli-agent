@@ -673,7 +673,10 @@ def main() -> None:
     sdk_configless = bool(getattr(args, "sdk_configless", False))
     if sdk_configless and args.config_file is not None:
         raise ValueError("--sdk-configless und --config-file sind nicht kombinierbar.")
-    config = AppConfig() if sdk_configless else load_config(path=args.config_file)
+    config = (
+        AppConfig() if sdk_configless
+        else load_config(path=args.config_file, workspace=args.project_directory)
+    )
     effective_config_file = (
         args.config_file.expanduser()
         if args.config_file is not None

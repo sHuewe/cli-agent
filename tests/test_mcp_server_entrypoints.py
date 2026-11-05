@@ -332,7 +332,7 @@ def test_os_main_uses_resolved_config_workspace_and_stdio(tmp_path, monkeypatch)
     monkeypatch.setattr(
         os_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=logging_config, mcp_servers=(), max_pdf_pages=100),
+        lambda path, **kwargs: SimpleNamespace(logging=logging_config, mcp_servers=(), max_pdf_pages=100),
     )
 
     def fake_configure_logging(config, **kwargs):
@@ -399,7 +399,7 @@ def test_os_main_protects_effective_default_config_when_config_flag_is_omitted(t
     monkeypatch.setattr(
         os_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=object(), mcp_servers=(), max_pdf_pages=100),
+        lambda path, **kwargs: SimpleNamespace(logging=object(), mcp_servers=(), max_pdf_pages=100),
     )
     monkeypatch.setattr(os_mcp_server, "configure_logging", lambda *_args, **_kwargs: None)
 
@@ -446,7 +446,7 @@ def test_os_main_converts_workspace_error_to_system_exit(tmp_path, monkeypatch) 
     monkeypatch.setattr(
         os_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=object(), mcp_servers=(), max_pdf_pages=100),
+        lambda path, **kwargs: SimpleNamespace(logging=object(), mcp_servers=(), max_pdf_pages=100),
     )
     monkeypatch.setattr(os_mcp_server, "configure_logging", lambda *_args, **_kwargs: None)
 
