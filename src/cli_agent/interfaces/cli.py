@@ -555,11 +555,18 @@ async def run(args: argparse.Namespace) -> None:
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
-    config = load_config(args.config, workspace=workspace)
+    project_file = workspace / ".cli-agent" / "project.toml"
+    config = (
+        load_config(args.config, workspace=workspace)
+        if project_file.exists() or project_file.is_symlink()
+        else load_config(args.config)
+    )
     admin_config: AdminConfig = load_admin_config()
     config = apply_model_cli_override(config, model=args.model)
     from cli_agent.settings.project_config import read_project_system_prompt
-    project_system_prompt = read_project_system_prompt(workspace, config.agent.system_prompt)
+    project_system_prompt = read_project_system_prompt(
+        workspace, getattr(config.agent, "system_prompt", None)
+    )
 
     excluded_paths = tuple(getattr(args, "exclude_path", ()) or ())
     if excluded_paths and args.os_access not in {"read", "write"}:
