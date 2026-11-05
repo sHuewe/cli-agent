@@ -256,9 +256,9 @@ def structured_tables_result(
     if not tables:
         raise ValueError("Kein tabellarischer Datensatz erkannt.")
     if raw_tables is None:
-        raise ValueError("Für Tabellenmetadaten werden die ursprünglichen Werte benötigt.")
+        raise ValueError("Original values are required for table metadata.")
     if len(raw_tables) != len(tables):
-        raise ValueError("Tabellen und Metadaten stimmen nicht überein.")
+        raise ValueError("Tables and metadata do not match.")
     payload: dict[str, object]
     if len(tables) == 1:
         payload = tables[0]
@@ -266,14 +266,14 @@ def structured_tables_result(
         payload = {"tables": tables, "scalar_encoding": SCALAR_ENCODING}
     serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False)
     if len(serialized.encode("utf-8")) > max_result_bytes:
-        raise ValueError("Vollständiges Datenergebnis ist zu groß für einen MCP-Aufruf.")
+        raise ValueError("Complete data result is too large for one MCP call.")
 
     metadata: dict[str, object] = {"operation": operation, "format": "json"}
     if summary is not None:
         metadata["summary"] = summary
     if result_metadata is not None:
         if set(result_metadata) - {"timestamp_timezone", "source_timezone"}:
-            raise ValueError("Unbekannte zusätzliche Tabellenmetadaten.")
+            raise ValueError("Unknown additional table metadata.")
         metadata.update(result_metadata)
     if len(tables) == 1:
         columns, rows = raw_tables[0]
@@ -303,9 +303,9 @@ def structured_tables_result(
                     item[optional].pop()
                     item["sample_rows_complete" if optional == "sample_rows" else "stats_columns_complete"] = False
             if not _metadata_fits(metadata):
-                raise ValueError("Zu viele oder zu breite Tabellen für das Metadatenbudget.")
+                raise ValueError("Too many tables or columns for the metadata budget.")
     return CallToolResult(
-        content=[TextContent(type="text", text="Tabellendaten als Session-Artefakt vorbereitet.")],
+        content=[TextContent(type="text", text="Tabular data prepared as a session artifact.")],
         structuredContent=payload,
         **{
             "_meta": {

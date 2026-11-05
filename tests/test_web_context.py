@@ -254,7 +254,7 @@ def test_add_web_context_is_session_command_not_history(
 
     answer = asyncio.run(agent.ask("add_web_context http://localhost:8080/docs"))
 
-    assert "Web-Kontext hinzugefügt" in answer
+    assert "Web context added" in answer
     assert len(agent._web_contexts) == 1
     assert agent.history == []
 
@@ -294,7 +294,7 @@ def test_clear_web_context_removes_all_contexts_without_history(tmp_path: Path) 
 
     answer = asyncio.run(agent.ask("clear_web_context"))
 
-    assert answer == "Web-Kontext gelöscht (2 Einträge)."
+    assert answer == "Web context cleared (2 entries)."
     assert agent._web_contexts == []
     assert agent.history == []
 
@@ -372,12 +372,12 @@ def test_tokens_command_reports_main_and_knowledge_usage(tmp_path: Path) -> None
     answer = asyncio.run(agent.ask("tokens"))
 
     assert "Main-Loop:" in answer
-    assert "Usage verfügbar: 1/1" in answer
-    assert "Input gesamt: 3.000 Tokens" in answer
-    assert "Output gesamt: 200 Tokens" in answer
-    assert "Max. gemeldeter Input eines Aufrufs: 3.000 Tokens" in answer
+    assert "Usage available: 1/1" in answer
+    assert "Total input: 3.000 Tokens" in answer
+    assert "Total output: 200 Tokens" in answer
+    assert "Maximum reported input in one request: 3.000 Tokens" in answer
     assert "Knowledge-Loop:" in answer
-    assert "Input gesamt: 1.500 Tokens" in answer
+    assert "Total input: 1.500 Tokens" in answer
     assert len(model.calls) == calls_before
 
 
@@ -397,11 +397,11 @@ def test_tokens_command_marks_mixed_usage_as_incomplete(tmp_path: Path) -> None:
         usage=usage,
     )
 
-    assert "Modellaufrufe: 3" in text
-    assert "Usage verfügbar: 2/3" in text
-    assert "Input gesamt: mindestens 3.000 Tokens" in text
-    assert "Input letzter Aufruf: nicht verfügbar" in text
-    assert "Usage-Daten sind unvollständig" in text
+    assert "Model requests: 3" in text
+    assert "Usage available: 2/3" in text
+    assert "Total input: at least 3.000 Tokens" in text
+    assert "Input of last request: unavailable" in text
+    assert "usage data are incomplete" in text
 
 
 def test_tokens_command_reports_all_missing_usage(tmp_path: Path) -> None:
@@ -414,9 +414,9 @@ def test_tokens_command_reports_all_missing_usage(tmp_path: Path) -> None:
         usage=usage,
     )
 
-    assert "Modellaufrufe: 2" in text
-    assert "Usage verfügbar: 0/2" in text
-    assert "keine Usage-Daten geliefert" in text
+    assert "Model requests: 2" in text
+    assert "Usage available: 0/2" in text
+    assert "no usage data" in text
 
 
 def test_tokens_command_does_not_clear_previous_usage(tmp_path: Path) -> None:
@@ -431,7 +431,7 @@ def test_tokens_command_does_not_clear_previous_usage(tmp_path: Path) -> None:
 
     assert first == second
     assert "Main-Loop:" in first
-    assert "Knowledge-Loop: nicht ausgeführt." in first
+    assert "Knowledge-Loop: not executed." in first
 
 
 def test_add_web_context_typo_does_not_call_model(tmp_path: Path) -> None:
@@ -453,7 +453,7 @@ def test_add_web_context_missing_url_does_not_call_model(tmp_path: Path) -> None
 
     answer = asyncio.run(agent.ask("add_web_context"))
 
-    assert "Verwendung: add_web_context <URL>" in answer
+    assert "Usage: add_web_context <URL>" in answer
     assert model.calls == []
     assert agent.history == []
 
@@ -634,14 +634,14 @@ def test_confluence_document_accepts_single_search_result() -> None:
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        ({"results": []}, "nicht gefunden"),
+        ({"results": []}, "not found"),
         (
             {"results": [{"title": "A"}, {"title": "B"}]},
-            "nicht eindeutig",
+            "ambiguous",
         ),
         (
             {"results": ["invalid"]},
-            "ungültiges Seitenergebnis",
+            "invalid page result",
         ),
         (
             {"title": "No body"},
@@ -649,7 +649,7 @@ def test_confluence_document_accepts_single_search_result() -> None:
         ),
         (
             {"title": "Empty", "body": {"view": {"value": "   "}}},
-            "keinen verwertbaren Seiteninhalt",
+            "no usable page content",
         ),
     ],
 )
@@ -708,10 +708,10 @@ def test_json_repairs_accumulate_main_usage(tmp_path: Path) -> None:
         last_input_tokens=200,
     )
     tokens = asyncio.run(agent.ask("tokens"))
-    assert "Modellaufrufe: 2" in tokens
-    assert "Input gesamt: 300 Tokens" in tokens
-    assert "Output gesamt: 30 Tokens" in tokens
-    assert "Tokens gesamt: 330 Tokens" in tokens
+    assert "Model requests: 2" in tokens
+    assert "Total input: 300 Tokens" in tokens
+    assert "Total output: 30 Tokens" in tokens
+    assert "Total tokens: 330 Tokens" in tokens
 
 
 

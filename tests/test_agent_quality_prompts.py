@@ -21,13 +21,46 @@ def _agent(tmp_path: Path, *, agent_timezone: str | None = None) -> CliAgent:
     )
 
 
+
+def test_built_in_agent_prompts_use_english_instructions() -> None:
+    """Prompt language is independent of the user's response language."""
+    from cli_agent.runtime.agent import (
+        EVIDENCE_WORKING_MEMORY_SYSTEM_RULE,
+        MCP_INSTRUCTION_SYSTEM_RULE,
+        REFERENCE_CONTEXT_SYSTEM_RULE,
+        WORKSPACE_TOOL_SYSTEM_RULE,
+    )
+    from cli_agent.runtime.agent_prompts import (
+        KNOWLEDGE_SYSTEM_PROMPT,
+        VECTOR_KNOWLEDGE_PROMPT,
+        HYBRID_OKF_KNOWLEDGE_PROMPT,
+        CHROMA_KNOWLEDGE_PROMPT,
+    )
+    from cli_agent.context.file_context import FILE_CONTEXT_SYSTEM_RULE
+    from cli_agent.context.web_context_agent import WEB_CONTEXT_SYSTEM_RULE
+
+    prompts = (
+        BASE_SYSTEM_PROMPT, MCP_TOOL_SYSTEM_RULE,
+        EVIDENCE_WORKING_MEMORY_SYSTEM_RULE, MCP_INSTRUCTION_SYSTEM_RULE,
+        REFERENCE_CONTEXT_SYSTEM_RULE, WORKSPACE_TOOL_SYSTEM_RULE,
+        KNOWLEDGE_SYSTEM_PROMPT, VECTOR_KNOWLEDGE_PROMPT,
+        HYBRID_OKF_KNOWLEDGE_PROMPT, CHROMA_KNOWLEDGE_PROMPT,
+        FILE_CONTEXT_SYSTEM_RULE, WEB_CONTEXT_SYSTEM_RULE,
+    )
+    for prompt in prompts:
+        assert not any(char in prompt for char in "äöüÄÖÜß")
+    assert "user's language" in BASE_SYSTEM_PROMPT
+    assert "untrusted" in REFERENCE_CONTEXT_SYSTEM_RULE
+    assert "one OKF tool per model response" in KNOWLEDGE_SYSTEM_PROMPT
+
+
 def test_system_prompt_uses_system_local_time_by_default(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
     instant = datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc)
     assert agent._format_current_time(instant) == (
-        f"Aktuelle lokale Zeit: {instant.astimezone().isoformat()}"
+        f"Current local time: {instant.astimezone().isoformat()}"
     )
-    assert "Aktuelle lokale Zeit:" in agent._build_system_prompt()
+    assert "Current local time:" in agent._build_system_prompt()
 
 
 def test_configured_timezone_distinguishes_dst_instants(tmp_path: Path) -> None:
@@ -39,21 +72,21 @@ def test_configured_timezone_distinguishes_dst_instants(tmp_path: Path) -> None:
     first = datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc)
     second = first + timedelta(hours=1)
     assert agent._format_current_time(first) == (
-        "Aktuelle lokale Zeit: 2026-10-25T02:30:00+02:00 (Europe/Berlin)"
+        "Current local time: 2026-10-25T02:30:00+02:00 (Europe/Berlin)"
     )
     assert agent._format_current_time(second) == (
-        "Aktuelle lokale Zeit: 2026-10-25T02:30:00+01:00 (Europe/Berlin)"
+        "Current local time: 2026-10-25T02:30:00+01:00 (Europe/Berlin)"
     )
 
 
 def test_evidence_rules_apply_without_mcp_tools(tmp_path: Path) -> None:
     prompt = _agent(tmp_path)._build_system_prompt()
-    assert "Superlative durch vollständige Vergleiche" in prompt
-    assert "sonst benenne Kandidaten" in prompt
-    assert "belegte Fakten, Ableitungen und Hypothesen" in prompt
-    assert "verlässlicher Quellen" in prompt
-    assert "Zeitzonen und Zeitgrenzen" in prompt
-    assert "grundloser Datei-Inventarisierung" not in prompt
+    assert "Substantiate superlatives through complete comparisons" in prompt
+    assert "otherwise identify" in prompt
+    assert "established facts, deductions, and hypotheses" in prompt
+    assert "reliable sources" in prompt
+    assert "time zones and time boundaries" in prompt
+    assert "arbitrary file inventory" not in prompt
 
 
 def test_tool_reuse_rule_only_applies_when_tools_exist(tmp_path: Path) -> None:
@@ -63,10 +96,10 @@ def test_tool_reuse_rule_only_applies_when_tools_exist(tmp_path: Path) -> None:
         "example": [{"function": {"name": "example__history"}}]
     }
     prompt = agent._build_system_prompt()
-    assert "Rufe Tools nur bei Erkenntnisgewinn auf" in prompt
-    assert "nutze vorhandene Daten" in prompt
-    assert "redundanter Abfragen oder grundloser Datei-Inventarisierung" in prompt
-    assert prompt.count("Superlative durch vollständige Vergleiche") == 1
+    assert "Call tools only when they add useful information" in prompt
+    assert "reuse existing data" in prompt
+    assert "redundant queries or arbitrary file inventory" in prompt
+    assert prompt.count("Substantiate superlatives through complete comparisons") == 1
 
 
 def test_data_instructions_reuse_artifacts_and_known_pointers() -> None:
@@ -91,16 +124,16 @@ def test_sub_run_guidance_encourages_early_single_task_delegation(tmp_path: Path
         tool["function"]["name"] for tool in agent._model_tools()
     ]
     prompt = agent._build_system_prompt()
-    assert "bearbeitet genau EINE Analyseetappe innerhalb EINES" in prompt
-    assert "Trenne Kandidatensuche, Detailprüfung und unabhängige Validierung" in prompt
-    assert "Ein einzelner Planschritt darf mehrere Sub-Runs benötigen" in prompt
-    assert "genau EIN überprüfbares Zwischenergebnis" in prompt
-    assert "unterteile ihn in kleinere, einzeln überprüfbare" in prompt
-    assert "mehrerer Planschritte" in prompt
-    assert "klare Grenzen" in prompt
-    assert "Hauptagent bleibt Koordinator und Prüfer" in prompt
-    assert "begründeten Ausnahmefällen" in prompt
-    assert "früh" in prompt.lower()
+    assert "handles exactly ONE analysis stage" in prompt
+    assert "Separate candidate discovery, detailed inspection, and independent" in prompt
+    assert "One plan step may require multiple sub-runs" in prompt
+    assert "exactly ONE verifiable interim outcome" in prompt
+    assert "Break large plan steps into smaller, independently verifiable" in prompt
+    assert "several plan steps" in prompt
+    assert "explicit scope" in prompt
+    assert "main agent remains coordinator and reviewer" in prompt
+    assert "justified exceptions" in prompt
+    assert "early" in prompt.lower()
 
     description = SUB_RUN_TOOL["function"]["description"]
     assert "ONE coordinator plan step" in description
@@ -133,13 +166,13 @@ def test_sub_run_invalid_source_refs_receive_actionable_feedback() -> None:
     from cli_agent.state.sub_runs import execute_sub_run
 
     coordinator = SimpleNamespace(_sub_runs=[], _evidence_state=EvidenceState())
-    with pytest.raises(ValueError, match="source_refs, keine Evidence-IDs") as error:
+    with pytest.raises(ValueError, match="source_refs, not evidence IDs") as error:
         asyncio.run(execute_sub_run(coordinator, {
             "task": "Investigate the selected time intervals and compare results.",
             "evidence_ids": ["S1", "S4"],
         }))
     assert "agent__add_evidence" in str(error.value)
-    assert "lasse evidence_ids weg" in str(error.value)
+    assert "omit evidence_ids" in str(error.value)
     assert coordinator._sub_runs == []
 
 
@@ -168,7 +201,7 @@ def test_sub_run_prompt_includes_coordinator_session_timezone(monkeypatch, tmp_p
     assert agent.agent_timezone == "Europe/Berlin"
     assert agent._format_current_time(datetime.now(timezone.utc))[:20] in seen[0]
     assert "(Europe/Berlin)" in seen[0]
-    assert "Aktuelle lokale Zeit:" in seen[0]
+    assert "Current local time:" in seen[0]
 
 
 def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch) -> None:
@@ -199,7 +232,7 @@ def test_sub_run_has_200_tool_calls_independent_of_coordinator_limit(monkeypatch
         _model_tools=lambda: [],
         _build_reference_context_message=lambda **kwargs: None,
         _main_tools_need_workspace_context=lambda names: False,
-        _format_current_time=lambda now: "Aktuelle lokale Zeit: " + now.isoformat(),
+        _format_current_time=lambda now: "Current local time: " + now.isoformat(),
         model_client=SimpleNamespace(),
     )
     result = asyncio.run(execute_sub_run(agent, {
@@ -246,9 +279,9 @@ def test_sub_run_prompt_explains_existing_evidence_artifacts_and_handoff(tmp_pat
     agent._active_servers = {"example"}
     agent._server_tools = {"example": [{"function": {"name": "example__search"}}]}
     prompt = agent._build_system_prompt()
-    assert "in getrennten Modellschritten" in prompt
+    assert "in separate model steps" in prompt
     assert "evidence_ids" in prompt
-    assert "bloße Erwähnung im task reicht" in prompt
+    assert "simply mentioning it in the task does not suffice" in prompt
     assert "source_artifacts" in SUB_RUN_RULES
     assert "workspace_path" in SUB_RUN_RULES
     assert "source_artifacts" in SUB_RUN_TOOL["function"]["parameters"]["properties"]["evidence_ids"]["description"]
@@ -286,7 +319,7 @@ def test_sub_run_retries_invalid_response_using_same_context_and_budget(monkeypa
         _model_tools=lambda: [],
         _build_reference_context_message=lambda **kwargs: None,
         _main_tools_need_workspace_context=lambda names: False,
-        _format_current_time=lambda now: "Aktuelle lokale Zeit: " + now.isoformat(),
+        _format_current_time=lambda now: "Current local time: " + now.isoformat(),
         model_client=SimpleNamespace(),
     )
     result = asyncio.run(execute_sub_run(agent, {
@@ -295,7 +328,7 @@ def test_sub_run_retries_invalid_response_using_same_context_and_budget(monkeypa
     assert result["status"] == "partial"
     assert len(seen) == 2
     assert seen[0][0:2] == seen[1][0:2]
-    assert "Validierungsfehler" in seen[1][2][-1]["content"]
+    assert "Validation error" in seen[1][2][-1]["content"]
     assert agent._sub_runs[0]["status"] == "partial"
 
 
@@ -322,10 +355,10 @@ def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
         _model_tools=lambda: [],
         _build_reference_context_message=lambda **kwargs: None,
         _main_tools_need_workspace_context=lambda names: False,
-        _format_current_time=lambda now: "Aktuelle lokale Zeit: " + now.isoformat(),
+        _format_current_time=lambda now: "Current local time: " + now.isoformat(),
         model_client=SimpleNamespace(),
     )
-    with pytest.raises(ValueError, match="nach 2 Korrekturversuchen"):
+    with pytest.raises(ValueError, match="after 2 correction attempts"):
         asyncio.run(execute_sub_run(agent, {
             "task": "Investigate the selected intervals and return findings.",
         }))
@@ -437,7 +470,7 @@ def test_completed_sub_run_requires_new_source_backed_evidence() -> None:
         "status": "completed", "summary": "Found a result",
         "evidence_ids": [], "confidence": "high", "uncertainties": [],
     }
-    with pytest.raises(ValueError, match="mindestens eine NEUE Evidence"):
+    with pytest.raises(ValueError, match="at least one NEW evidence"):
         validate_sub_result(json.dumps(completed), set())
     assert validate_sub_result(
         json.dumps({**completed, "evidence_ids": ["new-finding"]}),
@@ -492,9 +525,9 @@ def test_delegation_warns_about_fanout_and_soft_budget(tmp_path: Path) -> None:
     agent._active_servers = {"example"}
     agent._server_tools = {"example": [{"function": {"name": "example__search"}}]}
     prompt = agent._build_system_prompt()
-    assert "Anzahl Elemente mal Schritte" in prompt
-    assert "20 bis 50 Toolaufrufe" in prompt
-    assert "keine offenen Aufträge" in prompt
+    assert "items times steps" in prompt
+    assert "20–50 tool calls" in prompt
+    assert "do not delegate open-ended" in prompt
     assert "Estimate fan-out" in SUB_RUN_TOOL["function"]["description"]
     assert SUB_RUN_SOFT_TOOL_LIMIT == 120
 

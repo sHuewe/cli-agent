@@ -48,7 +48,7 @@ def test_workspace_read_rejects_hardlink_alias(tmp_path: Path) -> None:
     alias = tmp_path / "notes.txt"
     _make_hardlink(outside, alias)
 
-    with pytest.raises(WorkspaceError, match="Hardlinks"):
+    with pytest.raises(WorkspaceError, match="multiple hardlinks"):
         _workspace(tmp_path).read_file("notes.txt")
 
 
@@ -58,7 +58,7 @@ def test_workspace_write_rejects_existing_hardlink_target(tmp_path: Path) -> Non
     alias = tmp_path / "notes.txt"
     _make_hardlink(outside, alias)
 
-    with pytest.raises(WorkspaceError, match="Hardlinks"):
+    with pytest.raises(WorkspaceError, match="multiple hardlinks"):
         _workspace(tmp_path).write_file("notes.txt", "replacement")
     assert outside.read_text(encoding="utf-8") == "original"
 
@@ -69,7 +69,7 @@ def test_workspace_copy_rejects_hardlink_source(tmp_path: Path) -> None:
     alias = tmp_path / "notes.txt"
     _make_hardlink(outside, alias)
 
-    with pytest.raises(WorkspaceError, match="Hardlinks"):
+    with pytest.raises(WorkspaceError, match="multiple hardlinks"):
         _workspace(tmp_path).copy_file("notes.txt", "copy.txt")
     assert not (tmp_path / "copy.txt").exists()
 
@@ -81,7 +81,7 @@ def test_okf_rejects_markdown_hardlink(tmp_path: Path) -> None:
     _make_hardlink(outside, alias)
     (tmp_path / "index.md").write_text("[Concept](concept.md)\n", encoding="utf-8")
 
-    with pytest.raises(OkfRepositoryError, match="Hardlinks"):
+    with pytest.raises(OkfRepositoryError, match="multiple hardlinks"):
         OkfRepository.from_directory(tmp_path).knowledge_read("concept.md")
 
 
@@ -96,7 +96,7 @@ def test_context_dump_rejects_symlink_directory(tmp_path: Path) -> None:
 
     agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
     agent._exit_stack = SimpleNamespace()
-    with pytest.raises(RuntimeError, match="Symlink|Reparse"):
+    with pytest.raises(RuntimeError, match="symlink|reparse"):
         asyncio.run(agent.ask("Hallo"))
     assert list(outside.iterdir()) == []
 
@@ -114,7 +114,7 @@ def test_context_dump_rejects_dangling_symlink_file(tmp_path: Path) -> None:
     assert not link.exists()
     agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
     agent._exit_stack = SimpleNamespace()
-    with pytest.raises(RuntimeError, match="Symlink|Reparse"):
+    with pytest.raises(RuntimeError, match="symlink|reparse"):
         asyncio.run(agent.ask("Hallo"))
     assert not outside.exists()
 
@@ -128,7 +128,7 @@ def test_context_dump_rejects_hardlinked_existing_dump_file(tmp_path: Path) -> N
 
     agent = CliAgent(tmp_path, RecordingModel(), (), dump_llm_context=True)
     agent._exit_stack = SimpleNamespace()
-    with pytest.raises(RuntimeError, match="Hardlinks"):
+    with pytest.raises(RuntimeError, match="multiple hardlinks"):
         asyncio.run(agent.ask("Hallo"))
     assert outside.read_text(encoding="utf-8") == "original"
 

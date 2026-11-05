@@ -30,7 +30,7 @@ def chroma_search_event_summary(
     """
     entries = result.get("entries")
     if not isinstance(entries, list):
-        raise ValueError("Chroma-Suchergebnis enthält keine gültige Trefferliste.")
+        raise ValueError("Chroma search result does not contain a valid match list.")
     return {
         "matches": len(entries),
         "collection": collection,
@@ -77,16 +77,16 @@ class ChromaKnowledgeSession:
         size = 0
         for hit in hits:
             if len(hit.content) > MAX_CHROMA_CHUNK_CHARS:
-                raise ValueError("Chroma-Chunk überschreitet die maximale Kontextgröße.")
+                raise ValueError("Chroma chunk exceeds the maximum context size.")
             if not isinstance(hit.id, str) or not hit.id or len(hit.id) > 256:
-                raise ValueError("Chroma-Treffer besitzt eine ungültige ID.")
+                raise ValueError("Chroma match has an invalid ID.")
             if hit.source is not None and len(hit.source) > 2048:
                 raise ValueError("Chroma-Quelle ist zu lang.")
             if len(json.dumps(hit.metadata, ensure_ascii=False)) > 4096:
-                raise ValueError("Chroma-Metadaten sind zu groß.")
+                raise ValueError("Chroma metadata are too large.")
             size += len(hit.content)
             if size > MAX_CHROMA_RESULT_CHARS:
-                raise ValueError("Chroma-Suchergebnis überschreitet die maximale Kontextgröße.")
+                raise ValueError("Chroma search result exceeds the maximum context size.")
             entries.append({
                 "id": hit.id, "source": hit.source,
                 "content": hit.content, "metadata": hit.metadata,
@@ -97,7 +97,7 @@ class ChromaKnowledgeSession:
     async def call_tool(self, name: str, arguments: dict[str, Any]):
         try:
             if name != "knowledge_search":
-                raise ValueError("Nicht unterstütztes Chroma-Knowledge-Tool.")
+                raise ValueError("Unsupported Chroma Knowledge tool.")
             return SimpleNamespace(
                 structuredContent=await self.search(arguments["query"]),
                 content=[], isError=False,

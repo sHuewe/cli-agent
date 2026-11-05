@@ -68,7 +68,7 @@ def test_context_guard_triggers_at_configured_margin() -> None:
         total_tokens=10_000 - CONTEXT_LIMIT_MARGIN + 20,
     )
 
-    with pytest.raises(ContextLimitReachedError, match="Context-Limit"):
+    with pytest.raises(ContextLimitReachedError, match="context limit"):
         client._check_context_limit()
 
     assert client._context_limit_reached is True

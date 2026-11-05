@@ -28,6 +28,21 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         from cli_agent.interfaces.web_ui_api import API_APP_JS
         return browser_security_headers(PlainTextResponse(API_APP_JS, media_type="application/javascript"))
 
+    async def ui_i18n(_request: Request) -> Response:
+        from cli_agent.interfaces.web_ui_api import API_I18N_JS
+        return browser_security_headers(PlainTextResponse(API_I18N_JS, media_type="application/javascript"))
+
+    async def ui_locales(_request: Request) -> Response:
+        from cli_agent.interfaces.web_ui_locales import available_locales
+        return browser_security_headers(JSONResponse(available_locales()))
+
+    async def ui_locale(request: Request) -> Response:
+        from cli_agent.interfaces.web_ui_locales import get_locale
+        catalog = get_locale(request.path_params["locale"])
+        if catalog is None:
+            return browser_security_headers(JSONResponse({"error": "Unknown locale."}, status_code=404))
+        return browser_security_headers(JSONResponse(catalog))
+
     async def ui_bootstrap(request: Request) -> Response:
         assert ui is not None
         from cli_agent.interfaces.web_ui_sessions import SessionOccupiedError
@@ -39,12 +54,12 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
                 ticket = body.get("ticket")
                 if ticket is not None:
                     if not isinstance(ticket, str):
-                        return error(400, "Ungültiges Session-Ticket.")
+                        return error(400, "Invalid session ticket.")
                     session_id, lease = registry.redeem(ticket)
                 else:
                     session_id = body.get("session_id", ui["session_id"])
                     if not isinstance(session_id, str):
-                        return error(400, "Ungültige Session-ID.")
+                        return error(400, "Invalid session ID.")
                     lease = registry.claim(session_id)
             session = service.sessions[session_id]
             return JSONResponse({
@@ -59,7 +74,7 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         except SessionOccupiedError as exc:
             return error(409, str(exc))
         except KeyError:
-            return error(404, "Session nicht gefunden.")
+            return error(404, "Session not found.")
         except ValueError as exc:
             return error(400, str(exc))
 
@@ -83,7 +98,7 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         except (SessionOccupiedError, KeyError):
             registry.forget(session.id)
             await service.remove(session.id)
-            return error(409, "Session konnte nicht geöffnet werden.")
+            return error(409, "Session could not be opened.")
         return JSONResponse({"session_id": session.id, "ticket": ticket}, status_code=201)
 
     async def ui_session_ticket(request: Request) -> Response:
@@ -92,7 +107,7 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         try:
             ticket = ui["registry"].invitation(request.path_params["session_id"])
         except KeyError:
-            return error(404, "Session nicht gefunden.")
+            return error(404, "Session not found.")
         except SessionOccupiedError as exc:
             return error(409, str(exc))
         return JSONResponse({"ticket": ticket})
@@ -108,14 +123,14 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
             if owner:
                 target = service.sessions[session_id]
                 if target._busy and target._pending_interrupt is None:
-                    return error(409, "Session ist beschäftigt.")
+                    return error(409, "Session is busy.")
             elif not registry.can_close(session_id):
-                return error(409, "Session ist in einem anderen Tab geöffnet oder beschäftigt.")
+                return error(409, "Session is open in another tab or busy.")
         except KeyError:
-            return error(404, "Session nicht gefunden.")
+            return error(404, "Session not found.")
         registry.forget(session_id)
         if not await service.remove(session_id):
-            return error(404, "Session nicht gefunden.")
+            return error(404, "Session not found.")
         return Response(status_code=204)
 
     async def ui_release(request: Request) -> Response:
@@ -153,7 +168,7 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
                 if set(body) != {"text"} or not isinstance(body["text"], str):
                     return error(400, "Text erwartet.")
                 if len(body["text"].encode("utf-8")) > MAX_PROMPT_BYTES:
-                    return error(400, "Text zu groß.")
+                    return error(400, "Text is too large.")
                 return JSONResponse({"html": _render_markdown(body["text"])})
         except ValueError as exc:
             return error(400, str(exc))
@@ -166,18 +181,18 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
             async with checked_json(request) as body:
                 if (set(body) - {"session_id", "command", "argument"}
                         or not isinstance(body.get("session_id"), str)):
-                    return error(400, "Ungültiger Web-UI-Befehl.")
+                    return error(400, "Invalid Web UI command.")
                 sid = body["session_id"]
                 if not ui["registry"].is_owner(
                     sid, request.headers.get("x-cli-agent-lease")
                 ):
-                    return error(403, "Session gehört nicht diesem Tab.")
+                    return error(403, "Session does not belong to this tab.")
                 prompt = _web_ui_command_prompt(
                     body.get("command"), body.get("argument")
                 )
             session = service.sessions[sid]
             if session._pending_frontend:
-                return error(409, "Offene Frontend-Tool-Aufrufe müssen zuerst beantwortet werden.")
+                return error(409, "Pending frontend tool calls must be answered first.")
             # Local commands still run on the same MCP-owning worker.
             run = session.submit(prompt, require_listener=False)
             while not run.done:
@@ -188,9 +203,9 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
                 return error(503, run.error or "Befehl fehlgeschlagen.")
             return JSONResponse({"answer": run.answer or ""})
         except KeyError:
-            return error(404, "Session nicht gefunden.")
+            return error(404, "Session not found.")
         except RuntimeError:
-            return error(409, "Session ist beschäftigt.")
+            return error(409, "Session is busy.")
         except ValueError as exc:
             return error(400, str(exc))
 
@@ -200,6 +215,9 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         ("ui_index", ui_index),
         ("ui_css", ui_css),
         ("ui_js", ui_js),
+        ("ui_i18n", ui_i18n),
+        ("ui_locales", ui_locales),
+        ("ui_locale", ui_locale),
         ("ui_bootstrap", ui_bootstrap),
         ("ui_sessions", ui_sessions),
         ("ui_session_new", ui_session_new),

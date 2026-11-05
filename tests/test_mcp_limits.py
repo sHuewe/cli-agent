@@ -22,7 +22,7 @@ def test_mcp_operation_timeout_is_reported() -> None:
         await asyncio.sleep(1)
         return "done"
 
-    with pytest.raises(RuntimeError, match="initialize.*Timeout"):
+    with pytest.raises(RuntimeError, match="initialize exceeded the timeout of 0\\.01 seconds\\."):
         asyncio.run(
             limits.await_mcp_operation(
                 slow(),
@@ -64,7 +64,7 @@ def test_metadata_within_generous_defaults_is_accepted() -> None:
 def test_tool_count_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_TOOLS_PER_SERVER", 2)
 
-    with pytest.raises(RuntimeError, match="zu viele Tools"):
+    with pytest.raises(RuntimeError, match="too many tools"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -75,7 +75,7 @@ def test_tool_count_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_instruction_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_INSTRUCTIONS_CHARS", 10)
 
-    with pytest.raises(RuntimeError, match="zu große Instructions"):
+    with pytest.raises(RuntimeError, match="MCP-Server 'broken' provides oversized instructions \\(11 > 10 characters\\)\\."):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions="x" * 11,
@@ -85,7 +85,7 @@ def test_instruction_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_description_and_schema_limits_are_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_DESCRIPTION_CHARS", 10)
-    with pytest.raises(RuntimeError, match="zu große Beschreibung"):
+    with pytest.raises(RuntimeError, match="MCP-Tool broken__search has an oversized description \\("):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -94,7 +94,7 @@ def test_description_and_schema_limits_are_enforced(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_DESCRIPTION_CHARS", 100)
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_SCHEMA_CHARS", 20)
-    with pytest.raises(RuntimeError, match="zu großes Schema"):
+    with pytest.raises(RuntimeError, match="oversized schema"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -109,7 +109,7 @@ def test_tool_name_length_limit_is_enforced() -> None:
         tools=[tool(name="t" * limits.MAX_MCP_TOOL_NAME_CHARS)],
     )
 
-    with pytest.raises(RuntimeError, match="zu langen Toolnamen"):
+    with pytest.raises(RuntimeError, match="excessively long tool name"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -118,7 +118,7 @@ def test_tool_name_length_limit_is_enforced() -> None:
 
 
 def test_tool_name_with_lone_surrogate_is_rejected() -> None:
-    with pytest.raises(RuntimeError, match="Unicode-Surrogate"):
+    with pytest.raises(RuntimeError, match="MCP-Server 'broken' provides a tool name containing an invalid Unicode surr"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -127,7 +127,7 @@ def test_tool_name_with_lone_surrogate_is_rejected() -> None:
 
 
 def test_duplicate_tool_names_are_rejected() -> None:
-    with pytest.raises(RuntimeError, match="mehrfach"):
+    with pytest.raises(RuntimeError, match="duplicate tool name"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -136,14 +136,14 @@ def test_duplicate_tool_names_are_rejected() -> None:
 
 
 def test_invalid_and_external_ref_schemas_are_rejected() -> None:
-    with pytest.raises(RuntimeError, match="gültiges JSON-Schema"):
+    with pytest.raises(RuntimeError, match="MCP-Tool broken__search does not provide a valid JSON Schema\\."):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
             tools=[tool(schema={"type": "definitely-not-a-json-schema-type"})],
         )
 
-    with pytest.raises(RuntimeError, match="externe JSON-Schema-Referenz"):
+    with pytest.raises(RuntimeError, match="external JSON Schema reference"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -193,7 +193,7 @@ def test_tool_arguments_are_validated_against_schema() -> None:
 def test_total_metadata_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_TOTAL_TOOL_METADATA_CHARS", 50)
 
-    with pytest.raises(RuntimeError, match="insgesamt zu viele Tool-Metadaten"):
+    with pytest.raises(RuntimeError, match="total tool metadata"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
@@ -205,7 +205,7 @@ def test_tool_result_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(limits, "MAX_MCP_TOOL_RESULT_CHARS", 10)
 
     assert limits.enforce_mcp_tool_result_limit("1234567890") == "1234567890"
-    with pytest.raises(RuntimeError, match="Sicherheitslimit"):
+    with pytest.raises(RuntimeError, match="safety limit"):
         limits.enforce_mcp_tool_result_limit("12345678901")
 
 
@@ -602,14 +602,14 @@ def test_draft2019_unevaluated_properties_tracks_dependent_and_conditionals() ->
 
 
 def test_metadata_rejects_non_object_and_non_serializable_schemas() -> None:
-    with pytest.raises(RuntimeError, match="kein JSON-Objekt"):
+    with pytest.raises(RuntimeError, match="JSON object as input schema"):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,
             tools=[tool(schema=["not", "an", "object"])],
         )
 
-    with pytest.raises(RuntimeError, match="serialisierbares Schema"):
+    with pytest.raises(RuntimeError, match="does not provide a valid serializable schema\\."):
         limits.validate_mcp_server_metadata(
             server_name="broken",
             instructions=None,

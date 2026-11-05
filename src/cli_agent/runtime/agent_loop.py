@@ -110,7 +110,7 @@ async def run_model_loop(
         ][:16]
         return json.dumps({
             "status": "partial",
-            "summary": "Die Teiluntersuchung wurde am weichen Toolbudget beendet.",
+            "summary": "The sub-run ended after reaching the soft tool-call budget.",
             "evidence_ids": new_ids,
             "confidence": "low",
             "uncertainties": [reason],
@@ -126,20 +126,19 @@ async def run_model_loop(
         if phase == "sub" and calls >= SUB_RUN_SOFT_TOOL_LIMIT:
             if sub_finalization_rounds >= 3:
                 return partial_sub_result(
-                    "Abschluss nach wiederholten Versuchen beim weichen Toolbudget."
+                    "Finalization after repeated attempts at the soft tool budget."
                 )
             sub_finalization_rounds += 1
             if sub_finalization_rounds == 1:
                 messages.append({
                     "role": "user",
                     "content": (
-                        "Das weiche Sub-Run-Budget ist erreicht. Beende jetzt "
-                        "die Untersuchung; starte keine weiteren Datenabfragen. "
-                        "Speichere bereits verifizierte wesentliche Ergebnisse "
-                        "falls nötig mit agent__add_evidence und gib danach "
-                        "sofort das vorgeschriebene JSON mit status=partial "
-                        "oder completed und den neuen Evidence-IDs zurück. "
-                        "Beschreibe unerledigte Teile als uncertainties."
+                        "The sub-run soft budget has been reached. Finish the investigation; "
+                        "do not start more data queries. Save already verified "
+                        "significant results with agent__add_evidence if needed, "
+                        "then immediately return the required JSON with "
+                        "status=partial or completed and new evidence IDs. "
+                        "Describe unfinished work in uncertainties."
                     ),
                 })
         agent._dump_context(messages, phase=phase)
@@ -239,9 +238,9 @@ async def run_model_loop(
                                 selection,
                                 knowledge_state,
                                 reason=(
-                                    "Das Modell hat wiederholt vor dem ersten "
-                                    "Concept-Read eine positive Auswahl "
-                                    "ausgegeben."
+                                    "The model returned a positive selection before the first "
+                                    "concept read "
+                                    "was completed."
                                 ),
                             )
                             agent._dump_value(
@@ -256,15 +255,11 @@ async def run_model_loop(
                             {
                                 "role": "user",
                                 "content": (
-                                    "Du hast `found_content: true` "
-                                    "ausgegeben, obwohl noch kein Concept "
-                                    "erfolgreich gelesen wurde und daher "
-                                    "keine gültigen Auswahl-Tokens "
-                                    "existieren. `root_index` ist nur eine "
-                                    "Navigationshilfe. Wenn die Anfrage "
-                                    "anwendbar ist, rufe jetzt genau ein "
-                                    "angebotenes Knowledge-Tool auf. Andernfalls "
-                                    "liefere `found_content: false` mit "
+                                    "You returned `found_content: true` before reading any concept, "
+                                    "so no valid selection tokens exist. The root_index "
+                                    "is for navigation only. If this request is applicable, "
+                                    "call exactly one offered Knowledge tool now. Otherwise "
+                                    "return `found_content: false` with "
                                     "`reason_code: not_applicable`."
                                 ),
                             }
@@ -282,10 +277,9 @@ async def run_model_loop(
                         and selection.get("found_content") is not True
                     ):
                         selection_error = (
-                            "Nach einer ungültigen Auswahl mit "
-                            "`found_content: true` darf die reine "
-                            "Formatkorrektur nicht zu "
-                            "`found_content: false` wechseln."
+                            "After an invalid selection with `found_content: true`, "
+                            "a format-only correction must not switch to "
+                            "`found_content: false`."
                         )
                     if selection_error is not None:
                         if (
@@ -296,7 +290,7 @@ async def run_model_loop(
                                 selection,
                                 knowledge_state,
                                 reason=(
-                                    "Wiederholt ungültige finale Auswahl: "
+                                    "Repeatedly invalid final selection: "
                                     + selection_error
                                 ),
                             )
@@ -322,40 +316,32 @@ async def run_model_loop(
                         if valid_tokens:
                             knowledge_selection_only_mode = True
                             correction_action = (
-                                "Korrigiere ausschließlich die finale "
-                                "Auswahl anhand der bereits gelesenen "
-                                "Concepts. Rufe keine weiteren Tools nur "
-                                "zur Korrektur des Ausgabeformats auf."
+                                "Correct only the final selection using concepts already read. "
+                                "Do not call additional tools merely to fix formatting."
                             )
                         else:
                             correction_action = (
-                                "Es existiert noch kein gültiger Token. "
-                                "Nutze jetzt die Knowledge-Tools, bevor du erneut "
-                                "eine positive Auswahl ausgibst."
+                                "No valid token exists yet. Use Knowledge tools before "
+                                "returning another positive selection."
                             )
                         messages.append(
                             {
                                 "role": "user",
                                 "content": (
-                                    "Deine finale Auswahl ist ungültig: "
+                                    "Your final selection is invalid: "
                                     f"{selection_error}\n"
-                                    "`found_content: true` ist nur mit "
-                                    "`selected_okf_tokens` zulässig, die "
-                                    "der Agent nach einem erfolgreichen "
-                                    "`knowledge_read` unter "
-                                    "`agent_selection.token` vergeben hat. "
-                                    "Verwende weder Repository-Pfade noch "
-                                    "`concept_id`-Werte. Aktuell gültige "
-                                    "Tokens: "
+                                    "`found_content: true` requires "
+                                    "`selected_okf_tokens` issued as "
+                                    "`agent_selection.token` after successful "
+                                    "`knowledge_read`. Do not use repository paths "
+                                    "or `concept_id` values. Currently valid tokens: "
                                     + json.dumps(
                                         valid_tokens,
                                         ensure_ascii=False,
                                     )
                                     + ". "
                                     + correction_action
-                                    + " Liefere danach erneut "
-                                    "ausschließlich das verlangte "
-                                    "JSON-Objekt."
+                                    + " Return only the required final JSON object."
                                 ),
                             }
                         )
@@ -383,7 +369,7 @@ async def run_model_loop(
                     )
                     logger.warning("knowledge_empty_response_fallback")
                     return json.dumps(fallback, ensure_ascii=False)
-                answer = "(Das Modell hat keine Antwort erzeugt.)"
+                answer = "(The model did not produce an answer.)"
                 agent._dump_context(messages, phase=phase)
                 return answer
 
@@ -392,12 +378,10 @@ async def run_model_loop(
                 {
                     "role": "user",
                     "content": (
-                        "Du hast weder eine finale Antwort noch einen "
-                        "Tool-Aufruf erzeugt. Setze diese Phase jetzt mit "
-                        "den verfügbaren Tools fort oder liefere das für "
-                        "diese Phase verlangte textliche Endergebnis. "
-                        "Behaupte keinen Erfolg ohne passende "
-                        "Tool-Ergebnisse."
+                        "You produced neither a final answer nor a tool call. "
+                        "Continue this phase with available tools or return "
+                        "its required final text result. Do not claim success "
+                        "without supporting tool results."
                     ),
                 }
             )
@@ -415,8 +399,8 @@ async def run_model_loop(
                     None,
                     knowledge_state,
                     reason=(
-                        "Das Modell hat im reinen Auswahlmodus wiederholt "
-                        "unzulässige Tool-Aufrufe erzeugt."
+                        "The model repeatedly made "
+                        "disallowed tool calls in selection-only mode."
                     ),
                 )
                 agent._dump_value(
@@ -433,10 +417,9 @@ async def run_model_loop(
                     messages,
                     rejected_call,
                     exposed_name,
-                    "Der Knowledge-Lauf befindet sich im reinen "
-                    "Auswahlmodus. Verwende jetzt ausschließlich "
-                    "einen oder mehrere der bereits genannten gültigen "
-                    "Agent-Tokens und rufe keine weiteren Tools auf.",
+                    "The Knowledge run is in selection-only mode. Select "
+                    "one or more previously listed valid agent tokens; "
+                    "do not call further tools.",
                 )
                 transient_rejections.append((message, rejected_call, tool_message))
             logger.info(
@@ -453,16 +436,16 @@ async def run_model_loop(
                     and any((call.get("function") or {}).get("name")
                             not in allowed_names for call in tool_calls)):
                 return partial_sub_result(
-                    "Modell wollte nach dem weichen Toolbudget weitere "
-                    "Untersuchungstools statt einer Ergebnisübergabe aufrufen."
+                    "After the soft budget the model tried more "
+                    "investigation tools instead of returning results."
                 )
             if (calls < SUB_RUN_SOFT_TOOL_LIMIT
                     and calls + len(tool_calls) > SUB_RUN_SOFT_TOOL_LIMIT):
                 # Never execute a batch that would overrun the soft budget;
                 # keep already persisted evidences instead of hard-failing.
                 return partial_sub_result(
-                    "Ein Tool-Batch hätte das weiche Sub-Run-Budget "
-                    "überschritten; weitere Arbeit muss getrennt erfolgen."
+                    "A tool batch would exceed the soft sub-run budget; "
+                    "further work must be split off."
                 )
         frontend_calls = []
         if phase == "main":
@@ -564,12 +547,12 @@ async def run_model_loop(
                     evidence.update_evidence(args)
                 if tool_name != PLAN_TOOL_NAME:
                     result_text = (
-                        "Evidence-State erfolgreich aktualisiert. "
-                        f"Einträge: {len(evidence.evidences)} "
-                        f"(vorher {previous_count}); "
-                        f"ausgeblendete Toolaufrufe: {len(evidence.compacted)} "
-                        f"(vorher {previous_compacted}). "
-                        "Nicht erneut speichern, sofern keine Korrektur nötig ist."
+                        "Evidence state successfully updated. "
+                        f"Entries: {len(evidence.evidences)} "
+                        f"(previously {previous_count}); "
+                        f"hidden tool calls: {len(evidence.compacted)} "
+                        f"(previously {previous_compacted}). "
+                        "Do not save again unless a correction is needed."
                     )
                 logger.info("evidence_state_updated entries=%d hidden=%d",
                             len(evidence.evidences), len(evidence.compacted))
@@ -583,8 +566,8 @@ async def run_model_loop(
                     }, ensure_ascii=False)
                 else:
                     result_text = (
-                        "Evidence-Update NICHT übernommen: " + str(exc)[:1800]
-                        + " Korrigiere die konkret genannten Argumente und versuche es erneut."
+                        "Evidence update NOT applied: " + str(exc)[:1800]
+                        + " Correct the specified arguments and retry."
                     )
                 logger.warning("evidence_update_rejected type=%s", type(exc).__name__)
             finally:
@@ -649,10 +632,10 @@ async def run_model_loop(
                         "call_id": event_id, "id": artifact_id, "path": published.path,
                         "filename": published.filename, "mime_type": published.mime_type,
                     })
-                result_text = "Download bereitgestellt: " + published.filename
+                result_text = "Download published: " + published.filename
             except (ValueError, RuntimeError, OSError) as exc:
                 status = "error"
-                result_text = "Download konnte nicht veröffentlicht werden: " + str(exc)[:500]
+                result_text = "Could not publish download: " + str(exc)[:500]
             messages.append({"role": "tool", "tool_call_id": event_id, "content": result_text})
             if event_callback is not None:
                 await event_callback("tool_finished", {
@@ -672,16 +655,16 @@ async def run_model_loop(
             }
             if getattr(knowledge_state, "chroma_budget_exhausted", False):
                 notice = (
-                    "Das kumulative Chroma-Kontextbudget ist erreicht. "
-                    "Rufe keine weiteren Tools auf. Wähle ausschließlich "
-                    "die relevanten, bereits registrierten Chunk-Tokens: "
+                    "The cumulative Chroma context budget has been reached. "
+                    "Do not call more tools. Select only relevant, already "
+                    "registered chunk tokens: "
                 )
             else:
                 notice = (
-                    "Das konfigurierte Limit von "
-                    f"{max_concept_reads} gelesenen Concepts ist erreicht. "
-                    "Rufe keine weiteren Tools auf. Wähle ausschließlich "
-                    "die materiell hilfreichen Agent-Tokens: "
+                    "The configured limit of "
+                    f"{max_concept_reads} read concepts has been reached. "
+                    "Do not call more tools. Select only materially useful "
+                    "agent tokens: "
                 )
             messages.append(
                 {
@@ -689,7 +672,7 @@ async def run_model_loop(
                     "content": (
                         notice
                         + json.dumps(valid_tokens, ensure_ascii=False)
-                        + ". Liefere ausschließlich das verlangte finale JSON-Objekt."
+                        + ". Return only the required final JSON object."
                     ),
                 }
             )

@@ -58,8 +58,8 @@ prompt_file = "prompt.md"
     flow_module.main()
 
     output = capsys.readouterr().out
-    assert "Flow gültig:" in output
-    assert "1 Schritte" in output
+    assert "Flow valid:" in output
+    assert "1 steps" in output
 
 
 def test_flow_cli_validate_sanitizes_dynamic_status(
@@ -156,7 +156,7 @@ def test_flow_cli_reports_validation_error(
         flow_module.main()
 
     assert exc_info.value.code == 1
-    assert "Fehler: ValueError:" in capsys.readouterr().err
+    assert "Error: ValueError:" in capsys.readouterr().err
 
 
 def test_flow_rejects_oversized_static_conversation_items(
@@ -175,24 +175,24 @@ def test_flow_rejects_oversized_static_conversation_items(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="conversation_items.*mehr als"):
+    with pytest.raises(ValueError, match="conversation_items.*contains more than"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
 @pytest.mark.parametrize(
     ("flow_text", "message"),
     [
-        ("version = 1\nunknown = true", "Unbekannte Flow-Schlüssel"),
+        ("version = 1\nunknown = true", "Unknown flow keys"),
         (
             "version = 1\nconfig = 123\n[[steps]]\nid = \"one\"\nprompt_file = \"prompt.md\"",
-            "config muss ein nichtleerer String",
+            "config must be a nonempty string",
         ),
         (
             "version = 1\nmodel = \"\"\n[[steps]]\nid = \"one\"\nprompt_file = \"prompt.md\"",
-            "model muss ein nichtleerer String",
+            "model must be a nonempty string",
         ),
         ("version = 2\nsteps = []", "version = 1"),
-        ("version = 1\nsteps = []", "mindestens einen"),
+        ("version = 1\nsteps = []", "at least one"),
         (
             """
 version = 1
@@ -203,7 +203,7 @@ prompt_file = "prompt.md"
 id = "one"
 prompt_file = "prompt.md"
 """.strip(),
-            "Doppelte Step-ID",
+            "Duplicate step ID",
         ),
         (
             """
@@ -213,7 +213,7 @@ id = "one"
 prompt_file = "prompt.md"
 add_file_context = []
 """.strip(),
-            "nichtleerer String",
+            "nonempty string",
         ),
         (
             """
@@ -233,7 +233,7 @@ id = "one"
 prompt_file = "prompt.md"
 retry = "invalid"
 """.strip(),
-            "retry muss eine Tabelle",
+            "retry must be a table",
         ),
         (
             """
@@ -424,7 +424,7 @@ add_file_context = ["a.txt", "a.txt"]
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="doppelten Dateien"):
+    with pytest.raises(ValueError, match="steps\\[1\\]\\.add_file_context must not contain duplicate files\\."):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -509,7 +509,7 @@ add_file_context = "context.txt"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="nicht gleichzeitig"):
+    with pytest.raises(ValueError, match="simultaneously"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 def test_flow_inherits_global_config_and_model_and_allows_step_overrides(
@@ -638,7 +638,7 @@ max_delay_seconds = 4
         ("initial_delay_seconds = -1", "initial_delay_seconds"),
         ("backoff_multiplier = 0", "backoff_multiplier"),
         ("max_delay_seconds = 301", "max_delay_seconds"),
-        ("unknown = 1", "unbekannte Schlüssel"),
+        ("unknown = 1", "unknown keys"),
     ],
 )
 def test_flow_rejects_invalid_retry_policy(
@@ -738,7 +738,7 @@ def test_flow_rejects_dynamic_or_duplicate_approve_tools(tmp_path: Path) -> None
 
     for value, message in (
         ('["os__write_file", "os__write_file"]', "doppelten"),
-        ('["${item.tool}"]', "parametrisiert"),
+        ('["${item.tool}"]', "parameterized"),
     ):
         (tmp_path / "flow.toml").write_text(
             f"""
@@ -819,7 +819,7 @@ workspace = "../other"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="unbekannte Schlüssel"):
+    with pytest.raises(ValueError, match="contains unknown keys:"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -977,7 +977,7 @@ path = "${item.path}"
         tmp_path / "flow.toml",
         workspace=tmp_path,
     )
-    with pytest.raises(ValueError, match="darf '..' nicht enthalten"):
+    with pytest.raises(ValueError, match="must not contain"):
         asyncio.run(
             run_flow(
                 definition,
@@ -1020,7 +1020,7 @@ foreach = "steps.discover.output.items"
         tmp_path / "flow.toml",
         workspace=tmp_path,
     )
-    with pytest.raises(ValueError, match="gültiges JSON"):
+    with pytest.raises(ValueError, match="must be valid JSON:"):
         asyncio.run(
             run_flow(
                 definition,
@@ -1085,7 +1085,7 @@ prompt_file = "prompt.md"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="vorherigen Schritt"):
+    with pytest.raises(ValueError, match="may only reference a previous step"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -1202,7 +1202,7 @@ overwrite_output = true
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="nicht eindeutige Output-Pfade"):
+    with pytest.raises(ValueError, match="Step 'process' produces for multiple foreach items nonunique output paths\\."):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert len(calls) == 1
@@ -1294,7 +1294,7 @@ prompt_file = "later.md"
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="reservierten Flow-Eingabe"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
@@ -1360,7 +1360,7 @@ overwrite_output = true
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="reservierten Flow-Eingabe"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         asyncio.run(
             run_flow(
                 definition,
@@ -1425,7 +1425,7 @@ foreach = "steps.discover.output.items"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="gültiges JSON"):
+    with pytest.raises(ValueError, match="must be valid JSON:"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
 
@@ -1448,7 +1448,7 @@ prompt_file = "prompt.md"
     )
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="Konfiguration.*ungültig"):
+    with pytest.raises(ValueError, match="Configuration for step 'one' is invalid: Expected '\\]' at the end of a table"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -1470,7 +1470,7 @@ output = "../escape.txt"
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="darf '..' nicht enthalten"):
+    with pytest.raises(ValueError, match="must not contain"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -1625,7 +1625,7 @@ output = "./result.txt"
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="geplanten Output"):
+    with pytest.raises(ValueError, match="; the later step does not permit overwriting\\."):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -1634,7 +1634,7 @@ output = "./result.txt"
     [
         (
             '{"items":[{"path":"ok.md"},{"path":"process.md"}]}',
-            "reservierten Flow-Eingabe",
+            "reserved flow input",
         ),
         (
             '{"items":[{"path":"ok.md"},{"path":"existing.md"}]}',
@@ -2144,7 +2144,7 @@ prompt_file = "prompt.md"
         workspace=tmp_path,
     )
 
-    with pytest.raises(ValueError, match="Prompt-Datei"):
+    with pytest.raises(ValueError, match="Prompt file.*could not be resolved"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -2234,7 +2234,7 @@ exclude_paths = ["flow"]
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exclude_paths benötigen workspace_access"):
+    with pytest.raises(ValueError, match="requires workspace_access"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -2252,7 +2252,7 @@ iteration_id = "one"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="iteration_id ist nur zusammen mit foreach"):
+    with pytest.raises(ValueError, match="steps\\[1\\]\\.iteration_id is only allowed with foreach\\."):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -2345,7 +2345,7 @@ overwrite_output = false
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="gültiges JSON"):
+    with pytest.raises(ValueError, match="must be valid JSON:"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
@@ -2521,7 +2521,7 @@ overwrite_output = false
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="gültiges JSON"):
+    with pytest.raises(ValueError, match="must be valid JSON:"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
@@ -2678,7 +2678,7 @@ overwrite_output = false
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="bereits von.*create"):
+    with pytest.raises(ValueError, match="Output file"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert [call.prompt for call in calls] == ["discover", "create"]
@@ -2725,7 +2725,7 @@ overwrite_output = false
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="geplanten Output|bereits von"):
+    with pytest.raises(ValueError, match="Output file for step 'two' conflicts with the planned output of step 'flow\\."):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
@@ -3041,7 +3041,7 @@ id = "${item.id}"
     )
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="nach dem Preflight verändert"):
+    with pytest.raises(ValueError, match="Preflight changed"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
@@ -3486,7 +3486,7 @@ value = "static"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="vorherigen Schritt"):
+    with pytest.raises(ValueError, match="may only reference output from a previous step"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -3529,7 +3529,7 @@ value = "${steps.first.output.missing}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="enthält kein Feld 'missing'"):
+    with pytest.raises(ValueError, match="has no field 'missing'"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
 
@@ -3888,7 +3888,7 @@ value = "${item.output.value}"
 
 
 def test_parse_structured_output_rejects_nonstandard_constants_with_lossless_numbers() -> None:
-    with pytest.raises(ValueError, match="nicht standardkonstante JSON-Zahl"):
+    with pytest.raises(ValueError, match="Output of step 'test' must be valid JSON: nonstandard JSON numeric constant"):
         flow_module._parse_structured_output(
             '{"x":Infinity}',
             step_id="test",
@@ -4015,7 +4015,7 @@ id = "${item.id}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="Aggregierter Output.*JSON-Limit"):
+    with pytest.raises(ValueError, match="Aggregated output of step 'process' exceeds the JSON limit of"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert [call.prompt for call in calls] == [
@@ -4079,7 +4079,7 @@ id = "${item.id}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="Aggregierter Output.*JSON-Limit"):
+    with pytest.raises(ValueError, match="Aggregated output of step 'process' exceeds the JSON limit of"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
@@ -4380,7 +4380,7 @@ directory = "${conversation.item}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="ist leer"):
+    with pytest.raises(ValueError, match="conversation_items for step 'update' is empty and there is no conversation_"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
 
@@ -4448,7 +4448,7 @@ directory = "${conversation.item}"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="ohne conversation_items"):
+    with pytest.raises(ValueError, match="without conversation_items"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -5269,7 +5269,7 @@ previous = "${previous_output}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="Run-Start"):
+    with pytest.raises(ValueError, match="previous_output of foreach step 'update' cannot be determined at run startu"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
 
@@ -5329,7 +5329,7 @@ previous = "${previous_output}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="nach dem Run-Start verändert"):
+    with pytest.raises(ValueError, match="previous_output of step 'update' was changed after Run startup changed:"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert [call.prompt for call in calls] == ["mutate"]
@@ -5385,7 +5385,7 @@ task = "${steps.discover.output.task}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
 
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(ValueError, match="darf kein lokaler Agent-Befehl sein"):
+    with pytest.raises(ValueError, match="Gerenderter Prompt for step 'process' must not be a local agent command\\."):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert len(calls) == 1
@@ -5560,7 +5560,7 @@ wrong = "explicit"
 
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="fehlend: value.*unbekannt: wrong"):
+    with pytest.raises(ValueError, match="Inputs for subflow step 'child' do not match"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -5619,7 +5619,7 @@ flow = "a.toml"
 
     definition = load_flow(tmp_path / "a.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="Zyklischer Subflow"):
+    with pytest.raises(ValueError, match="Cyclic subflow invocation detected"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -5643,7 +5643,7 @@ value = "${input.value}"
 
     definition = load_flow(tmp_path / "child.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="nicht direkt"):
+    with pytest.raises(ValueError, match="cannot run directly"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
 
@@ -5659,7 +5659,7 @@ flow = "${item.flow}"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="statischer Pfad"):
+    with pytest.raises(ValueError, match="steps\\[1\\]\\.flow must be a static path and must not contain dynamic flow place"):
         load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
 
@@ -5793,7 +5793,7 @@ flow = "../outside.toml"
         workspace=tmp_path,
     )
 
-    with pytest.raises(ValueError, match="darf '..' nicht enthalten"):
+    with pytest.raises(ValueError, match="must not contain"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -5954,7 +5954,7 @@ item = "${item}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="global.*Limit"):
+    with pytest.raises(ValueError, match="Flow execution exceeds the global limit of 2 step iterations\\."):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
 
@@ -6112,7 +6112,7 @@ flow = "leaf.toml"
 
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="Expansionslimit"):
+    with pytest.raises(ValueError, match="exceeds the expansion limit"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -6290,7 +6290,7 @@ flow = "child.toml"
 
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="geplanten Output"):
+    with pytest.raises(ValueError, match="; the later step does not permit overwriting\\."):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -6350,7 +6350,7 @@ item = "${item}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="bereits von"):
+    with pytest.raises(ValueError, match="Output file"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == ["discover"]
@@ -6392,7 +6392,7 @@ flow = "child.toml"
 
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="reservierten Flow-Eingabe"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         validate_flow(definition, workspace=tmp_path)
 
 
@@ -6667,7 +6667,7 @@ outer = "${item}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="bereits von"):
+    with pytest.raises(ValueError, match="Output file"):
         asyncio.run(run_flow(definition, workspace=tmp_path))
 
     assert calls == []
@@ -6820,7 +6820,7 @@ def test_flow_with_mcp_cannot_be_set_on_subflow_invocation(
         'version = 1\n[[steps]]\nid = "parent"\nflow = "child.toml"\nwith_mcp = ["validator"]\n',
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="Subflow-Schritt.*with_mcp"):
+    with pytest.raises(ValueError, match="Subflow step 'parent' must not set these keys: with_mcp"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
 
 
@@ -6898,14 +6898,14 @@ with_mcp = ["{name}"]
         ),
     )
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-    with pytest.raises(error, match="MCP-Auswahl"):
+    with pytest.raises(error, match="d' is invalid: MCP server"):
         validate_flow(
             definition,
             workspace=tmp_path,
             config_loader=deps.load_config,
             admin_config_loader=deps.load_admin_config,
         )
-    with pytest.raises(error, match="MCP-Auswahl"):
+    with pytest.raises(error, match="d' is invalid: MCP server"):
         asyncio.run(run_flow(definition, workspace=tmp_path, dependencies=deps))
     assert executed == []
     assert not (tmp_path / "first.out").exists()
@@ -6953,7 +6953,7 @@ flow = "child.toml"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
     deps = flow_module.ExecutionDependencies(load_admin_config=AdminConfig)
-    with pytest.raises(ValueError, match="MCP-Auswahl"):
+    with pytest.raises(ValueError, match="d' is invalid: MCP server"):
         asyncio.run(run_flow(definition, workspace=tmp_path, dependencies=deps))
     assert executed == []
 
@@ -7183,7 +7183,7 @@ def test_subflow_preflight_reports_later_bad_iteration_input(
     assert "phase=preflight-render-subflow-inputs" in error
     assert "step=nested" in error
     assert "iteration=second" in error
-    assert "enthält kein Feld" in error
+    assert "has no field" in error
     assert calls == ["seed"]
 
 
@@ -7206,7 +7206,7 @@ def test_flow_logging_setup_failure_does_not_leak_traceback(
         flow_module.main()
     assert exit_info.value.code == 1
     stderr = capsys.readouterr().err
-    assert "Fehler: RuntimeError" in stderr
+    assert "Error: RuntimeError" in stderr
     assert "\\u001b" in stderr and "\\u202e" in stderr
     assert "Traceback (most recent call last)" not in stderr
     assert "\x1b" not in stderr and "\u202e" not in stderr
@@ -7231,7 +7231,7 @@ def test_flow_logging_configure_failure_does_not_leak_traceback(
         flow_module.main()
     assert exit_info.value.code == 1
     stderr = capsys.readouterr().err
-    assert "Fehler: RuntimeError" in stderr
+    assert "Error: RuntimeError" in stderr
     assert "\\u001b" in stderr and "\\u202e" in stderr
     assert "Traceback (most recent call last)" not in stderr
     assert "\x1b" not in stderr and "\u202e" not in stderr
@@ -7266,7 +7266,7 @@ def test_flow_cli_uses_explicit_config_without_loading_default(
     )
     flow_module.main()
     assert seen_paths == [tmp_path / "config.toml"]
-    assert "Flow gültig:" in capsys.readouterr().out
+    assert "Flow valid:" in capsys.readouterr().out
 
 
 def test_flow_cli_checks_effective_logging_after_step_reconfiguration(
@@ -7313,7 +7313,7 @@ def test_flow_cli_checks_effective_logging_after_step_reconfiguration(
         with pytest.raises(SystemExit):
             flow_module.main()
         assert any("flow_failed" in event and "step=work" in event for event in events)
-        assert "Fehler: RuntimeError" in capsys.readouterr().err
+        assert "Error: RuntimeError" in capsys.readouterr().err
     finally:
         existing_logger.handlers = original_handlers
         existing_logger.disabled = original_disabled
@@ -7338,7 +7338,7 @@ def test_flow_logging_preload_invalid_step_config_reports_step(
     with pytest.raises(SystemExit):
         flow_module.main()
     error = capsys.readouterr().err
-    assert "Konfiguration von Schritt 'broken' ist ungültig" in error
+    assert "Configuration for step 'broken' is invalid" in error
     assert "phase=configure-step-logging" in error
     assert "step=broken" in error
 
@@ -7365,7 +7365,7 @@ def test_flow_logging_preload_nested_invalid_step_config_reports_child(
     with pytest.raises(SystemExit):
         flow_module.main()
     error = capsys.readouterr().err
-    assert "Konfiguration von Schritt 'child' ist ungültig" in error
+    assert "Configuration for step 'child' is invalid" in error
     assert "phase=configure-step-logging" in error
     assert "step=child" in error
     assert "child.toml" in error
@@ -7391,7 +7391,7 @@ def test_logging_discovery_rejects_excessive_subflow_depth(
     with pytest.raises(SystemExit):
         flow_module.main()
     error = capsys.readouterr().err
-    assert "Maximale Subflow-Tiefe" in error
+    assert "Maximum subflow depth" in error
     assert "level-8.toml" not in error
 
 

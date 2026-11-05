@@ -537,7 +537,7 @@ expected_source_path = "concept.md"
     original_source = "# Important concept"
     (tmp_path / "verify.json").write_text(original_checkpoint, encoding="utf-8")
     (tmp_path / "concept.md").write_text(original_source, encoding="utf-8")
-    with pytest.raises(ValueError, match="überschreiben|reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="JSON output conflicts with reserved input\\."):
         _run(tmp_path, flow, monkeypatch, {})
     assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original_checkpoint
     assert (tmp_path / "concept.md").read_text(encoding="utf-8") == original_source
@@ -580,7 +580,7 @@ value = "writer"
         raise AssertionError("No model step may execute before collision detection")
 
     monkeypatch.setattr(flow_module, "run_once", should_not_run)
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         asyncio.run(run_flow(load_flow(flow, workspace=tmp_path), workspace=tmp_path))
     assert called == []
     assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original_checkpoint
@@ -619,7 +619,7 @@ flow = "child.toml"
 concept = "concept.md"
 """)
     (tmp_path / "concept.md").write_text("# Original", encoding="utf-8")
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         _run(tmp_path, flow, monkeypatch, {})
     assert (tmp_path / "concept.md").read_text(encoding="utf-8") == "# Original"
 
@@ -700,7 +700,7 @@ concept = "${steps.discover.output.path}"
                                web_context_statuses=())
 
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         asyncio.run(run_flow(load_flow(definition, workspace=tmp_path), workspace=tmp_path))
     assert calls == ["discover"]
     assert (tmp_path / "concept.md").read_text(encoding="utf-8") == "# Original"
@@ -777,7 +777,7 @@ concept = "concept.md"
 
     # Each individual scan remains bounded, including nested descendants.
     monkeypatch.setattr(flow_module, "MAX_SUBFLOW_GRAPH_EXPANSIONS", 1)
-    with pytest.raises(ValueError, match="Expansionslimit"):
+    with pytest.raises(ValueError, match="exceeds the expansion limit"):
         flow_module._reserve_future_child_checkpoint_inputs(
             root, workspace=tmp_path, cache=cache,
             flow_input={}, outputs={}, output_json={}, statuses={},
@@ -1052,7 +1052,7 @@ id = "child"
 flow = "child.toml"
 """)
     if both_active:
-        with pytest.raises(ValueError, match="bereits|kollidiert|existiert"):
+        with pytest.raises(ValueError, match="Output file"):
             _run(tmp_path, definition, monkeypatch, {"choice": '{"enabled":true}'})
     else:
         assert _run(
@@ -1136,7 +1136,7 @@ expected_source_path = "concept.md"
     (tmp_path / "verify.json").write_text(
         '{"status":"ok","source_path":"concept.md"}', encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         _run(tmp_path, definition, monkeypatch, {"selector": '{"enabled":true}'})
 
 
@@ -1174,7 +1174,7 @@ expected_source_path = "concept.md"
     original = '{"status":"ok","source_path":"concept.md"}'
     (tmp_path / "verify.json").write_text(original, encoding="utf-8")
     (tmp_path / "concept.md").write_text("# Concept", encoding="utf-8")
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         _run(tmp_path, definition, monkeypatch, {})
     assert (tmp_path / "verify.json").read_text(encoding="utf-8") == original
 
@@ -1321,7 +1321,7 @@ flow = "child.toml"
     (tmp_path / "verify.json").write_text(
         '{"status":"ok","source_path":"concept.md"}', encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         _run(tmp_path, definition, monkeypatch, {})
     assert (tmp_path / "concept.md").read_text(encoding="utf-8") == "# Original"
 

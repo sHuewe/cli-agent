@@ -36,9 +36,9 @@ MAX_BATCH = 32
 
 def source_root(config: VectorKnowledgeConfig, *, okf_root: Path | None, config_file: Path | None) -> Path:
     if config.mode != "okf":
-        raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
+        raise ValueError("Only OKF-based vector search is supported.")
     if okf_root is None:
-        raise ValueError("knowledge.vector.mode='okf' erfordert [okf].repository.")
+        raise ValueError("knowledge.vector.mode='okf' requires [okf].repository.")
     return okf_root.resolve()
 
 
@@ -51,22 +51,22 @@ def db_path(config: VectorKnowledgeConfig, *, config_file: Path | None) -> Path:
 
 def _source_file(root: Path, relative: str) -> Path:
     if not relative or "\\" in relative or relative.startswith("/") or ":" in relative:
-        raise ValueError("Ungültiger Knowledge-Pfad.")
+        raise ValueError("Invalid Knowledge path.")
     pure = Path(relative)
     if any(part in {".", "..", ""} for part in pure.parts) or pure.is_absolute():
-        raise ValueError("Ungültiger Knowledge-Pfad.")
+        raise ValueError("Invalid Knowledge path.")
     candidate = root / pure
     # Reject symlinks in every component, including links that remain in-root.
     current = root
     for part in pure.parts:
         current = current / part
         if current.is_symlink():
-            raise ValueError("Symbolische Links sind keine Knowledge-Quellen.")
+            raise ValueError("Symbolic links cannot be Knowledge sources.")
     resolved = candidate.resolve()
     if not resolved.is_relative_to(root) or not resolved.is_file():
-        raise ValueError("Knowledge-Pfad liegt nicht in der konfigurierten Quelle.")
+        raise ValueError("Knowledge path is outside the configured source.")
     if regular_file_has_multiple_links(resolved):
-        raise ValueError("Knowledge-Dateien mit Hardlinks sind nicht erlaubt.")
+        raise ValueError("Hardlinked Knowledge files are not allowed.")
     return resolved
 
 
@@ -87,14 +87,14 @@ def _read_source(
 ) -> str:
     if mode == "files":
         if Path(relative).suffix.lower() not in {".md", ".txt"}:
-            raise ValueError("Nur UTF-8 Text- und Markdown-Dateien können indexiert werden.")
+            raise ValueError("Only UTF-8 text and Markdown files can be indexed.")
         return _read_verified_okf_bytes(
             root, relative, max_read_bytes=max_read_bytes,
         ).decode("utf-8")
     if mode != "okf":
-        raise ValueError("Nur OKF- oder Datei-basierte Vektorsuche wird unterstützt.")
+        raise ValueError("Only OKF-based or file-based vector search is supported.")
     if Path(relative).name in {"index.md", "log.md"} or Path(relative).suffix.lower() != ".md":
-        raise ValueError("Nur OKF-Concepts können indexiert werden.")
+        raise ValueError("Only OKF concepts can be indexed.")
     content = _read_verified_okf_bytes(root, relative, max_read_bytes=max_read_bytes).decode("utf-8")
     # Apply the same restrictive OKF frontmatter parser as the MCP server,
     # without reopening the pathname after the verified descriptor read.
@@ -115,7 +115,7 @@ def _okf_paths(root: Path, *, max_files: int, max_read_bytes: int = MAX_SOURCE_B
             continue
         seen.add((path, tool))
         if len(seen) > max_files * 20 + 2000:
-            raise ValueError("OKF-Navigation überschreitet das Indexierungslimit.")
+            raise ValueError("OKF traversal exceeds the indexing limit.")
         if tool == "knowledge_index":
             result = repo.knowledge_index(path)
         else:
@@ -123,7 +123,7 @@ def _okf_paths(root: Path, *, max_files: int, max_read_bytes: int = MAX_SOURCE_B
             if result["kind"] == "concept":
                 concepts.add(path)
                 if len(concepts) > max_files:
-                    raise ValueError("OKF enthält zu viele Concepts.")
+                    raise ValueError("OKF contains too many concepts.")
         for link in (*result.get("internal_links", []), *result.get("entries", [])):
             if not isinstance(link, dict) or link.get("exists") is False:
                 continue
@@ -159,7 +159,7 @@ def _file_paths(root: Path, *, max_files: int) -> list[str]:
             relative = (Path(directory) / filename).relative_to(root).as_posix()
             sources.append(relative)
             if len(sources) > max_files:
-                raise ValueError("Zu viele Dateien für die Vektorindexierung.")
+                raise ValueError("Too many files for vector indexing.")
     return sorted(sources)
 
 
@@ -168,7 +168,7 @@ def _index_paths(config: VectorKnowledgeConfig, root: Path, *, max_read_bytes: i
         return _okf_paths(root, max_files=config.max_files, max_read_bytes=max_read_bytes)
     if config.mode == "files":
         return _file_paths(root, max_files=config.max_files)
-    raise ValueError("Nur OKF- oder Datei-basierte Vektorsuche wird unterstützt.")
+    raise ValueError("Only OKF-based or file-based vector search is supported.")
 
 
 def _chunks(text: str, *, size: int = 1800, overlap: int = 200) -> list[str]:
@@ -193,13 +193,13 @@ def _chunks(text: str, *, size: int = 1800, overlap: int = 200) -> list[str]:
 
 def _encode(vector: list[float]) -> bytes:
     if not vector or len(vector) > 8192 or any(type(v) not in (int, float) or not math.isfinite(v) for v in vector):
-        raise ValueError("Embedding enthält ungültige Werte.")
+        raise ValueError("Embedding contains invalid values.")
     return struct.pack(f"<{len(vector)}f", *vector)
 
 
 def _decode(blob: bytes) -> tuple[float, ...]:
     if len(blob) % 4 or not blob or len(blob) > 8192 * 4:
-        raise ValueError("Ungültiger gespeicherter Embedding-Vektor.")
+        raise ValueError("Invalid stored embedding vector.")
     return struct.unpack(f"<{len(blob) // 4}f", blob)
 
 
@@ -207,11 +207,11 @@ def _embedding_endpoint_identity(base_url: str) -> str:
     """Canonical endpoint identity; never persist secrets or query parameters."""
     parsed = urlsplit(base_url)
     if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
-        raise ValueError("Embedding-Endpunkt darf keine Credentials, Query oder Fragmente enthalten.")
+        raise ValueError("Embedding endpoint must not contain credentials, query or fragment.")
     scheme = parsed.scheme.lower()
     hostname = (parsed.hostname or "").lower().rstrip(".")
     if not hostname or scheme not in {"http", "https"}:
-        raise ValueError("Ungültiger Embedding-Endpunkt.")
+        raise ValueError("Invalid embedding endpoint.")
     host = f"[{hostname}]" if ":" in hostname else hostname
     port = parsed.port
     if port is not None and port != (80 if scheme == "http" else 443):
@@ -227,17 +227,17 @@ class EmbeddingProvider:
         if config.provider == "openai":
             _validate_api_key_env(ModelConfig(provider="openai", base_url=self.base_url, api_key_env=config.api_key_env), credential_rules)
         elif config.api_key_env:
-            raise ValueError("api_key_env wird nur für den OpenAI-Embedding-Provider unterstützt.")
+            raise ValueError("api_key_env is supported only for the OpenAI embedding provider.")
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts or len(texts) > MAX_BATCH or any(not isinstance(t, str) or not t or len(t) > 16000 for t in texts):
-            raise ValueError("Ungültiger Embedding-Batch.")
+            raise ValueError("Invalid embedding batch.")
         config = self.config
         headers: dict[str, str] = {}
         if config.api_key_env:
             key = os.environ.get(config.api_key_env)
             if not key:
-                raise ValueError(f"Embedding-Credential {config.api_key_env!r} fehlt.")
+                raise ValueError(f"Embedding credential {config.api_key_env!r} is missing.")
             headers["Authorization"] = f"Bearer {key}"
         if config.provider == "ollama":
             url = self.base_url + "/api/embed"
@@ -257,26 +257,26 @@ class EmbeddingProvider:
             # for each vector. Reject duplicates, gaps, booleans, negative or
             # out-of-range indices instead of silently misassigning vectors.
             if not isinstance(entries, list) or len(entries) != len(texts):
-                raise RuntimeError("Embedding-Antwort hat eine ungültige Anzahl Vektoren.")
+                raise RuntimeError("Embedding response has an invalid vector count.")
             indices = [entry.get("index") if isinstance(entry, dict) else None for entry in entries]
             if (
                 any(type(index) is not int for index in indices)
                 or sorted(indices) != list(range(len(texts)))
             ):
-                raise RuntimeError("Embedding-Antwort enthält ungültige oder doppelte Indizes.")
+                raise RuntimeError("Embedding response contains invalid or duplicate indices.")
             vectors = [entry["embedding"] for entry in sorted(entries, key=lambda x: x["index"])
                        if "embedding" in entry]
             if len(vectors) != len(texts):
-                raise RuntimeError("Embedding-Antwort enthält Einträge ohne Vektor.")
+                raise RuntimeError("Embedding response contains entries without a vector.")
         if not isinstance(vectors, list) or len(vectors) != len(texts):
-            raise RuntimeError("Embedding-Antwort hat eine ungültige Anzahl Vektoren.")
+            raise RuntimeError("Embedding response has an invalid vector count.")
         dim = None
         for vector in vectors:
             if not isinstance(vector, list):
-                raise RuntimeError("Ungültiges Embedding-Format.")
+                raise RuntimeError("Invalid embedding format.")
             _encode(vector)
             if dim is not None and len(vector) != dim:
-                raise RuntimeError("Inkonsistente Embedding-Dimensionen.")
+                raise RuntimeError("Inconsistent embedding dimensions.")
             dim = len(vector)
         return vectors
 
@@ -394,7 +394,7 @@ class SQLiteKnowledgeStore:
             )
         dim = int(meta["dimension"])
         if not (1 <= dim <= 8192 or (mode == "files" and dim == 0)):
-            raise ValueError("Ungültige Vektordimension im Index.")
+            raise ValueError("Invalid vector dimension in index.")
         return dim
 
     def replace_documents(self, records: list[tuple[str, str, list[list[float]]]]) -> None:
@@ -435,7 +435,7 @@ class SQLiteKnowledgeStore:
         ):
             blob = row["vector"]
             if not isinstance(blob, bytes) or len(blob) != dimension * 4:
-                raise ValueError("Ungültiger Vektor im bisherigen Knowledge-Index.")
+                raise ValueError("Invalid vector in the existing Knowledge index.")
             # Fail closed on corrupted or non-finite persisted vectors.
             _encode(list(_decode(blob)))
             self.db.execute(
@@ -449,18 +449,18 @@ class SQLiteKnowledgeStore:
     def search(self, vector: list[float], *, limit: int = 5) -> list[dict[str, Any]]:
         """Rank concepts by their best chunk cosine similarity, without lexical data."""
         if not 1 <= limit <= MAX_STALE_CANDIDATES:
-            raise ValueError("Ungültiges Knowledge-Suchlimit.")
+            raise ValueError("Invalid Knowledge search limit.")
         # Verify the supplied query vector before evaluating any stored vectors.
         _encode(vector)
         norm = math.sqrt(sum(value * value for value in vector))
         if norm == 0:
-            raise ValueError("Embedding hat Norm 0.")
+            raise ValueError("Embedding has zero norm.")
         best_similarity: dict[str, float] = {}
         for row in self.db.execute("SELECT source,vector FROM chunks"):
             saved = _decode(row["vector"])
             _encode(list(saved))  # Reject non-finite or otherwise invalid persisted floats.
             if len(saved) != len(vector):
-                raise ValueError("Embedding-Dimension stimmt nicht mit dem Index überein.")
+                raise ValueError("Embedding dimension does not match the index.")
             saved_norm = math.sqrt(sum(value * value for value in saved))
             similarity = (
                 sum(a * b for a, b in zip(saved, vector)) / (norm * saved_norm)
@@ -518,7 +518,7 @@ async def _build_index_unlocked(config: VectorKnowledgeConfig, *, root: Path, pa
                         if dim is None:
                             dim = len(vector)
                         elif len(vector) != dim:
-                            raise ValueError("Inkonsistente Embedding-Dimensionen.")
+                            raise ValueError("Inconsistent embedding dimensions.")
                         store.db.execute(
                             "INSERT INTO chunks(source,vector) VALUES (?,?)",
                             (relative, _encode(vector)),
@@ -536,14 +536,14 @@ async def _build_index_unlocked(config: VectorKnowledgeConfig, *, root: Path, pa
                             max_read_bytes=okf_max_read_bytes,
                         )
                         if dim is not None and dim != old_dim:
-                            raise ValueError("Embedding-Dimension hat sich geändert.")
+                            raise ValueError("Embedding dimension has changed.")
                         dim = old_dim
                         store.copy_sdk_records(old, dimension=old_dim)
                 finally:
                     old.close()
             if dim is None:
                 if config.mode != "files":
-                    raise ValueError("Knowledge-Quelle enthält keine indexierbaren Texte.")
+                    raise ValueError("Knowledge source contains no indexable text.")
                 # An empty file index may be filled via the SDK add_record API.
                 dim = 0
             store.configure(
@@ -556,7 +556,7 @@ async def _build_index_unlocked(config: VectorKnowledgeConfig, *, root: Path, pa
             store.close()
         for suffix in ("-wal", "-shm"):
             if Path(str(new_path) + suffix).exists():
-                raise RuntimeError("Index-Datenbank besitzt noch aktive WAL-Dateien.")
+                raise RuntimeError("Index database still has active WAL files.")
         os.replace(new_path, path)
     return indexed
 
@@ -598,7 +598,7 @@ async def _update_index_unlocked(
     if not path.is_file():
         raise ValueError(
             "Es existiert noch kein SQLite-Vektorindex. "
-            "Zuerst cli-agent-rag init-vector-db ausführen."
+            "Run cli-agent-rag init-vector-db first."
         )
 
     # Validate endpoint identity even for a no-change run. This prevents mixing
@@ -673,8 +673,8 @@ async def _update_index_unlocked(
                     content = _read_source(root, relative, mode=config.mode, max_read_bytes=okf_max_read_bytes)
                     if hashlib.sha256(content.encode("utf-8")).hexdigest() != fingerprint:
                         raise ValueError(
-                            "Knowledge-Quelle wurde während der Indexierung "
-                            "geändert; bitte den Update-Lauf wiederholen."
+                            "Knowledge source was modified during indexing; "
+                            "repeat the update run."
                         )
                     new_store.db.execute(
                         "INSERT INTO sources(path,sha256) VALUES (?,?)",
@@ -688,7 +688,7 @@ async def _update_index_unlocked(
                                 next_dimension = len(vector)
                             elif len(vector) != next_dimension:
                                 raise ValueError(
-                                    "Embedding-Dimension hat sich geändert; "
+                                    "Embedding dimension has changed; "
                                     "bitte mit init-vector-db neu indexieren."
                                 )
                             new_store.db.execute(
@@ -708,7 +708,7 @@ async def _update_index_unlocked(
             # WAL sidecars must not survive publication of the new database.
             for suffix in ("-wal", "-shm"):
                 if Path(str(new_path) + suffix).exists():
-                    raise RuntimeError("Aktualisierter Index enthält aktive WAL-Dateien.")
+                    raise RuntimeError("Updated index contains active WAL files.")
 
             # Release the old reader before replacing the file (Windows).
             old.close()
@@ -725,7 +725,7 @@ class VectorKnowledgeSession:
     def __init__(self, config: VectorKnowledgeConfig, *, root: Path, path: Path, network: NetworkConfig,
                  credential_rules: tuple[Any, ...] = (), okf_max_read_bytes: int = MAX_SOURCE_BYTES) -> None:
         if config.mode != "okf":
-            raise ValueError("Nur OKF-basierte Vektorsuche wird unterstützt.")
+            raise ValueError("Only OKF-based vector search is supported.")
         self.config = config
         self.root = root
         self.okf_max_read_bytes = okf_max_read_bytes
@@ -746,10 +746,10 @@ class VectorKnowledgeSession:
 
     async def search(self, query: str) -> dict[str, Any]:
         if not isinstance(query, str) or not query.strip() or len(query) > MAX_SEARCH_QUERY:
-            raise ValueError("Knowledge-Suchanfrage ist leer oder zu lang.")
+            raise ValueError("Knowledge search query is empty or too long.")
         vector = (await self.embedder.embed([query]))[0]
         if len(vector) != self.dimension:
-            raise ValueError("Embedding-Modell passt nicht zur Indexdimension.")
+            raise ValueError("Embedding model does not match the index dimension.")
         # Bound expensive source re-reads even if a large part of the index is
         # stale. Searching all stored vectors is the current SQLite backend's
         # expected cost; validating all source files is not.
@@ -775,7 +775,7 @@ class VectorKnowledgeSession:
             if name == "knowledge_search":
                 data = await self.search(arguments["query"])
             else:
-                raise ValueError("Nicht unterstütztes Knowledge-Tool.")
+                raise ValueError("Unsupported Knowledge tool.")
             return SimpleNamespace(structuredContent=data, content=[], isError=False)
         except (ValueError, OSError, KeyError) as exc:
             return SimpleNamespace(structuredContent={"error": str(exc)}, content=[], isError=True)

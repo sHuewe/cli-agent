@@ -4,6 +4,7 @@ from importlib.resources import files
 
 # Packaged browser code; keep the module-level API_APP_JS contract for callers.
 API_APP_JS = files("cli_agent.interfaces").joinpath("static", "app.js").read_text(encoding="utf-8")
+API_I18N_JS = files("cli_agent.interfaces").joinpath("static", "i18n.js").read_text(encoding="utf-8")
 
 
 
@@ -16,6 +17,7 @@ async def run_web_ui_via_api(
     file_contexts,
     output_target,
     excluded_paths,
+    system_prompt=None,
 ):
     """Keep cli-agent --with-web-ui a one-command localhost launch.
 
@@ -62,6 +64,7 @@ async def run_web_ui_via_api(
             workspace, client, config.mcp_servers,
             logging_config=config.logging,
             agent_timezone=config.agent.timezone,
+            system_prompt=system_prompt,
             config_file=config_file,
             dump_llm_context=False,
             network=admin_config.network,

@@ -34,15 +34,15 @@ _FREQUENCY = re.compile(r"[1-9][0-9]{0,3}(?:s|min|h|d)\Z")
 class DataFrameOperations:
     def __init__(self, base: DataOperations) -> None:
         if base.workspace is None:
-            raise DataOperationError("DataFrame-Tools benötigen Workspace-Dateizugriff.")
+            raise DataOperationError("DataFrame tools require workspace file access.")
         self.base = base
 
     def _read_frame(self, path: str, records_path: str | None) -> pd.DataFrame:
         columns, rows = self.base._read_records(path, records_path=records_path)
         if len(rows) > MAX_FRAME_ROWS or len(columns) > MAX_FRAME_COLUMNS:
             raise DataOperationError(
-                f"DataFrame-Eingabe ist zu groß (maximal {MAX_FRAME_ROWS} Zeilen, "
-                f"{MAX_FRAME_COLUMNS} Spalten). Filtere die Quelle zunächst."
+                f"DataFrame input is too large (maximum {MAX_FRAME_ROWS} rows, "
+                f"{MAX_FRAME_COLUMNS} columns). Filter the source first."
             )
         # Pandas infers float64 for nullable integer columns, irreversibly
         # rounding identifiers above 2**53 even when a transformation uses
@@ -55,12 +55,12 @@ class DataFrameOperations:
         if column not in frame:
             raise DataOperationError(f"Zeitstempelspalte fehlt: {column!r}.")
         if frame[column].isna().any():
-            raise DataOperationError("Zeitstempel dürfen nicht leer sein.")
+            raise DataOperationError("Timestamps must not be empty.")
         try:
             values = frame[column]
             if all(isinstance(value, str) for value in values):
                 if any(value.strip().casefold() in {"", "nat"} for value in values):
-                    raise DataOperationError("Zeitstempel dürfen nicht leer sein.")
+                    raise DataOperationError("Timestamps must not be empty.")
                 # Python's ISO parser is used only to distinguish aware from
                 # naive values; pandas performs the actual conversion without
                 # losing nanosecond precision. Non-ISO inputs retain the
@@ -72,7 +72,7 @@ class DataFrameOperations:
                 else:
                     awareness = {value.tzinfo is not None and value.utcoffset() is not None for value in native_times}
                     if len(awareness) > 1:
-                        raise DataOperationError("Zeitstempel benötigen eine einheitliche Zeitzone.")
+                        raise DataOperationError("Timestamps must have consistent timezone awareness.")
                     timestamps = pd.to_datetime(
                         values, format="ISO8601", errors="raise", utc=True in awareness,
                     )
@@ -85,9 +85,9 @@ class DataFrameOperations:
         # Strings such as "" and "NaT" become NaT without raising, even with
         # errors="raise". Never let joins match or resampling drop these rows.
         if timestamps.isna().any():
-            raise DataOperationError("Zeitstempel dürfen nicht leer sein.")
+            raise DataOperationError("Timestamps must not be empty.")
         if not pd.api.types.is_datetime64_any_dtype(timestamps.dtype):
-            raise DataOperationError("Zeitstempel benötigen eine einheitliche Zeitzone.")
+            raise DataOperationError("Timestamps must have consistent timezone awareness.")
         return timestamps
 
     @staticmethod
@@ -124,9 +124,9 @@ class DataFrameOperations:
         try:
             values = pd.to_numeric(frame[column], errors="raise").astype("float64")
         except (TypeError, ValueError, OverflowError) as exc:
-            raise DataOperationError(f"Spalte {column!r} enthält nichtnumerische Werte.") from exc
+            raise DataOperationError(f"Column {column!r} contains nonnumeric values.") from exc
         if values.notna().any() and not values.dropna().map(math.isfinite).all():
-            raise DataOperationError(f"Spalte {column!r} enthält nichtendliche Werte.")
+            raise DataOperationError(f"Column {column!r} contains nonfinite values.")
         return values
 
     @staticmethod
@@ -150,7 +150,7 @@ class DataFrameOperations:
             if not math.isfinite(value):
                 raise ValueError("Nichtendliche DataFrame-Zahl im Ergebnis.")
         if not isinstance(value, (str, bool, int, float)):
-            raise TypeError("Nicht unterstützter DataFrame-Skalar.")
+            raise TypeError("Unsupported DataFrame scalar.")
         return value
 
     @staticmethod
@@ -160,14 +160,14 @@ class DataFrameOperations:
         result_metadata: dict[str, object] | None = None,
     ) -> CallToolResult:
         if len(frame) > MAX_FRAME_ROWS or len(frame.columns) > MAX_FRAME_COLUMNS:
-            raise DataOperationError("DataFrame-Ergebnis überschreitet das Zeilen-/Spaltenlimit.")
+            raise DataOperationError("DataFrame result exceeds the row/column limit.")
         # The result is fed back into DataOperations._normalize_json_records
         # on the next tool call. Enforce the same rule before advertising an
         # artifact that downstream Data MCP tools would be unable to read.
         for column in frame.columns:
             _validate_column_name(column, source="DataFrame-Ergebnis")
         if not frame.columns.is_unique:
-            raise DataOperationError("DataFrame enthält doppelte Spaltennamen.")
+            raise DataOperationError("DataFrame contains duplicate column names.")
         time_metadata = dict(result_metadata or {})
         if "timestamp" in frame and "timestamp_timezone" not in time_metadata:
             column = frame["timestamp"]
@@ -203,7 +203,7 @@ class DataFrameOperations:
         series = pd.DataFrame({"timestamp": stamps, "value": values})
         series = series.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
         if series["timestamp"].duplicated().any():
-            raise DataOperationError("Zeitreihe enthält doppelte Zeitstempel.")
+            raise DataOperationError("Time series contains duplicate timestamps.")
         return series
 
     @staticmethod
@@ -246,7 +246,7 @@ class DataFrameOperations:
             )
         ]
         if columns is not None and time_column in columns:
-            raise DataOperationError("Die Zeitspalte darf nicht als numerische Datenspalte gewählt werden.")
+            raise DataOperationError("The time column must not be selected as a numeric value column.")
         statistics: dict[str, dict[str, object]] = {}
         for column in selected:
             values = self._numeric(frame, column)
@@ -273,9 +273,9 @@ class DataFrameOperations:
         try:
             encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
         except (ValueError, OverflowError) as exc:
-            raise DataOperationError("Statistik enthält nichtendliche Werte.") from exc
+            raise DataOperationError("Statistics contain nonfinite values.") from exc
         if len(encoded.encode("utf-8")) > MAX_DESCRIBE_RESULT_BYTES:
-            raise DataOperationError("Statistikausgabe überschreitet 5 KB; wähle weniger columns.")
+            raise DataOperationError("Statistics output exceeds 5 KB; select fewer columns.")
         return encoded
 
     def analyze_intervals(
@@ -406,12 +406,12 @@ class DataFrameOperations:
         inputs = [self._read_frame(source.path, source.records_path) for source in sources]
         base_columns = list(inputs[0].columns)
         if any(set(frame.columns) != set(base_columns) for frame in inputs[1:]):
-            raise DataOperationError("Alle concat_data-Quellen müssen dieselben Spalten besitzen.")
+            raise DataOperationError("All concat_data sources must have the same columns.")
         if sum(len(frame) for frame in inputs) > MAX_FRAME_ROWS:
-            raise DataOperationError("concat_data überschreitet das Zeilenlimit.")
+            raise DataOperationError("concat_data exceeds the row limit.")
         for names, parameter in ((sort_by, "sort_by"), (unique_by, "unique_by")):
             if names is not None and (not names or len(names) != len(set(names)) or any(name not in base_columns for name in names)):
-                raise DataOperationError(f"{parameter} muss eine gültige Liste eindeutiger Spalten sein.")
+                raise DataOperationError(f"{parameter} must be a valid list of distinct columns.")
         frame = pd.concat([source[base_columns] for source in inputs], ignore_index=True)
         if unique_by is not None:
             # Pandas treats True and 1 as duplicates even though the Data MCP
@@ -430,7 +430,7 @@ class DataFrameOperations:
             try:
                 frame = frame.sort_values(sort_by, kind="stable")
             except (TypeError, ValueError) as exc:
-                raise DataOperationError("sort_by-Spalten können nicht gemeinsam sortiert werden.") from exc
+                raise DataOperationError("sort_by columns cannot be sorted together.") from exc
         return self._result(frame.reset_index(drop=True), operation="concat_data")
 
     def join_data(
@@ -445,14 +445,14 @@ class DataFrameOperations:
             raise DataOperationError("join_data erwartet 2 bis 8 Quellen.")
         aliases = [source.alias for source in sources]
         if any(not alias or alias == "timestamp" or not alias.isidentifier() for alias in aliases) or len(set(aliases)) != len(aliases):
-            raise DataOperationError("Jede Quelle benötigt einen eindeutigen Alias (Identifier, nicht 'timestamp').")
+            raise DataOperationError("Each source requires a unique alias (identifier, not 'timestamp').")
         if direction != "exact":
             if how != "left":
-                raise DataOperationError("Tolerierte Joins sind ausschließlich left-Joins.")
+                raise DataOperationError("Tolerance-based joins support only left joins.")
             if tolerance_seconds is None or isinstance(tolerance_seconds, bool) or not math.isfinite(tolerance_seconds) or not 0 <= tolerance_seconds <= 86_400:
-                raise DataOperationError("Tolerierte Joins benötigen tolerance_seconds zwischen 0 und 86400.")
+                raise DataOperationError("Tolerance-based joins require tolerance_seconds between 0 and 86400.")
         elif tolerance_seconds is not None:
-            raise DataOperationError("tolerance_seconds ist nur für tolerierte Joins gültig.")
+            raise DataOperationError("tolerance_seconds is valid only for tolerance-based joins.")
 
         frames: list[pd.DataFrame] = []
         source_offsets: list[str | None] = []
@@ -461,13 +461,13 @@ class DataFrameOperations:
             source_offsets.append(self._source_timezone(raw, source.time_column))
             times = self._timestamps(raw, source.time_column)
             if times.duplicated().any():
-                raise DataOperationError(f"Quelle {source.alias!r} enthält doppelte Zeitstempel.")
+                raise DataOperationError(f"Source {source.alias!r} contains duplicate timestamps.")
             values = self._numeric(raw, source.value_column)
             frame = pd.DataFrame({"timestamp": times, source.alias: values})
             frames.append(frame.sort_values("timestamp").reset_index(drop=True))
 
         if len({frame["timestamp"].dt.tz is not None for frame in frames}) > 1:
-            raise DataOperationError("Join-Quellen dürfen keine Zeitstempel mit und ohne Zeitzone mischen.")
+            raise DataOperationError("Join sources must not mix timezone-aware and naive timestamps.")
         # pandas 3.x infers datetime resolution per source (e.g. seconds ->
         # microseconds, fractional nanoseconds -> nanoseconds). merge_asof
         # requires identical key dtypes. Use the finest input resolution to
@@ -484,7 +484,7 @@ class DataFrameOperations:
                     frame["timestamp"] = frame["timestamp"].dt.as_unit(common_unit)
         except (ValueError, TypeError, OverflowError) as exc:
             raise DataOperationError(
-                "Zeitstempel können nicht verlustfrei auf eine gemeinsame Auflösung gebracht werden."
+                "Timestamps cannot be aligned to a common resolution without losing precision."
             ) from exc
 
         joined = frames[0]
@@ -501,9 +501,9 @@ class DataFrameOperations:
                         tolerance=pd.Timedelta(seconds=tolerance_seconds),
                     )
                 if len(joined) > MAX_FRAME_ROWS:
-                    raise DataOperationError("Join-Ergebnis überschreitet das Zeilenlimit.")
+                    raise DataOperationError("Join result exceeds the row limit.")
         except (ValueError, TypeError) as exc:
-            raise DataOperationError(f"Zeitreihen konnten nicht verknüpft werden: {exc}") from exc
+            raise DataOperationError(f"Time series could not be joined: {exc}") from exc
         time_metadata: dict[str, object] = {}
         if frames[0]["timestamp"].dt.tz is not None:
             # _artifact_scalar serializes aware timestamps in UTC.
@@ -533,11 +533,11 @@ class DataFrameOperations:
             if spec.operation != "diff_per_time" and (
                 spec.max_gap_seconds is not None or spec.time_unit != "hours"
             ):
-                raise DataOperationError("Rate-Parameter sind nur für diff_per_time zulässig.")
+                raise DataOperationError("Rate parameters are allowed only for diff_per_time.")
             left = self._numeric(frame, spec.column)
             if spec.operation in {"add", "subtract", "multiply", "divide"}:
                 if (spec.other_column is None) == (spec.constant is None):
-                    raise DataOperationError("Binäre Operation benötigt exakt other_column oder constant.")
+                    raise DataOperationError("Binary operation requires exactly one of other_column or constant.")
                 if spec.other_column is not None:
                     right = self._numeric(frame, spec.other_column)
                 else:
@@ -552,15 +552,15 @@ class DataFrameOperations:
                     result = left * right
                 else:
                     if (right == 0).any() if isinstance(right, pd.Series) else right == 0:
-                        raise DataOperationError("Division durch null ist nicht zulässig.")
+                        raise DataOperationError("Division by zero is not allowed.")
                     result = left / right
             elif spec.operation == "diff":
                 result = left.diff()
             elif spec.operation == "diff_per_time":
                 if spec.max_gap_seconds is None:
-                    raise DataOperationError("diff_per_time benötigt max_gap_seconds.")
+                    raise DataOperationError("diff_per_time requires max_gap_seconds.")
                 if spec.other_column is not None or spec.constant is not None or spec.window is not None:
-                    raise DataOperationError("diff_per_time erlaubt keine Binär-/Fensterparameter.")
+                    raise DataOperationError("diff_per_time does not accept binary/window parameters.")
                 gap_limit = self._gap_limit(spec.max_gap_seconds)
                 units = {"seconds": 1, "minutes": 60, "hours": 3600}
                 if spec.time_unit not in units:
@@ -572,7 +572,7 @@ class DataFrameOperations:
                         timestamps.iloc[index - 1], timestamps.iloc[index],
                     )
                     if seconds < 0:
-                        raise DataOperationError("diff_per_time benötigt aufsteigende Zeitstempel.")
+                        raise DataOperationError("diff_per_time requires ascending timestamps.")
                     if seconds == 0 or seconds > gap_limit:
                         continue
                     previous, current = left.iloc[index - 1], left.iloc[index]
@@ -595,10 +595,10 @@ class DataFrameOperations:
                 result = left.cumsum()
             elif spec.operation == "rolling_mean":
                 if isinstance(spec.window, bool) or not isinstance(spec.window, int) or not 2 <= spec.window <= 10_000:
-                    raise DataOperationError("rolling_mean benötigt window zwischen 2 und 10000 (Zeilen).")
+                    raise DataOperationError("rolling_mean requires window between 2 and 10000 (rows).")
                 result = left.rolling(spec.window, min_periods=spec.window).mean()
             else:
-                raise DataOperationError(f"Nicht unterstützte Operation: {spec.operation!r}.")
+                raise DataOperationError(f"Unsupported operation: {spec.operation!r}.")
             if result.notna().any() and not result.dropna().map(math.isfinite).all():
                 raise DataOperationError("Berechnung erzeugte ein nichtendliches Ergebnis.")
             frame[spec.name] = result
@@ -642,10 +642,10 @@ class DataFrameOperations:
         if len(candidates) == 1:
             return candidates[0]
         if not candidates:
-            raise DataOperationError("Keine Zeitspalte erkannt; time_column explizit angeben.")
+            raise DataOperationError("No time column detected; specify time_column explicitly.")
         raise DataOperationError(
-            "Mehrere mögliche Zeitspalten: " + ", ".join(map(repr, candidates))
-            + "; time_column explizit angeben."
+            "Multiple possible time columns: " + ", ".join(map(repr, candidates))
+            + "; specify time_column explicitly."
         )
 
     def resample_data(
@@ -658,12 +658,12 @@ class DataFrameOperations:
         records_path: str | None = None,
     ) -> CallToolResult:
         if not isinstance(frequency, str) or not _FREQUENCY.fullmatch(frequency):
-            raise DataOperationError("frequency muss z.B. '5min', '30s', '1h' oder '1d' sein.")
+            raise DataOperationError("frequency must be a positive integer followed by s, min, h or d (e.g. '30s', '5min', '1h', '1d').")
         if not 1 <= len(aggregations) <= MAX_FRAME_TRANSFORMS:
-            raise DataOperationError("resample_data erwartet 1 bis 20 Aggregationen.")
+            raise DataOperationError("resample_data requires between 1 and 20 aggregations.")
         aliases = [spec.alias for spec in aggregations]
         if any(not alias or alias == "timestamp" for alias in aliases) or len(set(aliases)) != len(aliases):
-            raise DataOperationError("Aggregationsalias muss eindeutig und nicht 'timestamp' sein.")
+            raise DataOperationError("Aggregation aliases must be unique, nonempty and must not equal 'timestamp'.")
         frame = self._read_frame(path, records_path)
         if time_column is None:
             time_column = self._infer_time_column(frame)
@@ -677,10 +677,10 @@ class DataFrameOperations:
         specs: dict[str, tuple[str, str]] = {}
         for spec in aggregations:
             if spec.column == time_column:
-                raise DataOperationError("Zeitstempel können nicht numerisch aggregiert werden.")
+                raise DataOperationError("Timestamps cannot be aggregated numerically.")
             frame[spec.column] = self._numeric(frame, spec.column)
             if spec.method not in {"mean", "min", "max", "sum", "count"}:
-                raise DataOperationError(f"Unbekannte Aggregation: {spec.method!r}.")
+                raise DataOperationError(f"Unknown resampling method: {spec.method!r}.")
             specs[spec.alias] = (spec.column, spec.method)
         try:
             if not frame.empty:
@@ -700,8 +700,8 @@ class DataFrameOperations:
                 )
                 if bucket_count > MAX_FRAME_ROWS:
                     raise DataOperationError(
-                        "Resampling überschreitet das Zeilenlimit. "
-                        "Wähle einen kürzeren Zeitraum oder ein größeres Intervall."
+                        "Resampling exceeds the row limit. "
+                        "Choose a shorter time range or a larger interval."
                     )
             resampler = frame.set_index(time_column).sort_index().resample(
                 frequency, closed="left", label="left"
@@ -722,10 +722,10 @@ class DataFrameOperations:
                 # allowed, but computed infinities must be rejected.
                 values = grouped[alias].dropna()
                 if not values.empty and not values.map(math.isfinite).all():
-                    raise DataOperationError("Resampling erzeugte ein nichtendliches Ergebnis.")
+                    raise DataOperationError("Resampling produced a nonfinite result.")
             grouped = grouped.reset_index()
         except (ValueError, TypeError, OverflowError) as exc:
-            raise DataOperationError(f"Resampling fehlgeschlagen: {exc}") from exc
+            raise DataOperationError(f"Resampling failed: {exc}") from exc
         if time_column != "timestamp":
             grouped = grouped.rename(columns={time_column: "timestamp"})
         return self._result(

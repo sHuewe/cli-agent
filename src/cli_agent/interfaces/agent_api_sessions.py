@@ -254,7 +254,7 @@ class AgentSession:
                             if yielded is None or yielded.done:
                                 run.status = "failed"
                                 run.emit({"type": "RUN_ERROR",
-                                          "message": "Frontend-Tool-Run ist nicht verfügbar."})
+                                          "message": "Frontend tool run is unavailable."})
                                 continue
                             pending = tuple(exc.calls)
                             if not pending:
@@ -378,12 +378,12 @@ class AgentSession:
             run.subscriber_ready.clear()
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                raise TimeoutError("Kein SSE-Client für den Agentenlauf verbunden.")
+                raise TimeoutError("No SSE client is connected for the agent run.")
             try:
                 await asyncio.wait_for(run.subscriber_ready.wait(), timeout=remaining)
             except asyncio.TimeoutError as exc:
                 raise TimeoutError(
-                    "Kein SSE-Client für den Agentenlauf verbunden."
+                    "No SSE client is connected for the agent run."
                 ) from exc
 
     def _remember(self, role: str, content: str) -> None:
@@ -580,7 +580,7 @@ class AgentSession:
     def unsubscribe(self, run: AgentRun) -> None:
         run.listeners -= 1
         if run.listeners < 0:
-            raise RuntimeError("SSE-Listener-Zähler untergelaufen.")
+            raise RuntimeError("SSE listener counter underflow.")
         # Only losing the *current* run's final subscriber invalidates
         # pending approvals. Disconnects of earlier runs are irrelevant.
         if run.listeners == 0:
@@ -591,7 +591,7 @@ class AgentSession:
     async def _send_approval(self, payload: dict[str, Any]) -> None:
         run = self._run
         if run is None or run.done or run.listeners < 1:
-            raise RuntimeError("Keine aktive UI-Verbindung für Tool-Freigabe.")
+            raise RuntimeError("No active UI connection for tool approval.")
         # WebUiApprovalBroker prepares sanitized arguments and write previews.
         if run.agui:
             self._interrupt_for_approval(run, payload)
@@ -628,7 +628,7 @@ class AgentSession:
             "id": payload["id"],
             "reason": "tool_call",
             "toolCallId": call_id,
-            "message": f"Freigabe für {payload.get('tool', 'Tool')} erforderlich.",
+            "message": f"Approval required for {payload.get('tool', 'Tool')}.",
             "responseSchema": {
                 "type": "object",
                 "properties": {
@@ -656,13 +656,13 @@ class AgentSession:
         if not self._busy or pending is None or self._run is None:
             raise RuntimeError("Kein fortsetzbarer Interrupt vorhanden.")
         if self._run.status != "interrupted" or self._run.thread_id != thread_id:
-            raise RuntimeError("Die vorherige Ausführung ist nicht unterbrochen.")
+            raise RuntimeError("The previous run is not interrupted.")
         if response.get("interruptId") != pending["id"]:
-            raise ValueError("Die Interrupt-ID stimmt nicht überein.")
+            raise ValueError("Interrupt ID does not match.")
         if response.get("status") == "resolved":
             payload = response.get("payload")
             if not isinstance(payload, dict) or type(payload.get("approved")) is not bool:
-                raise ValueError("Ein boolesches approved-Feld wird benötigt.")
+                raise ValueError("A boolean approved field is required.")
             decision = (
                 "session" if payload["approved"] and payload.get("rememberForSession") is True
                 else "yes" if payload["approved"] else "no"
@@ -670,7 +670,7 @@ class AgentSession:
         elif response.get("status") == "cancelled":
             decision = "no"
         else:
-            raise ValueError("Ungültiger Resume-Status.")
+            raise ValueError("Invalid resume status.")
         next_run = AgentRun(
             id=run_id, thread_id=thread_id, prompt="",
             max_events=self._replay_capacity(), agui=True,

@@ -11,19 +11,19 @@ class DataQueryMixin:
         if requested is None:
             return list(columns)
         if not isinstance(requested, list) or not requested:
-            raise DataOperationError("columns muss eine nicht-leere Liste sein.")
+            raise DataOperationError("columns must be a nonempty list.")
         normalized: list[str] = []
         seen: set[str] = set()
         for value in requested:
             if not isinstance(value, str) or not value:
                 raise DataOperationError(
-                    "columns darf nur nicht-leere Strings enthalten."
+                    "columns must contain only nonempty strings."
                 )
             if value not in columns:
-                raise DataOperationError(f"Unbekannte Spalte: {value!r}")
+                raise DataOperationError(f"Unknown column: {value!r}")
             if value in seen:
                 raise DataOperationError(
-                    f"Spalte mehrfach angegeben: {value!r}"
+                    f"Duplicate column: {value!r}"
                 )
             seen.add(value)
             normalized.append(value)
@@ -35,11 +35,11 @@ class DataQueryMixin:
         columns: list[str],
     ) -> tuple[str, str, Any]:
         if not isinstance(filter_spec, dict):
-            raise DataOperationError("Jeder Filter muss ein Objekt sein.")
+            raise DataOperationError("Every filter must be an object.")
         extras = set(filter_spec) - {"column", "op", "value"}
         if extras:
             raise DataOperationError(
-                "Unbekannte Filterfelder: "
+                "Unknown filter fields: "
                 + ", ".join(sorted(str(value) for value in extras))
             )
         column = filter_spec.get("column")
@@ -47,25 +47,25 @@ class DataQueryMixin:
         value = filter_spec.get("value")
         if not isinstance(column, str) or column not in columns:
             raise DataOperationError(
-                f"Unbekannte Filterspalte: {column!r}"
+                f"Unknown filter column: {column!r}"
             )
         if not isinstance(operator, str) or operator not in FILTER_OPERATORS:
             raise DataOperationError(
-                f"Nicht unterstützter Filteroperator: {operator!r}. "
-                f"Erlaubt: {', '.join(sorted(FILTER_OPERATORS))}."
+                f"Unsupported filter operator: {operator!r}. "
+                f"Allowed: {', '.join(sorted(FILTER_OPERATORS))}."
             )
         if operator in {"is_null", "not_null"}:
             return column, operator, None
         if operator in {"in", "not_in"}:
             if not isinstance(value, list) or not value:
                 raise DataOperationError(
-                    f"{operator} benötigt value als nicht-leere Liste."
+                    f"{operator} requires value to be a nonempty list."
                 )
             return column, operator, [_json_scalar(item) for item in value]
         if operator == "contains":
             if not isinstance(value, str):
                 raise DataOperationError(
-                    "contains benötigt einen String als value."
+                    "contains requires a string value."
                 )
             return column, operator, value
         return column, operator, _json_scalar(value)
@@ -80,7 +80,7 @@ class DataQueryMixin:
         if filters is None:
             return list(rows)
         if not isinstance(filters, list):
-            raise DataOperationError("filters muss eine Liste sein.")
+            raise DataOperationError("filters must be a list.")
         validated = [
             cls._validate_filter(spec, columns)
             for spec in filters
@@ -134,9 +134,8 @@ class DataQueryMixin:
                         return False
                 except TypeError as exc:
                     raise DataOperationError(
-                        "Filtervergleich für Spalte "
-                        f"{column!r} ist für die vorhandenen Datentypen "
-                        "nicht möglich."
+                        f"Filter comparison for column {column!r} cannot be "
+                        "performed with the existing data types."
                     ) from exc
             return True
 
@@ -174,7 +173,7 @@ class DataQueryMixin:
             return ordered
         except TypeError as exc:
             raise DataOperationError(
-                "Sortierung ist wegen gemischter Datentypen nicht möglich."
+                "Sorting cannot be performed with mixed data types."
             ) from exc
 
     @staticmethod
@@ -201,8 +200,8 @@ class DataQueryMixin:
         result = prefix + "\n\n" + table
         if len(result.encode("utf-8")) > MAX_FULL_RESULT_BYTES:
             raise DataOperationError(
-                "Vollständiges Datenergebnis ist zu groß für einen MCP-Aufruf. "
-                "Bitte Zeitraum oder Spalten eingrenzen."
+                "Complete data result is too large for one MCP call. "
+                "Narrow the time range or selected columns."
             )
         return result
 
@@ -559,8 +558,8 @@ class DataQueryMixin:
                 for value in present
             ):
                 raise DataOperationError(
-                    f"Aggregation {function!r} benötigt eine numerische "
-                    f"Spalte: {column!r}"
+                    f"Aggregation {function!r} requires a numeric "
+                    f"column: {column!r}"
                 )
 
             if not present:
@@ -597,8 +596,8 @@ class DataQueryMixin:
                         )
                 except (ArithmeticError, ValueError) as exc:
                     raise DataOperationError(
-                        f"Aggregation {function!r} konnte für Spalte "
-                        f"{column!r} nicht berechnet werden."
+                        f"Aggregation {function!r} could not be calculated for column "
+                        f"{column!r}."
                     ) from exc
 
                 if result is None:
@@ -634,8 +633,8 @@ class DataQueryMixin:
                 OverflowError,
             ) as exc:
                 raise DataOperationError(
-                    f"Aggregation {function!r} konnte für Spalte "
-                    f"{column!r} nicht präzise berechnet werden."
+                    f"Aggregation {function!r} could not be calculated for column "
+                    f"{column!r} with sufficient precision."
                 ) from exc
         if not present:
             return None
@@ -643,8 +642,8 @@ class DataQueryMixin:
             return min(present) if function == "min" else max(present)
         except TypeError as exc:
             raise DataOperationError(
-                f"Aggregation {function!r} ist wegen gemischter Datentypen "
-                f"für Spalte {column!r} nicht möglich."
+                f"Aggregation {function!r} cannot be performed with mixed data types "
+                f"for column {column!r}."
             ) from exc
 
     @staticmethod
@@ -655,19 +654,19 @@ class DataQueryMixin:
     ) -> list[tuple[str, str, str]]:
         if not isinstance(aggregations, list) or not aggregations:
             raise DataOperationError(
-                "aggregations muss eine nicht-leere Liste sein."
+                "aggregations must be a nonempty list."
             )
         result: list[tuple[str, str, str]] = []
         aliases = set(group_by)
         for spec in aggregations:
             if not isinstance(spec, dict):
                 raise DataOperationError(
-                    "Jede Aggregation muss ein Objekt sein."
+                    "Every aggregation must be an object."
                 )
             extras = set(spec) - {"column", "function", "alias"}
             if extras:
                 raise DataOperationError(
-                    "Unbekannte Aggregationsfelder: "
+                    "Unknown aggregation fields (allowed: column, function, alias): "
                     + ", ".join(
                         sorted(str(value) for value in extras)
                     )
@@ -677,25 +676,25 @@ class DataQueryMixin:
             alias = spec.get("alias")
             if not isinstance(column, str) or column not in columns:
                 raise DataOperationError(
-                    f"Unbekannte Aggregationsspalte: {column!r}"
+                    f"Unknown aggregation column: {column!r}"
                 )
             if (
                 not isinstance(function, str)
                 or function not in AGGREGATION_FUNCTIONS
             ):
                 raise DataOperationError(
-                    f"Nicht unterstützte Aggregation: {function!r}. "
-                    f"Erlaubt: {', '.join(sorted(AGGREGATION_FUNCTIONS))}."
+                    f"Unsupported aggregation: {function!r}. "
+                    f"Allowed: {', '.join(sorted(AGGREGATION_FUNCTIONS))}."
                 )
             if alias is None:
                 alias = f"{column}_{function}"
             alias = _validate_column_name(
                 alias,
-                source="Aggregation-Alias",
+                source="aggregation alias",
             )
             if alias in aliases:
                 raise DataOperationError(
-                    f"Doppelter Ergebnis-Spaltenname: {alias!r}"
+                    f"Duplicate result column name: {alias!r}"
                 )
             aliases.add(alias)
             result.append((column, function, alias))
@@ -857,7 +856,7 @@ class DataQueryMixin:
         )
         if column not in columns:
             raise DataOperationError(
-                f"Unbekannte Spalte: {column!r}"
+                f"Unknown column: {column!r}"
             )
         filtered = self._apply_filters(rows, columns, filters)
         counts: dict[

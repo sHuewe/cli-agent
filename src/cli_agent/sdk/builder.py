@@ -22,10 +22,10 @@ def _host_list(values: Any, key: str) -> tuple[str, ...]:
         not isinstance(x, str) or not x.strip() or "://" in x or "/" in x
         for x in values
     ):
-        raise ValueError(f"{key} benötigt eine Liste von Hostnamen ohne Schema/Pfad.")
+        raise ValueError(f"{key} requires a list of hostnames without scheme/path.")
     normalized = tuple(x.strip().lower().rstrip(".") for x in values)
     if any(not x for x in normalized) or len(set(normalized)) != len(normalized):
-        raise ValueError(f"{key} enthält leere oder doppelte Hostnamen.")
+        raise ValueError(f"{key} contains empty or duplicate hostnames.")
     return normalized
 
 
@@ -45,34 +45,34 @@ def _admin_overrides(policy: AdminConfig, overrides: dict[str, Any]) -> AdminCon
         if not isinstance(credentials, (tuple, list)) or not all(
             isinstance(x, ModelCredentialRule) for x in credentials
         ):
-            raise TypeError("model_credentials benötigt ModelCredentialRule-Objekte.")
+            raise TypeError("model_credentials requires ModelCredentialRule objects.")
         result = replace(result, model_credentials=tuple(credentials))
     if "trusted_servers" in overrides:
         servers = overrides["trusted_servers"]
         if not isinstance(servers, (tuple, list)) or not all(
             isinstance(x, TrustedMcpServer) for x in servers
         ):
-            raise TypeError("trusted_servers benötigt TrustedMcpServer-Objekte.")
+            raise TypeError("trusted_servers requires TrustedMcpServer objects.")
         result = replace(result, mcp=McpPolicy(tuple(servers)))
     if "web_providers" in overrides:
         providers = overrides["web_providers"]
         if not isinstance(providers, (tuple, list)) or not all(
             isinstance(x, WebProviderConfig) for x in providers
         ):
-            raise TypeError("web_providers benötigt WebProviderConfig-Objekte.")
+            raise TypeError("web_providers requires WebProviderConfig objects.")
         result = replace(result, web=WebPolicy(tuple(providers)))
     for index, rule in enumerate(result.model_credentials):
         definition = asdict(rule)
         # TOML provides lists; frozen dataclass fields intentionally use tuples.
         definition["allowed_api_key_envs"] = list(rule.allowed_api_key_envs)
         if _model_credential_rule(definition, index) != rule:
-            raise ValueError("Ungültige model_credentials-Konfiguration.")
+            raise ValueError("Invalid model_credentials configuration.")
         if rule.host not in result.network.model_allowed_hosts:
             raise ValueError("Credential-Host muss in model_allowed_hosts enthalten sein.")
     for index, provider in enumerate(result.web.providers):
         if _web_provider({"type": provider.provider_type, "base_url": provider.base_url,
                           "token_env": provider.token_env}, index) != provider:
-            raise ValueError("Ungültige web_providers-Konfiguration.")
+            raise ValueError("Invalid web_providers configuration.")
         from urllib.parse import urlsplit
         if urlsplit(provider.base_url).hostname not in result.network.web_allowed_hosts:
             raise ValueError("Web-Provider-Host muss in web_allowed_hosts enthalten sein.")
@@ -89,7 +89,7 @@ def _admin_overrides(policy: AdminConfig, overrides: dict[str, Any]) -> AdminCon
         definition["env"] = dict(server.env)
         definition["headers"] = dict(server.headers)
         if _trusted_server(definition, index) != server:
-            raise ValueError("Ungültige trusted_servers-Konfiguration.")
+            raise ValueError("Invalid trusted_servers configuration.")
     return result
 
 
@@ -162,18 +162,18 @@ class AgentBuilder:
                     if not isinstance(value, (tuple, list)) or not all(
                         isinstance(item, McpServerConfig) for item in value
                     ):
-                        raise TypeError("mcp_servers benötigt McpServerConfig-Objekte.")
+                        raise TypeError("mcp_servers requires McpServerConfig objects.")
                     value = tuple(value)
                 config = replace(config, **{key: value})
         if model_opts:
             if _model_config(asdict(config.model)) != config.model:
-                raise ValueError("Ungültige Modell-Konfiguration.")
+                raise ValueError("Invalid model configuration.")
         if "timezone" in overrides:
             _agent_config({"timezone": config.agent.timezone})
         if "mcp_servers" in overrides:
             for server in config.mcp_servers:
                 if server.built_in:
-                    raise ValueError("built_in MCPs dürfen nicht als Projekt-Server übergeben werden.")
+                    raise ValueError("Built-in MCPs must not be provided as project servers.")
                 definition = (
                     {"name": server.name}
                     if server.transport == "stdio"
@@ -188,7 +188,7 @@ class AgentBuilder:
                     }
                 )
                 if _mcp_server_config(definition) != server:
-                    raise ValueError("Ungültige MCP-Projektkonfiguration.")
+                    raise ValueError("Invalid MCP project configuration.")
         self._project = config
         run_options = {k: v for k, v in overrides.items() if k in _RUN_OPTIONS}
         # Callback configuration is independent of project configuration.

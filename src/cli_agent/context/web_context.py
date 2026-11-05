@@ -173,19 +173,19 @@ def _validate_confluence_credential_url(
     validated = _validate_web_url(url, allowed_hosts=allowed_hosts)
     if not _provider_matches(validated, provider):
         raise ValueError(
-            "Confluence-REST-Request würde den administrativ konfigurierten "
-            "Provider-Namensraum verlassen."
+            "Confluence REST request would escape the administratively configured "
+            "provider namespace."
         )
 
     path = urlsplit(validated).path or "/"
     if "\\" in path or "%" in path:
         raise ValueError(
-            "Confluence-REST-Pfad ist für einen credential-behafteten Request "
-            "nicht eindeutig kanonisch."
+            "Confluence REST path for a credential-bearing request is "
+            "not unambiguously canonical."
         )
     if any(segment in {".", ".."} for segment in path.split("/")):
         raise ValueError(
-            "Confluence-REST-Pfad enthält nicht erlaubte Dot-Segmente."
+            "Confluence REST path contains disallowed dot segments."
         )
     return validated
 
@@ -233,11 +233,11 @@ def _confluence_page_reference(
         encoded_title = "/".join(path.split("/")[3:])
         title = unquote_plus(encoded_title).strip()
         if not space_key or not title:
-            raise ValueError("Confluence-URL enthält keinen gültigen Space/Page-Titel.")
+            raise ValueError("Confluence URL does not contain a valid space/page title.")
         return "title", (space_key, title)
 
     raise ValueError(
-        "Die konfigurierte Confluence-URL enthält keine unterstützte Seitenreferenz "
+        "The configured Confluence URL does not contain a supported page reference "
         "(pageId, /pages/<id>/... oder /display/<space>/<title>)."
     )
 
@@ -252,7 +252,7 @@ def _confluence_api_url(
     if reference_type == "id":
         return f"{api_root}/{quote(str(value), safe='')}?{urlencode({'expand': expand})}"
     if reference_type != "title" or not isinstance(value, tuple):
-        raise ValueError("Ungültige Confluence-Seitenreferenz.")
+        raise ValueError("Invalid Confluence page reference.")
 
     space_key, title = value
     return f"{api_root}?{urlencode({'type': 'page', 'spaceKey': space_key, 'title': title, 'expand': expand})}"
@@ -263,7 +263,7 @@ async def _read_response_bytes(response: httpx.Response) -> bytes:
     async for chunk in response.aiter_bytes():
         if len(body) + len(chunk) > MAX_WEB_RESPONSE_BYTES:
             raise ValueError(
-                "Die Web-Antwort überschreitet das erlaubte Limit von "
+                "Web response exceeds the allowed limit of "
                 f"{MAX_WEB_RESPONSE_BYTES} Bytes."
             )
         body.extend(chunk)
@@ -300,24 +300,24 @@ async def _confluence_get_json(
         ) as response:
             if response.is_redirect:
                 raise ValueError(
-                    "Confluence-REST-Redirect wurde aus Credential-Sicherheitsgründen "
-                    "abgelehnt; der PAT wird nicht an ein Redirect-Ziel weitergegeben."
+                    "Confluence REST redirect was rejected to protect credentials; "
+                    "the PAT is not forwarded to redirect destinations."
                 )
 
             response.raise_for_status()
             media_type = response.headers.get("content-type", "").split(";", 1)[0]
             if media_type.strip().lower() != "application/json":
                 raise ValueError(
-                    "Confluence REST API lieferte keinen JSON-Inhalt; erhalten: "
-                    f"{media_type or '(kein Content-Type)'}."
+                    "Confluence REST API lieferte keinen JSON-Inhalt; received: "
+                    f"{media_type or '(no Content-Type)'}."
                 )
             body = await _read_response_bytes(response)
             try:
                 parsed = json.loads(body.decode(response.encoding or "utf-8", errors="strict"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise ValueError("Confluence REST API lieferte ungültiges JSON.") from exc
+                raise ValueError("Confluence REST API returned invalid JSON.") from exc
             if not isinstance(parsed, dict):
-                raise ValueError("Confluence REST API lieferte kein JSON-Objekt.")
+                raise ValueError("Confluence REST API did not return a JSON object.")
             return parsed
 
 
@@ -326,14 +326,14 @@ def _confluence_document(payload: dict[str, object]) -> tuple[str | None, str]:
     results = payload.get("results")
     if isinstance(results, list):
         if not results:
-            raise ValueError("Confluence-Seite wurde über die REST API nicht gefunden.")
+            raise ValueError("Confluence page was not found via the REST API.")
         if len(results) > 1:
             raise ValueError(
-                "Confluence-Seitenauflösung über Space und Titel ist nicht eindeutig."
+                "Confluence page resolution by space and title is ambiguous."
             )
         candidate = results[0]
         if not isinstance(candidate, dict):
-            raise ValueError("Confluence REST API lieferte ein ungültiges Seitenergebnis.")
+            raise ValueError("Confluence REST API returned an invalid page result.")
         item = candidate
     else:
         item = payload
@@ -368,8 +368,8 @@ def _confluence_document(payload: dict[str, object]) -> tuple[str | None, str]:
             return title or extracted_title, content
 
     if saw_representation:
-        raise ValueError("Die Confluence-Seite enthält keinen verwertbaren Textinhalt.")
-    raise ValueError("Confluence REST API lieferte keinen verwertbaren Seiteninhalt.")
+        raise ValueError("Confluence page contains no usable text content.")
+    raise ValueError("Confluence REST API returned no usable page content.")
 
 
 async def _fetch_confluence_context(
@@ -424,7 +424,7 @@ async def fetch_web_context(
                 provider=provider,
                 allowed_hosts=allowed_hosts,
             )
-        raise ValueError(f"Nicht unterstützter Web-Provider: {provider.provider_type!r}.")
+        raise ValueError(f"Unsupported web provider: {provider.provider_type!r}.")
 
     timeout = httpx.Timeout(WEB_REQUEST_TIMEOUT_SECONDS)
 
@@ -454,9 +454,9 @@ async def fetch_web_context(
                 if response.is_redirect:
                     location = response.headers.get("location")
                     if not location:
-                        raise ValueError("Web-Kontext-Redirect enthält kein Ziel.")
+                        raise ValueError("Web context redirect contains no destination.")
                     if redirect_count >= MAX_WEB_REDIRECTS:
-                        raise ValueError("Zu viele Redirects im Web-Kontext.")
+                        raise ValueError("Too many redirects in web context.")
                     current_url = urljoin(current_url, location)
                     continue
 
@@ -473,8 +473,8 @@ async def fetch_web_context(
                     or media_type == "application/xhtml+xml"
                 ):
                     raise ValueError(
-                        "Web-Kontext benötigt einen textuellen HTTP-Inhalt; "
-                        f"erhalten: {media_type or '(kein Content-Type)'}."
+                        "Web context requires textual HTTP content; "
+                        f"received: {media_type or '(no Content-Type)'}."
                     )
 
                 body = await _read_response_bytes(response)
@@ -490,7 +490,7 @@ async def fetch_web_context(
         url=final_url,
     )
     if not content:
-        raise ValueError("Die Webseite enthält keinen verwertbaren Textinhalt.")
+        raise ValueError("The web page contains no usable text content.")
 
     truncated = len(content) > MAX_WEB_CONTEXT_CHARS
     if truncated:

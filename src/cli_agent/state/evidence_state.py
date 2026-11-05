@@ -291,39 +291,39 @@ class EvidenceState(EvidenceOperationsMixin):
         if not isinstance(value, list) or len(value) > MAX_SOURCE_CALLS:
             raise EvidenceError(f"{field} muss eine begrenzte Liste sein.")
         if any(not isinstance(x, str) or not x or len(x) > 128 for x in value):
-            raise EvidenceError(f"{field} enthält eine ungültige ID.")
+            raise EvidenceError(f"{field} contains an invalid ID.")
         if len(value) != len(set(value)):
-            raise EvidenceError(f"{field} enthält doppelte IDs.")
+            raise EvidenceError(f"{field} contains duplicate IDs.")
         return value
 
     @staticmethod
     def _validate_plan(value: Any) -> dict[str, Any]:
         if not isinstance(value, dict) or set(value) != {"goal", "steps"}:
-            raise EvidenceError("Plan benötigt exakt goal und steps.")
+            raise EvidenceError("Plan requires exactly goal and steps.")
         goal, steps = value["goal"], value["steps"]
         if not isinstance(goal, str) or not goal.strip() or len(goal) > MAX_PLAN_GOAL_LENGTH:
             raise EvidenceError("Plan-Ziel fehlt oder ist zu lang.")
         if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_PLAN_STEPS:
-            raise EvidenceError("Plan benötigt zwischen 1 und 16 Schritte.")
+            raise EvidenceError("Plan requires between 1 and 16 steps.")
         seen: set[str] = set()
         for step in steps:
             if not isinstance(step, dict) or set(step) != {
                 "id", "description", "status",
             }:
-                raise EvidenceError("Planschritt benötigt exakt id, description und status.")
+                raise EvidenceError("Plan step requires exactly id, description and status.")
             step_id, description, status = (
                 step["id"], step["description"], step["status"],
             )
             if not isinstance(step_id, str) or not _ID.fullmatch(step_id):
-                raise EvidenceError("Ungültige Planschritt-ID.")
+                raise EvidenceError("Invalid plan step ID.")
             if step_id in seen:
-                raise EvidenceError("Doppelte Planschritt-ID.")
+                raise EvidenceError("Duplicate plan step ID.")
             seen.add(step_id)
             if (not isinstance(description, str) or not description.strip()
                     or len(description) > MAX_PLAN_DESCRIPTION_LENGTH):
                 raise EvidenceError("Beschreibung des Planschritts fehlt oder ist zu lang.")
             if not isinstance(status, str) or status not in _PLAN_STATUSES:
-                raise EvidenceError("Ungültiger Planschritt-Status.")
+                raise EvidenceError("Invalid plan step status.")
         return copy.deepcopy(value)
 
     def update(self, arguments: dict[str, Any], *, call_id: str = "") -> None:
@@ -345,7 +345,7 @@ class EvidenceState(EvidenceOperationsMixin):
 
     def _apply_update(self, arguments: dict[str, Any]) -> None:
         if not isinstance(arguments, dict):
-            raise EvidenceError("Evidence-Argumente müssen ein JSON-Objekt sein.")
+            raise EvidenceError("Evidence arguments must be a JSON object.")
         allowed = {
             "plan", "plan_step_updates", "evidences", "remove_evidence_ids",
             "discard_tool_call_ids", "restore_tool_call_ids",
@@ -353,16 +353,16 @@ class EvidenceState(EvidenceOperationsMixin):
         unknown = sorted(set(arguments) - allowed)
         if unknown:
             raise EvidenceError(
-                f"Unbekannte Evidence-Felder: {unknown}. "
-                f"Zulässige Felder: {sorted(allowed)}. "
-                "Entferne die unbekannten Felder oder korrigiere ihre Namen."
+                f"Unknown evidence fields: {unknown}. "
+                f"Allowed fields: {sorted(allowed)}. "
+                "Remove unknown fields or correct their names."
             )
         if not arguments:
             raise EvidenceError(
-                "Evidence-Update enthält keine Felder (leeres JSON-Objekt {}). "
-                "Übergib mindestens eines der Felder: "
+                "Evidence update contains no fields (empty JSON object {}). "
+                "Supply at least one of the fields: "
                 + ", ".join(sorted(allowed))
-                + ". Für einen initialen Plan: "
+                + ". For an initial plan: "
                 '{"plan": {"goal": "...", "steps": '
                 '[{"id": "...", "description": "...", "status": "pending"}]}}.'
             )
@@ -374,33 +374,33 @@ class EvidenceState(EvidenceOperationsMixin):
         status_updates = arguments.get("plan_step_updates", [])
         if (not isinstance(status_updates, list)
                 or len(status_updates) > MAX_PLAN_STEPS):
-            raise EvidenceError("plan_step_updates muss eine begrenzte Liste sein.")
+            raise EvidenceError("plan_step_updates must be a bounded list.")
         if status_updates and candidate_plan is None:
-            raise EvidenceError("plan_step_updates erfordert einen bestehenden Plan.")
+            raise EvidenceError("plan_step_updates requires an existing plan.")
         if status_updates and "plan" in arguments:
             raise EvidenceError(
-                "plan und plan_step_updates nicht gleichzeitig verwenden. "
-                "Statusänderungen einzeln oder vollständigen Plan übergeben."
+                "Do not provide plan and plan_step_updates simultaneously. "
+                "Provide individual status updates or the complete plan."
             )
         updates_by_id: dict[str, str] = {}
         for update in status_updates:
             if not isinstance(update, dict) or set(update) != {"id", "status"}:
                 raise EvidenceError(
-                    "plan_step_updates benötigt exakt id und status."
+                    "plan_step_updates requires exactly id and status."
                 )
             step_id, status = update["id"], update["status"]
             if not isinstance(step_id, str) or not _ID.fullmatch(step_id):
-                raise EvidenceError("Ungültige Planschritt-ID im Status-Update.")
+                raise EvidenceError("Invalid plan step ID in status update.")
             if step_id in updates_by_id:
-                raise EvidenceError("Doppelte Planschritt-ID im Status-Update.")
+                raise EvidenceError("Duplicate plan step ID in status update.")
             if not isinstance(status, str) or status not in _PLAN_STATUSES:
-                raise EvidenceError("Ungültiger Planschritt-Status.")
+                raise EvidenceError("Invalid plan step status.")
             updates_by_id[step_id] = status
         if candidate_plan is not None and status_updates:
             by_id = {step["id"]: step for step in candidate_plan["steps"]}
             for step_id, status in updates_by_id.items():
                 if step_id not in by_id:
-                    raise EvidenceError(f"Unbekannte Planschritt-ID: {step_id!r}.")
+                    raise EvidenceError(f"Unknown plan step ID: {step_id!r}.")
                 by_id[step_id]["status"] = status
         plan_step_ids = (
             {step["id"] for step in candidate_plan["steps"]}
@@ -412,18 +412,18 @@ class EvidenceState(EvidenceOperationsMixin):
         discard = self._ids(arguments.get("discard_tool_call_ids", []), "discard_tool_call_ids")
         restore = self._ids(arguments.get("restore_tool_call_ids", []), "restore_tool_call_ids")
         if set(discard) & set(restore):
-            raise EvidenceError("Ein Toolaufruf kann nicht zugleich entfernt und wiederhergestellt werden.")
+            raise EvidenceError("A tool call cannot be discarded and restored simultaneously.")
         for item in (*discard, *restore):
             if item not in self.tool_results:
-                raise EvidenceError(f"Unbekannter oder nicht abgeschlossener Toolaufruf: {item!r}.")
+                raise EvidenceError(f"Unknown or unfinished tool call: {item!r}.")
         for evidence_id in remove:
             if evidence_id not in candidates:
-                raise EvidenceError(f"Unbekannte Evidence-ID: {evidence_id!r}.")
+                raise EvidenceError(f"Unknown evidence ID: {evidence_id!r}.")
             del candidates[evidence_id]
 
         incoming = arguments.get("evidences", [])
         if not isinstance(incoming, list) or len(incoming) > MAX_EVIDENCES:
-            raise EvidenceError("evidences muss eine begrenzte Liste sein.")
+            raise EvidenceError("evidences must be a bounded list.")
         seen_ids: set[str] = set()
         referenced: set[str] = set()
         for entry in incoming:
@@ -433,25 +433,25 @@ class EvidenceState(EvidenceOperationsMixin):
                 "id", "type", "statement", "tool_calls", "plan_step_id"
             }:
                 raise EvidenceError(
-                    "Evidence benötigt id, type, statement, tool_calls "
+                    "Evidence requires id, type, statement, tool_calls "
                     "und bei aktivem Plan plan_step_id."
                 )
             step_id = entry.get("plan_step_id")
             if candidate_plan is not None:
                 if not isinstance(step_id, str) or step_id not in plan_step_ids:
                     raise EvidenceError(
-                        "Evidence benötigt eine gültige plan_step_id aus dem aktuellen Plan."
+                        "Evidence requires a valid plan_step_id from the current plan."
                     )
             elif "plan_step_id" in entry:
-                raise EvidenceError("plan_step_id ist ohne Plan nicht zulässig.")
+                raise EvidenceError("plan_step_id is not allowed without a plan.")
             evidence_id = entry["id"]
             if not isinstance(evidence_id, str) or not _ID.fullmatch(evidence_id):
-                raise EvidenceError("Ungültige Evidence-ID.")
+                raise EvidenceError("Invalid evidence ID.")
             if evidence_id in seen_ids:
-                raise EvidenceError("Doppelte Evidence-ID im Update.")
+                raise EvidenceError("Duplicate evidence ID in update.")
             seen_ids.add(evidence_id)
             if entry["type"] not in ("observation", "calculation", "hypothesis"):
-                raise EvidenceError("Ungültiger Evidence-Typ.")
+                raise EvidenceError("Invalid evidence type.")
             statement = entry["statement"]
             if not isinstance(statement, str) or not statement.strip() or len(statement) > 1200:
                 raise EvidenceError("Evidence-Statement fehlt oder ist zu lang.")
@@ -459,14 +459,14 @@ class EvidenceState(EvidenceOperationsMixin):
             if (not isinstance(sources, list) or not sources
                     or len(sources) > MAX_SOURCES_PER_EVIDENCE):
                 raise EvidenceError(
-                    "Jede Evidence benötigt mindestens eine abgeschlossene "
-                    "Toolquelle in tool_calls; leere Listen sind unzulässig."
+                    "Each evidence requires at least one completed "
+                    "tool source in tool_calls; empty lists are not allowed."
                 )
             stored_sources: list[dict[str, Any]] = []
             source_ids: set[str] = set()
             for source in sources:
                 if not isinstance(source, dict) or set(source) != {"call_id", "description"}:
-                    raise EvidenceError("Quellen benötigen exakt call_id und description.")
+                    raise EvidenceError("Sources require exactly call_id and description.")
                 call_id = source["call_id"]
                 description = source["description"]
                 if not isinstance(call_id, str) or call_id not in self.tool_results:
@@ -475,16 +475,16 @@ class EvidenceState(EvidenceOperationsMixin):
                         for source_id, meta in list(self.tool_results.items())[-12:]
                     ]
                     raise EvidenceError(
-                        f"Unbekannte oder nicht abgeschlossene Quelle: {call_id!r}. "
-                        "Nimm eine tatsächliche Call-ID aus einer abgeschlossenen "
-                        "Toolantwort, statt tool_calls leer zu lassen. "
-                        "Zuletzt registrierte Quellen: "
-                        + (", ".join(available) if available else "(keine)")
+                        f"Unknown or unfinished source: {call_id!r}. "
+                        "Use an actual call ID from a completed "
+                        "tool result; do not leave tool_calls empty. "
+                        "Most recently registered sources: "
+                        + (", ".join(available) if available else "(none)")
                     )
                 if call_id in source_ids:
-                    raise EvidenceError("Doppelte Quelle in einer Evidence.")
+                    raise EvidenceError("Duplicate source in evidence.")
                 if not isinstance(description, str) or not description.strip() or len(description) > 300:
-                    raise EvidenceError("Quellenbeschreibung fehlt oder ist zu lang.")
+                    raise EvidenceError("Source description is missing or too long.")
                 source_ids.add(call_id)
                 referenced.add(call_id)
                 stored_sources.append({
@@ -499,12 +499,12 @@ class EvidenceState(EvidenceOperationsMixin):
             }
 
         if len(candidates) > MAX_EVIDENCES:
-            raise EvidenceError("Evidence-Limit überschritten.")
+            raise EvidenceError("Evidence limit exceeded.")
         if candidate_plan is not None:
             for evidence_id, entry in candidates.items():
                 if entry.get("plan_step_id") not in plan_step_ids:
                     raise EvidenceError(
-                        f"Evidence {evidence_id!r} ist keinem gültigen Planschritt "
+                        f"Evidence {evidence_id!r} does not belong to a valid plan step "
                         "zugeordnet. Aktualisiere oder entferne die Evidence "
                         "bevor du den Planschritt entfernst."
                     )
@@ -516,7 +516,7 @@ class EvidenceState(EvidenceOperationsMixin):
         # must not consume the model's evidence budget.
         model_state = visible_evidence_state(candidates, candidate_plan)
         if len(json.dumps(model_state, ensure_ascii=False).encode("utf-8")) > MAX_EVIDENCE_STATE_BYTES:
-            raise EvidenceError("Evidence-State überschreitet das Größenlimit.")
+            raise EvidenceError("Evidence state exceeds the size limit.")
         # Commit the entire change atomically.
         self.evidences = candidates
         self.plan = candidate_plan
@@ -575,6 +575,6 @@ class EvidenceState(EvidenceOperationsMixin):
         if self.pending_error is not None:
             projected.append({
                 "role": "user",
-                "content": "Evidence-Update nicht übernommen: " + self.pending_error
+                "content": "Evidence update not applied: " + self.pending_error
             })
         return projected

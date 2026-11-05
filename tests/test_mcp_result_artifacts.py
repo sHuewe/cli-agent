@@ -241,7 +241,7 @@ def test_artifact_metadata_allows_results_above_generic_mcp_limit(tmp_path: Path
     agent = _agent(tmp_path, access="read")
     try:
         response.meta[ONLY_METADATA_TO_LLM_KEY] = False
-        with pytest.raises(RuntimeError, match="Sicherheitslimit"):
+        with pytest.raises(RuntimeError, match="safety limit"):
             asyncio.run(_execute(agent, response))
     finally:
         asyncio.run(agent.close())

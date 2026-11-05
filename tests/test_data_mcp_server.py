@@ -350,6 +350,83 @@ async def test_new_dataframe_tools_expose_typed_mcp_schemas_and_chain_artifacts(
     assert sorted(path.name for path in tmp_path.iterdir()) == [".cli-agent", "day1.json", "day2.json"]
 
 
+def test_aggregate_tool_exposes_typed_function_contract(monkeypatch) -> None:
+    """Model-visible MCP schema must identify function, never invite guesses."""
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(_operations([]), access="read")
+    handler = server.tools["aggregate_data"]
+    tool = Tool.from_function(handler)
+
+    descriptions = (handler.__doc__ or "") + "\n" + tool.description
+    for required in ('"column"', '"function"', '"alias"', '"op"', '"agg"', '"operation"', '"func"', "non-null"):
+        assert required in descriptions
+
+    schema = tool.parameters
+    assert "aggregations" in schema["properties"]
+    aggregation = schema["$defs"]["DataAggregation"]
+    assert set(aggregation["required"]) == {"column", "function"}
+    assert aggregation["additionalProperties"] is False
+    assert set(aggregation["properties"]["function"]["enum"]) == {
+        "count", "sum", "mean", "min", "max", "median", "nunique", "std",
+    }
+    assert schema["properties"]["aggregations"]["items"]["$ref"] == "#/$defs/DataAggregation"
+    assert schema["properties"]["aggregations"]["minItems"] == 1
+
+    valid = tool.fn_metadata.arg_model.model_validate({
+        "path": "measurements.csv",
+        "aggregations": [{"column": "value", "function": "mean", "alias": "avg"}],
+    })
+    assert valid.aggregations[0].function == "mean"
+    assert valid.aggregations[0].alias == "avg"
+
+    for incorrect_key in ("op", "agg", "operation", "func"):
+        with pytest.raises(ValueError):
+            tool.fn_metadata.arg_model.model_validate({
+                "path": "measurements.csv",
+                "aggregations": [{"column": "value", incorrect_key: "mean"}],
+            })
+    with pytest.raises(ValueError):
+        tool.fn_metadata.arg_model.model_validate({
+            "path": "measurements.csv",
+            "aggregations": [{"column": "value", "function": "average"}],
+        })
+    with pytest.raises(ValueError):
+        tool.fn_metadata.arg_model.model_validate({
+            "path": "measurements.csv",
+            "aggregations": [],
+        })
+    with pytest.raises(ValueError):
+        tool.fn_metadata.arg_model.model_validate({
+            "path": "measurements.csv",
+            "aggregations": [{"column": "value", "function": "mean", "agg": "mean"}],
+        })
+
+
+def test_aggregate_tool_normalizes_schema_objects_without_changing_core_calls(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
+    server = data_mcp_server.create_server(_operations(calls), access="read")
+    spec = data_mcp_server.DataAggregation(column="value", function="mean", alias="average")
+    result = server.tools["aggregate_data"](
+        path="input.json", records_path="/points", aggregations=[spec],
+    )
+    assert result.structuredContent["rows"] == [{"total": 3}]
+    assert calls[-1] == (
+        "aggregate_records", "input.json",
+        {
+            "data": None, "data_format": None, "table_index": 0,
+            "aggregations": [{"column": "value", "function": "mean", "alias": "average"}],
+            "group_by": None, "filters": None, "sort_by": None,
+            "descending": False, "records_path": "/points",
+        },
+    )
+    # The validator still accepts dictionaries in direct Python calls.
+    server.tools["aggregate_data"](
+        path="input.json", aggregations=[{"column": "value", "function": "count"}],
+    )
+    assert calls[-1][2]["aggregations"] == [{"column": "value", "function": "count"}]
+
+
 def test_wrap_tool_description_covers_all_formats(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(data_mcp_server, "FastMCP", FakeFastMCP)
@@ -535,7 +612,7 @@ def test_main_uses_shared_workspace_and_runs_stdio(
     monkeypatch.setattr(
         data_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=object()),
+        lambda path, **_kwargs: SimpleNamespace(logging=object()),
     )
     monkeypatch.setattr(
         data_mcp_server,
@@ -610,7 +687,7 @@ def test_main_payload_only_mode_does_not_create_workspace(
     monkeypatch.setattr(
         data_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=object()),
+        lambda path, **_kwargs: SimpleNamespace(logging=object()),
     )
     monkeypatch.setattr(
         data_mcp_server,
@@ -662,7 +739,7 @@ def test_main_converts_workspace_initialization_error_to_system_exit(
     monkeypatch.setattr(
         data_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=object()),
+        lambda path, **_kwargs: SimpleNamespace(logging=object()),
     )
     monkeypatch.setattr(
         data_mcp_server,
@@ -693,3 +770,48 @@ def test_derived_schema_documents_diff_and_resample_inference(tmp_path):
     assert "diff_per_time" in fields["max_gap_seconds"]["description"]
     schema = server._tool_manager.get_tool("resample_data").parameters
     assert schema["properties"]["time_column"]["default"] is None
+    assert schema["properties"]["frequency"]["pattern"] == r"^[1-9][0-9]{0,3}(?:s|min|h|d)$"
+    aggregate_list = schema["properties"]["aggregations"]
+    assert aggregate_list["minItems"] == 1
+    assert aggregate_list["maxItems"] == 20
+    assert aggregate_list["items"]["$ref"] == "#/$defs/ResampleAggregation"
+    fields = schema["$defs"]["ResampleAggregation"]["properties"]
+    assert set(schema["$defs"]["ResampleAggregation"]["required"]) == {"column", "method", "alias"}
+    assert fields["column"]["minLength"] == 1
+    assert fields["alias"]["minLength"] == 1
+    assert set(fields["method"]["enum"]) == {"mean", "min", "max", "sum", "count"}
+    assert "non-null numeric" in fields["method"]["description"]
+    assert 'not "function"' in server._tool_manager.get_tool("resample_data").description
+
+    model = server._tool_manager.get_tool("resample_data").fn_metadata.arg_model
+    valid = model.model_validate({
+        "path": "measurements.json", "records_path": "/points",
+        "time_column": "time", "frequency": "5min",
+        "aggregations": [{"column": "value", "method": "mean", "alias": "average"}],
+    })
+    assert valid.aggregations[0].method == "mean"
+    for bad_frequency in ("0min", "1D", "5minutes", "1 min", "10000s"):
+        with pytest.raises(ValueError):
+            model.model_validate({
+                "path": "measurements.json", "frequency": bad_frequency,
+                "aggregations": [{"column": "value", "method": "mean", "alias": "average"}],
+            })
+    for bad_aggregation in (
+        {"column": "value", "function": "mean", "alias": "average"},
+        {"column": "value", "method": "mean"},
+        {"column": "value", "method": "average", "alias": "average"},
+        {"column": "value", "method": "mean", "alias": ""},
+    ):
+        with pytest.raises(ValueError):
+            model.model_validate({
+                "path": "measurements.json", "frequency": "5min",
+                "aggregations": [bad_aggregation],
+            })
+    for size in (0, 21):
+        with pytest.raises(ValueError):
+            model.model_validate({
+                "path": "measurements.json", "frequency": "5min",
+                "aggregations": [{"column": "value", "method": "mean", "alias": "average"}] * size,
+            })
+
+

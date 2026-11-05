@@ -42,7 +42,7 @@ def test_workspace_rejects_symlink_escape(tmp_path: Path) -> None:
         pytest.skip("symlinks are not available in this test environment")
 
     workspace = WorkspaceRoot.from_directory(tmp_path)
-    with pytest.raises(WorkspacePathError, match="außerhalb"):
+    with pytest.raises(WorkspacePathError, match="outside the"):
         workspace.resolve("escape/secret.md")
 
 
@@ -117,7 +117,7 @@ def test_synthesized_subdirectory_index_classifies_entries_and_respects_limit(
     assert result["entries"][0]["next_tool"] == "knowledge_index"
     assert result["entries"][1]["title"] == "B"
     assert result["warnings"] == [
-        "Index-Prüfung wurde nach 2 Kandidaten abgeschnitten."
+        "Index inspection was truncated after 2 candidates."
     ]
 
 
@@ -140,7 +140,7 @@ def test_synthesized_index_bounds_invalid_markdown_inspection(tmp_path: Path) ->
 
     assert result["entries"] == []
     assert result["warnings"] == [
-        "Index-Prüfung wurde nach 3 Kandidaten abgeschnitten."
+        "Index inspection was truncated after 3 candidates."
     ]
 
 
@@ -150,7 +150,7 @@ def test_repository_requires_index_md_directly_in_configured_root(tmp_path: Path
     (nested / "index.md").write_text("[Deep](deep.md)\n", encoding="utf-8")
     (nested / "deep.md").write_text(_concept(title="Deep"), encoding="utf-8")
 
-    with pytest.raises(OkfRepositoryError, match="Repository-Root.*index.md"):
+    with pytest.raises(OkfRepositoryError, match="The configured path is not a valid OKF repository: An index\\.md must exist a"):
         OkfRepository.from_directory(tmp_path)
 
 
@@ -163,7 +163,7 @@ def test_root_index_does_not_expose_non_okf_markdown(tmp_path: Path) -> None:
 
     assert index["source"] == "index.md"
     assert index["internal_links"] == []
-    with pytest.raises(OkfRepositoryError, match="nicht konformes Markdown"):
+    with pytest.raises(OkfRepositoryError, match="knowledge_read refuses nonconforming Markdown; OKF concepts require valid Y"):
         repository.knowledge_read("notes.md")
 
 
@@ -179,7 +179,7 @@ def test_non_conforming_markdown_is_hidden_inside_valid_okf_root(tmp_path: Path)
     index = repository.knowledge_index()
     assert [link["path"] for link in index["internal_links"]] == ["valid.md"]
 
-    with pytest.raises(OkfRepositoryError, match="nicht konformes Markdown"):
+    with pytest.raises(OkfRepositoryError, match="knowledge_read refuses nonconforming Markdown; OKF concepts require valid Y"):
         repository.knowledge_read("private-notes.md")
 
 
@@ -206,7 +206,7 @@ def test_read_rejects_non_markdown_and_oversized_file(tmp_path: Path) -> None:
 
     with pytest.raises(OkfRepositoryError, match="Markdown"):
         repository.knowledge_read("data.txt")
-    with pytest.raises(OkfRepositoryError, match="größer"):
+    with pytest.raises(OkfRepositoryError, match="exceeds"):
         repository.knowledge_read("large.md")
 
 
@@ -301,9 +301,9 @@ def test_explicit_index_bounds_and_deduplicates_link_validation(
     ]
     assert result["content"] is None
     assert result["warnings"] == [
-        "Index enthält mehr als 3 interne Links. "
-        "Der freie Index-Inhalt wird ausgeblendet, damit nur tatsächlich "
-        "angebotene Folgepfade sichtbar sind."
+        "Index contains more than 3 internal links. "
+        "The full index content is hidden so that only actually offered "
+        "follow-up paths remain visible."
     ]
     assert calls == [target.resolve()]
 
@@ -313,7 +313,7 @@ def test_knowledge_index_rejects_file_path(tmp_path: Path) -> None:
     (tmp_path / "concept.md").write_text(_concept(), encoding="utf-8")
     repository = OkfRepository.from_directory(tmp_path)
 
-    with pytest.raises(OkfRepositoryError, match="kein OKF-Ordner"):
+    with pytest.raises(OkfRepositoryError, match="not an OKF directory"):
         repository.knowledge_index("concept.md")
 
 
@@ -335,7 +335,7 @@ def test_knowledge_read_rejects_missing_file(tmp_path: Path) -> None:
     (tmp_path / "index.md").write_text("Root", encoding="utf-8")
     repository = OkfRepository.from_directory(tmp_path)
 
-    with pytest.raises(OkfRepositoryError, match="Pfad konnte nicht aufgelöst werden"):
+    with pytest.raises(OkfRepositoryError, match="Path could not be resolved: 'missing\\.md"):
         repository.knowledge_read("missing.md")
 
 
@@ -348,7 +348,7 @@ def test_repository_rejects_hardlinked_root_index(tmp_path: Path) -> None:
     except (OSError, NotImplementedError):
         pytest.skip("hardlinks are not available in this test environment")
 
-    with pytest.raises(OkfRepositoryError, match="mehreren Hardlinks"):
+    with pytest.raises(OkfRepositoryError, match="multiple hardlinks"):
         OkfRepository.from_directory(tmp_path)
 
 
@@ -364,7 +364,7 @@ def test_knowledge_read_rejects_hardlinked_concept(tmp_path: Path) -> None:
 
     repository = OkfRepository.from_directory(tmp_path)
 
-    with pytest.raises(OkfRepositoryError, match="mehreren Hardlinks"):
+    with pytest.raises(OkfRepositoryError, match="multiple hardlinks"):
         repository.knowledge_read("concept.md")
 
 
@@ -387,7 +387,7 @@ def test_synthesized_index_skips_symlink_escape_with_warning(tmp_path: Path) -> 
 
     assert result["entries"] == []
     assert result["warnings"] == [
-        "Unsicherer oder nach außen führender Link wurde ausgelassen."
+        "Unsafe or escaping link was omitted."
     ]
 
 
@@ -409,7 +409,7 @@ def test_knowledge_read_reports_truncated_internal_links(tmp_path: Path) -> None
     result = repository.knowledge_read("concept.md")
 
     assert len(result["internal_links"]) == 1
-    assert result["warning"] == "Interne Links wurden auf 1 Einträge begrenzt."
+    assert result["warning"] == "Internal links were limited to 1 entries."
 
 
 @pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX symlink swap")

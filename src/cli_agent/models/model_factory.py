@@ -30,8 +30,8 @@ def _validate_api_key_env(
     )
     if matching is None or config.api_key_env not in matching.allowed_api_key_envs:
         raise PermissionError(
-            f"Die Credential-Umgebungsvariable {config.api_key_env!r} ist für "
-            f"Modell-Host {hostname!r} nicht administrativ freigegeben."
+            f"The credential environment variable {config.api_key_env!r} is not administratively approved for "
+            f"model host {hostname!r}."
         )
 
 
@@ -45,7 +45,7 @@ def create_model_client(
     validate_http_url(
         config.base_url,
         allowed_hosts=network.model_allowed_hosts,
-        purpose="Modell",
+        purpose="Model",
     )
     if config.provider == "ollama":
         return OllamaClient(
@@ -63,8 +63,8 @@ def create_model_client(
             api_key = os.getenv(config.api_key_env)
             if not api_key:
                 raise ValueError(
-                    "Die konfigurierte Credential-Umgebungsvariable "
-                    f"{config.api_key_env!r} ist nicht gesetzt oder leer."
+                    "The configured credential environment variable "
+                    f"{config.api_key_env!r} is not set or is empty."
                 )
 
         return OpenAIClient(

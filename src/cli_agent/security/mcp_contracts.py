@@ -34,7 +34,7 @@ def tool_contract_fingerprint(
 
     name = str(tool_name).strip()
     if not name:
-        raise ValueError("MCP-Toolname darf für einen Contract nicht leer sein.")
+        raise ValueError("MCP tool name cannot be empty for a contract.")
     try:
         canonical = json.dumps(
             {

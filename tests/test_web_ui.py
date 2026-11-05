@@ -565,7 +565,12 @@ def test_chroma_search_summaries_render_only_from_standard_agui_tool_results():
     assert "renderChromaSearchSummary(event)" in script
     assert 'status.dataset.toolName !== "vector__knowledge_search"' in script
     assert "value.matches" in script
-    assert "Collection: " in script
-    assert "Initiale Suche" in script
+    assert 't("vector.summary"' in script
+    from cli_agent.interfaces.web_ui_locales import get_locale
+    english = get_locale("en")
+    german = get_locale("de")
+    assert english is not None and german is not None
+    assert "Collection: {collection}" in english["vector.summary"]
+    assert german["vector.initial"] == "Initiale Suche"
     assert "summary.textContent =" in script
     assert "summary.innerHTML" not in script

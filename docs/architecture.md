@@ -1,265 +1,211 @@
-# Code-Architektur
+# Code architecture
 
-**Paketübersicht und aktuelle Importpfade:** [`src/cli_agent/ARCHITECTURE.md`](../src/cli_agent/ARCHITECTURE.md) und die README-Dateien in den Unterpaketen. Das historische flache `src/cli_agent`-Layout wurde entfernt; es gibt keine Aliasmodule im Paket-Root.
+**Current package structure and import paths:** See [`src/cli_agent/ARCHITECTURE.md`](../src/cli_agent/ARCHITECTURE.md) and the package-level README files. The historical flat `src/cli_agent` layout has been removed; no root-level alias modules remain.
 
-Diese Datei gibt einen kompakten Überblick über den aktuellen Aufbau des Python-Codes von `cli-agent`. Sie soll vor allem dabei helfen, sich im Projekt zu orientieren: Wo beginnt die Ausführung, welche Klassen tragen welchen Zustand, wo läuft die Agentenschleife und an welchen Stellen greifen Security- und Policy-Checks.
+This guide provides an overview of the current Python implementation: application entry points, state ownership, model/tool loops, and the boundaries where security and policy checks apply. It focuses on major components. Individual helpers and special cases are documented in their corresponding modules.
 
-Die Beschreibung ist bewusst auf die tragenden Bausteine konzentriert. Einzelne Hilfsfunktionen und Spezialfälle sind in den jeweiligen Modulen dokumentiert.
+## Entry point and composition
 
-## Einstiegspunkt und Verdrahtung
+The standard entry point is `src/cli_agent/interfaces/cli.py`, which:
 
-Der normale Programmeinstieg liegt in `src/cli_agent/interfaces/cli.py`.
+1. Parses CLI arguments.
+2. Loads user `config.toml` and machine-wide `admin_config.toml`.
+3. Applies CLI overrides.
+4. Creates the selected `ModelClient`.
+5. Prepares MCP and approval configuration.
+6. Validates file/prompt/output options.
+7. Creates and starts the concrete agent.
 
-Dort werden im Wesentlichen:
-
-1. CLI-Argumente ausgewertet,
-2. Benutzerkonfiguration (`config.toml`) und Maschinenpolicy (`admin_config.toml`) geladen,
-3. CLI-Overrides angewendet,
-4. der passende `ModelClient` erzeugt,
-5. MCP- und Approval-Konfiguration vorbereitet,
-6. Datei-/Prompt-/Output-Optionen validiert,
-7. der konkrete Agent erzeugt und gestartet.
-
-Der produktiv verwendete Agent ist aktuell `ContextFileCliAgent`. In `cli.py` wird dieser aus historischen Gründen unter dem lokalen Alias `WebContextCliAgent` importiert:
+The primary runtime agent is currently `ContextFileCliAgent`. For historical reasons, `cli.py` imports it under the local alias `WebContextCliAgent`:
 
 ```python
 from cli_agent.context.file_context import ContextFileCliAgent as WebContextCliAgent
 ```
 
-Die tatsächliche Vererbungshierarchie lautet:
+Actual inheritance:
 
 ```text
 ContextFileCliAgent
-        │
-        ▼
+        |
+        v
 WebContextCliAgent
-        │
-        ▼
+        |
+        v
 CliAgent
- ├─ McpLifecycleMixin
- └─ ConversationMixin
+  |- McpLifecycleMixin
+  +- ConversationMixin
 ```
 
-## Zentrale Agent-Klassen
+## Main agent classes
 
 ### `CliAgent` (`agent.py`)
 
-`CliAgent` ist die zentrale Zustandsklasse des Agenten. Sie besitzt unter anderem:
+`CliAgent` is the central agent state object. It holds the workspace/configuration path, `ModelClient`, configured MCP servers, logging configuration, network/MCP policy, conversation history, active MCP sessions, tool metadata/routes, enabled/disabled servers, trusted/untrusted MCP instructions, OKF/Knowledge state and session auto-approvals.
 
-- Workspace und Konfigurationspfad,
-- `ModelClient`,
-- konfigurierte MCP-Server,
-- Logging-Konfiguration,
-- Netzwerk- und MCP-Policy,
-- Conversation-History,
-- laufende MCP-Sessions,
-- Tool-Metadaten und Tool-Routen,
-- aktive/deaktivierte Server,
-- getrennte trusted und untrusted MCP-Instructions,
-- OKF-/Knowledge-Zustand,
-- Session-Auto-Approvals.
-
-`CliAgent` enthält außerdem gemeinsame Hilfslogik wie:
-
-- Aufbau des Systemprompts,
-- Auflösung von Platzhaltern wie `{python}` und `{workspace_directory}`,
-- Prüfung administrativ vertrauenswürdiger MCP-Server,
-- Contract-Prüfung für Auto-Approvals,
-- Entscheidung, ob ein Tool-Aufruf Approval benötigt,
-- sichere LLM-Context-Dumps.
-
-Die Agentenfunktionalität selbst ist auf zwei Mixins verteilt.
+Shared helper logic includes system prompt assembly, placeholder expansion (e.g. `{python}`, `{workspace_directory}`), identity-bound trusted MCP checks, auto-approval contract verification, tool approval decisions and secure LLM context dumps. The main agent functionality is distributed across two mixins.
 
 ### `McpLifecycleMixin` (`agent_mcp.py`)
 
-`McpLifecycleMixin` verwaltet den Lebenszyklus der MCP-Verbindungen.
+This mixin manages MCP connection lifecycle:
 
-Wesentliche Aufgaben:
+- Start and stop MCP servers.
+- Establish stdio and `streamable_http` connections.
+- Resolve external stdio name references to administrative `[[mcp.trusted_servers]]` launch profiles.
+- Discover tools via `list_tools()`.
+- Validate tool metadata and schemas.
+- Generate exposed names in `server__tool` form.
+- Map exposed tools to their `ClientSession` routes.
+- Classify MCP instructions as trusted/untrusted.
+- Enable or disable servers during a session.
+- Start the separate internal OKF MCP server.
 
-- MCP-Server starten und stoppen,
-- stdio- und `streamable_http`-Verbindungen herstellen,
-- externe stdio-Namensreferenzen gegen administrative `[[mcp.trusted_servers]]`-Launchprofile auflösen,
-- MCP-Tools über `list_tools()` einlesen,
-- Tool-Metadaten und Schemas prüfen,
-- exposed Tool-Namen nach dem Schema `server__tool` erzeugen,
-- Tool-Routen auf die jeweilige `ClientSession` abbilden,
-- MCP-Instructions nach trusted/untrusted klassifizieren,
-- MCP-Server zur Laufzeit aktivieren/deaktivieren,
-- den separaten OKF-MCP-Server starten.
-
-Eine Tool-Route hat konzeptionell die Form:
+A conceptual tool route looks like:
 
 ```text
 "search__start_search"
-        │
-        ▼
+        |
+        v
 (ClientSession, "start_search", ServerConfig)
 ```
 
-Für externe stdio-Server besteht bewusst eine zusätzliche Launch-Grenze:
+External stdio servers have an additional launch boundary:
 
 ```text
 config.toml
 [[mcp_servers]]
 name = "compose"
-       │
-       ▼
+       |
+       v
 admin_config.toml
 [[mcp.trusted_servers]]
 name = "compose"
 transport = "stdio"
 command = "..."
 args = ["--project-directory", "{workspace_directory}"]
-       │
-       ▼
-cli-agent materialisiert das Admin-Profil
-und löst den eigenen Workspace ein
-       │
-       ▼
+       |
+       v
+cli-agent materializes the admin profile
+and resolves the agent's own workspace
+       |
+       v
 stdio child process
 ```
 
-Damit kann die normale Projektkonfiguration weder Executable noch Argumentstruktur oder Environment eines externen stdio-MCP verändern. Der Workspace wird vom Agenten gebunden und ist kein modellkontrollierter Tool-Parameter.
+Ordinary project configuration therefore cannot change the executable, argument structure or environment of an external stdio server. The agent binds the workspace itself; it is not a model-controlled tool parameter.
 
-Die Mixinklasse besitzt keinen eigenen unabhängigen Zustand. Sie arbeitet direkt auf den Attributen der `CliAgent`-Instanz, z. B. `_sessions`, `_tool_routes`, `_server_tools` und `_active_servers`.
+The mixin has no separate independent state; it operates directly on the `CliAgent` instance, including `_sessions`, `_tool_routes`, `_server_tools` and `_active_servers`.
 
 ### `ConversationMixin` (`agent_conversation.py`)
 
-`ConversationMixin` orchestriert eine Benutzeranfrage.
-
-Der normale Ablauf von `ask(prompt)` ist vereinfacht:
+This mixin orchestrates one user request. Simplified flow of `ask(prompt)`:
 
 ```text
 ask(prompt)
-   │
-   ├─ optional: Knowledge-/OKF-Vorlauf
-   │      └─ _collect_knowledge(prompt)
-   │
-   ├─ transienten Referenzkontext aufbauen
-   │      ├─ untrusted MCP-Instructions
-   │      ├─ optionales OKF-Wissen
-   │      ├─ optionaler Web-Kontext
-   │      └─ optionaler lokaler Datei-Kontext
-   │
-   ├─ working_messages aufbauen
-   │      ├─ system
-   │      ├─ persistente History
-   │      ├─ optional: synthetische user-Referenzmessage
-   │      └─ user: exakter aktueller Prompt
-   │
-   └─ Agentenschleife starten
-          └─ _run_model_loop(...)
+   |
+   +-- optional Knowledge/OKF pre-run
+   |      +-- _collect_knowledge(prompt)
+   |
+   +-- assemble transient reference context
+   |      +-- untrusted MCP instructions
+   |      +-- optional OKF knowledge
+   |      +-- optional web context
+   |      +-- optional local file context
+   |
+   +-- assemble working_messages
+   |      +-- system
+   |      +-- persistent history
+   |      +-- optional synthetic user reference message
+   |      +-- user: exact current prompt
+   |
+   +-- start model/tool loop
+          +-- _run_model_loop(...)
 ```
 
-Die synthetische Referenzmessage ist bewusst **nicht** Teil von `self.history`. Persistiert werden nach einem erfolgreichen Turn ausschließlich die unveränderte echte Benutzeranfrage und die finale Assistentenantwort. Dadurch bleiben Conversation-History und tatsächlicher User-Input klar von externen Referenzdaten getrennt.
+The synthetic reference message is **not** persisted in `self.history`. After a successful turn, only the unchanged actual user request and the final assistant answer are retained. Conversation history and actual user input therefore remain separate from external reference data.
 
-Trusted MCP-Instructions sind die Ausnahme: Built-in-Instructions sowie externe Instructions eines identitätsgleich administrativ mit `trust_instructions = true` freigegebenen Servers werden in den Systemprompt aufgenommen. Alle anderen externen Instructions bleiben modell-sichtbar, aber nur als untrusted Referenzdaten.
+Trusted MCP instructions are the exception: built-in instructions and instructions from an identity-matched external server explicitly approved with `trust_instructions = true` are included in the system prompt. Other external instructions are still visible to the model, but only as untrusted reference data.
 
-`ConversationMixin` enthält außerdem unterstützende Funktionen für Tool-Fehler, Result-Kompression und OKF-Selektion.
+`ConversationMixin` also implements support for tool errors, result compression and OKF selection.
 
-## Agentenschleife
+## Model/tool loop
 
-Die eigentliche Modell-/Tool-Schleife ist aus der Klasse ausgelagert und liegt in `agent_loop.py`.
-
-Vereinfacht:
+The actual model/tool loop is implemented in `agent_loop.py` rather than the agent class:
 
 ```text
 run_model_loop()
-      │
-      ▼
+      |
+      v
 model_client.chat(messages, tools)
-      │
-      ├─ finale Textantwort
-      │      └─ return
-      │
-      └─ tool_calls
-             │
-             ▼
+      |
+      +-- final text response
+      |      +-- return
+      |
+      +-- tool_calls
+             |
+             v
        process_tool_calls()
-             │
-             └─ Tool-Ergebnisse als neue Messages
-                    │
-                    └─ nächster Modellaufruf
+             |
+             +-- add tool results to messages
+                    |
+                    +-- next model call
 ```
 
-`agent_loop.py` ist damit für die Iteration zuständig: Modell aufrufen, Antwort einordnen, Tool-Aufrufe verarbeiten lassen und die Unterhaltung fortsetzen.
+`agent_loop.py` controls iteration: call the model, classify its answer, dispatch tools, and continue conversation. For the Knowledge loop, it also guards against premature/invalid OKF selections and defines fallback behavior for repeated malformed responses.
 
-Für den Knowledge-Loop enthält diese Datei zusätzlich Guardrails für ungültige oder verfrühte OKF-Selektionen sowie Fallback-Verhalten bei wiederholt fehlerhaften Modellantworten.
+## Tool calls and guardrails
 
-## Tool-Aufrufe und Guardrails
-
-Die konkrete Verarbeitung einzelner Tool-Aufrufe liegt in `agent_tool_calls.py`.
-
-Ein Tool-Aufruf durchläuft dort unter anderem folgende Prüfungen:
+Individual tool calls are processed by `agent_tool_calls.py`. They undergo checks including:
 
 ```text
-LLM fordert Tool an
-       │
-       ▼
-Tool-Name / Route vorhanden?
-       │
-       ▼
-Server aktiv?
-       │
-       ▼
-Argumente gültiges JSON-Objekt?
-       │
-       ▼
-Argumente entsprechen inputSchema?
-       │
-       ▼
-Approval erforderlich?
-       │
-       ▼
-Approval vorhanden?
-       │
-       ▼
+LLM requests tool
+        |
+        v
+Known tool name / route?
+        |
+        v
+Server enabled?
+        |
+        v
+Arguments valid JSON object?
+        |
+        v
+Arguments match inputSchema?
+        |
+        v
+Approval required?
+        |
+        v
+Approved?
+        |
+        v
 session.call_tool(...)
-       │
-       ▼
-Result-Limit / optionale Kompression
-       │
-       ▼
-Tool-Message zurück in den Modellkontext
+        |
+        v
+Result size limit / optional compression
+        |
+        v
+Tool message returned to model context
 ```
 
-Damit ist bewusst getrennt:
+Responsibilities are intentionally separated: `agent_loop.py` decides **when** models and tools run, while `agent_tool_calls.py` decides **whether and how** an individual tool call may execute.
 
-- `agent_loop.py`: **wann** Modell und Tools aufgerufen werden,
-- `agent_tool_calls.py`: **ob und wie** ein konkreter Tool-Aufruf ausgeführt werden darf.
-
-## Spezialisierte Agenten
+## Specialized agents
 
 ### `WebContextCliAgent` (`web_context_agent.py`)
 
-`WebContextCliAgent` erweitert `CliAgent` um explizit geladene Web-Kontexte.
+Extends `CliAgent` with explicitly loaded web contexts, the `add_web_context <url>` and `clear_web_context` local commands, insertion into the shared transient untrusted reference payload, separate token usage tracking for main and Knowledge loops, and the local `tokens` command.
 
-Zusätzliche Aufgaben:
-
-- `add_web_context <url>`,
-- `clear_web_context`,
-- Web-Kontext in den gemeinsamen transienten untrusted Referenzpayload einfügen,
-- Token-Usage getrennt für Main- und Knowledge-Loop erfassen,
-- lokalen Befehl `tokens` bereitstellen.
-
-Die eigentliche URL-Validierung und der Abruf liegen in `web_context.py` bzw. `network_policy.py`.
+URL validation/fetching is implemented by `web_context.py` and `network_policy.py`.
 
 ### `ContextFileCliAgent` (`file_context.py`)
 
-`ContextFileCliAgent` erweitert `WebContextCliAgent` um einen expliziten lokalen Datei-Kontext.
+Extends `WebContextCliAgent` with explicit local file context and host-side processing of `--context-file`, `--prompt-file`, `--output` and `--overwrite-output`.
 
-Zusätzlich enthält `file_context.py` die Host-seitige Behandlung von:
+File context is not an LLM tool call. It is validated explicitly by the host before agent execution, then included in the same transient untrusted reference payload as web, OKF and external MCP reference data.
 
-- `--context-file`,
-- `--prompt-file`,
-- `--output`,
-- `--overwrite-output`.
+## Model abstraction
 
-Datei-Kontexte werden nicht als Toolzugriff des LLM behandelt, sondern vor dem Agentenlauf explizit vom Host validiert und anschließend in denselben transienten untrusted Referenzpayload wie Web-, OKF- und externe MCP-Referenzdaten aufgenommen.
-
-## Modell-Abstraktion
-
-`model.py` definiert das `ModelClient`-`Protocol`.
+`model.py` defines the `ModelClient` protocol:
 
 ```text
               ModelClient
@@ -267,141 +213,131 @@ Datei-Kontexte werden nicht als Toolzugriff des LLM behandelt, sondern vor dem A
               /        \
              /          \
     OllamaClient     OpenAIClient
-                         │
-                         └─ z. B. OpenRouter oder andere
-                            OpenAI-kompatible Endpunkte
+                         |
+                         +-- e.g. OpenRouter or other
+                             OpenAI-compatible endpoints
 ```
 
-Die zentrale Schnittstelle ist:
+Core interface:
 
 ```python
 async def chat(messages, tools, *, think=None) -> dict
 ```
 
-`model_factory.py` erzeugt abhängig von `ModelConfig.provider` den passenden Client und führt dabei Policy-Prüfungen für Modell-Host und Credential-Umgebungsvariablen durch. Modell-Credentials werden über `api_key_env` bezogen; ein statischer `Authorization`-Header in `[model.headers]` wird bereits beim Laden der Benutzerkonfiguration abgewiesen. Die administrative Credential-Regel begrenzt dabei den zulässigen **Environment-Variablennamen** für einen Remote-Provider/Host, nicht den vom Benutzer gesetzten Secret-Wert selbst.
+`model_factory.py` constructs the client based on `ModelConfig.provider`, checking allowed model hosts and credential variable policies. Model credentials are supplied through `api_key_env`; static `Authorization` headers in `[model.headers]` are rejected when user configuration loads. Administrator credential policy restricts the allowed **environment variable name** for a remote provider/host, not the secret value supplied by the user.
 
-## Konfiguration und Policy
+## Configuration and policy
 
-Die normale Benutzerkonfiguration und die Maschinenpolicy sind bewusst getrennt.
+Normal user configuration and machine policy are deliberately distinct:
 
 ```text
 config.toml
-    │
-    ▼
+    |
+    v
  AppConfig
- ├─ ModelConfig
- ├─ LoggingConfig
- ├─ McpServerConfig[]
- └─ OkfConfig
+ |- ModelConfig
+ |- LoggingConfig
+ |- McpServerConfig[]
+ +- OkfConfig
 
 admin_config.toml
-    │
-    ▼
+    |
+    v
  AdminConfig
- ├─ NetworkConfig
- ├─ ModelCredentialRule[]
- └─ McpPolicy
-      └─ TrustedMcpServer[]
+ |- NetworkConfig
+ |- ModelCredentialRule[]
+ +- McpPolicy
+      +- TrustedMcpServer[]
 ```
 
-Die Benutzerkonfiguration beschreibt überwiegend, **was verwendet werden soll**. Die Maschinenpolicy begrenzt für Netzwerkziele, externe stdio-Launches, Credential-Quellen und dauerhafte Trust-Entscheidungen, **was verwendet werden darf**.
+User configuration mostly determines **what should be used**. Machine policy limits **what is permitted** for network destinations, external stdio launch profiles, credential sources and durable trust decisions.
 
-Der optionale OKF-Root ist eine bewusste Ausnahme von diesem allgemeinen
-Policy-Schnitt: `[okf].repository` wird vom Benutzer gewählt, kann außerhalb des
-Projekt-Workspaces liegen und ist derzeit nicht über eine administrative
-Root-Allowlist begrenzt. Nach der Auswahl bildet dieser Root jedoch eine feste
-read-only Dateisystemgrenze für den internen Knowledge-Server. Architektur- und
-Security-Dokumentation behandeln OKF deshalb als **separate lokale
-Read-Boundary**, nicht als Erweiterung der Workspace-OS-Grenze oder als
-administrativ freigegebene Root-Liste.
+The optional OKF root is an intentional exception: `[okf].repository` is user-selected, may lie outside the project workspace, and currently has no administrative root allowlist. After selection it forms a fixed read-only filesystem boundary for the internal Knowledge server. The architecture and security model treat OKF as a **separate local read boundary**, not an extension of workspace OS or an administrator-approved root list.
 
-Für HTTP-MCPs reicht im Normalfall die Hostfreigabe über `mcp_allowed_hosts`; ein `TrustedMcpServer` ist dort nur für permanente Auto-Approvals oder explizit privilegierte Instructions erforderlich. Für externe stdio-MCPs ist dagegen immer ein `TrustedMcpServer` erforderlich, weil dessen Launch selbst lokale Prozessausführung darstellt.
+For HTTP MCPs, ordinary host approval via `mcp_allowed_hosts` is usually sufficient. A `TrustedMcpServer` entry is required for permanent auto-approvals or explicitly privileged instructions. External stdio MCPs always require `TrustedMcpServer` because launching them entails local process execution.
 
-Beide Konfigurationsebenen treffen insbesondere beim Aufbau des `ModelClient`, beim Start externer MCP-Server und bei permanenten MCP-Auto-Approvals zusammen.
+Configuration layers interact when constructing `ModelClient`, starting external MCP servers and checking permanent auto-approvals.
 
-## Security Boundaries
+## Security boundaries
 
-Die wichtigsten Vertrauensgrenzen sind:
+Principal trust relationships:
 
 ```text
-User Config ───────┐
-                   │
-Admin Policy ──────┼──► cli-agent
-                   │
-LLM ◄──────────────┤
-                   │
-MCP-Server ◄───────┤
-                   │
-Workspace ◄────────┤
-                   │
-Web-/Datei-Kontext ◄┘
+User config ----+
+                |
+Admin policy ---+---> cli-agent
+                |
+LLM <-----------+
+                |
+MCP server <----+
+                |
+Workspace <-----+
+                |
+Web/file context+
 ```
 
-Wichtige Grundannahmen:
+Key assumptions:
 
-- Das LLM ist keine Security Boundary.
-- Web-, Datei-, OKF-Inhalte und nicht privilegierte externe MCP-Instructions sind nicht vertrauenswürdige Referenzdaten.
-- Externe MCP-Server bilden eine eigene Trust Boundary.
-- Normale Benutzerkonfiguration darf keine administrativen Netzwerk-, Prozessstart- oder Trust-Grenzen erweitern.
-- Der OKF-Knowledge-Root ist davon ausdrücklich getrennt: seine Auswahl ist
-  benutzerkonfigurierbar und stellt eine eigene lokale read-only Datenfreigabe dar.
-- Vom Host verwaltete Dateizugriffe – insbesondere der eingebaute OS-MCP sowie Datei-Kontext und Output – werden deterministisch auf die vorgesehenen Workspace-Grenzen geprüft. Externe MCP-Server sind eigenständige Prozesse bzw. Dienste; ihre internen Datei- oder Systemzugriffe kann `cli-agent` nicht auf den Workspace beschränken.
+- The LLM is **not a security boundary**.
+- Web, file, OKF and unprivileged external MCP instructions are untrusted reference data.
+- External MCP servers form their own trust boundary.
+- Ordinary user configuration cannot extend administrative network, process launch or trust permissions.
+- OKF root selection is explicitly separate: users configure the local read-only source they wish to share.
+- Host-managed file access, especially built-in OS MCP, file context and output, is deterministically checked against the relevant workspace boundaries. External MCP servers are independent processes/services and their internal file or system access cannot be sandboxed to the workspace by `cli-agent`.
 
-Weitere Details stehen in [`security.md`](security.md) und [`company-deployment-checklist.md`](company-deployment-checklist.md).
+See [security.md](security.md) and [company-deployment-checklist.md](company-deployment-checklist.md).
 
-## Mixins im aktuellen Design
+## Mixins in the current design
 
-`McpLifecycleMixin` und `ConversationMixin` sind keine allgemein wiederverwendbaren Bibliotheks-Mixins. Sie sind eng an `CliAgent` gekoppelt und greifen direkt auf dessen Attribute und Hilfsmethoden zu.
+`McpLifecycleMixin` and `ConversationMixin` are not generic reusable library mixins. Both are tightly coupled to `CliAgent` and access its attributes/helpers directly.
 
-Beispielsweise setzt ein Mixin voraus, dass auf `self` Attribute wie `_tool_routes`, `model_client`, `history`, `logging_config` oder `mcp_policy` existieren. Dieser Vertrag ist in Python nicht automatisch erzwungen; Fehler würden typischerweise erst beim Aufruf einer Methode sichtbar, falls die Host-Klasse den erwarteten Zustand nicht bereitstellt.
+For example, they assume `self` provides `_tool_routes`, `model_client`, `history`, `logging_config` and `mcp_policy`. Python does not statically enforce this contract; missing state may surface only when a method executes.
 
-Die Mixins sind deshalb am besten als ausgelagerte Teilimplementierungen von `CliAgent` zu verstehen. Die Trennung dient derzeit vor allem dazu, die Verantwortlichkeiten und Dateigrößen beherrschbar zu halten.
+These mixins are best understood as extracted partial implementations of `CliAgent`, splitting responsibilities and file size. If coupling grows substantially, explicit composition (`CliAgent` with an independent `McpManager` and `AgentRunner`) could be appropriate, but is not currently required for functionality.
 
-Sollten die gegenseitigen Abhängigkeiten künftig deutlich weiter wachsen, wäre eine Umstellung auf explizite Komposition – beispielsweise `CliAgent` mit eigenständigem `McpManager` und `AgentRunner` – eine mögliche Weiterentwicklung. Das ist derzeit keine funktionale Voraussetzung.
+## Navigating the code
 
-## Orientierung im Code
+A useful reading order:
 
-Für einen schnellen Einstieg empfiehlt sich folgende Lesereihenfolge:
+1. `cli.py` — entry point and wiring.
+2. `agent.py` — shared state and central policy helpers.
+3. `agent_conversation.py` — `ask()` orchestration.
+4. `agent_loop.py` — model/tool loop.
+5. `agent_mcp.py` — MCP lifecycle/tool registration.
+6. `agent_tool_calls.py` — concrete tool execution and guards.
+7. `web_context_agent.py` and `file_context.py` — specialized context.
+8. `model.py`, `model_factory.py` and provider clients — model access.
 
-1. `cli.py` – Einstieg und Verdrahtung,
-2. `agent.py` – gemeinsamer Zustand und zentrale Policy-Hilfen,
-3. `agent_conversation.py` – Ablauf von `ask()`,
-4. `agent_loop.py` – LLM-/Tool-Schleife,
-5. `agent_mcp.py` – MCP-Lifecycle und Tool-Registrierung,
-6. `agent_tool_calls.py` – konkrete Tool-Ausführung und Guardrails,
-7. `web_context_agent.py` und `file_context.py` – spezialisierte Kontextfunktionen,
-8. `model.py` / `model_factory.py` / Provider-Clients – Modellzugriff.
+Supporting modules such as `network_policy.py`, `mcp_limits.py`, `mcp_contracts.py`, `filesystem_security.py` and `agent_knowledge*.py` implement specialized validation, security and knowledge logic.
 
-Unterstützende Module wie `network_policy.py`, `mcp_limits.py`, `mcp_contracts.py`, `filesystem_security.py` und `agent_knowledge*.py` kapseln jeweils spezialisierte Validierungs-, Security- oder Knowledge-Logik.
-
-## Gesamtbild
+## Overall architecture
 
 ```text
                          CLI
-                          │
-            User Config ──┼── Admin Policy
-                          │
-                          ▼
+                          |
+            User Config --+-- Admin Policy
+                          |
+                          v
                ContextFileCliAgent
-                          │
+                          |
                 WebContextCliAgent
-                          │
+                          |
                       CliAgent
                     /          \
           MCP Lifecycle      Conversation
-                │                 │
-                │                 ▼
-                │          run_model_loop()
-                │                 │
-                └────────► process_tool_calls()
-                                  │
-                                  ▼
+                |                 |
+                |                 v
+                |          run_model_loop()
+                |                 |
+                +--------> process_tool_calls()
+                                  |
+                                  v
                             MCP session.call_tool()
 
                         ModelClient
                        /           \
                   Ollama          OpenAI
-                                (z. B. OpenRouter)
+                                (e.g. OpenRouter)
 ```
 
-Die Architektur trennt damit Zustandsverwaltung, MCP-Lifecycle, Conversation-Orchestrierung, Agentenschleife, Tool-Ausführung und konkrete Kontext-/Provider-Funktionen, auch wenn ein Teil dieser Trennung aktuell über eng gekoppelte Mixins realisiert ist.
+The architecture separates state management, MCP lifecycle, conversation orchestration, the agent loop, tool dispatch and concrete context/provider features, though parts are currently implemented using tightly coupled mixins.

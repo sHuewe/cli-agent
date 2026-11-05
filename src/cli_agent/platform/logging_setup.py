@@ -254,7 +254,7 @@ def configure_logging(
 
     level = logging.getLevelName(config.level.upper())
     if not isinstance(level, int):
-        raise ValueError(f"Ungültiger Logging-Level: {config.level}")
+        raise ValueError(f"Invalid logging level: {config.level}")
 
     if default_filename is not None:
         config = replace(config, file=config.file.with_name(default_filename))

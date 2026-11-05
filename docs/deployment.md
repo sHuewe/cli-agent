@@ -1,244 +1,229 @@
-# Deploymentstrategie
+# Deployment strategy
 
-Dieses Dokument beschreibt den vorgesehenen Weg, `cli-agent` reproduzierbar zu veröffentlichen und in gemanagten Unternehmensumgebungen auszurollen. Es ist bewusst organisationsneutral: Das Open-Source-Projekt liefert die technischen Artefakte und Sicherheitsmechanismen; eine konkrete Organisation ergänzt ihre eigene Policy, Freigaben und Softwareverteilung.
+This document describes the intended reproducible release and managed enterprise deployment process for `cli-agent`. It is organization-neutral: the open-source project supplies technical artifacts and security mechanisms; each organization provides its own policy, approvals and distribution infrastructure.
 
-Die Strategie ist als Referenzarchitektur zu verstehen. Ein MSI ist dabei die bevorzugte Windows-Variante für einen gemanagten Rollout, aber kein zwingender Bestandteil jeder Installation.
+Treat this as a reference architecture. An MSI is the preferred Windows approach for a managed rollout, but is not mandatory for every installation.
 
-## Zielbild
+## Target architecture
 
-Der vorgesehene Ablauf trennt Upstream-Release, organisationsspezifisches Packaging und Endanwenderbetrieb:
+The intended process separates upstream releases, organization-specific packaging and end-user execution:
 
 ```text
-Source / Git-Tag
+Source / Git tag
         |
         v
-Release-CI
+Release CI
   - Tests
-  - gelockte Abhängigkeiten
+  - Locked dependencies
   - Wheel + sdist
-  - CycloneDX-SBOM
-  - SHA-256-Prüfsummen
+  - CycloneDX SBOM
+  - SHA-256 checksums
         |
         v
-Veröffentlichter Upstream-Release
+Published upstream release
   - Python Package Index / PyPI
-  - GitHub Release mit Zusatzartefakten
+  - GitHub Release with additional assets
         |
         v
-Organisationsspezifisches Packaging
-  - freigegebene cli-agent-Version
-  - geprüfte Python-Runtime als Voraussetzung
-  - festgelegte Python-Abhängigkeiten
-  - organisationsspezifische admin_config.toml
-  - optional freigegebene MCP-Erweiterungen
+Organization-specific packaging
+  - Approved cli-agent version
+  - Verified Python runtime prerequisite
+  - Pinned Python dependencies
+  - Organization-specific admin_config.toml
+  - Optional approved MCP extensions
         |
         v
-MSI oder äquivalentes gemanagtes Softwarepaket
+MSI or equivalent managed software package
         |
         v
-Softwareverteilung
-  - Software Center / Intune / SCCM / vergleichbar
+Software distribution
+  - Software Center / Intune / SCCM / equivalent
         |
         v
-Arbeitsplatz
-  - Installation/Update mit Admin- bzw. SYSTEM-Rechten
-  - Ausführung von cli-agent als normaler Benutzer
+Workstation
+  - Installation/update with admin or SYSTEM privileges
+  - Execution of cli-agent as an ordinary user
 ```
 
-## Aktueller Umsetzungsstand
+## Current implementation status
 
-Die GitHub-Actions-CI erzeugt bereits nach erfolgreicher Testmatrix Wheel, Source Distribution, eine CycloneDX-SBOM für Python 3.11 auf Windows und SHA-256-Prüfsummen. Diese Dateien werden derzeit als GitHub-Actions-Artefakt mit 30 Tagen Aufbewahrungszeit bereitgestellt. Details stehen in [ci-release.md](ci-release.md).
+After a successful test matrix, GitHub Actions already produces a wheel, a source distribution, a CycloneDX SBOM for Windows/Python 3.11, and SHA-256 checksums. Files are currently made available as GitHub Actions artifacts with a 30-day retention period. See [ci-release.md](ci-release.md).
 
-Ein dauerhaftes GitHub Release und ein tag-basierter öffentlicher Publish-Prozess sind dagegen noch nicht umgesetzt. Die folgenden Abschnitte beschreiben deshalb sowohl den bereits vorhandenen technischen Paketbau als auch den vorgesehenen weiterführenden Release- und Deployment-Weg.
+A permanent GitHub Release and tag-based public publishing workflow have not yet been implemented. The following sections therefore distinguish the existing technical build process from the intended subsequent release and deployment stages.
 
-## 1. Upstream-Release
+## 1. Upstream releases
 
-Ein freigegebener Release sollte aus einem eindeutig identifizierbaren Quellstand, typischerweise einem Git-Tag, erzeugt werden.
+An approved release should be built from an unambiguous source revision, typically a Git tag.
 
-Die Release-CI soll mindestens:
+Release CI should at least:
 
-1. das Lockfile auf Konsistenz prüfen,
-2. die Test-Suite aus der gelockten Umgebung ausführen,
-3. Wheel und Source Distribution bauen,
-4. die erzeugten Python-Artefakte testweise installieren beziehungsweise validieren,
-5. eine CycloneDX-SBOM erzeugen und
-6. kryptographische Prüfsummen für die Release-Artefakte bereitstellen.
+1. Verify lockfile consistency.
+2. Run the test suite in the locked environment.
+3. Build wheel and source distribution.
+4. Test-install or validate the resulting Python artifacts.
+5. Create a CycloneDX SBOM.
+6. Publish cryptographic checksums for the release artifacts.
 
-Das Wheel ist das primäre installierbare Python-Artefakt. Die Source Distribution dient als zusätzliche, standardkonforme Quell-Distribution.
+The wheel is the primary installable Python artifact. The source distribution is an additional standards-compliant source package.
 
-Für öffentliche Releases können Wheel und sdist über PyPI veröffentlicht werden. Die SBOM und zusätzliche Release-Metadaten können als versionierte GitHub-Release-Artefakte bereitgestellt werden.
+For public releases, wheel and sdist can be published through PyPI; the SBOM and other metadata can be attached as versioned GitHub Release assets.
 
-## 2. SBOM und Dependency-Stand
+## 2. SBOM and resolved dependencies
 
-Die SBOM soll nicht nur die Versionsbereiche aus `pyproject.toml`, sondern einen tatsächlich aufgelösten und getesteten Runtime-Stand beschreiben. Dafür ist eine aus `uv.lock` erzeugte Umgebung die Referenz.
+The SBOM should describe actual resolved, tested runtime dependencies, not merely version ranges from `pyproject.toml`. The reference is an environment built from `uv.lock`.
 
-Eine Upstream-SBOM beschreibt dabei immer eine konkrete Referenzumgebung, zum Beispiel Python 3.11 auf Windows. Plattformmarker können dazu führen, dass eine Installation auf einem anderen Betriebssystem oder einer anderen Python-Version einen abweichenden Dependency-Graphen besitzt.
+An upstream SBOM always represents a concrete reference environment, such as Windows/Python 3.11. Platform markers may yield different dependency graphs on other operating systems or Python versions.
 
-Für ein konkretes Unternehmens-Deployment sollte deshalb zusätzlich geprüft werden, ob die Upstream-SBOM die tatsächlich verteilte Umgebung vollständig abbildet. Wenn das Unternehmenspaket eine andere Python-Runtime, zusätzliche Pakete oder weitere MCP-Komponenten enthält, sollte der Deployment-Prozess eine eigene vollständige SBOM beziehungsweise SCA-Auswertung für genau dieses Paket erzeugen.
+For a specific enterprise deployment, verify whether the upstream SBOM fully captures the deployed environment. If the enterprise package includes a different Python runtime, additional packages or MCP components, generate a complete SBOM or SCA assessment for **that exact package**.
 
-## 3. Organisationsspezifische Policy
+## 3. Organization-specific policy
 
-Die Sicherheitsarchitektur trennt bewusst die normale Benutzerkonfiguration von der maschinenweiten `admin_config.toml`.
+The security architecture deliberately separates user configuration from machine-wide `admin_config.toml`.
 
-Das Upstream-Projekt bleibt generisch. Eine Organisation definiert im Deployment ihre eigene Policy, insbesondere:
+Upstream stays generic. The deploying organization defines its policy, including:
 
-- erlaubte Modell-Hosts,
-- erlaubte HTTP-MCP-Hosts,
-- erlaubte Web-Ziele,
-- einzelne freigegebene externe stdio-MCP-Launchprofile,
-- optional vertrauenswürdige MCP-Instructions,
-- optional permanente, contractgebundene Tool-Auto-Approvals und
-- erlaubte Credential-Quellen.
+- Permitted model hosts.
+- Permitted HTTP MCP hosts.
+- Permitted web destinations.
+- Individually approved external stdio MCP launch profiles.
+- Optionally trusted MCP instructions.
+- Optional permanent tool auto-approvals bound to pinned contracts.
+- Approved credential sources.
 
-Die organisationsspezifische `admin_config.toml` gehört nicht in das öffentliche Upstream-Repository. Sie sollte als Bestandteil des organisationsinternen Deployment-Pakets beziehungsweise eines separaten Policy-Pakets gepflegt und versioniert werden.
+Organization-specific `admin_config.toml` does not belong in the public upstream repository. Maintain and version it as part of an internal deployment package or a separate policy package.
 
-Ein gemanagtes Deployment darf die Trennung zwischen maschinenweiter Admin-Policy und benutzerkontrollierter Konfiguration nicht aufweichen.
+Managed deployment must preserve the boundary between machine-wide administrator policy and user-controlled configuration.
 
-### OKF-Knowledge-Roots
+### OKF knowledge roots
 
-Der optionale OKF-Root ist bewusst **nicht** Teil der maschinenweiten
-`admin_config.toml`. `[okf].repository` gehört zur normalen
-Benutzer-/Projektkonfiguration und darf außerhalb des Projekt-Workspaces liegen.
-Nach Auswahl dieses Roots sind die OKF-Tools zwar read-only und deterministisch
-auf genau diesen Root begrenzt; die Anwendung besitzt derzeit jedoch keine
-administrative `okf_allowed_roots`-Liste.
+The optional OKF root intentionally does **not** belong in machine-wide `admin_config.toml`. `[okf].repository` is part of user/project configuration and may reside outside the project workspace.
 
-Die Auswahl dieses Roots bleibt auch in einem gemanagten Deployment bewusst
-eine Benutzerentscheidung. Sie wird wie andere explizit bereitgestellte
-LLM-Kontextdaten behandelt: Der Benutzer wählt eine lokale Knowledge-Quelle,
-deren relevante Inhalte an das konfigurierte LLM weitergegeben werden dürfen.
-Eine zentrale Allowlist zulässiger OKF-Roots ist deshalb kein Bestandteil des
-vorgesehenen Deployment-Modells.
+After selection, OKF tools are deterministically constrained to the chosen root and are read-only. However, the application currently provides no administrative `okf_allowed_roots` allowlist.
 
-Die technische Garantie des Core-Agenten ist das Containment **innerhalb des
-vom Benutzer gewählten Roots**. Nach der Auswahl kann der Knowledge-Lauf diesen
-Root nicht verlassen und erhält ausschließlich die vorgesehenen read-only
-OKF-Tools.
+Even in managed deployment, selecting the root remains the user's decision. It is treated like other explicitly supplied LLM context: users select a local knowledge source whose relevant content may be passed to their configured LLM. A central allowed-roots list is therefore not part of the intended deployment model.
 
-## 4. Referenzweg für Windows
+The core agent technically guarantees containment **within the user-selected root**. Once selected, the Knowledge run cannot escape it and receives only the specified read-only OKF tools.
 
-Für gemanagte Windows-Arbeitsplätze ist ein MSI oder ein äquivalentes unternehmensinternes Softwarepaket der vorgesehene Referenzweg.
+## 4. Windows reference deployment
 
-### Python als Voraussetzung
+For managed Windows workstations, an MSI or equivalent internal package is the reference approach.
 
-Die bevorzugte Variante ist, eine bereits im Unternehmen verwaltete Python-Distribution als Voraussetzung zu verwenden, statt eine zweite Python-Runtime in `cli-agent` einzubetten.
+### Python prerequisite
 
-Das Unternehmenspaket sollte die unterstützte Python-Version explizit prüfen. `cli-agent` und seine Python-Abhängigkeiten sollten dabei in einer isolierten, nur für die Anwendung verwendeten Umgebung liegen und nicht global in die zentrale Python-Installation geschrieben werden.
+Prefer an existing company-managed Python distribution instead of embedding a second runtime into `cli-agent`.
 
-### Keine neue Dependency-Auflösung auf dem Zielsystem
+The deployment package should verify the supported Python version explicitly. Install the application and its dependencies in an isolated application-specific environment, not globally into the centrally managed Python installation.
 
-Ein produktives MSI sollte während der Installation nicht einfach gegen PyPI oder einen anderen Package Index ein ungebundenes
+### No dependency resolution on workstations
+
+Production MSI installation should **not** blindly execute an unconstrained command against PyPI or another index:
 
 ```text
 pip install cli-agent
 ```
 
-ausführen.
+Instead, build the deployment from the already verified release and include exact approved Python package versions or obtain them from a controlled internal repository.
 
-Der Deployment-Build soll stattdessen den bereits geprüften Release-Stand verwenden und die dafür vorgesehenen Python-Pakete in exakt festgelegten Versionen in das Installationsartefakt übernehmen oder aus einem kontrollierten internen Repository beziehen.
-
-Damit bleibt die Kette nachvollziehbar:
+The resulting provenance chain is:
 
 ```text
-geprüfter Release
-    -> festgelegte Dependency-Versionen
+Verified release
+    -> Pinned dependency versions
     -> SBOM / SCA
-    -> Deployment-Paket
-    -> Arbeitsplatz
+    -> Deployment package
+    -> Workstation
 ```
 
-### Installationsorte
+### Installation paths
 
-Eine mögliche Windows-Struktur ist:
+A possible Windows layout is:
 
 ```text
-C:\Program Files\<Organisation>\cli-agent\
-    Anwendung / isolierte Python-Umgebung
+C:\Program Files\<Organization>\cli-agent\
+    Application / isolated Python environment
 
 C:\ProgramData\cli-agent\
     admin_config.toml
 ```
 
-Die konkrete Organisation kann davon abweichen, solange die Sicherheitsgrenzen erhalten bleiben.
+Organizations may use other paths provided security boundaries remain intact.
 
-### Rechte
+### Privileges
 
-Installation, Update und Änderung der maschinenweiten Policy sollen mit administrativen beziehungsweise SYSTEM-Rechten erfolgen.
+Installation, upgrades and machine-wide policy changes should use administrator or SYSTEM privileges.
 
-Der normale Betrieb von `cli-agent` erfolgt dagegen mit den Rechten des normalen Benutzerkontos.
-
-Damit gilt:
+Normal `cli-agent` execution should use an ordinary user account.
 
 ```text
-Installation / Update / Policy-Änderung -> Admin oder SYSTEM
-cli-agent ausführen                     -> normaler Benutzer
-Projekt- und Benutzerkonfiguration      -> normaler Benutzer
-admin_config.toml ändern                -> Admin oder SYSTEM
+Installation / update / policy change -> Admin or SYSTEM
+Execute cli-agent                   -> Ordinary user
+Project and user configuration      -> Ordinary user
+Change admin_config.toml            -> Admin or SYSTEM
 ```
 
-Unter Windows muss die `admin_config.toml` so geschützt sein, dass normale Benutzer sie lesen, aber nicht ersetzen oder verändern können.
+On Windows, protect `admin_config.toml` so ordinary users can read it but cannot modify or replace it.
 
-## 5. Gemanagte Softwareverteilung
+## 5. Managed software distribution
 
-Das fertige MSI beziehungsweise Softwarepaket sollte über die in der Organisation etablierte Softwareverteilung ausgerollt werden, zum Beispiel über Software Center, Microsoft Intune, Configuration Manager oder ein vergleichbares System.
+Deploy finished MSI/packages through the organization's established software distribution tooling, such as Software Center, Microsoft Intune, Configuration Manager or an equivalent.
 
-Dadurch muss der Entwickler selbst keine administrativen Installationsschritte durchführen. Die Verteilung kann mit SYSTEM- oder administrativen Rechten installieren, während `cli-agent` anschließend als normaler Benutzer läuft.
+Developers then do not need to perform their own privileged installation steps. The distribution service may install under SYSTEM/administrator privileges while `cli-agent` runs as a normal user afterward.
 
-Ein gemanagter Rollout sollte außerdem Versionssteuerung, gestufte Verteilung, Update und Rollback abbilden können.
+A managed rollout should support version control, staged deployment, updates and rollback.
 
-## 6. Updates und Rollback
+## 6. Updates and rollback
 
-Eine neue `cli-agent`-Version sollte nicht ungeprüft auf bestehende Installationen aktualisiert werden.
+Do not upgrade existing installations to a new `cli-agent` version without evaluation.
 
-Der vorgesehene Ablauf ist:
+The intended pipeline is:
 
 ```text
-neuer Upstream-Release
-    -> CI und Tests
-    -> neue SBOM / Dependency-Auswertung
-    -> Security- und Betriebsprüfung
-    -> neues gemanagtes Softwarepaket
-    -> Pilotgruppe
-    -> breiter Rollout
+New upstream release
+    -> CI and tests
+    -> Updated SBOM / dependency analysis
+    -> Security and operations assessment
+    -> New managed software package
+    -> Pilot group
+    -> Broad rollout
 ```
 
-Ein Rollback muss mindestens ermöglichen:
+Rollback must at least support:
 
-- auf die vorherige freigegebene Anwendungsversion zurückzugehen,
-- eine fehlerhafte Admin-Policy zurückzunehmen,
-- optionale MCP-Erweiterungen zu deaktivieren und
-- bei Bedarf verwendete Credentials oder Tokens zu rotieren.
+- Reverting to the previous approved application version.
+- Restoring a prior administrator policy.
+- Disabling optional MCP extensions.
+- Rotating credentials or tokens when needed.
 
-Anwendungsversion und Policy-Version sollten getrennt versionierbar sein. Eine Organisation muss dadurch nicht zwingend einen neuen `cli-agent`-Build erzeugen, nur weil sich beispielsweise ein erlaubter interner Host ändert.
+Version application and policy separately. An organization should not need to rebuild `cli-agent` merely because a permitted internal host changes.
 
-## 7. Optionale MCP-Erweiterungen
+## 7. Optional MCP extensions
 
-Externe MCP-Pakete sind nicht automatisch Teil der Freigabe des Core-Agenten.
+External MCP packages are **not automatically covered** by core-agent approval.
 
-Insbesondere Komponenten mit Docker-Daemon-Zugriff, Code-Ausführung oder anderen Host-nahen Fähigkeiten benötigen eine eigene Bewertung. Werden solche Komponenten zusammen mit `cli-agent` verteilt, müssen sie im konkreten Deployment-Paket und dessen SBOM/SCA-Betrachtung berücksichtigt werden.
+In particular, components with Docker daemon access, code execution or similar host-level capabilities require separate evaluation. If deployed alongside `cli-agent`, include them in the concrete deployment package's SBOM/SCA assessment.
 
-Für externe stdio-MCPs muss die zugehörige Launch-Konfiguration weiterhin administrativ in `admin_config.toml` gebunden sein. Der normale Benutzer darf Command, Args oder Environment eines solchen Servers nicht über seine Projektkonfiguration ersetzen.
+External stdio MCP launch configuration must remain administratively bound in `admin_config.toml`. Ordinary users cannot replace a trusted external server's command, arguments or environment through project configuration.
 
-## 8. Andere Plattformen
+## 8. Other platforms
 
-MSI ist die Windows-Referenz für einen gemanagten Rollout, nicht die eigentliche Sicherheitsgrenze.
+MSI is the Windows reference packaging mechanism, not the security boundary itself.
 
-Auf Linux oder anderen Plattformen kann dasselbe Modell mit den dort üblichen Paket- und Softwareverteilungsmechanismen umgesetzt werden, zum Beispiel mit DEB/RPM oder einer organisationsspezifischen Paketierung.
+Linux and other platforms can implement the same model with their normal managed package tooling, such as DEB/RPM or organization-specific packaging.
 
-Unabhängig vom Paketformat bleiben die wesentlichen Anforderungen gleich:
+Regardless of package format, essential requirements remain:
 
-- reproduzierbarer, nachvollziehbarer Release-Stand,
-- dokumentierte Komponenten und Abhängigkeiten,
-- organisationskontrollierte Admin-Policy,
-- keine Lockerung der Policy durch Benutzerkonfiguration,
-- Installation und Policy-Verwaltung außerhalb normaler Benutzerrechte,
-- normale Ausführung ohne administrative Rechte sowie
-- kontrollierte Updates und Rollbacks.
+- Reproducible, traceable release revision.
+- Documented components and dependencies.
+- Organization-controlled administrator policy.
+- No relaxation of that policy by user configuration.
+- Installation/policy changes beyond ordinary user privileges.
+- Normal execution without administrator privileges.
+- Controlled updates and rollback.
 
-## 9. Abgrenzung zum lokalen Entwickler-Setup
+## 9. Local developer setup versus managed deployment
 
-Die lokale Installation aus einem Git-Checkout oder über `pipx` bleibt für Entwicklung, Tests und individuelle Nutzung sinnvoll.
+Local installation from a Git checkout or via `pipx` is appropriate for development, tests and individual use.
 
-Sie ist jedoch nicht automatisch gleichbedeutend mit einem freigegebenen Unternehmens-Deployment. Ein gemanagter Rollout ergänzt den Upstream-Release um reproduzierbares Packaging, organisationsspezifische Policy, Softwareverteilung und den dazugehörigen Freigabeprozess.
+It is **not equivalent** to an approved enterprise deployment. Managed rollout adds reproducible packaging, organization policy, software distribution and an approval process to upstream release artifacts.
 
-Die konkrete Betriebsfreigabe ist in [company-deployment-checklist.md](company-deployment-checklist.md) beschrieben. Die Security-Grenzen des Agenten sind in [security.md](security.md) dokumentiert.
+See [company-deployment-checklist.md](company-deployment-checklist.md) for operating approvals and [security.md](security.md) for agent security boundaries.

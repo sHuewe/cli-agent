@@ -97,7 +97,7 @@ def test_inventory_directory_rejects_unknown_var(tmp_path):
         'directory = "${var.missing}"\n',
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="Inventory-Variable"):
+    with pytest.raises(ValueError, match="inventory variable"):
         load_flow(flow, workspace=tmp_path)
 
 

@@ -161,37 +161,37 @@ def validate_sub_result(answer: str, available: set[str]) -> dict[str, Any]:
     from cli_agent.runtime.agent_conversation import _normalize_json_response
     normalized, error = _normalize_json_response(answer)
     if error is not None:
-        raise ValueError("Sub-Run lieferte kein gültiges JSON: " + error)
+        raise ValueError("Sub-run did not return valid JSON: " + error)
     result = json.loads(normalized)
     if not isinstance(result, dict) or set(result) != {
         "status", "summary", "evidence_ids", "confidence", "uncertainties"
     }:
-        raise ValueError("Sub-Run JSON hat nicht die geforderte Struktur.")
+        raise ValueError("Sub-run JSON does not have the required structure.")
     if result["status"] not in {"completed", "partial", "blocked", "failed"}:
-        raise ValueError("Ungültiger Sub-Run-Status.")
+        raise ValueError("Invalid sub-run status.")
     if result["confidence"] not in {"high", "medium", "low"}:
-        raise ValueError("Ungültige Sub-Run-Konfidenz.")
+        raise ValueError("Invalid sub-run confidence.")
     if not isinstance(result["summary"], str) or len(result["summary"]) > 4000:
-        raise ValueError("Ungültige Sub-Run-Zusammenfassung.")
+        raise ValueError("Invalid sub-run summary.")
     ids = result["evidence_ids"]
     if (not isinstance(ids, list) or len(ids) > 16 or len(set(ids)) != len(ids)
             or any(not isinstance(i, str) or i not in available for i in ids)):
         raise ValueError(
-            "Sub-Run referenziert unbekannte oder nicht neu gespeicherte Evidences. "
-            "Speichere belegte Ergebnisse zuerst mit agent__add_evidence und gib "
-            "deren neue IDs in evidence_ids zurück."
+            "Sub-run references unknown or not newly saved evidence. "
+            "First save substantiated results with agent__add_evidence and return "
+            "their new IDs in evidence_ids."
         )
     if result["status"] == "completed" and not ids:
         raise ValueError(
-            "Ein abgeschlossener Sub-Run muss mindestens eine NEUE Evidence "
-            "mit agent__add_evidence speichern und ihre ID in evidence_ids "
-            "zurückgeben. Falls kein Ergebnis belegbar ist, verwende partial "
-            "oder blocked und erläutere die Unsicherheiten."
+            "A completed sub-run must save at least one NEW evidence "
+            "using agent__add_evidence and return its ID in evidence_ids. "
+            "If no finding is substantiated, use partial "
+            "or blocked and explain uncertainties."
         )
     if (not isinstance(result["uncertainties"], list)
             or len(result["uncertainties"]) > 16
             or any(not isinstance(i, str) or len(i) > 500 for i in result["uncertainties"])):
-        raise ValueError("Ungültige Unsicherheiten.")
+        raise ValueError("Invalid uncertainties.")
     return result
 
 
@@ -200,32 +200,32 @@ async def execute_sub_run(
     coordinator_messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(args, dict) or set(args) - {"task", "plan_step_id", "evidence_ids"}:
-        raise ValueError("Ungültige Sub-Run-Argumente.")
+        raise ValueError("Invalid sub-run arguments.")
     task = args.get("task")
     if not isinstance(task, str) or not 20 <= len(task) <= 2500:
-        raise ValueError("Sub-Run benötigt einen konkreten Teilauftrag.")
+        raise ValueError("Sub-run requires a concrete subtask.")
     if len(agent._sub_runs) >= MAX_SUB_RUNS_PER_TASK:
-        raise ValueError("Sub-Run-Limit dieser Aufgabe erreicht.")
+        raise ValueError("Sub-run limit for this task has been reached.")
     parent = agent._evidence_state
     step = args.get("plan_step_id")
     if step is not None and (parent.plan is None or step not in {
         item["id"] for item in parent.plan["steps"]
     }):
-        raise ValueError("Unbekannter Planschritt.")
+        raise ValueError("Unknown plan step.")
     ids = args.get("evidence_ids", [])
     if (not isinstance(ids, list) or len(ids) > 16
             or any(not isinstance(i, str) or len(i) > 80 for i in ids)):
-        raise ValueError("evidence_ids erwartet höchstens 16 gespeicherte Evidence-IDs.")
+        raise ValueError("evidence_ids expects no more than 16 stored evidence IDs.")
     unknown_ids = [i for i in ids if i not in parent.evidences]
     if unknown_ids:
-        available = ", ".join(list(parent.evidences)[:16]) or "keine"
+        available = ", ".join(list(parent.evidences)[:16]) or "none"
         raise ValueError(
-            "Unbekannte Evidence-ID(s): " + ", ".join(repr(i) for i in unknown_ids)
-            + ". evidence_ids akzeptiert nur IDs bereits mit agent__add_evidence "
-            "gespeicherter Evidences. S1/S2/... aus Toolantworten sind source_refs, "
-            "keine Evidence-IDs. Speichere einen relevanten Befund zunächst mit "
-            "agent__add_evidence und dessen source_refs oder lasse evidence_ids weg; "
-            "der Sub-Run kann Daten selbst abfragen. Verfügbare Evidence-IDs: "
+            "Unknown evidence IDs: " + ", ".join(repr(i) for i in unknown_ids)
+            + ". evidence_ids accepts only IDs previously saved using "
+            "agent__add_evidence. S1/S2/... from tool results are source_refs, "
+            "not evidence IDs. First save a relevant finding using "
+            "agent__add_evidence and its source_refs, or omit evidence_ids; "
+            "the sub-run can query data itself. Available evidence IDs: "
             + available
         )
     run_id = "sub-" + uuid.uuid4().hex[:12]
@@ -271,7 +271,7 @@ async def execute_sub_run(
     ]
     reference_context = agent._build_reference_context_message(knowledge=None)
     parts = [
-        BASE_SYSTEM_PROMPT,
+        getattr(agent, "base_system_prompt", BASE_SYSTEM_PROMPT),
         agent._format_current_time(datetime.datetime.now(datetime.UTC)),
     ]
     if names:
@@ -286,8 +286,8 @@ async def execute_sub_run(
     parts.append(SUB_RUN_RULES)
     if active_instructions:
         parts.append(
-            "Administrativ vertrauenswürdige Anweisungen der verbundenen "
-            "MCP-Server:\\n\\n"
+            "Administratively trusted instructions from connected "
+            "MCP servers:\\n\\n"
             + "\\n\\n".join(
                 f"### MCP-Server {name}\\n{instructions}"
                 for name, instructions in active_instructions
@@ -353,31 +353,26 @@ async def execute_sub_run(
             except (ValueError, TypeError) as exc:
                 if attempt == MAX_RESPONSE_FORMAT_REPAIRS:
                     raise ValueError(
-                        "Sub-Run lieferte auch nach "
-                        f"{MAX_RESPONSE_FORMAT_REPAIRS} Korrekturversuchen "
-                        f"kein gültiges Ergebnis: {exc}"
+                        "Sub-run failed even after "
+                        f"{MAX_RESPONSE_FORMAT_REPAIRS} correction attempts: "
+                        f"invalid result: {exc}"
                     ) from exc
                 messages.append({
                     "role": "user",
                     "content": (
-                        "Deine letzte finale Antwort ist kein gültiges "
-                        "Sub-Run-Ergebnis. Korrigiere den Abschluss unter "
-                        "Verwendung der vorhandenen Ergebnisse und Evidences; "
-                        "wiederhole abgeschlossene Untersuchungen nicht. "
-                        "Falls du ein belegtes Ergebnis erarbeitet, aber noch "
-                        "keine eigene Evidence angelegt hast, nutze jetzt "
-                        "agent__add_evidence mit verifizierten source_refs und "
-                        "gib anschließend deren ID zurück. Erfinde keine "
-                        "Evidence oder Quellen. Nur wenn keine belastbare "
-                        "Evidence möglich ist, melde partial oder blocked "
-                        "mit konkreten Unsicherheiten. "
-                        "Antworte ausschließlich mit einem JSON-Objekt mit exakt "
-                        "den Feldern status (completed/partial/blocked/failed), "
-                        "summary (String), evidence_ids (Liste neu gespeicherter "
-                        "Evidence-IDs), confidence (high/medium/low) und "
-                        "uncertainties (Liste von Strings). "
-                        "Keine Markdown-Codeblöcke oder Begleittexte. "
-                        f"Validierungsfehler: {str(exc)[:500]}"
+                        "Your last final answer is not a valid sub-run result. "
+                        "Correct it using existing results and evidence; do not "
+                        "repeat completed investigations. If you have a substantiated "
+                        "finding without your own evidence, save it using "
+                        "agent__add_evidence with verified source_refs and return "
+                        "its new ID. Never invent evidence or sources. Only if no "
+                        "defensible evidence is possible, return partial or blocked "
+                        "with specific uncertainties. Return only a JSON object "
+                        "with exactly: status (completed/partial/blocked/failed), "
+                        "summary (string), evidence_ids (newly saved evidence IDs), "
+                        "confidence (high/medium/low), and uncertainties "
+                        "(list of strings). No Markdown fences or commentary. "
+                        f"Validation error: {str(exc)[:500]}"
                     ),
                 })
                 answer = await run_model_loop(agent, **loop_kwargs)

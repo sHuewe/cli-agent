@@ -46,11 +46,11 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             try:
                 length = int(declared_length)
             except ValueError as exc:
-                raise ValueError("Ungültiger Content-Length-Header.") from exc
+                raise ValueError("Invalid Content-Length header.") from exc
             if length < 0:
-                raise ValueError("Ungültiger Content-Length-Header.")
+                raise ValueError("Invalid Content-Length header.")
             if length > MAX_JSON_BYTES:
-                raise ValueError("JSON-Anfrage zu groß.")
+                raise ValueError("JSON request is too large.")
 
         # Content-Length is optional (for example with chunked encoding), and
         # client-provided length is not a trusted memory limit. Check the size
@@ -60,15 +60,15 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         async for chunk in request.stream():
             total_bytes += len(chunk)
             if total_bytes > MAX_JSON_BYTES:
-                raise ValueError("JSON-Anfrage zu groß.")
+                raise ValueError("JSON request is too large.")
             chunks.append(chunk)
         raw = b"".join(chunks)
         try:
             value = json.loads(raw)
         except (ValueError, UnicodeDecodeError) as exc:
-            raise ValueError("Ungültiges JSON.") from exc
+            raise ValueError("Invalid JSON.") from exc
         if not isinstance(value, dict):
-            raise ValueError("Ein JSON-Objekt wird benötigt.")
+            raise ValueError("A JSON object is required.")
         yield value
 
     @asynccontextmanager
@@ -90,14 +90,14 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
         # Reject rebinding / proxies even for public static assets.
         host = request.headers.get("host", "").split(":")[0].lower()
         if host != API_HOST or request.headers.get("x-forwarded-host") or request.headers.get("forwarded"):
-            return error(403, "Unzulässiger Host.")
+            return error(403, "Disallowed host.")
         # Use the ASGI-decoded path; request.url.path may treat decoded # or
         # ? characters as URL delimiters and truncate the real path.
         path = request.scope["path"]
         origin = request.headers.get("origin")
-        if ui is not None and path in {"/", "/assets/app.css", "/assets/app.js"}:
+        if ui is not None and (path in {"/", "/assets/app.css", "/assets/app.js", "/assets/i18n.js", "/assets/i18n/locales.json"} or path.startswith("/assets/i18n/")):
             if request.method != "GET" or origin is not None:
-                return error(403, "Unzulässige Browser-Anfrage.")
+                return error(403, "Disallowed browser request.")
             return await call_next(request)
         header = request.headers.get("authorization", "")
         prefix = "Bearer "
@@ -120,13 +120,13 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
                         or parts[3] != "artifacts" or not parts[4]
                         or not ui["registry"].is_owner(
                             thread_id, request.headers.get("x-cli-agent-lease"))):
-                    return error(403, "Keine gültige Tab-Bindung für den Download.")
+                    return error(403, "No valid tab lease for the download.")
             if path.startswith("/sessions/"):
                 parts = path.split("/")
                 if (len(parts) < 4 or request.method == "DELETE"
                         or not ui["registry"].is_owner(
                             parts[2], request.headers.get("x-cli-agent-lease"))):
-                    return error(403, "Keine gültige Tab-Bindung für diese Session.")
+                    return error(403, "No valid tab lease for this session.")
             return await call_next(request)
         if origin is not None:
             return error(403, "Browser-Origin nicht zugelassen.")
@@ -152,6 +152,9 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/", browser["ui_index"], methods=["GET"]),
             Route("/assets/app.css", browser["ui_css"], methods=["GET"]),
             Route("/assets/app.js", browser["ui_js"], methods=["GET"]),
+            Route("/assets/i18n.js", browser["ui_i18n"], methods=["GET"]),
+            Route("/assets/i18n/locales.json", browser["ui_locales"], methods=["GET"]),
+            Route("/assets/i18n/{locale}.json", browser["ui_locale"], methods=["GET"]),
             Route("/ui/bootstrap", browser["ui_bootstrap"], methods=["POST"]),
             Route("/ui/sessions", browser["ui_sessions"], methods=["GET"]),
             Route("/ui/sessions", browser["ui_session_new"], methods=["POST"]),
@@ -204,10 +207,19 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
     if not workspace.is_dir():
         raise ValueError("Workspace existiert nicht.")
     if args.exclude_path and args.os_access not in {"read", "write"}:
-        raise ValueError("--exclude-path benötigt OS-Zugriff.")
+        raise ValueError("--exclude-path requires OS access.")
 
     config_file = args.config or default_config_file()
-    config = load_config(args.config)
+    from cli_agent.settings.project_config import read_project_system_prompt
+    project_file = workspace / ".cli-agent" / "project.toml"
+    config = (
+        load_config(args.config, workspace=workspace)
+        if project_file.exists() or project_file.is_symlink()
+        else load_config(args.config)
+    )
+    project_system_prompt = read_project_system_prompt(
+        workspace, getattr(config.agent, "system_prompt", None)
+    )
     admin = load_admin_config()
     if args.model is not None:
         from dataclasses import replace
@@ -241,6 +253,7 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
             workspace, model_client, config.mcp_servers,
             logging_config=config.logging,
             agent_timezone=config.agent.timezone,
+            system_prompt=project_system_prompt,
             config_file=config_file,
             # API sessions never write LLM context dumps, even when enabled
             # in config.toml for CLI or flow execution.

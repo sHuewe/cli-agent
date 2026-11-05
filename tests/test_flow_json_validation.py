@@ -9,7 +9,7 @@ def doctrine(concepts=None):
 
 
 def test_doctrine_validation_rejects_duplicate_ids():
-    with pytest.raises(ValueError,match="doppelt"):
+    with pytest.raises(ValueError,match="is duplicated"):
         validate_okf_plan(doctrine([
             {"id":"same","path":"doctrines/source-123/one.md"},
             {"id":"same","path":"doctrines/source-123/two.md"}]), plan_kind="doctrine")
@@ -34,7 +34,7 @@ def test_valid_and_noop_theme_plan():
 
 
 def test_invalid_plan_status_blocks_writing():
-    with pytest.raises(ValueError,match="nicht erfolgreich"):
+    with pytest.raises(ValueError,match="not successful"):
         validate_okf_plan({"status":"needs_attention","themes":[]},plan_kind="themes")
 
 
@@ -96,7 +96,7 @@ def test_manifest_rejects_valid_but_wrong_source():
     plan["source_path"] = "doctrines/other.md"
     nav = {"status": "ok", "module_path": "doctrines/source-123",
            "index_paths": ["doctrines/source-123/index.md"]}
-    with pytest.raises(ValueError, match="inventarisierten"):
+    with pytest.raises(ValueError, match="source_path does not match the inventoried source\\."):
         build_okf_manifest(plan=plan, navigation=nav,
                            expected_source_path="doctrines/source.md")
 
@@ -139,7 +139,7 @@ def test_theme_validation_rejects_stale_members():
         validate_okf_plan(plan, plan_kind="themes", manifests=[
             manifests[0], {**manifests[1], "concepts": []},
         ])
-    with pytest.raises(ValueError, match="Unvollständiges"):
+    with pytest.raises(ValueError, match="Incomplete module manifest\\."):
         validate_okf_plan(plan, plan_kind="themes", manifests=[
             {**manifests[0], "status": "needs_attention"}, manifests[1],
         ])

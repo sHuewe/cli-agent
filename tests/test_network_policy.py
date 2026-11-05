@@ -41,7 +41,7 @@ def test_validate_http_url_rejects_credentials() -> None:
 
 
 def test_validate_http_url_requires_tls_for_remote_hosts() -> None:
-    with pytest.raises(ValueError, match="Unverschlüsseltes HTTP"):
+    with pytest.raises(ValueError, match="Unencrypted HTTP for Modell is permitted only to local hosts\\."):
         validate_http_url(
             "http://llm.internal:8000/v1",
             allowed_hosts=("llm.internal",),

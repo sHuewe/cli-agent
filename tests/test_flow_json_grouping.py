@@ -257,7 +257,7 @@ def test_group_rejects_unsafe_nested_folder_paths(folder_path: str) -> None:
     routes, assignments, topics = source_fixture()
     topics["folder"]["path"] = folder_path
     topics["topics"][0]["path"] = folder_path + "/requirements.md"
-    with pytest.raises(ValueError, match="Ungültiger semantischer Ordnerpfad"):
+    with pytest.raises(ValueError, match="Invalid semantic folder path\\."):
         build(routes, assignments, topics)
 
 
@@ -265,7 +265,7 @@ def test_group_rejects_topic_path_outside_nested_folder() -> None:
     routes, assignments, topics = source_fixture()
     topics["folder"]["path"] = "doctrines/example"
     topics["topics"][0]["path"] = "doctrines/other/requirements.md"
-    with pytest.raises(ValueError, match="Topic-Pfad außerhalb"):
+    with pytest.raises(ValueError, match="Topic path outside folder: 'doctrines/"):
         build(routes, assignments, topics)
 
 
@@ -276,7 +276,7 @@ def test_group_rejects_reserved_windows_folder_names(reserved: str) -> None:
     routes, assignments, topics = source_fixture()
     topics["folder"]["path"] = f"doctrines/{reserved}"
     topics["topics"][0]["path"] = f"doctrines/{reserved}/requirements.md"
-    with pytest.raises(ValueError, match="Ungültiger semantischer Ordnerpfad"):
+    with pytest.raises(ValueError, match="Invalid semantic folder path\\."):
         build(routes, assignments, topics)
 
 
@@ -285,7 +285,7 @@ def test_group_rejects_reserved_windows_topic_names(reserved: str) -> None:
     routes, assignments, topics = source_fixture()
     topics["folder"]["path"] = "doctrines/example"
     topics["topics"][0]["path"] = f"doctrines/example/{reserved}.md"
-    with pytest.raises(ValueError, match="Reservierter Windows-Gerätename"):
+    with pytest.raises(ValueError, match="Reserved Windows device name in topic path: 'doctrines/example/"):
         build(routes, assignments, topics)
 
 
@@ -305,7 +305,7 @@ def test_group_rejects_bad_semantic_subfolders(subfolder):
     topics["folder"]["path"] = "doctrines/example"
     topics["folders"] = [{"id": subfolder, "path": f"doctrines/example/{subfolder}", "title": "Bad"}]
     topics["topics"][0]["path"] = f"doctrines/example/{subfolder}/requirements.md"
-    with pytest.raises(ValueError, match="Ungültiger semantischer Unterordner|nichtleerer String"):
+    with pytest.raises(ValueError, match="Invalid semantic subfolder|nonempty string"):
         build(routes, assignments, topics)
 
 
@@ -314,5 +314,5 @@ def test_group_rejects_undeclared_semantic_topic_folder():
     topics["folder"]["path"] = "doctrines/example"
     topics["folders"] = [{"id": "rights", "path": "doctrines/example/rights", "title": "Rights"}]
     topics["topics"][0]["path"] = "doctrines/example/other/requirements.md"
-    with pytest.raises(ValueError, match="Topic-Pfad außerhalb"):
+    with pytest.raises(ValueError, match="Topic path outside folder: 'doctrines/"):
         build(routes, assignments, topics)

@@ -126,7 +126,7 @@ class WorkspaceIoMixin:
                     scanned_bytes += len(raw)
                     if scanned_bytes > MAX_READ_RANGE_SCAN_BYTES:
                         raise WorkspaceError(
-                            "Datei-Ausschnitt überschreitet das Scan-Limit von "
+                            "File range exceeds the scan limit of "
                             f"{MAX_READ_RANGE_SCAN_BYTES} Bytes: {path!r}"
                         )
 
@@ -148,7 +148,7 @@ class WorkspaceIoMixin:
 
                     if utf8_invalid:
                         if not latin1_valid:
-                            raise UnicodeError("Datei ist kein unterstützter Text.")
+                            raise UnicodeError("File is not supported text.")
                         if latin1_selection.done:
                             break
                     elif utf8_selection.done:
@@ -164,7 +164,7 @@ class WorkspaceIoMixin:
 
                 if utf8_invalid:
                     if not latin1_valid:
-                        raise UnicodeError("Datei ist kein unterstützter Text.")
+                        raise UnicodeError("File is not supported text.")
                     latin1_selection.feed("", final=True)
                     selected = latin1_selection
                 else:
@@ -172,8 +172,8 @@ class WorkspaceIoMixin:
 
             if selected.oversized:
                 raise WorkspaceError(
-                    "Angeforderter Datei-Ausschnitt überschreitet "
-                    f"das Leselimit von {MAX_READ_FILE_BYTES} Bytes: {path!r}"
+                    "Requested file range exceeds "
+                    f"the read limit of {MAX_READ_FILE_BYTES} Bytes: {path!r}"
                 )
             result = "".join(selected.selected_parts)
             if result:
@@ -247,27 +247,27 @@ class WorkspaceIoMixin:
             and start_line > end_line
         ):
             raise WorkspaceError(
-                "start_line darf nicht größer als end_line sein."
+                "start_line must not exceed end_line."
             )
 
         for name, number in (("start_page", start_page), ("end_page", end_page)):
             self._validate_line_number(number, name=name)
         if start_page is not None and end_page is not None and start_page > end_page:
-            raise WorkspaceError("start_page darf nicht größer als end_page sein.")
+            raise WorkspaceError("start_page must not exceed end_page.")
         file_path = self.resolve_readable_file(path)
 
         ranged_read = start_line is not None or end_line is not None
         if file_path.suffix.lower() == ".pdf":
             if ranged_read:
                 raise WorkspaceError(
-                    "start_line/end_line werden für PDF-Dateien nicht unterstützt."
+                    "start_line/end_line are not supported for PDF files."
                 )
             try:
                 return read_pdf_text(file_path, start_page=start_page, end_page=end_page, max_pages=self.config.config.get("max_pdf_pages", 100))
             except PdfTextError as exc:
                 raise WorkspaceError(str(exc)) from exc
         if start_page is not None or end_page is not None:
-            raise WorkspaceError("start_page/end_page sind nur für PDF-Dateien verfügbar.")
+            raise WorkspaceError("start_page/end_page are available only for PDF files.")
         if not self._is_text_file(file_path):
             raise WorkspaceError(
                 f"Dateityp darf nicht als Text gelesen werden: {path!r}"
@@ -280,19 +280,19 @@ class WorkspaceIoMixin:
                 )
             except UnicodeError as exc:
                 raise WorkspaceError(
-                    f"Datei ist kein unterstützter Text: {path!r}"
+                    f"File is not supported text: {path!r}"
                 ) from exc
 
         try:
             if file_path.stat().st_size > MAX_READ_FILE_BYTES:
                 raise WorkspaceError(
-                    f"Datei überschreitet das Leselimit von "
+                    f"File exceeds the read limit of "
                     f"{MAX_READ_FILE_BYTES} Bytes: {path!r}"
                 )
             data = file_path.read_bytes()
             if len(data) > MAX_READ_FILE_BYTES:
                 raise WorkspaceError(
-                    f"Datei überschreitet das Leselimit von "
+                    f"File exceeds the read limit of "
                     f"{MAX_READ_FILE_BYTES} Bytes: {path!r}"
                 )
             res, _encoding = _decode_workspace_text(data)
@@ -301,7 +301,7 @@ class WorkspaceIoMixin:
             return res if res else "(Empty file)"
         except UnicodeError as exc:
             raise WorkspaceError(
-                f"Datei ist kein unterstützter UTF-8-/ISO-8859-1-Text: {path!r}"
+                f"File is not supported UTF-8/ISO-8859-1 text: {path!r}"
             ) from exc
         except OSError as exc:
             raise WorkspaceError(
@@ -317,10 +317,10 @@ class WorkspaceIoMixin:
         if not isinstance(text, str) or not text:
             raise WorkspaceError("text darf nicht leer sein.")
         if "\n" in text or "\r" in text:
-            raise WorkspaceError("text darf keine Zeilenumbrüche enthalten.")
+            raise WorkspaceError("text must not contain newlines.")
         if len(text) > MAX_SEARCH_TEXT_LENGTH:
             raise WorkspaceError(
-                f"text darf höchstens {MAX_SEARCH_TEXT_LENGTH} Zeichen lang sein."
+                f"text must not exceed {MAX_SEARCH_TEXT_LENGTH} characters."
             )
         limit = self._limit(max_results, name="max_results", maximum=MAX_SEARCH_RESULTS)
         root = self.resolve_direct_path(path)
@@ -468,7 +468,7 @@ class WorkspaceIoMixin:
         elif resolved.is_dir():
             kind = "directory"
         else:
-            raise WorkspaceError(f"Pfad ist keine reguläre Datei oder Ordner: {path!r}")
+            raise WorkspaceError(f"Path is neither a regular file nor directory: {path!r}")
         try:
             stat = resolved.stat()
         except OSError as exc:
@@ -497,11 +497,11 @@ class WorkspaceIoMixin:
             file_path.unlink()
         except OSError as exc:
             raise WorkspaceError(
-                f"Datei konnte nicht gelöscht werden: {path!r}: {exc}"
+                f"File could not be deleted: {path!r}: {exc}"
             ) from exc
 
         relative = file_path.relative_to(self.directory).as_posix()
-        return f"Datei gelöscht: {relative}"
+        return f"File deleted: {relative}"
 
     def copy_file(self, path_src: str, path_dst: str) -> str:
         src_path = self.resolve_direct_path(path_src)

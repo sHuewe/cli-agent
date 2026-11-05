@@ -77,17 +77,17 @@ class OllamaClient:
         usage = self.last_usage
         if usage is None or self.context_length is None:
             return ContextLimitReachedError(
-                "Context-Limit der aktuellen Sitzung wurde erreicht. "
-                "Es werden keine weiteren Modellanfragen gesendet. Bitte starte "
-                "eine neue Sitzung."
+                "The current session's context limit was reached. "
+                "No further model requests will be sent. Start "
+                "a new session."
             )
         return ContextLimitReachedError(
-            "Context-Limit der aktuellen Sitzung wurde erreicht. "
-            f"Input des letzten Modellaufrufs: {usage.input_tokens} Tokens; "
-            f"konfiguriertes Limit: {self.context_length} Tokens; "
-            f"Sicherheitsreserve: {CONTEXT_LIMIT_MARGIN} Tokens. "
-            "Die Modellantwort wurde verworfen. Es werden keine weiteren "
-            "Modellanfragen gesendet. Bitte starte eine neue Sitzung."
+            "The current session's context limit was reached. "
+            f"Input of the last model call: {usage.input_tokens} Tokens; "
+            f"configured limit: {self.context_length} Tokens; "
+            f"safety margin: {CONTEXT_LIMIT_MARGIN} Tokens. "
+            "The model response was discarded. No further "
+            "model requests will be sent. Start a new session."
         )
 
     def _check_context_limit(self) -> None:

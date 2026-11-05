@@ -75,7 +75,7 @@ class McpResultArtifacts:
             safe_path = self.workspace.resolve_direct_path(relative)
             stat = safe_path.stat(follow_symlinks=False)
             if (stat.st_dev, stat.st_ino) != self._directory_identity:
-                raise ArtifactError("Ablageordner wurde während der Session ersetzt.")
+                raise ArtifactError("Storage directory was replaced during the session.")
             return self._directory
         relative = self.session_directory.relative_to(self.workspace.directory).as_posix()
         self.workspace._reject_protected_mutation(self.session_directory)
@@ -109,11 +109,11 @@ class McpResultArtifacts:
         try:
             encoded = raw_result_text.encode("utf-8")
         except UnicodeError as exc:
-            raise ArtifactError("MCP-Datensatz enthält ungültigen Unicode-Text.") from exc
+            raise ArtifactError("MCP dataset contains invalid Unicode text.") from exc
         if len(encoded) > MAX_ARTIFACT_BYTES:
-            raise ArtifactError("MCP-Datensatz überschreitet das Dateigrößenlimit.")
+            raise ArtifactError("MCP dataset exceeds the file size limit.")
         if self._bytes_written + len(encoded) > MAX_SESSION_ARTIFACT_BYTES:
-            raise ArtifactError("MCP-Daten dieser Session überschreiten das Gesamtkontingent.")
+            raise ArtifactError("MCP data for this session exceed the total quota.")
 
         directory = self._ensure_directory()
         # Only a fixed extension may be selected; MCP metadata never controls
@@ -145,15 +145,15 @@ class McpResultArtifacts:
         try:
             metadata_text = json.dumps(metadata, ensure_ascii=False, allow_nan=False)
         except (TypeError, ValueError, OverflowError, RecursionError) as exc:
-            raise ArtifactError("MCP-Metadaten enthalten ungültige JSON-Werte.") from exc
+            raise ArtifactError("MCP metadata contain invalid JSON values.") from exc
         if len(metadata_text) > MAX_MODEL_METADATA_CHARS:
-            raise ArtifactError("MCP-Metadaten für das LLM sind zu groß.")
+            raise ArtifactError("MCP metadata for the LLM are too large.")
 
         structured_payload = getattr(result, "structuredContent", None)
         export_format = metadata.get("export_format")
         if export_format in {"csv", "json", "markdown"}:
             if not isinstance(structured_payload, dict) or set(structured_payload) != {"export_content"}:
-                raise ArtifactError("Export-Artefakt enthält kein gültiges Exportformat.")
+                raise ArtifactError("Export artifact does not contain a valid export format.")
             raw_export = structured_payload["export_content"]
             if not isinstance(raw_export, str):
                 raise ArtifactError("Export-Artefakt muss Text enthalten.")
@@ -171,10 +171,10 @@ class McpResultArtifacts:
     def save_export(self, content: str, suffix: str) -> str:
         """Store generated export bytes, without exposing them in the model response."""
         if suffix not in {"csv", "json", "markdown"}:
-            raise ArtifactError("Nicht unterstütztes Exportformat.")
+            raise ArtifactError("Unsupported export format.")
         raw = content.encode("utf-8")
         if len(raw) > MAX_ARTIFACT_BYTES or self._bytes_written + len(raw) > MAX_SESSION_ARTIFACT_BYTES:
-            raise ArtifactError("Export überschreitet das Artefaktlimit.")
+            raise ArtifactError("Export exceeds the artifact limit.")
         directory = self._ensure_directory()
         extension = "md" if suffix == "markdown" else suffix
         relative = (directory / f"export-{uuid.uuid4().hex[:16]}.{extension}").relative_to(self.workspace.directory).as_posix()
@@ -189,7 +189,7 @@ class McpResultArtifacts:
     def read_registered(self, relative: str) -> bytes:
         """Read an unchanged artifact owned by this session; reject arbitrary paths."""
         if not isinstance(relative, str):
-            raise ArtifactError("Ungültiger Artefaktpfad.")
+            raise ArtifactError("Invalid artifact path.")
         path = self.workspace.resolve_direct_path(relative)
         identity = self._files.get(path)
         if identity is None:
@@ -197,10 +197,10 @@ class McpResultArtifacts:
         with path.open("rb") as handle:
             stat = os.fstat(handle.fileno())
             if (stat.st_dev, stat.st_ino) != identity or not stat_module.S_ISREG(stat.st_mode):
-                raise ArtifactError("Session-Artefakt wurde verändert.")
+                raise ArtifactError("Session artifact was modified.")
             payload = handle.read(MAX_ARTIFACT_BYTES + 1)
         if len(payload) > MAX_ARTIFACT_BYTES:
-            raise ArtifactError("Artefakt überschreitet das Downloadlimit.")
+            raise ArtifactError("Artifact exceeds the download limit.")
         return payload
 
     def cleanup(self) -> None:

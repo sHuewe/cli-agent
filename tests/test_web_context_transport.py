@@ -113,7 +113,7 @@ def test_fetch_web_context_enforces_redirect_limit_on_real_transport(
     monkeypatch.setattr(web_context_module, "MAX_WEB_REDIRECTS", 2)
 
     with _http_server() as base_url:
-        with pytest.raises(ValueError, match="Zu viele Redirects"):
+        with pytest.raises(ValueError, match="Too many redirects in web context\\."):
             asyncio.run(
                 fetch_web_context(
                     f"{base_url}/redirect/0",

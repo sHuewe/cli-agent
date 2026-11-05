@@ -43,7 +43,7 @@ def test_rejects_unsafe_paths(tmp_path: Path) -> None:
 
 def test_rejects_section_explosion(tmp_path: Path) -> None:
     (tmp_path / "doc.md").write_text("a" * 1000 + "\n" + ("abc\n" * 12000))
-    with pytest.raises(ValueError, match="zu viele Abschnitte"):
+    with pytest.raises(ValueError, match="markdown_sections: too many sections; increase target_chars\\."):
         markdown_sections(tmp_path, "doc.md", target_chars=4000, max_sections=2)
 
 
@@ -78,7 +78,7 @@ def test_section_output_cannot_replace_source(
         encoding="utf-8",
     )
     step = load_flow(tmp_path / "flow.toml", workspace=tmp_path).steps[0]
-    with pytest.raises(ValueError, match="Quelldatei"):
+    with pytest.raises(ValueError, match="markdown_sections\\.output must not overwrite the Markdown source file must n"):
         flow_module._reject_markdown_source_output_alias(
             step, workspace=tmp_path, flow_input={},
             output=tmp_path / "doc.md",
@@ -91,7 +91,7 @@ def test_sensitive_markdown_sources_are_rejected_before_read(tmp_path: Path) -> 
     (tmp_path / "secrets").mkdir()
     private = tmp_path / "secrets" / "doc.md"
     private.write_text("# confidential-heading\n" + ("a\n" * 6000), encoding="utf-8")
-    with pytest.raises(ValueError, match="geschützt"):
+    with pytest.raises(ValueError, match="markdown_sections\\.source_path ist als Secret-/Credential- oder protected in"):
         markdown_sections(tmp_path, "secrets/doc.md", target_chars=4000)
 
 

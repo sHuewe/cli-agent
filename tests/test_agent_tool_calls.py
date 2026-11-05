@@ -103,7 +103,7 @@ def test_unknown_tool_is_rejected_without_execution() -> None:
     (calls, _), messages, transient = _run(agent=agent, tool_calls=[call])
     assert calls == 1
     assert transient
-    assert "existiert nicht" in messages[-1]["content"]
+    assert "does not exist" in messages[-1]["content"]
 
 
 def test_non_object_json_arguments_are_rejected() -> None:
@@ -115,7 +115,7 @@ def test_non_object_json_arguments_are_rejected() -> None:
     _result, messages, transient = _run(agent=agent, tool_calls=[call], routes=routes)
     assert session.calls == []
     assert transient
-    assert "JSON-Objekt" in messages[-1]["content"]
+    assert "JSON object" in messages[-1]["content"]
 
 
 def test_disabled_server_tool_is_rejected() -> None:
@@ -132,7 +132,7 @@ def test_disabled_server_tool_is_rejected() -> None:
     )
     assert session.calls == []
     assert transient
-    assert "deaktiviert" in messages[-1]["content"]
+    assert "disabled" in messages[-1]["content"]
 
 
 def test_schema_invalid_arguments_are_rejected_before_approval_and_execution() -> None:
@@ -153,7 +153,7 @@ def test_schema_invalid_arguments_are_rejected_before_approval_and_execution() -
     assert session.calls == []
     assert agent.approvals == []
     assert transient
-    assert "Input-Schema" in messages[-1]["content"]
+    assert "input schema" in messages[-1]["content"]
 
 
 def test_external_tool_requires_approval_and_denial_prevents_execution() -> None:
@@ -166,7 +166,7 @@ def test_external_tool_requires_approval_and_denial_prevents_execution() -> None
     assert agent.approvals == [("external__run", {"x": 1})]
     assert session.calls == []
     assert transient
-    assert "Benutzerfreigabe" in messages[-1]["content"]
+    assert "user approval" in messages[-1]["content"]
 
 
 def test_approved_external_tool_is_executed_and_result_is_appended() -> None:
@@ -231,7 +231,7 @@ def test_knowledge_parallel_calls_only_execute_first() -> None:
     )
     assert session.calls == [("knowledge_index", {"path": "."})]
     assert len(transient) == 1
-    assert "genau ein" in messages[-2]["content"] or "genau ein" in transient[0][2]["content"]
+    assert "exactly one" in messages[-2]["content"] or "exactly one" in transient[0][2]["content"]
 
 
 def test_knowledge_undiscovered_path_is_rejected() -> None:
@@ -250,7 +250,7 @@ def test_knowledge_undiscovered_path_is_rejected() -> None:
     )
     assert session.calls == []
     assert transient
-    assert "nicht für" in messages[-1]["content"]
+    assert "did not offer" in messages[-1]["content"]
 
 
 def test_duplicate_successful_knowledge_call_is_rejected() -> None:
@@ -270,7 +270,7 @@ def test_duplicate_successful_knowledge_call_is_rejected() -> None:
     )
     assert session.calls == []
     assert transient
-    assert "bereits erfolgreich ausgeführt" in messages[-1]["content"]
+    assert "already completed successfully" in messages[-1]["content"]
 
 
 def test_successful_knowledge_read_registers_concept_and_hides_repository_id() -> None:
@@ -352,7 +352,7 @@ def test_tool_call_times_out(
     routes = {"server__read": (SlowSession(), "read", config)}
     call = _tool_call("server__read", {})
 
-    with pytest.raises(RuntimeError, match="MCP-Tool.*Timeout"):
+    with pytest.raises(RuntimeError, match="MCP-Tool 'server__read' exceeded the timeout of 0\\.01 seconds\\."):
         _run(agent=agent, tool_calls=[call], routes=routes)
 
 

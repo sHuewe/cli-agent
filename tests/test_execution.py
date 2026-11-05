@@ -169,7 +169,7 @@ def test_run_once_rejects_mixed_prepared_and_raw_file_options(
         agent_type=object,
     )
 
-    with pytest.raises(ValueError, match="nicht zusammen"):
+    with pytest.raises(ValueError, match="Prepared file options must not be provided together with context_files/outp"):
         asyncio.run(
             run_once(
                 OneShotRunOptions(
@@ -536,7 +536,7 @@ def test_resolve_excluded_paths_rejects_workspace_escape(
 ) -> None:
     from cli_agent.platform.execution import resolve_excluded_paths
 
-    with pytest.raises(ValueError, match="Ausgeschlossene"):
+    with pytest.raises(ValueError, match="Excluded path"):
         resolve_excluded_paths(tmp_path, (path,))
 
 
@@ -635,7 +635,7 @@ def test_run_conversation_rejects_local_agent_commands(
         "add_web_context https://example.com",
         "clear_web_context",
     ):
-        with pytest.raises(ValueError, match="lokalen Agent-Befehle"):
+        with pytest.raises(ValueError, match="Conversation prompts must not contain local agent commands\\."):
             asyncio.run(
                 run_conversation(
                     ConversationRunOptions(
@@ -649,7 +649,7 @@ def test_run_conversation_rejects_local_agent_commands(
 def test_run_conversation_rejects_empty_or_blank_prompts(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(ValueError, match="mindestens einen Prompt"):
+    with pytest.raises(ValueError, match="Conversation requires at least one prompt\\."):
         asyncio.run(
             run_conversation(
                 ConversationRunOptions(
@@ -659,7 +659,7 @@ def test_run_conversation_rejects_empty_or_blank_prompts(
             )
         )
 
-    with pytest.raises(ValueError, match="dürfen nicht leer sein"):
+    with pytest.raises(ValueError, match="must not be empty"):
         asyncio.run(
             run_conversation(
                 ConversationRunOptions(

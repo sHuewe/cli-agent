@@ -41,9 +41,9 @@ class PublishedArtifact:
 
 def register_artifact(store, path: str, filename: str) -> tuple[str, PublishedArtifact]:
     if not isinstance(filename, str) or not _FILENAME.fullmatch(filename) or filename in {".", ".."}:
-        raise ValueError("Ungültiger Download-Dateiname.")
+        raise ValueError("Invalid download filename.")
     if not isinstance(path, str):
-        raise ValueError("Ungültiger Artefaktpfad.")
+        raise ValueError("Invalid artifact path.")
     # Verify ownership and inode, never follow client/model-selected arbitrary paths.
     store.read_registered(path)
     item = PublishedArtifact(path=path, filename=filename,

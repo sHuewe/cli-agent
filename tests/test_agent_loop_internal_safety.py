@@ -89,7 +89,7 @@ async def test_evidence_update_failure_is_protocol_complete_and_redacted():
     assert output == "Finished"
     assert agent._evidence_state.evidences == {}
     tool = next(m for m in messages if m.get("tool_call_id") == "evidence-1")
-    assert "NICHT übernommen" in tool["content"]
+    assert "NOT applied" in tool["content"]
     internal = messages[1]["tool_calls"][0]
     assert internal["function"]["arguments"] == {}
     assert events[-1][1]["status"] == "error"
@@ -123,7 +123,7 @@ async def test_publish_validation_rejects_partial_arguments_without_side_effect(
     ])
     assert output == "Finished"
     result = next(m for m in messages if m.get("tool_call_id") == "publish-1")
-    assert "konnte nicht veröffentlicht werden" in result["content"]
+    assert "Could not publish download" in result["content"]
     assert events[-1][1]["status"] == "error"
 
 

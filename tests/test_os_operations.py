@@ -91,12 +91,12 @@ def test_file_mutations_require_existing_parent(tmp_path, operation, args):
 
 @pytest.mark.parametrize("path", ["", "  ", None])
 def test_workspace_rejects_empty_paths(tmp_path, path):
-    with pytest.raises(WorkspaceError, match="leer"):
+    with pytest.raises(WorkspaceError, match="empty"):
         _workspace(tmp_path).resolve_path(path)
 
 
 def test_missing_workspace_is_rejected(tmp_path):
-    with pytest.raises(WorkspaceError, match="Workspace existiert nicht"):
+    with pytest.raises(WorkspaceError, match="workspace does not exist"):
         _workspace(tmp_path / "missing")
 
 
@@ -107,9 +107,9 @@ def test_symlink_escape_is_rejected_for_reads_and_writes(tmp_path):
     outside.write_text("original")
     (root / "link.txt").symlink_to(outside)
     workspace = _workspace(root)
-    with pytest.raises(WorkspaceError, match="außerhalb"):
+    with pytest.raises(WorkspaceError, match="outside the"):
         workspace.read_file("link.txt")
-    with pytest.raises(WorkspaceError, match="außerhalb"):
+    with pytest.raises(WorkspaceError, match="outside the"):
         workspace.write_file("link.txt", "changed")
     assert outside.read_text() == "original"
 
@@ -133,10 +133,10 @@ def test_write_preserves_cr_line_endings(tmp_path):
 @pytest.mark.parametrize("operation,args,target,method,message", [
     ("read_file", ("file.txt",), Path, "read_bytes", "gelesen"),
     ("write_file", ("file.txt", "replacement"), Path, "write_text", "geschrieben"),
-    ("delete_file", ("file.txt",), Path, "unlink", "gelöscht"),
+    ("delete_file", ("file.txt",), Path, "unlink", "deleted"),
     ("copy_file", ("file.txt", "copy.txt"), os_operations.shutil, "copy2", "kopiert"),
     ("make_directory", ("new",), Path, "mkdir", "erstellt"),
-    ("read_file", ("file.txt",), os_operations, "regular_file_has_multiple_links", "Dateimetadaten"),
+    ("read_file", ("file.txt",), os_operations, "regular_file_has_multiple_links", "File metadata"),
 ])
 def test_io_failures_are_workspace_errors(tmp_path, monkeypatch, operation, args, target, method, message):
     path = tmp_path / "file.txt"
@@ -201,13 +201,13 @@ def test_write_file_uses_lf_for_new_files(tmp_path) -> None:
 @pytest.mark.parametrize("filename", [".env", ".env.production", "credentials.json", "server.pem"])
 def test_read_file_rejects_sensitive_files(tmp_path, filename) -> None:
     (tmp_path / filename).write_text("secret", encoding="utf-8")
-    with pytest.raises(WorkspaceError, match="Secret-/Credential"):
+    with pytest.raises(WorkspaceError, match="credential or"):
         _workspace(tmp_path).read_file(filename)
 
 
 def test_read_file_rejects_oversized_text(tmp_path) -> None:
     (tmp_path / "large.txt").write_text("x" * 1_000_001, encoding="utf-8")
-    with pytest.raises(WorkspaceError, match="Leselimit"):
+    with pytest.raises(WorkspaceError, match="read limit of"):
         _workspace(tmp_path).read_file("large.txt")
 
 
@@ -248,7 +248,7 @@ def test_read_file_still_rejects_unknown_file_types(tmp_path) -> None:
 
 def test_copy_file_rejects_sensitive_source(tmp_path) -> None:
     (tmp_path / "credentials.json").write_text("secret", encoding="utf-8")
-    with pytest.raises(WorkspaceError, match="Secret-/Credential"):
+    with pytest.raises(WorkspaceError, match="credential or"):
         _workspace(tmp_path).copy_file("credentials.json", "copy.txt")
 
 
@@ -257,7 +257,7 @@ def test_read_file_rejects_sensitive_project_artifacts(tmp_path, relative_path) 
     file_path = tmp_path / relative_path
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text("sensitive", encoding="utf-8")
-    with pytest.raises(WorkspaceError, match="Secret-/Credential"):
+    with pytest.raises(WorkspaceError, match="credential or"):
         _workspace(tmp_path).read_file(relative_path)
 
 
@@ -271,7 +271,7 @@ def test_workspace_rejects_windows_drive_paths(tmp_path, path: str) -> None:
 def test_write_file_rejects_sensitive_destinations(tmp_path, relative_path) -> None:
     path = tmp_path / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    with pytest.raises(WorkspaceError, match="Ändern"):
+    with pytest.raises(WorkspaceError, match="Modifying protected workspace files is not allowed"):
         _workspace(tmp_path).write_file(relative_path, "replacement")
     assert not path.exists()
 
@@ -281,7 +281,7 @@ def test_delete_file_rejects_sensitive_files(tmp_path, relative_path) -> None:
     path = tmp_path / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("original", encoding="utf-8")
-    with pytest.raises(WorkspaceError, match="Ändern"):
+    with pytest.raises(WorkspaceError, match="Modifying protected workspace files is not allowed"):
         _workspace(tmp_path).delete_file(relative_path)
     assert path.read_text(encoding="utf-8") == "original"
 
@@ -291,14 +291,14 @@ def test_copy_file_rejects_sensitive_destinations(tmp_path, destination) -> None
     (tmp_path / "source.txt").write_text("safe", encoding="utf-8")
     path = tmp_path / destination
     path.parent.mkdir(parents=True, exist_ok=True)
-    with pytest.raises(WorkspaceError, match="Ändern"):
+    with pytest.raises(WorkspaceError, match="Modifying protected workspace files is not allowed"):
         _workspace(tmp_path).copy_file("source.txt", destination)
     assert not path.exists()
 
 
 @pytest.mark.parametrize("directory", [".git", ".cli-agent", ".ssh", ".aws"])
 def test_make_directory_rejects_sensitive_directories(tmp_path, directory) -> None:
-    with pytest.raises(WorkspaceError, match="Ändern"):
+    with pytest.raises(WorkspaceError, match="Modifying protected workspace files is not allowed"):
         _workspace(tmp_path).make_directory(directory)
     assert not (tmp_path / directory).exists()
 
@@ -308,7 +308,7 @@ def test_write_file_rejects_workspace_internal_symlink_alias(tmp_path) -> None:
     target.write_text("original", encoding="utf-8")
     (tmp_path / "harmless.txt").symlink_to(target)
 
-    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+    with pytest.raises(WorkspaceError, match="Symlinks or junctions are not allowed for this file operation\\."):
         _workspace(tmp_path).write_file("harmless.txt", "changed")
 
     assert target.read_text(encoding="utf-8") == "original"
@@ -320,7 +320,7 @@ def test_delete_file_rejects_workspace_internal_symlink_alias(tmp_path) -> None:
     alias = tmp_path / "harmless.txt"
     alias.symlink_to(target)
 
-    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+    with pytest.raises(WorkspaceError, match="Symlinks or junctions are not allowed for this file operation\\."):
         _workspace(tmp_path).delete_file("harmless.txt")
 
     assert target.read_text(encoding="utf-8") == "original"
@@ -332,7 +332,7 @@ def test_copy_file_rejects_workspace_internal_symlink_source(tmp_path) -> None:
     target.write_text("secret-content", encoding="utf-8")
     (tmp_path / "harmless.txt").symlink_to(target)
 
-    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+    with pytest.raises(WorkspaceError, match="Symlinks or junctions are not allowed for this file operation\\."):
         _workspace(tmp_path).copy_file("harmless.txt", "copy.txt")
 
     assert not (tmp_path / "copy.txt").exists()
@@ -345,7 +345,7 @@ def test_copy_file_rejects_workspace_internal_symlink_destination(tmp_path) -> N
     target.write_text("original", encoding="utf-8")
     (tmp_path / "harmless.txt").symlink_to(target)
 
-    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+    with pytest.raises(WorkspaceError, match="Symlinks or junctions are not allowed for this file operation\\."):
         _workspace(tmp_path).copy_file("source.txt", "harmless.txt")
 
     assert target.read_text(encoding="utf-8") == "original"
@@ -360,11 +360,11 @@ def test_mutations_reject_symlinked_parent_directory(tmp_path) -> None:
 
     workspace = _workspace(tmp_path)
 
-    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+    with pytest.raises(WorkspaceError, match="Symlinks or junctions are not allowed for this file operation\\."):
         workspace.write_file("alias/new.txt", "new")
-    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+    with pytest.raises(WorkspaceError, match="Symlinks or junctions are not allowed for this file operation\\."):
         workspace.delete_file("alias/existing.txt")
-    with pytest.raises(WorkspaceError, match="Symlinks oder Junctions"):
+    with pytest.raises(WorkspaceError, match="Symlinks or junctions are not allowed for this file operation\\."):
         workspace.make_directory("alias/new-dir")
 
     assert not (real_dir / "new.txt").exists()
@@ -438,7 +438,7 @@ def test_list_files_hides_lstat_metadata_error(
 def test_list_files_rejects_sensitive_directory(tmp_path) -> None:
     (tmp_path / ".git").mkdir()
 
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         _workspace(tmp_path).list_files(".git")
 
 
@@ -452,11 +452,11 @@ def test_active_workspace_config_is_protected_across_read_operations(tmp_path) -
         protected_paths=(config_path,),
     )
 
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.read_file("custom-agent.toml")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.file_info("custom-agent.toml")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.search_text("custom-agent.toml", "secret-sentinel")
 
     found = workspace.find_files(".", "*.toml")
@@ -478,7 +478,7 @@ def test_active_workspace_config_is_hidden_from_listing_and_copy(tmp_path) -> No
     )
 
     assert "custom-agent.toml" not in workspace.list_files(".")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.copy_file("custom-agent.toml", "copy.toml")
     assert not (tmp_path / "copy.toml").exists()
 
@@ -502,7 +502,7 @@ def test_active_workspace_config_rejects_mutations(tmp_path, operation, args) ->
         protected_paths=(config_path,),
     )
 
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         getattr(workspace, operation)(*args)
 
     assert config_path.read_text(encoding="utf-8") == "original"
@@ -540,15 +540,15 @@ def test_mutation_protected_path_is_readable_but_not_mutable(tmp_path) -> None:
 
     assert workspace.read_file("prompt.md") == "trusted prompt"
 
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.write_file("prompt.md", "changed")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.delete_file("prompt.md")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.copy_file("source.md", "prompt.md")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.move_file("prompt.md", "moved.md")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.move_file("source.md", "prompt.md")
 
     assert protected.read_text(encoding="utf-8") == "trusted prompt"
@@ -574,21 +574,21 @@ def test_protected_directory_is_hidden_and_blocked_recursively(tmp_path) -> None
     assert "visible.txt" in listing
     assert "flow" not in listing
 
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.list_files("flow")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.read_file("flow/flow.toml")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.file_info("flow/prompt.md")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.search_text("flow", "prompt")
 
     found = workspace.find_files(".", "*.md")
     assert "flow/prompt.md" not in found
 
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.write_file("flow/new.md", "new")
-    with pytest.raises(WorkspaceError, match="geschützten"):
+    with pytest.raises(WorkspaceError, match="files is not allowed through workspace file access\\."):
         workspace.delete_file("flow/prompt.md")
 
 
@@ -628,7 +628,7 @@ def test_read_file_range_can_read_large_text_file(tmp_path) -> None:
     )
     workspace = _workspace(tmp_path)
 
-    with pytest.raises(WorkspaceError, match="Leselimit"):
+    with pytest.raises(WorkspaceError, match="read limit of"):
         workspace.read_file("large.txt")
 
     assert workspace.read_file("large.txt", start_line=2, end_line=2) == middle
@@ -642,7 +642,7 @@ def test_read_file_range_can_read_large_text_file(tmp_path) -> None:
         (True, None, "start_line"),
         (None, 0, "end_line"),
         (None, False, "end_line"),
-        (4, 3, "größer"),
+        (4, 3, "exceed"),
     ],
 )
 def test_read_file_rejects_invalid_line_ranges(
@@ -696,7 +696,7 @@ def test_read_file_rejects_line_range_for_pdf(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr("cli_agent.platform.workspace_io.read_pdf_text", should_not_run)
 
-    with pytest.raises(WorkspaceError, match="PDF-Dateien nicht unterstützt"):
+    with pytest.raises(WorkspaceError, match="start_line/end_line are not supported for PDF files\\."):
         _workspace(tmp_path).read_file(
             "document.pdf",
             start_line=1,
@@ -710,7 +710,7 @@ def test_read_file_range_rejects_oversized_selected_text(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkspaceError, match="Ausschnitt.*Leselimit"):
+    with pytest.raises(WorkspaceError, match="Requested file range exceeds the read limit of 1000000 Bytes: 'large\\.txt"):
         _workspace(tmp_path).read_file("large.txt", start_line=1, end_line=2)
 
 
@@ -722,7 +722,7 @@ def test_read_file_range_scan_limit_counts_raw_crlf_bytes(
     monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_READ_RANGE_SCAN_BYTES", 6)
     monkeypatch.setattr("cli_agent.platform.workspace_io.READ_RANGE_CHUNK_BYTES", 4)
 
-    with pytest.raises(WorkspaceError, match="Scan-Limit"):
+    with pytest.raises(WorkspaceError, match="File range exceeds the scan limit of"):
         _workspace(tmp_path).read_file("lines.txt", start_line=3, end_line=3)
 
 
@@ -753,19 +753,19 @@ def test_sensitive_named_directories_protect_descendants_recursively(
 
     assert directory not in workspace.list_files(".")
 
-    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+    with pytest.raises(WorkspaceError, match="Reading secret, credential or protected agent files is not allowed through "):
         workspace.list_files(directory)
-    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+    with pytest.raises(WorkspaceError, match="Reading secret, credential or protected agent files is not allowed through "):
         workspace.read_file(f"{directory}/service.json")
-    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+    with pytest.raises(WorkspaceError, match="Reading secret, credential or protected agent files is not allowed through "):
         workspace.file_info(f"{directory}/service.json")
-    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+    with pytest.raises(WorkspaceError, match="Reading secret, credential or protected agent files is not allowed through "):
         workspace.copy_file(f"{directory}/service.json", "copy.json")
-    with pytest.raises(WorkspaceError, match="Ändern|geschützten"):
+    with pytest.raises(WorkspaceError, match="Modifying|protected"):
         workspace.write_file(f"{directory}/service.json", '{"changed":true}')
-    with pytest.raises(WorkspaceError, match="Ändern|geschützten"):
+    with pytest.raises(WorkspaceError, match="Modifying|protected"):
         workspace.copy_file("source.json", f"{directory}/copy.json")
-    with pytest.raises(WorkspaceError, match="Ändern|geschützten"):
+    with pytest.raises(WorkspaceError, match="Modifying|protected"):
         workspace.move_file(f"{directory}/service.json", "moved.json")
 
     assert secret.read_text(encoding="utf-8") == '{"token":"secret"}'
@@ -800,9 +800,9 @@ def test_sensitive_workspace_root_name_protects_all_descendants(
 
     workspace = _workspace(workspace_dir)
 
-    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+    with pytest.raises(WorkspaceError, match="Reading secret, credential or protected agent files is not allowed through "):
         workspace.read_file("service.json")
-    with pytest.raises(WorkspaceError, match="Secret-/Credential|geschützten"):
+    with pytest.raises(WorkspaceError, match="Reading secret, credential or protected agent files is not allowed through "):
         workspace.list_files(".")
 
 
@@ -829,7 +829,7 @@ def test_latin1_write_rejects_unrepresentable_without_modifying(tmp_path):
 def test_latin1_fallback_rejects_binary_data(tmp_path):
     path = tmp_path / "binary.properties"
     path.write_bytes(b"foo=\xff\x00\n")
-    with pytest.raises(WorkspaceError, match="Text"):
+    with pytest.raises(WorkspaceError, match="File is not supported UTF-8/ISO-8859-1 text: 'binary\\.properties"):
         _workspace(tmp_path).read_file(path.name)
     with pytest.raises(WorkspaceError, match="Kodierung"):
         _workspace(tmp_path).write_file(path.name, "safe")
@@ -879,7 +879,7 @@ def test_latin1_range_scan_limit_is_not_reset_on_late_decode_error(
     path.write_bytes(b"x" * 9000 + b"\xe4\n")
     monkeypatch.setattr("cli_agent.platform.workspace_io.READ_RANGE_CHUNK_BYTES", 512)
     monkeypatch.setattr("cli_agent.platform.workspace_io.MAX_READ_RANGE_SCAN_BYTES", 9_000)
-    with pytest.raises(WorkspaceError, match="Scan-Limit"):
+    with pytest.raises(WorkspaceError, match="File range exceeds the scan limit of"):
         _workspace(tmp_path).read_file(
             "long.properties", start_line=1, end_line=1
         )

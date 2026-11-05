@@ -44,9 +44,9 @@ class ContextDumpMixin:
         filename_bytes = len(filename.encode("utf-8"))
         if filename_bytes > budget:
             raise RuntimeError(
-                "LLM-Context-Dump-Dateiname passt nicht zum Workspace-Pfad. "
-                f"Der Ablageordner ist {self.workspace_directory / '.cli-agent'}. "
-                "Verkürze den Workspace-Pfad oder deaktiviere dump_llm_context."
+                "LLM context dump filename does not fit the workspace path. "
+                f"The storage directory is {self.workspace_directory / '.cli-agent'}. "
+                "Shorten the workspace path or disable dump_llm_context."
             )
         if self.dump_file_prefix is None:
             return filename
@@ -62,9 +62,9 @@ class ContextDumpMixin:
         available_prefix_bytes = budget - len(tail.encode("utf-8"))
         if available_prefix_bytes <= 0:
             raise RuntimeError(
-                "LLM-Context-Dump-Dateiname passt nicht zum Workspace-Pfad. "
-                f"Der Ablageordner ist {self.workspace_directory / '.cli-agent'}. "
-                "Verkürze den Workspace-Pfad oder deaktiviere dump_llm_context."
+                "LLM context dump filename does not fit the workspace path. "
+                f"The storage directory is {self.workspace_directory / '.cli-agent'}. "
+                "Shorten the workspace path or disable dump_llm_context."
             )
         shortened_prefix = self._truncate_utf8(
             self.dump_file_prefix,
@@ -77,21 +77,21 @@ class ContextDumpMixin:
         gitignore = dump_directory / ".gitignore"
         if path_entry_is_symlink_or_reparse(gitignore):
             raise RuntimeError(
-                "LLM-Context-Dump verweigert: .cli-agent/.gitignore darf kein "
-                "Symlink oder Reparse Point sein."
+                "LLM context dump refused: .cli-agent/.gitignore must not be a "
+                "symlink or reparse point."
             )
 
         if gitignore.exists():
             if not gitignore.is_file():
                 raise RuntimeError(
-                    "LLM-Context-Dump verweigert: .cli-agent/.gitignore muss "
-                    "eine reguläre Datei sein."
+                    "LLM context dump refused: .cli-agent/.gitignore must be "
+                    "a regular file."
                 )
             try:
                 if regular_file_has_multiple_links(gitignore):
                     raise RuntimeError(
-                        "LLM-Context-Dump verweigert: .cli-agent/.gitignore "
-                        "besitzt mehrere Hardlinks."
+                        "LLM context dump refused: .cli-agent/.gitignore "
+                        "has multiple hardlinks."
                     )
 
                 size = gitignore.stat().st_size
@@ -111,8 +111,8 @@ class ContextDumpMixin:
                 return
             except OSError as exc:
                 raise RuntimeError(
-                    "LLM-Context-Dump konnte .cli-agent/.gitignore nicht sicher "
-                    "prüfen oder aktualisieren."
+                    "LLM context dump could not safely "
+                    "check or update .cli-agent/.gitignore."
                 ) from exc
 
         try:
@@ -124,44 +124,44 @@ class ContextDumpMixin:
             ContextDumpMixin._ensure_dump_gitignore(dump_directory)
         except OSError as exc:
             raise RuntimeError(
-                "LLM-Context-Dump konnte .cli-agent/.gitignore nicht anlegen."
+                "LLM context dump could not create .cli-agent/.gitignore."
             ) from exc
 
     def _safe_dump_path(self, filename: str) -> Path:
         filename = self._dump_filename(filename)
         if Path(filename).name != filename or not filename:
-            raise RuntimeError("Ungültiger Dateiname für LLM-Context-Dump.")
+            raise RuntimeError("Invalid LLM context dump filename.")
         dump_directory = self.workspace_directory / ".cli-agent"
         if dump_directory.exists() and path_entry_is_symlink_or_reparse(dump_directory):
             raise RuntimeError(
-                "LLM-Context-Dump verweigert: .cli-agent darf kein Symlink oder Reparse Point sein."
+                "LLM context dump refused: .cli-agent must not be a symlink or reparse point."
             )
         dump_directory.mkdir(parents=True, exist_ok=True)
         if path_entry_is_symlink_or_reparse(dump_directory):
             raise RuntimeError(
-                "LLM-Context-Dump verweigert: .cli-agent darf kein Symlink oder Reparse Point sein."
+                "LLM context dump refused: .cli-agent must not be a symlink or reparse point."
             )
         self._ensure_dump_gitignore(dump_directory)
         try:
             dump_directory.resolve(strict=True).relative_to(self.workspace_directory)
         except (OSError, RuntimeError, ValueError) as exc:
             raise RuntimeError(
-                "LLM-Context-Dump verweigert: .cli-agent liegt nicht sicher im Workspace."
+                "LLM context dump refused: .cli-agent is not safely contained within the workspace."
             ) from exc
         dump_file = dump_directory / filename
         if dump_file.exists():
             try:
                 if regular_file_has_multiple_links(dump_file):
                     raise RuntimeError(
-                        f"LLM-Context-Dump verweigert: {filename!r} besitzt mehrere Hardlinks."
+                        f"LLM context dump refused: {filename!r} has multiple hardlinks."
                     )
             except OSError as exc:
                 raise RuntimeError(
-                    f"LLM-Context-Dump-Datei {filename!r} konnte nicht sicher geprüft werden."
+                    f"LLM context dump file {filename!r} could not be safely validated."
                 ) from exc
         if path_entry_is_symlink_or_reparse(dump_file):
             raise RuntimeError(
-                f"LLM-Context-Dump verweigert: {filename!r} darf kein Symlink oder Reparse Point sein."
+                f"LLM context dump refused: {filename!r} must not be a symlink or reparse point."
             )
         return dump_file
 

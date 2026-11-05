@@ -44,7 +44,7 @@ from cli_agent.platform.os_operations import Workspace
 
 OS_MCP_SERVER_NAME = "os"
 DATA_MCP_SERVER_NAME = "data"
-REDACTED_CONFIG_VALUE = "<WERT AUS KONFIGURATION ÜBERNEHMEN>"
+REDACTED_CONFIG_VALUE = "<COPY VALUE FROM CONFIGURATION>"
 logger = logging.getLogger("cli_agent.interfaces.cli")
 
 
@@ -96,7 +96,7 @@ class _InspectionModel:
     base_url = "local://not-used"
 
     async def chat(self, *_args, **_kwargs):
-        raise RuntimeError("Der MCP-Inspektionsmodus führt keine Modellaufrufe aus.")
+        raise RuntimeError("MCP inspection mode does not make model requests.")
 
 
 async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> bool | str:
@@ -109,10 +109,10 @@ async def approve_tool_call(tool_name: str, arguments: dict[str, object]) -> boo
         escape_literal_backslashes=True,
     )
     print(
-        "\nExplizite Freigabe erforderlich: "
+        "\nExplicit approval required: "
         f"{safe_tool_name}({_approval_arguments(arguments)})"
     )
-    answer = await asyncio.to_thread(input, "Aktion ausführen? [j]a / [s] dieses Tool für die Session / [N]ein ")
+    answer = await asyncio.to_thread(input, "Execute action? [y]es / [s] approve this tool for this session / [N]o ")
     normalized = answer.strip().casefold()
     if normalized in {"s", "session"}:
         return "session"
@@ -307,7 +307,7 @@ async def _inspect_mcp_tool(
     workspace_access: str | None = None,
 ) -> McpToolInspection:
     if getattr(server, "built_in", False):
-        raise ValueError("Built-in MCP-Tools werden nicht über permanente Admin-Auto-Approvals freigegeben.")
+        raise ValueError("Built-in MCP tools cannot be granted permanent admin auto-approvals.")
     native_tool_name = tool_name.strip()
     exposed_prefix = f"{server.name}__"
     if native_tool_name.startswith(exposed_prefix):
@@ -338,9 +338,9 @@ async def _inspect_mcp_tool(
             else "--with-os-read"
         )
         raise PermissionError(
-            f"MCP-Server {server.name!r} benötigt mindestens "
+            f"MCP server {server.name!r} requires at least "
             f"workspace_access={required_workspace_access!r}. "
-            f"Erteile den Zugriff für diesen Admin-Aufruf explizit mit "
+            f"Explicitly grant access for this admin command with "
             f"{required_flag}."
         )
     agent = CliAgent(
@@ -357,7 +357,7 @@ async def _inspect_mcp_tool(
         tool_metadata = next((tool for tool in agent._server_tools.get(server.name, ()) if tool.get("function", {}).get("name") == exposed_name), None)
         if tool_metadata is None:
             available = [tool.get("function", {}).get("name", "") for tool in agent._server_tools.get(server.name, ())]
-            raise ValueError(f"MCP-Server {server.name!r} bietet Tool {native_tool_name!r} nicht an. Verfügbare Tools: {', '.join(name for name in available if name) or '(keine)'}")
+            raise ValueError(f"MCP server {server.name!r} does not offer tool {native_tool_name!r}. Available tools: {', '.join(name for name in available if name) or '(none)'}")
         function = tool_metadata.get("function", {})
         schema = function.get("parameters", {})
         description = str(function.get("description") or "")
@@ -373,7 +373,7 @@ async def _inspect_mcp_tool(
 
 
 def _render_tool_approval_fragment(inspection: McpToolInspection) -> str:
-    return "\n".join(["# Unter dem zugehörigen [[mcp.trusted_servers]]-Eintrag einfügen:", "[[mcp.trusted_servers.auto_approve_tools]]", f"name = {json.dumps(inspection.tool_name, ensure_ascii=False)}", f"contract_sha256 = {json.dumps(inspection.contract_sha256)}"])
+    return "\n".join(["# Insert under the matching [[mcp.trusted_servers]] entry:", "[[mcp.trusted_servers.auto_approve_tools]]", f"name = {json.dumps(inspection.tool_name, ensure_ascii=False)}", f"contract_sha256 = {json.dumps(inspection.contract_sha256)}"])
 
 
 def _config_pairs(values: Any) -> tuple[tuple[str, str], ...]:
@@ -405,7 +405,7 @@ def _render_trusted_server_fragment(server: Any) -> str:
             lines.append(f"url = {json.dumps(str(url), ensure_ascii=False)}")
         headers = getattr(server, "headers", None)
         if headers:
-            lines.append("# Header-Werte werden aus Sicherheitsgründen nicht ausgegeben; Werte aus der vorhandenen Konfiguration übernehmen.")
+            lines.append("# Header values are omitted for security reasons; copy values from the existing configuration.")
             lines.append(f"headers = {_render_inline_toml_table(headers, redact_values=True)}")
         bearer_token_env = getattr(server, "bearer_token_env", None)
     elif transport == "stdio":
@@ -424,7 +424,7 @@ def _render_trusted_server_fragment(server: Any) -> str:
         )
         env = getattr(server, "env", None)
         if env:
-            lines.append("# Environment-Werte werden aus Sicherheitsgründen nicht ausgegeben; Werte aus der vorhandenen Admin-Konfiguration übernehmen.")
+            lines.append("# Environment values are omitted for security reasons; copy values from the existing admin configuration.")
             lines.append(f"env = {_render_inline_toml_table(env, redact_values=True)}")
     lines.append(f"trust_instructions = {'true' if bool(getattr(server, 'trust_instructions', False)) else 'false'}")
     if bearer_token_env:
@@ -510,16 +510,16 @@ async def run_admin(args: argparse.Namespace) -> None:
         return
     if args.update:
         if not inspection.trusted_server_found:
-            raise ValueError("--update benötigt einen identitätsgleichen [[mcp.trusted_servers]]-Eintrag in der maschinenweiten Admin-Policy.")
+            raise ValueError("--update requires an identity-matching [[mcp.trusted_servers]] entry in machine-wide admin policy.")
         if inspection.existing_contract_sha256 is None:
-            raise ValueError("--update benötigt bereits eine gepinnte Auto-Freigabe für dieses Tool.")
-        print(f"Bisheriger Contract: {inspection.existing_contract_sha256}")
+            raise ValueError("--update requires an existing pinned auto-approval for this tool.")
+        print(f"Previous contract: {inspection.existing_contract_sha256}")
         if inspection.existing_contract_sha256 == inspection.contract_sha256:
-            print("Der Tool-Contract ist unverändert.")
+            print("The tool contract is unchanged.")
         else:
-            print("Der Tool-Contract hat sich geändert. Prüfe Beschreibung und Schema vor einer erneuten Freigabe.")
+            print("The tool contract has changed. Review its description and schema before approving it again.")
     elif not inspection.trusted_server_found:
-        print("Hinweis: In der aktuellen Admin-Policy existiert noch kein identitätsgleicher [[mcp.trusted_servers]]-Eintrag. Der folgende Contract kann vorbereitet werden, greift aber erst zusammen mit einer passenden administrativen Serveridentität.")
+        print("Note: The current admin policy has no identity-matching [[mcp.trusted_servers]] entry. The following contract can be prepared but takes effect only with a matching administrative server identity.")
     trusted_server = next(
         (
             item
@@ -529,11 +529,11 @@ async def run_admin(args: argparse.Namespace) -> None:
         None,
     )
     fragment_server = trusted_server if inspection.trusted_server_found and trusted_server is not None else server
-    print("\nDie Admin-Konfiguration wurde NICHT geändert.")
-    print("Prüfe Tool, Beschreibung und Schema und übernimm die folgenden Blöcke bei bewusster Freigabe manuell in die Admin-Policy.")
-    print("\nPfad zur Admin-Konfiguration:")
+    print("\nThe admin configuration was NOT modified.")
+    print("Review the tool, description and schema, then manually copy the following blocks into admin policy only if you explicitly approve them.")
+    print("\nAdmin configuration path:")
     print(_status_text(default_admin_config_file()))
-    print("\nBeispiel für den Trusted-Server-Eintrag:")
+    print("\nExample trusted-server entry:")
     print(
         sanitize_terminal_text(
             _render_trusted_server_fragment(fragment_server),
@@ -541,7 +541,7 @@ async def run_admin(args: argparse.Namespace) -> None:
             escape_invisible_formatting=True,
         )
     )
-    print("\nAuto-Approval für dieses Tool:")
+    print("\nAuto-approval for this tool:")
     print(
         sanitize_terminal_text(
             _render_tool_approval_fragment(inspection),
@@ -552,18 +552,26 @@ async def run_admin(args: argparse.Namespace) -> None:
 
 
 async def run(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
-    admin_config: AdminConfig = load_admin_config()
-    config = apply_model_cli_override(config, model=args.model)
-
     workspace = args.workspace.expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
+    project_file = workspace / ".cli-agent" / "project.toml"
+    config = (
+        load_config(args.config, workspace=workspace)
+        if project_file.exists() or project_file.is_symlink()
+        else load_config(args.config)
+    )
+    admin_config: AdminConfig = load_admin_config()
+    config = apply_model_cli_override(config, model=args.model)
+    from cli_agent.settings.project_config import read_project_system_prompt
+    project_system_prompt = read_project_system_prompt(
+        workspace, getattr(config.agent, "system_prompt", None)
+    )
 
     excluded_paths = tuple(getattr(args, "exclude_path", ()) or ())
     if excluded_paths and args.os_access not in {"read", "write"}:
         raise ValueError(
-            "--exclude-path benötigt --with-os-read oder --with-os-write."
+            "--exclude-path requires --with-os-read or --with-os-write."
         )
     resolved_excluded_paths = resolve_excluded_paths(workspace, excluded_paths)
     config = apply_workspace_access_override(
@@ -615,14 +623,14 @@ async def run(args: argparse.Namespace) -> None:
         ]
         if missing_variables and not sys.stdin.isatty():
             raise ValueError(
-                "Prompt-Template benötigt interaktive Variablenwerte, aber stdin "
-                "ist kein TTY. Fehlend: "
+                "Prompt template requires interactive variable values, but stdin "
+                "is not a TTY. Missing: "
                 + ", ".join(missing_variables)
             )
         for name in missing_variables:
             variable_values[name] = await asyncio.to_thread(
                 input,
-                f"Wert für Prompt-Variable {name}: ",
+                f"Value for prompt variable {name}: ",
             )
         one_shot_prompt = template.render(variable_values)
         if not one_shot_prompt or one_shot_prompt.isspace():
@@ -637,7 +645,7 @@ async def run(args: argparse.Namespace) -> None:
     print(
         _status_text(
             "MCP-Server: "
-            + (", ".join(server.name for server in config.mcp_servers) or "(keine)")
+            + (", ".join(server.name for server in config.mcp_servers) or "(none)")
         )
     )
     print(
@@ -677,8 +685,8 @@ async def run(args: argparse.Namespace) -> None:
 
     if web_ui and one_shot_prompt is not None:
         raise ValueError(
-            "--with-web-ui ist nur für den interaktiven Modus ohne positional "
-            "Prompt oder --prompt-file vorgesehen."
+            "--with-web-ui is only available for interactive mode without a positional "
+            "prompt or --prompt-file."
         )
 
     if web_ui:
@@ -688,6 +696,7 @@ async def run(args: argparse.Namespace) -> None:
             config=config,
             admin_config=admin_config,
             workspace=workspace,
+            system_prompt=project_system_prompt,
             file_contexts=file_contexts,
             output_target=output_target,
             excluded_paths=resolved_excluded_paths,
@@ -738,6 +747,7 @@ async def run(args: argparse.Namespace) -> None:
         config.mcp_servers,
         logging_config=config.logging,
         agent_timezone=config.agent.timezone,
+        system_prompt=project_system_prompt,
         config_file=args.config or default_config_file(),
         dump_llm_context=config.dump_llm_context,
         network=admin_config.network,
@@ -758,7 +768,7 @@ async def run(args: argparse.Namespace) -> None:
             status = await agent.ask(f"add_web_context {url}")
             print(sanitize_terminal_text(status, multiline=True))
 
-        print("Interaktiver Modus; 'enable <server>' und 'disable <server>' steuern MCP-Server, 'add_web_context <url>' lädt Web-Kontext, 'clear_web_context' entfernt ihn, 'tokens' zeigt die Usage des letzten Agentenlaufs, 'exit' oder 'quit' beendet die Sitzung.")
+        print("Interactive mode; 'enable <server>' and 'disable <server>' control MCP servers, 'add_web_context <url>' loads web context, 'clear_web_context' removes it, 'tokens' shows usage for the latest agent run, and 'exit' or 'quit' ends the session.")
         while True:
             try:
                 prompt = input("\n> ").strip()

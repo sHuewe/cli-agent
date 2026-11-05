@@ -1,37 +1,22 @@
-# Lokaler Datei-Kontext, Prompt-Datei und Output
+# Local file context, prompt file and output
 
-Für große, bereits extern erzeugte Referenzartefakte kann genau eine lokale UTF-8-Textdatei als zusätzlicher Kontext an das Modell übergeben werden:
-
-```powershell
-cli-agent `
-  --context-file .review/repository.txt `
-  "Führe einen Security- und Architecture-Review durch"
-```
-
-`--context-file` ist absichtlich **kein LLM-Tool**. Der Benutzer wählt die Datei beim Prozessstart. Der Agent durchsucht dafür weder automatisch das Repository noch andere lokale Verzeichnisse. Die Datei muss innerhalb des aufgelösten Workspace liegen; `..` und Symlink-/Reparse-Escapes nach außerhalb werden abgewiesen. `--with-os-read` oder `--with-os-write` sind dafür nicht erforderlich und bleiben ausschließlich Schalter für die dem Modell angebotenen Workspace-OS-MCP-Tools. Zusätzlich gelten dieselben Sensitive-Path-Kategorien wie beim Workspace-OS-Lesezugriff, sodass beispielsweise `.env`, `.ssh`, `.git`, Credential-Dateien, Schlüssel/Zertifikate und Logdateien nicht als Context-Datei geladen werden. Der Dateiinhalt wird als nicht vertrauenswürdiger Referenzkontext markiert und nicht in die Conversation History kopiert.
-
-Der Repository-Snapshot selbst sollte außerhalb des Agenten erzeugt werden, zum Beispiel aus bewusst ausgewählten Git-Dateien. Damit bleibt die Entscheidung, welche Daten an einen eventuell externen Modellanbieter übertragen werden, außerhalb des LLM-gesteuerten Tool-Loops.
-
-Für `--context-file` und `--prompt-file` gilt jeweils ein bewusst sehr großzügiges technisches Sicherheitslimit von **256 MiB pro Datei**. Dieses Limit ist keine Modell- oder Token-Grenze und wird nicht aus der konfigurierten Modellgröße abgeleitet. `cli-agent` fragt die Context-Größe des Modells hierfür absichtlich nicht ab. Ist der tatsächlich zusammengesetzte Prompt für das gewählte Modell zu groß, darf der Modell-Endpoint den Request ablehnen; diese Fehlermeldung wird wie andere Modellfehler an den Benutzer weitergegeben. Das Dateilimit dient ausschließlich als letzte Speicher-/DoS-Grenze gegen versehentlich oder absichtlich extrem große lokale Eingaben.
-
-## Prompt aus einer Datei
-
-Ein längerer User-Prompt kann mit `--prompt-file` aus einer UTF-8-Textdatei im Workspace geladen werden:
+For large reference artifacts generated externally, local UTF-8 text files can be supplied as additional model context:
 
 ```powershell
 cli-agent `
   --context-file .review/repository.txt `
-  --prompt-file .review/security-review-prompt.md `
-  --output .review/review.md
+  "Perform a security and architecture review"
 ```
 
-`--prompt-file` ist sicherheitsrelevant, weil sein Inhalt **direkt als User-Prompt an das Modell** geht. Deshalb muss die Datei innerhalb des aufgelösten Workspace liegen. `..`, Symlink-/Reparse-Escapes, Hardlinks sowie dieselben geschützten Secret-/Credential-Pfade wie bei `--context-file` werden abgewiesen. Eine leere Prompt-Datei ist ungültig.
+`--context-file` is deliberately **not an LLM tool**. The user explicitly selects the file at process startup; the agent does not automatically search the repository or other directories. The file must reside within the resolved workspace; `..` path traversal and symlink/reparse-point escapes are rejected. `--with-os-read` or `--with-os-write` are not required: those switches exclusively control workspace OS MCP tools offered to the model. The same sensitive-path categories used for workspace OS reads also apply, so `.env`, `.ssh`, `.git`, credential files, keys/certificates and logs cannot be loaded as context. File content is marked as untrusted reference context, not copied into conversation history.
 
-Die Verwendung von `--prompt-file` erzwingt One-Shot-Verhalten: Der Dateiinhalt wird genau einmal als Prompt verarbeitet, danach beendet sich der Prozess. Ein zusätzlicher positional Prompt auf der Kommandozeile ist zusammen mit `--prompt-file` nicht zulässig. Die Prompt-Datei wird nicht als Referenzkontext markiert, sondern semantisch genauso behandelt wie ein direkt auf der Kommandozeile angegebener User-Prompt.
+The repository snapshot should be created outside the agent, for example using deliberately selected Git files. This ensures the decision about which data may be shared with a potentially external model provider remains outside the LLM-controlled tool loop.
 
-## Output-Datei
+`--context-file` and `--prompt-file` each have a deliberately generous technical safety limit of **256 MiB per file**. This limit is not a model or token bound and does not depend on the configured model context size. The agent deliberately does not query model context length to determine the file limit. If the actual assembled prompt is too large for the selected model, the model endpoint may reject the request and its error is reported normally. The file bound exists solely as a last-resort memory/DoS defense against extremely large local inputs.
 
-Die Modellantwort kann zusätzlich zu stdout in eine Workspace-Datei geschrieben werden:
+## Prompt from a file
+
+A longer user prompt can be loaded from a UTF-8 text file in the workspace:
 
 ```powershell
 cli-agent `
@@ -40,7 +25,22 @@ cli-agent `
   --output .review/review.md
 ```
 
-`--output` benötigt **kein** `--with-os-write`, weil der Zielpfad ausschließlich durch den Benutzer als CLI-Argument festgelegt wird und nicht vom Modell gewählt werden kann. Auch der Output muss innerhalb des Workspace liegen. Zusätzlich gelten dieselben Sensitive-Path-Kategorien wie für mutierende Workspace-OS-Operationen: beispielsweise `.env*`, `.git`, `.cli-agent`, `.ssh`, `.aws`, Schlüssel-/Credential-Dateien und Logs können weder neu als Output-Ziel angelegt noch mit `--overwrite-output` ersetzt werden. Diese Prüfung erfolgt vor Agent-Konstruktion und vor dem ersten Modelllauf. Existiert eine sonst zulässige Datei bereits, bricht der Start ebenfalls vor dem ersten Modelllauf ab. Ein bewusstes Ersetzen wird explizit aktiviert:
+`--prompt-file` is security relevant because its content is passed to the model **directly as the user prompt**. The file must be within the resolved workspace. `..`, symlink/reparse-point escapes, hardlinks and the same protected secret/credential paths as for `--context-file` are rejected. An empty prompt file is invalid.
+
+Using `--prompt-file` enforces one-shot operation: file content is processed as the prompt exactly once, then the process exits. A positional CLI prompt cannot be combined with `--prompt-file`. Unlike a reference file, a prompt file is not marked as reference context; semantically it is identical to a user prompt supplied directly on the command line.
+
+## Output file
+
+The model response can be written to stdout and additionally saved to a workspace file:
+
+```powershell
+cli-agent `
+  --context-file .review/repository.txt `
+  --prompt-file .review/security-review-prompt.md `
+  --output .review/review.md
+```
+
+`--output` does **not** require `--with-os-write` because the target path is selected exclusively by the user as a CLI argument and cannot be chosen by the model. Output must also be workspace-local. The same sensitive-path categories as for mutating workspace OS operations apply: for example, `.env*`, `.git`, `.cli-agent`, `.ssh`, `.aws`, key/credential files and logs cannot be created or replaced using `--overwrite-output`. This is checked before agent construction and the first model run. If an otherwise permitted output file already exists, startup also fails before the first model call. Explicit replacement can be enabled:
 
 ```powershell
 cli-agent `
@@ -50,6 +50,6 @@ cli-agent `
   --overwrite-output
 ```
 
-`--overwrite-output` ohne `--output` ist ungültig. Context-, Prompt- und Output-Datei dürfen nicht auf dieselbe Datei verweisen. Bestehende Output-Symlinks/Reparse Points und Hardlinks werden abgewiesen. Beim Überschreiben wird über eine temporäre Datei im selben Verzeichnis und `os.replace()` ersetzt.
+`--overwrite-output` without `--output` is invalid. Context, prompt and output files must not refer to the same file. Existing output symlinks/reparse points and hardlinks are rejected. Overwriting creates a temporary file in the same directory, then uses `os.replace()`.
 
-Alle Workspace-, Context-, Prompt- und Output-Argumente werden validiert und die Eingabedateien vollständig gelesen, bevor der Agent gestartet und bevor ein LLM-Loop ausgeführt wird. In einer interaktiven Session enthält die Output-Datei jeweils die zuletzt erzeugte Modellantwort; lokale Steuerkommandos wie `tokens`, `enable`, `disable`, `add_web_context` und `clear_web_context` werden nicht in die Output-Datei geschrieben.
+All workspace, context, prompt and output arguments are validated and input files fully read before the agent starts or an LLM loop executes. In an interactive session, the output file contains the most recently produced model answer. Local commands such as `tokens`, `enable`, `disable`, `add_web_context` and `clear_web_context` are not written to the output file.

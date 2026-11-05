@@ -62,12 +62,12 @@ def test_assembled_outlines_merge_shared_concept_keys_without_llm():
 
 def test_missing_or_wrong_section_outline_is_rejected():
     tasks = prepare_section_outline_tasks(*data())
-    with pytest.raises(ValueError, match="fehlen"):
+    with pytest.raises(ValueError, match="are missing"):
         assemble_section_outlines(
             tasks, {"iterations": []},
             source_path="sources/doc.md", source_slug="doc-123",
         )
-    with pytest.raises(ValueError, match="inkonsistent"):
+    with pytest.raises(ValueError, match="Section outline is incomplete or inconsistent\\."):
         assemble_section_outlines(
             tasks, {"iterations": [
                 {"id": "s001", "output": {"status": "ok", "section_id": "s002",
@@ -82,7 +82,7 @@ def test_missing_or_wrong_section_outline_is_rejected():
 def test_incomplete_analysis_blocks_outlines():
     sections, analyses = data()
     analyses["iterations"][0]["output"]["status"] = "needs_attention"
-    with pytest.raises(ValueError, match="Unvollständige"):
+    with pytest.raises(ValueError, match="Incomplete or contradictory section analysis\\."):
         prepare_section_outline_tasks(sections, analyses)
 
 

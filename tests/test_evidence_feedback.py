@@ -27,7 +27,7 @@ def test_plan_creation_update_and_noop_feedback():
     }]
     repeated = state.update_plan({"steps": [{"id": "s1", "status": "completed"}]})
     assert repeated["status"] == "unchanged"
-    assert "Keinen identischen Aufruf" in repeated["message"]
+    assert "Do not repeat the same call" in repeated["message"]
     added = state.update_plan({"steps": [
         {"id": "s3", "description": "Conclude", "status": "pending"},
     ]})

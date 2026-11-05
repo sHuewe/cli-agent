@@ -32,25 +32,25 @@ def test_frontend_tools_validate_schema_names_bounds_and_collisions():
     assert translated["show_view"]["function"]["parameters"]["required"] == ["view"]
     with pytest.raises(ValueError, match="MCP"):
         normalize_frontend_tools([definition("os__write_file")], server_names={"os__write_file"})
-    with pytest.raises(ValueError, match="Doppelter"):
+    with pytest.raises(ValueError, match="Duplicate"):
         normalize_frontend_tools([definition(), definition()], server_names=set())
     for bad in ("", "with space", "symbol!", "é", "a" * 129):
-        with pytest.raises(ValueError, match="Name"):
+        with pytest.raises(ValueError, match="frontend tool name"):
             normalize_frontend_tools([definition(bad)], server_names=set())
-    with pytest.raises(ValueError, match="Zu viele"):
+    with pytest.raises(ValueError, match="Too many"):
         normalize_frontend_tools([definition(str(n)) for n in range(33)], server_names=set())
-    with pytest.raises(ValueError, match="lang"):
+    with pytest.raises(ValueError, match="too long"):
         normalize_frontend_tools([{"name": "a", "description": "x" * 4097}], server_names=set())
-    with pytest.raises(ValueError, match="Objekt"):
+    with pytest.raises(ValueError, match="JSON schema object"):
         normalize_frontend_tools([{"name": "a", "description": "x", "parameters": []}], server_names=set())
-    with pytest.raises(ValueError, match="Parameterschema"):
+    with pytest.raises(ValueError, match="parameter schema"):
         normalize_frontend_tools([{"name": "a", "description": "x",
                                   "parameters": {"type": "not-a-json-schema-type"}}],
                                  server_names=set())
-    with pytest.raises(ValueError, match="groß"):
+    with pytest.raises(ValueError, match="too large"):
         normalize_frontend_tools([{"name": "a", "description": "x",
                                    "parameters": {"x": "z" * 66000}}], server_names=set())
-    with pytest.raises(ValueError, match="Definition"):
+    with pytest.raises(ValueError, match="definition"):
         normalize_frontend_tools([{"name": "a", "description": "x",
                                    "parameters": {"x": float("nan")}}], server_names=set())
 
@@ -81,23 +81,23 @@ def test_frontend_results_require_exactly_once_and_original_call():
     assert checked_frontend_results(completed_messages(), pending) == [
         {"role": "tool", "tool_call_id": "call-1", "content": "view opened"}
     ]
-    with pytest.raises(ValueError, match="fehlt"):
+    with pytest.raises(ValueError, match="missing"):
         checked_frontend_results(completed_messages(include_assistant=False), pending)
-    with pytest.raises(ValueError, match="Nicht alle"):
+    with pytest.raises(ValueError, match="Not all"):
         checked_frontend_results(completed_messages(result=False), pending)
-    with pytest.raises(ValueError, match="mehrfach"):
+    with pytest.raises(ValueError, match="more than once"):
         checked_frontend_results(completed_messages(repeat=True), pending)
-    with pytest.raises(ValueError, match="Doppelte"):
+    with pytest.raises(ValueError, match="Duplicate"):
         checked_frontend_results(completed_messages(), pending * 2)
-    with pytest.raises(ValueError, match="Keine offenen"):
+    with pytest.raises(ValueError, match="No pending frontend tools"):
         checked_frontend_results([], ())
     long = completed_messages()
     long[-1]["content"] = "a" * 270000
-    with pytest.raises(ValueError, match="groß"):
+    with pytest.raises(ValueError, match="too large"):
         checked_frontend_results(long, pending)
     invalid = completed_messages()
     invalid[-1]["content"] = 42
-    with pytest.raises(ValueError, match="Text"):
+    with pytest.raises(ValueError, match="text or content parts"):
         checked_frontend_results(invalid, pending)
 
 
@@ -111,20 +111,20 @@ def test_frontend_results_error_and_content_part_reduction():
     ]
     messages[-1]["error"] = "permission denied"
     result = checked_frontend_results(messages, pending)[0]
-    assert result["content"] == "FEHLER: permission denied\nopened\nsuccess"
+    assert result["content"] == "ERROR: permission denied\nopened\nsuccess"
     assert result["_meta"]["io.github.shuewe.cli-agent/frontend_tool_failed"] is True
     from cli_agent.state.message_visibility import messages_for_model
     assert "_meta" not in messages_for_model([result])[0]
     messages[-1]["error"] = 14
-    with pytest.raises(ValueError, match="Fehler"):
+    with pytest.raises(ValueError, match="error must be text"):
         checked_frontend_results(messages, pending)
     tampered = completed_messages()
     tampered[1]["toolCalls"][0]["function"]["name"] = "os__write_file"
-    with pytest.raises(ValueError, match="verändert"):
+    with pytest.raises(ValueError, match="changed"):
         checked_frontend_results(tampered, pending)
     tampered = completed_messages()
     tampered[1]["toolCalls"][0]["function"]["arguments"] = '{"view":"other"}'
-    with pytest.raises(ValueError, match="verändert"):
+    with pytest.raises(ValueError, match="changed"):
         checked_frontend_results(tampered, pending)
 
 
@@ -295,7 +295,7 @@ async def test_frontend_handoff_and_followup_without_replaying_agent_call():
                 "/ag-ui", json=with_new_user, headers=headers
             )
             assert rejected.status_code == 409
-            assert "Benutzernachrichten" in rejected.json()["error"]
+            assert "user messages" in rejected.json()["error"]
             assert session._pending_frontend is not None
             assert agents[0].resume_data == []
 
@@ -558,7 +558,7 @@ def test_frontend_history_reduces_result_content_parts_and_error():
     ])
     assert value == [{
         "role": "tool", "tool_call_id": "call",
-        "content": "FEHLER: denied\ndone",
+        "content": "ERROR: denied\ndone",
     }]
 
 
@@ -582,7 +582,7 @@ def test_multiple_frontend_tools_require_all_results_in_issued_order():
         {"role": "tool", "tool_call_id": "second", "content": "done second"},
     ]
     messages.pop()
-    with pytest.raises(ValueError, match="Nicht alle"):
+    with pytest.raises(ValueError, match="Not all"):
         checked_frontend_results(messages, pending)
 
 
@@ -618,7 +618,7 @@ async def test_model_loop_routes_only_advertised_frontend_tool_calls():
         )
     assert len(raised.value.calls) == 1
     assert raised.value.calls[0].id == "client"
-    assert any("existiert nicht" in item.get("content", "")
+    assert any("does not exist" in item.get("content", "")
                for item in messages if item.get("role") == "tool")
 
 
@@ -798,7 +798,7 @@ async def test_frontend_continuation_rejects_json_after_exhausted_repairs():
         async def _run_model_loop(self, **_kwargs): return "still invalid"
 
     agent = Agent()
-    with pytest.raises(ValueError, match="kein gültiges JSON"):
+    with pytest.raises(ValueError, match="valid JSON"):
         await agent.continue_after_frontend_tools([])
     assert agent.history == []
 
@@ -834,7 +834,7 @@ async def test_json_repair_frontend_tool_handoff_saves_checkpoint_and_resumes():
             if self.calls == 1:
                 return "prose that is not JSON"
             if self.calls == 2:
-                assert any("JSON-Format" in m.get("content", "") for m in messages)
+                assert any("required JSON format" in m.get("content", "") for m in messages)
                 run_state.tool_calls += 1
                 raise FrontendToolHandoff(
                     [FrontendToolCall("frontend-one", "show_view", "{}")],
@@ -889,7 +889,7 @@ async def test_json_repair_budget_not_reset_by_frontend_handoff():
             return "still invalid"
 
     agent = Agent()
-    with pytest.raises(ValueError, match="kein gültiges JSON"):
+    with pytest.raises(ValueError, match="valid JSON"):
         await agent.continue_after_frontend_tools([
             {"role": "tool", "tool_call_id": "first", "content": "done"}
         ])
@@ -995,7 +995,7 @@ async def test_repair_budget_is_not_reset_by_repeated_frontend_handoffs():
             {"role": "tool", "tool_call_id": "frontend-2", "content": "ok"},
         ])
     assert agent._agui_pending_json_repairs == 2
-    with pytest.raises(ValueError, match="kein gültiges JSON"):
+    with pytest.raises(ValueError, match="valid JSON"):
         await agent.continue_after_frontend_tools([
             {"role": "tool", "tool_call_id": "frontend-4", "content": "ok"},
         ])
@@ -1098,9 +1098,9 @@ async def test_failed_frontend_result_cannot_be_used_as_evidence():
 
         async def _run_model_loop(self, **kwargs):
             assert "front-fail" not in self._evidence_state.tool_results
-            assert "FEHLER: denied" in kwargs["messages"][-1]["content"]
+            assert "ERROR: denied" in kwargs["messages"][-1]["content"]
             assert "_meta" not in messages_for_model(kwargs["messages"])[-1]
-            with pytest.raises(EvidenceError, match="Unbekannte"):
+            with pytest.raises(EvidenceError, match="Unknown"):
                 self._evidence_state.update({
                     "evidences": [{
                         "id": "invalid", "type": "observation", "statement": "Succeeded",
@@ -1140,7 +1140,7 @@ async def test_frontend_tool_cannot_shadow_internal_evidence_name():
             }
             response = await client.post("/ag-ui", json=request, headers=headers)
             assert response.status_code == 400
-            assert "kollidierender Tool-Name" in response.json()["error"]
+            assert "colliding tool name" in response.json()["error"]
     finally:
         await service.shutdown()
 
@@ -1185,7 +1185,7 @@ async def test_resumed_frontend_results_expose_verified_short_source_refs():
         {"role": "tool", "tool_call_id": "one", "content": "view opened"},
         {"role": "tool", "tool_call_id": "two",
          "content": '{"value": 7}'},
-        {"role": "tool", "tool_call_id": "failed", "content": "FEHLER: denied",
+        {"role": "tool", "tool_call_id": "failed", "content": "ERROR: denied",
          "_meta": {FRONTEND_FAILURE_META_KEY: True}},
     ]
     assert await agent.continue_after_frontend_tools(results) == "Done"
@@ -1194,4 +1194,4 @@ async def test_resumed_frontend_results_expose_verified_short_source_refs():
     assert "failed" not in agent._evidence_state.tool_results
     assert agent.received[-3]["content"].startswith("[Quelle S1: show_view]")
     assert json.loads(agent.received[-2]["content"])["source_ref"] == "S2"
-    assert agent.received[-1]["content"] == "FEHLER: denied"
+    assert agent.received[-1]["content"] == "ERROR: denied"

@@ -12,7 +12,7 @@ _POLICY_KEYS = frozenset({"protected_paths", "mutation_protected_paths", "allowe
 
 def _validate_policy(data: object) -> dict[str, tuple]:
     if not isinstance(data, dict) or (set(data) - _POLICY_KEYS) or not {"protected_paths", "mutation_protected_paths"} <= set(data):
-        raise ValueError("Ungültige MCP-Pfad-Policy.")
+        raise ValueError("Invalid MCP path policy.")
     result: dict[str, tuple] = {}
     for key in ("protected_paths", "mutation_protected_paths"):
         entries = data[key]
@@ -21,17 +21,17 @@ def _validate_policy(data: object) -> dict[str, tuple]:
             or len(entries) > MAX_POLICY_PATHS
             or any(not isinstance(item, str) or not item or "\x00" in item for item in entries)
         ):
-            raise ValueError(f"Ungültige MCP-Pfadliste: {key}.")
+            raise ValueError(f"Invalid MCP path list: {key}.")
         result[key] = tuple(Path(item) for item in entries)
     grants = data.get("allowed_paths", [])
     if not isinstance(grants, list) or len(grants) > MAX_POLICY_PATHS:
-        raise ValueError("Ungültige MCP-allowed_paths.")
+        raise ValueError("Invalid MCP allowed_paths.")
     checked = []
     for grant in grants:
         if (not isinstance(grant, dict) or set(grant) != {"path", "access"}
                 or not isinstance(grant["path"], str) or not grant["path"]
                 or "\x00" in grant["path"] or grant["access"] not in {"read", "write"}):
-            raise ValueError("Ungültiger MCP-allowed_paths-Eintrag.")
+            raise ValueError("Invalid MCP allowed_paths entry.")
         checked.append({"path": grant["path"], "access": grant["access"]})
     result["allowed_paths"] = tuple(checked)
     return result
@@ -44,7 +44,7 @@ def write_path_policy(path: Path, data: dict) -> None:
         ensure_ascii=True,
     ).encode("utf-8")
     if len(serialized) > MAX_POLICY_BYTES:
-        raise ValueError("MCP-Pfad-Policy überschreitet das Größenlimit.")
+        raise ValueError("MCP path policy exceeds the size limit.")
     with path.open("xb") as handle:
         handle.write(serialized)
 
@@ -56,7 +56,7 @@ def read_path_policy(path: Path | None) -> dict[str, tuple]:
         with path.open("rb") as handle:
             raw = handle.read(MAX_POLICY_BYTES + 1)
         if len(raw) > MAX_POLICY_BYTES:
-            raise ValueError("MCP-Pfad-Policy überschreitet das Größenlimit.")
+            raise ValueError("MCP path policy exceeds the size limit.")
         return _validate_policy(json.loads(raw.decode("utf-8")))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"MCP-Pfad-Policy nicht lesbar oder ungültig: {path}") from exc
+        raise ValueError(f"MCP path policy cannot be read or is invalid: {path}") from exc

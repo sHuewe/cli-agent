@@ -459,7 +459,7 @@ async def await_mcp_operation(
         if not timeout.expired():
             raise
         raise RuntimeError(
-            f"{operation} hat das Timeout von {timeout_seconds:g} Sekunden überschritten."
+            f"{operation} exceeded the timeout of {timeout_seconds:g} seconds."
         ) from exc
 
 
@@ -473,8 +473,8 @@ def _reject_external_schema_references(schema: Any, *, tool_name: str) -> None:
                 if key in reference_keys:
                     if not isinstance(value, str) or not value.startswith("#"):
                         raise RuntimeError(
-                            f"MCP-Tool {tool_name} verwendet eine externe JSON-Schema-Referenz. "
-                            "Nur lokale Schema-Referenzen sind zulässig."
+                            f"MCP-Tool {tool_name} uses an external JSON Schema reference. "
+                            "Only local schema references are allowed."
                         )
                 stack.append(value)
         elif isinstance(current, list):
@@ -488,7 +488,7 @@ def _schema_validator(schema: dict[str, Any], *, tool_name: str):
         validator_class.check_schema(schema)
     except SchemaError as exc:
         raise RuntimeError(
-            f"MCP-Tool {tool_name} liefert kein gültiges JSON-Schema."
+            f"MCP-Tool {tool_name} does not provide a valid JSON Schema."
         ) from exc
     return validator_class(schema)
 
@@ -516,8 +516,8 @@ def validate_mcp_tool_arguments(
         )
     except _UnsupportedSafeRegex as exc:
         return (
-            "$: JSON-Schema-Regex wird von der sicheren RE2-Engine "
-            f"nicht unterstützt: {exc}"
+            "$: JSON Schema regex is not supported by the safe RE2 engine "
+            f" : {exc}"
         )
     if not errors:
         return None
@@ -551,12 +551,12 @@ def validate_mcp_server_metadata(
 ) -> None:
     if instructions is not None and len(instructions) > MAX_MCP_INSTRUCTIONS_CHARS:
         raise RuntimeError(
-            f"MCP-Server {server_name!r} liefert zu große Instructions "
-            f"({len(instructions)} > {MAX_MCP_INSTRUCTIONS_CHARS} Zeichen)."
+            f"MCP-Server {server_name!r} provides oversized instructions "
+            f"({len(instructions)} > {MAX_MCP_INSTRUCTIONS_CHARS} characters)."
         )
     if len(tools) > MAX_MCP_TOOLS_PER_SERVER:
         raise RuntimeError(
-            f"MCP-Server {server_name!r} bietet zu viele Tools an "
+            f"MCP-Server {server_name!r} offers too many tools "
             f"({len(tools)} > {MAX_MCP_TOOLS_PER_SERVER})."
         )
 
@@ -566,30 +566,30 @@ def validate_mcp_server_metadata(
         tool_name = str(getattr(tool, "name", "<unbekannt>"))
         if any(0xD800 <= ord(character) <= 0xDFFF for character in tool_name):
             raise RuntimeError(
-                f"MCP-Server {server_name!r} liefert einen Toolnamen mit "
-                "einem ungültigen Unicode-Surrogate."
+                f"MCP-Server {server_name!r} provides a tool name containing "
+                "an invalid Unicode surrogate."
             )
         if len(tool_name) > MAX_MCP_TOOL_NAME_CHARS:
             raise RuntimeError(
-                f"MCP-Server {server_name!r} liefert einen zu langen Toolnamen "
-                f"({len(tool_name)} > {MAX_MCP_TOOL_NAME_CHARS} Zeichen)."
+                f"MCP-Server {server_name!r} returns an excessively long tool name "
+                f"({len(tool_name)} > {MAX_MCP_TOOL_NAME_CHARS} characters)."
             )
         if tool_name in seen_tool_names:
             raise RuntimeError(
-                f"MCP-Server {server_name!r} bietet den Toolnamen {tool_name!r} mehrfach an."
+                f"MCP-Server {server_name!r} provides duplicate tool name {tool_name!r}."
             )
         seen_tool_names.add(tool_name)
 
         description = str(getattr(tool, "description", None) or "")
         if len(description) > MAX_MCP_TOOL_DESCRIPTION_CHARS:
             raise RuntimeError(
-                f"MCP-Tool {server_name}__{tool_name} hat eine zu große Beschreibung "
-                f"({len(description)} > {MAX_MCP_TOOL_DESCRIPTION_CHARS} Zeichen)."
+                f"MCP-Tool {server_name}__{tool_name} has an oversized description "
+                f"({len(description)} > {MAX_MCP_TOOL_DESCRIPTION_CHARS} characters)."
             )
         schema = getattr(tool, "inputSchema", {})
         if not isinstance(schema, dict):
             raise RuntimeError(
-                f"MCP-Tool {server_name}__{tool_name} liefert kein JSON-Objekt als Input-Schema."
+                f"MCP-Tool {server_name}__{tool_name} does not provide a JSON object as input schema."
             )
         try:
             schema_text = json.dumps(
@@ -599,26 +599,26 @@ def validate_mcp_server_metadata(
             )
         except (TypeError, ValueError) as exc:
             raise RuntimeError(
-                f"MCP-Tool {server_name}__{tool_name} liefert kein gültig serialisierbares Schema."
+                f"MCP-Tool {server_name}__{tool_name} does not provide a valid serializable schema."
             ) from exc
         if len(schema_text) > MAX_MCP_TOOL_SCHEMA_CHARS:
             raise RuntimeError(
-                f"MCP-Tool {server_name}__{tool_name} hat ein zu großes Schema "
-                f"({len(schema_text)} > {MAX_MCP_TOOL_SCHEMA_CHARS} Zeichen)."
+                f"MCP-Tool {server_name}__{tool_name} has an oversized schema "
+                f"({len(schema_text)} > {MAX_MCP_TOOL_SCHEMA_CHARS} characters)."
             )
         _schema_validator(schema, tool_name=f"{server_name}__{tool_name}")
         total_metadata_chars += len(description) + len(schema_text)
         if total_metadata_chars > MAX_MCP_TOTAL_TOOL_METADATA_CHARS:
             raise RuntimeError(
-                f"MCP-Server {server_name!r} liefert insgesamt zu viele Tool-Metadaten "
-                f"({total_metadata_chars} > {MAX_MCP_TOTAL_TOOL_METADATA_CHARS} Zeichen)."
+                f"MCP-Server {server_name!r} provides too much total tool metadata "
+                f"({total_metadata_chars} > {MAX_MCP_TOTAL_TOOL_METADATA_CHARS} characters)."
             )
 
 
 def enforce_mcp_tool_result_limit(text: str) -> str:
     if len(text) > MAX_MCP_TOOL_RESULT_CHARS:
         raise RuntimeError(
-            "MCP-Tool-Ergebnis überschreitet das Sicherheitslimit "
-            f"({len(text)} > {MAX_MCP_TOOL_RESULT_CHARS} Zeichen)."
+            "MCP tool result exceeds the safety limit "
+            f"({len(text)} > {MAX_MCP_TOOL_RESULT_CHARS} characters)."
         )
     return text

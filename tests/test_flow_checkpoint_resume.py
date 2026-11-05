@@ -180,7 +180,7 @@ def test_null_primary_without_available_fallback_is_an_error(tmp_path):
         encoding="utf-8",
     )
     flow = load_flow(source, workspace=tmp_path)
-    with pytest.raises(ValueError, match="Kein verfügbarer Flow-Result-Selector"):
+    with pytest.raises(ValueError, match="No available flow result selector for"):
         flow_module._flow_result_value(
             flow, outputs={"primary": "null"}, output_json={"primary": True},
         )
@@ -234,7 +234,7 @@ def test_oversize_embedded_verification_rejected_before_status_write(
         (len(raw.encode("utf-8")) + len(wrapper.encode("utf-8"))) // 2,
     )
     (tmp_path / "old-v2.json").write_text(raw, encoding="utf-8")
-    with pytest.raises(ValueError, match="checkpoint_status überschreitet"):
+    with pytest.raises(ValueError, match="checkpoint_status exceeds"):
         asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
     assert not (tmp_path / "resume.json").exists()
     assert (tmp_path / "old-v2.json").read_text(encoding="utf-8") == raw
@@ -288,7 +288,7 @@ def test_parent_retains_only_live_checkpoint_source_guards(
     monkeypatch.setattr(flow_module, "run_once", fake_run)
     flow = load_flow(root, workspace=tmp_path)
     if checkpoint_success:
-        with pytest.raises(ValueError, match="reserviert|kollidiert"):
+        with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
             asyncio.run(run_flow(flow, workspace=tmp_path))
         assert called == []
     else:
@@ -316,7 +316,7 @@ def test_parent_protects_unknown_future_checkpoint_before_writer(
         raise AssertionError("Earlier writer must not run")
 
     monkeypatch.setattr(flow_module, "run_once", fake_run)
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
     assert called == []
 
@@ -369,7 +369,7 @@ def test_completed_child_still_protects_verifier_checkpoint_file(
             web_context_statuses=(),
         )
     monkeypatch.setattr(flow_module, "run_once", fake_run)
-    with pytest.raises(ValueError, match="reserviert|kollidiert"):
+    with pytest.raises(ValueError, match="conflicts with a reserved flow input:"):
         asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
 
 

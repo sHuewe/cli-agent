@@ -71,12 +71,12 @@ def _validate_parent_structure(value: Any, *, label: str) -> None:
         nodes += 1
         if nodes > MAX_MCP_SCHEMA_PARENT_NODES:
             raise RuntimeError(
-                f"{label} überschreitet das Knotenlimit "
+                f"{label} exceeds the node limit "
                 f"({nodes} > {MAX_MCP_SCHEMA_PARENT_NODES})."
             )
         if depth > MAX_MCP_SCHEMA_PARENT_DEPTH:
             raise RuntimeError(
-                f"{label} überschreitet das Tiefenlimit "
+                f"{label} exceeds the depth limit "
                 f"({depth} > {MAX_MCP_SCHEMA_PARENT_DEPTH})."
             )
         if isinstance(current, dict):
@@ -90,7 +90,7 @@ def _truncate_validation_error(message: str | None) -> str | None:
 
     if message is None or len(message) <= MAX_MCP_VALIDATION_ERROR_CHARS:
         return message
-    marker = " … [Validierungsfehler gekürzt] … "
+    marker = " … [validation error truncated] … "
     remaining = MAX_MCP_VALIDATION_ERROR_CHARS - len(marker)
     head = remaining // 2
     tail = remaining - head
@@ -99,13 +99,13 @@ def _truncate_validation_error(message: str | None) -> str | None:
 
 def _decode_worker_response(raw: bytes, *, operation: str) -> dict[str, Any]:
     if len(raw) > MAX_MCP_SCHEMA_WORKER_RESPONSE_BYTES:
-        raise RuntimeError(f"{operation} lieferte eine unerwartet große Antwort.")
+        raise RuntimeError(f"{operation} returned an unexpectedly large response.")
     try:
         response = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"{operation} lieferte keine gültige Antwort.") from exc
+        raise RuntimeError(f"{operation} did not return a valid response.") from exc
     if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
-        raise RuntimeError(f"{operation} lieferte keine gültige Antwort.")
+        raise RuntimeError(f"{operation} did not return a valid response.")
     if not response["ok"]:
         message = response.get("error")
         if not isinstance(message, str) or not message:
@@ -116,8 +116,8 @@ def _decode_worker_response(raw: bytes, *, operation: str) -> dict[str, Any]:
 
 def _timeout_error(operation: str, timeout_seconds: float) -> RuntimeError:
     return RuntimeError(
-        f"{operation} überschreitet das Zeitlimit von "
-        f"{timeout_seconds:g} Sekunden."
+        f"{operation} exceeds the time limit of "
+        f"{timeout_seconds:g} seconds."
     )
 
 
@@ -242,8 +242,8 @@ class _PersistentSchemaWorker:
         except queue.Empty as exc:
             self._stop_locked()
             raise RuntimeError(
-                "MCP-JSON-Schema-Worker überschreitet das Start-Zeitlimit von "
-                f"{MCP_SCHEMA_WORKER_START_TIMEOUT_SECONDS:g} Sekunden."
+                "MCP JSON Schema worker exceeded the startup timeout of "
+                f"{MCP_SCHEMA_WORKER_START_TIMEOUT_SECONDS:g} seconds."
             ) from exc
 
         if ready is None:
@@ -254,12 +254,12 @@ class _PersistentSchemaWorker:
         except (UnicodeError, json.JSONDecodeError) as exc:
             self._stop_locked()
             raise RuntimeError(
-                "MCP-JSON-Schema-Worker lieferte keinen gültigen Start-Handshake."
+                "MCP JSON Schema worker did not provide a valid startup handshake."
             ) from exc
         if handshake != {"ready": True}:
             self._stop_locked()
             raise RuntimeError(
-                "MCP-JSON-Schema-Worker lieferte keinen gültigen Start-Handshake."
+                "MCP JSON Schema worker did not provide a valid startup handshake."
             )
 
     def _write_payload_locked(
@@ -342,7 +342,7 @@ class _PersistentSchemaWorker:
 
         if len(payload) > MAX_MCP_SCHEMA_WORKER_REQUEST_BYTES:
             raise RuntimeError(
-                f"{operation}: Validierungsdaten überschreiten das Prozesslimit "
+                f"{operation}: validation data exceed the process limit "
                 f"({len(payload)} > {MAX_MCP_SCHEMA_WORKER_REQUEST_BYTES} Bytes)."
             )
 
@@ -365,7 +365,7 @@ class _PersistentSchemaWorker:
                 if process is None or responses is None:
                     self._stop_locked()
                     raise RuntimeError(
-                        f"{operation}: JSON-Schema-Worker ist nicht verfügbar."
+                        f"{operation}: JSON Schema worker is unavailable."
                     )
                 if self._write_payload_locked(
                     process,
@@ -382,14 +382,14 @@ class _PersistentSchemaWorker:
                 self._start_locked()
             else:  # pragma: no cover - defensive
                 raise RuntimeError(
-                    f"{operation}: JSON-Schema-Worker ist nicht verfügbar."
+                    f"{operation}: JSON Schema worker is unavailable."
                 )
 
             responses = self._responses
             if responses is None:
                 self._stop_locked()
                 raise RuntimeError(
-                    f"{operation}: JSON-Schema-Worker ist nicht verfügbar."
+                    f"{operation}: JSON Schema worker is unavailable."
                 )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -459,8 +459,8 @@ def validate_mcp_server_metadata(
 
     if instructions is not None and len(instructions) > mcp_limits.MAX_MCP_INSTRUCTIONS_CHARS:
         raise RuntimeError(
-            f"MCP-Server {server_name!r} liefert zu große Instructions "
-            f"({len(instructions)} > {mcp_limits.MAX_MCP_INSTRUCTIONS_CHARS} Zeichen)."
+            f"MCP-Server {server_name!r} provides oversized instructions "
+            f"({len(instructions)} > {mcp_limits.MAX_MCP_INSTRUCTIONS_CHARS} characters)."
         )
     if len(tools) > mcp_limits.MAX_MCP_TOOLS_PER_SERVER:
         raise RuntimeError(
@@ -475,13 +475,13 @@ def validate_mcp_server_metadata(
         tool_name = str(getattr(tool, "name", "<unbekannt>"))
         if any(0xD800 <= ord(character) <= 0xDFFF for character in tool_name):
             raise RuntimeError(
-                f"MCP-Server {server_name!r} liefert einen Toolnamen mit "
-                "einem ungültigen Unicode-Surrogate."
+                f"MCP-Server {server_name!r} provides a tool name containing "
+                "an invalid Unicode surrogate."
             )
         if len(tool_name) > mcp_limits.MAX_MCP_TOOL_NAME_CHARS:
             raise RuntimeError(
                 f"MCP-Server {server_name!r} liefert einen zu langen Toolnamen "
-                f"({len(tool_name)} > {mcp_limits.MAX_MCP_TOOL_NAME_CHARS} Zeichen)."
+                f"({len(tool_name)} > {mcp_limits.MAX_MCP_TOOL_NAME_CHARS} characters)."
             )
         if tool_name in seen_tool_names:
             raise RuntimeError(
@@ -492,8 +492,8 @@ def validate_mcp_server_metadata(
         description = str(getattr(tool, "description", None) or "")
         if len(description) > mcp_limits.MAX_MCP_TOOL_DESCRIPTION_CHARS:
             raise RuntimeError(
-                f"MCP-Tool {server_name}__{tool_name} hat eine zu große Beschreibung "
-                f"({len(description)} > {mcp_limits.MAX_MCP_TOOL_DESCRIPTION_CHARS} Zeichen)."
+                f"MCP-Tool {server_name}__{tool_name} has an oversized description "
+                f"({len(description)} > {mcp_limits.MAX_MCP_TOOL_DESCRIPTION_CHARS} characters)."
             )
         schema = getattr(tool, "inputSchema", {})
         if not isinstance(schema, dict):
@@ -512,18 +512,18 @@ def validate_mcp_server_metadata(
             )
         except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise RuntimeError(
-                f"MCP-Tool {server_name}__{tool_name} liefert kein gültig serialisierbares Schema."
+                f"MCP-Tool {server_name}__{tool_name} does not provide a valid serializable schema."
             ) from exc
         if len(schema_text) > mcp_limits.MAX_MCP_TOOL_SCHEMA_CHARS:
             raise RuntimeError(
-                f"MCP-Tool {server_name}__{tool_name} hat ein zu großes Schema "
-                f"({len(schema_text)} > {mcp_limits.MAX_MCP_TOOL_SCHEMA_CHARS} Zeichen)."
+                f"MCP-Tool {server_name}__{tool_name} has an oversized schema "
+                f"({len(schema_text)} > {mcp_limits.MAX_MCP_TOOL_SCHEMA_CHARS} characters)."
             )
         total_metadata_chars += len(description) + len(schema_text)
         if total_metadata_chars > mcp_limits.MAX_MCP_TOTAL_TOOL_METADATA_CHARS:
             raise RuntimeError(
                 f"MCP-Server {server_name!r} liefert insgesamt zu viele Tool-Metadaten "
-                f"({total_metadata_chars} > {mcp_limits.MAX_MCP_TOTAL_TOOL_METADATA_CHARS} Zeichen)."
+                f"({total_metadata_chars} > {mcp_limits.MAX_MCP_TOTAL_TOOL_METADATA_CHARS} characters)."
             )
         schemas.append(
             {
@@ -536,7 +536,7 @@ def validate_mcp_server_metadata(
         _run_worker(
             {"operation": "validate_schemas", "schemas": schemas},
             timeout_seconds=MCP_SCHEMA_METADATA_TIMEOUT_SECONDS,
-            operation=f"MCP-Server {server_name!r}: JSON-Schema-Prüfung",
+            operation=f"MCP-Server {server_name!r}: JSON Schema validation",
         )
 
 
@@ -567,8 +567,8 @@ def validate_mcp_tool_arguments(
     validation_error = response.get("validation_error")
     if validation_error is not None and not isinstance(validation_error, str):
         raise RuntimeError(
-            f"MCP-Tool {tool_name}: JSON-Schema-Validierung lieferte "
-            "eine ungültige Antwort."
+            f"MCP-Tool {tool_name}: JSON Schema validation returned "
+            "an invalid response."
         )
     return validation_error
 
@@ -610,20 +610,20 @@ def _handle_request(request: Any) -> dict[str, Any]:
     from cli_agent.security import mcp_limits
 
     if not isinstance(request, dict):
-        raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")
+        raise RuntimeError("Invalid JSON Schema worker request.")
 
     operation = request.get("operation")
     if operation == "validate_schemas":
         schemas = request.get("schemas")
         if not isinstance(schemas, list):
-            raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")
+            raise RuntimeError("Invalid JSON Schema worker request.")
         for item in schemas:
             if not isinstance(item, dict):
-                raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")
+                raise RuntimeError("Invalid JSON Schema worker request.")
             tool_name = item.get("tool_name")
             schema = item.get("schema")
             if not isinstance(tool_name, str) or not isinstance(schema, dict):
-                raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")
+                raise RuntimeError("Invalid JSON Schema worker request.")
             _worker_schema_validator(schema, tool_name=tool_name)
         return {"ok": True}
 
@@ -636,7 +636,7 @@ def _handle_request(request: Any) -> dict[str, Any]:
             or not isinstance(schema, dict)
             or not isinstance(arguments, dict)
         ):
-            raise RuntimeError("Ungültige JSON-Schema-Worker-Anfrage.")
+            raise RuntimeError("Invalid JSON Schema worker request.")
         validator = _worker_schema_validator(schema, tool_name=tool_name)
         validation_error = mcp_limits.validate_mcp_tool_arguments(
             tool_name=tool_name,
@@ -659,7 +659,7 @@ def _encode_worker_response(response: dict[str, Any]) -> bytes:
         encoded = json.dumps(
             {
                 "ok": False,
-                "error": "JSON-Schema-Worker-Antwort überschreitet das Limit.",
+                "error": "JSON Schema worker response exceeds the limit.",
             }
         ).encode("utf-8")
     return encoded
@@ -701,7 +701,7 @@ def _worker_main() -> int:
         ):
             response = {
                 "ok": False,
-                "error": "Ungültige JSON-Schema-Worker-Anfrage.",
+                "error": "Invalid JSON Schema worker request.",
             }
         except Exception:
             # Do not expose parser/validator internals or argument content.

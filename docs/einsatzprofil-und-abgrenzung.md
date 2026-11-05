@@ -1,176 +1,176 @@
-# Einsatzzweck und Abgrenzung
+# Intended use and scope boundaries
 
-> Stand: 6. Oktober 2026. Die Aussagen zu anderen Projekten beziehen sich auf deren öffentlich dokumentierten Funktionsumfang zu diesem Zeitpunkt und sollten vor einer späteren Produktentscheidung erneut geprüft werden.
+> As of October 6, 2026. Statements about other projects reflect their publicly documented capabilities as of that date and should be reverified before future product decisions.
 
-## Zielbild
+## Design objective
 
-`cli-agent` ist bewusst kein möglichst autonomer Coding-Agent. Der Schwerpunkt liegt auf einem **lokal betreibbaren, policy-kontrollierten LLM-/MCP-Agenten für technische Arbeitsabläufe**, bei dem die tatsächlich benötigten Fähigkeiten möglichst klein, explizit und überprüfbar bleiben.
+`cli-agent` is deliberately **not** intended to be a maximally autonomous coding agent. Its focus is a **locally deployable, policy-controlled LLM/MCP agent for technical workflows**, exposing only the capabilities genuinely required, as explicitly, narrowly and verifiably as practical.
 
-Ein typischer Einsatz geht von folgenden Anforderungen aus:
+A typical use case expects:
 
-- Nutzung eines eigenen oder intern bereitgestellten OpenAI-kompatiblen LLM-Endpunkts;
-- MCP als definierte Schnittstelle zu zusätzlichen Funktionen und Fachsystemen;
-- technisch erzwingbare administrative Grenzen, die eine normale Benutzerkonfiguration nicht lockern kann;
-- kein generisches Shell-Tool und keine beliebige Codeausführung durch das Modell;
-- kein projektübergreifendes persistentes Agenten-Memory im Core;
-- explizit begrenzter Workspace-, Netzwerk- und Toolzugriff; optionale Knowledge-Quellen besitzen separat dokumentierte Vertrauensgrenzen;
-- nachvollziehbare, reproduzierbare Abläufe für wiederkehrende Aufgaben.
+- A privately operated or internally provided OpenAI-compatible LLM endpoint.
+- MCP as a defined interface to additional functions and domain systems.
+- Technically enforceable administrative constraints that ordinary user configuration cannot relax.
+- No generic shell tool or arbitrary model-driven code execution.
+- No persistent cross-project agent memory in core.
+- Explicitly bounded workspace, network and tool access; optional knowledge sources have separately documented trust boundaries.
+- Auditable, reproducible execution for recurring tasks.
 
-Damit ist die zentrale Designfrage nicht: **Welche Fähigkeiten kann ein Agent theoretisch anbieten?** Sondern: **Welche Fähigkeiten werden für einen konkreten Einsatz tatsächlich benötigt und wie eng können sie technisch begrenzt werden?**
+The design question is therefore not **what an agent can theoretically do**, but **which capabilities are actually needed for a concrete application and how narrowly they can be technically restricted**.
 
-## Bewusste Nicht-Ziele
+## Deliberate non-goals
 
-Der Core von `cli-agent` stellt dem Modell keine universelle Ausführungsprimitive wie `shell(command)` oder eine frei programmierbare Code-Execution-Umgebung bereit.
+The core does not expose a universal execution primitive like `shell(command)` or a freely programmable code-execution environment to the model.
 
-Workspace-Dateisystemzugriffe des Main-Agenten erfolgen stattdessen über definierte eingebaute MCP-Tools mit eigener Pfadvalidierung, Workspace-Containment, Größenlimits, Sensitive-Path-Schutz und getrennten Lese-/Schreibfähigkeiten. Diese Aussage gilt bewusst **nicht pauschal für jede optionale lokale Kontextquelle**: Der separat aktivierbare OKF-Knowledge-Server besitzt einen eigenen, read-only Repository-Root, der außerhalb des Workspace liegen darf. Externe MCPs können ebenfalls zusätzliche Fähigkeiten bereitstellen und müssen für einen gemanagten Einsatz separat bewertet und administrativ freigegeben werden.
+Instead, main-agent workspace filesystem operations use defined built-in MCP tools with their own path validation, workspace containment, size limits, sensitive-path protection and separate read/write capabilities. This statement intentionally does **not** apply universally to optional local context sources: the separately enabled OKF knowledge server has its own read-only repository root, which may reside outside the workspace. External MCPs may add other capabilities and need separate assessment and administrative approval for managed use.
 
-Dadurch soll vermieden werden, dass eine einzelne generische Capability zahlreiche andere Grenzen indirekt wieder öffnet. Ein Shell-Tool kann beispielsweise Datei-, Netzwerk-, Prozess- und Codeausführungsfähigkeiten kombinieren. Ein eng definiertes Tool wie `read_file` oder ein fachliches MCP-Tool besitzt dagegen einen deutlich kleineren und besser prüfbaren Contract.
+The aim is to prevent one generic capability from indirectly reopening many other security boundaries. For example, a shell combines file, network, process and code execution. A narrowly defined `read_file` or domain-specific MCP tool has a much smaller, more easily audited contract.
 
-## Administrative Sicherheitsgrenze
+## Administrative security boundary
 
-`cli-agent` trennt normale Benutzer-/Projektkonfiguration und maschinenweite Admin-Policy.
+`cli-agent` separates normal user/project configuration from machine-wide administrative policy.
 
-Die Benutzerkonfiguration legt fest, **was verwendet werden soll**. Die Admin-Policy legt fest, **was überhaupt verwendet werden darf**. Dazu gehören insbesondere freigegebene Modell-, MCP- und Web-Ziele, externe stdio-MCP-Launchprofile, Credential-Bindungen und optionale permanente Tool-Auto-Approvals.
+User configuration determines **what to use**; admin policy determines **what is permitted at all**. The latter covers allowed model/MCP/web destinations, external stdio MCP launch profiles, credential bindings and optional permanent tool auto-approvals.
 
-Wesentliche Eigenschaften:
+Key characteristics:
 
-- Die Admin-Policy wird ausschließlich von einem festen maschinenweiten Pfad geladen.
-- Die normale Benutzerkonfiguration kann diese Grenze nicht lockern.
-- Fehlt die Policy, gelten restriktive Defaults.
-- Eine vorhandene, aber ungültige Admin-Policy führt zu einem Fehler statt zu einem stillen Fallback auf weniger restriktive Einstellungen.
-- Externe stdio-MCPs werden nicht durch frei wählbare Benutzer-Commands gestartet; ihre Launch-Konfiguration stammt aus der Admin-Policy.
-- Netzwerkziele werden getrennt für Modell, MCP und Web administrativ begrenzt.
+- Admin policy is loaded only from a fixed machine-wide path.
+- User configuration cannot relax its constraints.
+- Absent policy results in restrictive defaults.
+- A present but invalid policy fails closed instead of silently falling back to weaker settings.
+- External stdio MCPs are not launched using arbitrary user-provided commands; their launch profiles come from admin policy.
+- Model, MCP and web network destinations have separate administrative allowlists.
 
-Details stehen in [Security](security.md), [Deployment](deployment.md) und der [Firmen-Rollout-Checkliste](company-deployment-checklist.md).
+See [Security](security.md), [Deployment](deployment.md) and the [enterprise rollout checklist](company-deployment-checklist.md).
 
-### OKF als separate lokale Read-Boundary
+### OKF as a separate local read boundary
 
-Der optionale OKF-Knowledge-Zugriff ist eine bewusste Ausnahme von der Workspace-Grenze. `[okf].repository` gehört zur normalen Benutzer-/Projektkonfiguration und darf auf einen lokalen Repository-Root außerhalb des Workspace zeigen. Nach Auswahl dieses Roots sind die Knowledge-Tools deterministisch und read-only auf genau diesen Root begrenzt: absolute Folgepfade, `..`, Symlink-/Reparse-Escapes und Hardlink-Aliase werden abgefangen, und der Retrieval-Lauf besitzt ausschließlich die vorgesehenen OKF-Tools.
+Optional OKF knowledge access is an intentional exception to the workspace boundary. `[okf].repository` belongs to user/project configuration and may point to a root outside the workspace. After selection, Knowledge tools are deterministically read-only and contained to that root: absolute follow-up paths, `..`, symlink/reparse escapes and hardlink aliases are blocked, and retrieval offers only the specified OKF tools.
 
-Die **Auswahl des OKF-Roots ist bewusst Benutzerkonfiguration und keine administrative Policy**. Es existiert keine `okf_allowed_roots`-Allowlist in `admin_config.toml`, und eine solche Einschränkung ist für das aktuelle Trust-Modell nicht vorgesehen. Durch das explizite Setzen von `[okf].repository` wählt der Benutzer eine lokale Knowledge-Quelle aus, deren relevante Inhalte an das konfigurierte LLM weitergegeben werden dürfen. Das entspricht der grundsätzlichen Annahme, dass der Benutzer dem freigegebenen LLM auch selbst lokale Informationen als Kontext bereitstellen darf.
+**Selecting the OKF root is deliberately user configuration, not admin policy.** There is no `okf_allowed_roots` list in `admin_config.toml`, nor is one planned for the current trust model. By setting `[okf].repository`, the user explicitly selects a local knowledge source whose relevant content may be provided to the configured LLM. This follows the assumption that users may independently provide locally accessible information as context to their approved model.
 
-Die technische Sicherheitsgrenze liegt deshalb nicht in einer administrativen Auswahl erlaubter Repository-Pfade, sondern **innerhalb des explizit gewählten OKF-Roots**. Nach dessen Auswahl kann der Retrieval-Lauf den Root nicht verlassen und erhält ausschließlich die beiden vorgesehenen read-only Tools `knowledge_index` und `knowledge_read`. Der interne OKF-MCP wird nur akzeptiert, wenn er exakt diese Toolmenge anbietet.
+The technical security boundary is therefore not an administrative list of permitted repository paths, but **containment within the explicitly selected OKF root**. After selection, retrieval cannot escape it and has only the two read-only tools `knowledge_index` and `knowledge_read`. The internal OKF MCP is accepted only if it exposes exactly that tool set.
 
-Auch innerhalb des gewählten Roots gibt es **keinen freien Dateibrowser**. Das Verzeichnis muss ein gültiges OKF-Repository mit einer lesbaren Root-`index.md` sein. `knowledge_index` und `knowledge_read` folgen ausschließlich der OKF-Struktur; nicht OKF-konforme Markdown-Dateien werden nicht als Knowledge angeboten beziehungsweise von `knowledge_read` abgewiesen. Ein beliebiger lokaler Ordner kann daher nicht allein durch Angabe seines Pfades als frei durchsuchbare Datenquelle verwendet werden.
+There is **no unrestricted file browser even within the selected root**. The directory must be a valid OKF repository with a readable root `index.md`. Both tools follow OKF structure only; nonconforming Markdown files are not offered as knowledge and are rejected by `knowledge_read`. Merely entering an arbitrary local directory path does not make it a freely searchable data source.
 
-Damit sind zwei unterschiedliche Grenzen zu unterscheiden: Der Workspace-OS-MCP kann seinen Workspace nicht verlassen; der OKF-MCP kann den **vom Benutzer ausdrücklich gewählten** Repository-Root nicht verlassen. Die fehlende administrative Root-Allowlist ist damit eine bewusste Designentscheidung und nicht als offene Sicherheitsmaßnahme dargestellt.
+Two distinct boundaries follow: Workspace OS MCP cannot escape its workspace; OKF MCP cannot escape the **repository root explicitly selected by the user**. The absent administrative root allowlist is a deliberate design choice, not an outstanding mitigation.
 
-Details: [OKF MCP](mcp-okf.md) und [Security](security.md).
+See [OKF MCP](mcp-okf.md) and [Security](security.md).
 
-## MCP als kontrollierte Capability-Grenze
+## MCP as a controlled capability boundary
 
-MCP ist für `cli-agent` nicht nur ein Erweiterungsmechanismus, sondern eine bewusst kontrollierte Capability-Grenze.
+For `cli-agent`, MCP is not merely an extension mechanism, but an intentionally controlled capability boundary.
 
-Externe Tools benötigen standardmäßig eine Freigabe. Permanente Auto-Approvals sind optional und werden nicht nur an einen Toolnamen, sondern zusätzlich an die administrativ definierte Serveridentität und einen SHA-256-Fingerprint des Tool-Contracts gebunden. Der Contract umfasst Toolname, modell-sichtbare Beschreibung und vollständiges `inputSchema`. Ändert sich dieser Contract, fällt die Ausführung auf die normale Benutzerbestätigung zurück.
+External tools require approval by default. Permanent auto-approvals are optional and are pinned not just to a tool name, but to the administratively defined server identity and a SHA-256 fingerprint of the tool contract. That contract contains the tool name, model-visible description and full `inputSchema`. Contract changes fall back to ordinary user approval.
 
-Auch MCP-Instructions besitzen eine eigene Trust-Grenze. Instructions externer Server werden standardmäßig als nicht vertrauenswürdiger Referenzkontext behandelt. Erst eine explizite administrative Freigabe mit `trust_instructions = true` erlaubt ihre Aufnahme in den Systemprompt.
+MCP instructions also have a trust boundary. External server instructions are treated as untrusted reference context unless an explicit administrative `trust_instructions = true` approval allows inclusion in the system prompt.
 
-## Reproduzierbare statt beliebig autonome Abläufe
+## Reproducible rather than arbitrarily autonomous workflows
 
-Für wiederkehrende Aufgaben bietet `cli-agent` deklarative Multi-Step-Flows. Pro Schritt können unter anderem Modell, Datei-/Web-Kontext, Workspace-Zugriff, Tool-Vorabfreigaben, Retry-Verhalten und Ausgabeformat festgelegt werden.
+For recurring work, `cli-agent` supports declarative multi-step flows. Individual steps can define model, file/web context, workspace access, tool preapprovals, retries and response format.
 
-Damit lassen sich Abläufe so gestalten, dass einzelne Schritte nur die für sie notwendigen Fähigkeiten erhalten. `foreach`, Checkpoints, Subflows und Conversation-Steps ermöglichen komplexere Workflows, ohne dafür eine generische Shell oder frei programmierbare Agentenlogik freizugeben.
+Capabilities can therefore be limited to what each step actually needs. `foreach`, checkpoints, subflows and conversation steps allow more complex workflows without granting a generic shell or freely programmable agent execution.
 
-## Vergleich mit bekannten Open-Source-Agenten
+## Comparison with established open-source agents
 
-Die folgenden Projekte sind technisch leistungsfähig und verfolgen teilweise bewusst ein anderes Zielbild. Die Tabelle bewertet nicht deren allgemeine Qualität, sondern die Passung zu einem Einsatz, bei dem ein eigener LLM-Endpunkt, MCP und eine möglichst kleine administrativ begrenzte Capability-Oberfläche im Vordergrund stehen.
+The following projects are technically capable but sometimes deliberately pursue different goals. This comparison is **not** an overall quality ranking; it assesses suitability where a custom LLM endpoint, MCP and a small administratively constrained capability surface matter most.
 
-| Projekt | Eigener / OpenAI-kompatibler LLM-Endpunkt | MCP | Generische Shell / Codeausführung | Governance-Aspekt für diesen Einsatzzweck |
+| Project | Custom/OpenAI-compatible LLM endpoint | MCP | Generic shell / code execution | Governance implications |
 | --- | --- | --- | --- | --- |
-| **cli-agent** | Ja | Ja | **Nicht als Core-Capability vorhanden** | Feste maschinenweite Admin-Policy, fail-closed bei ungültiger Policy, explizite Capability-Grenzen |
-| **Hermes Agent** | Ja | Ja | Terminal und Code Execution gehören zum dokumentierten Funktionsumfang | Toolsets können deaktiviert und Werte im Managed Scope gepinnt werden; der Managed Scope wird vom Projekt selbst jedoch nicht als harte Sandbox beschrieben und benötigt zusätzliche Deployment-Härtung |
-| **goose** | Ja | Ja | Die Developer Extension enthält ein `shell`-Tool für beliebige Systemkommandos mit Benutzerrechten | Tool-Permissions können `Never Allow` verwenden; die öffentlich dokumentierte Steuerung ist primär Benutzer-/Session-Konfiguration |
-| **Continue** | Ja | Ja | `Bash` ist ein eingebautes Agent-Tool | `Bash` kann ausgeschlossen werden, aber CLI-Modi und Flags haben Vorrang vor der persönlichen `permissions.yaml` |
-| **OpenHands** | Ja | Ja | Ein persistentes Terminal-Tool ist Bestandteil des Agenten-SDK | Stark auf Coding-Agent- und Sandbox-Szenarien ausgerichtet; bei einem grundsätzlichen Ausschluss generischer Shell-Ausführung entsteht zusätzlicher Anpassungsbedarf |
+| **cli-agent** | Yes | Yes | **Not a core capability** | Fixed machine-wide admin policy, fail-closed invalid policy, explicit capability limits |
+| **Hermes Agent** | Yes | Yes | Terminal and code execution are documented features | Toolsets can be disabled and configuration pinned in managed scope, but managed scope is not described as a hard sandbox and needs additional deployment hardening |
+| **goose** | Yes | Yes | Developer Extension includes a `shell` tool for arbitrary commands with user privileges | Tool permissions support `Never Allow`; public controls are mainly user/session configuration |
+| **Continue** | Yes | Yes | Built-in agent tool `Bash` | `Bash` can be excluded, but CLI modes/flags take precedence over personal `permissions.yaml` |
+| **OpenHands** | Yes | Yes | Persistent terminal is part of agent SDK | Oriented toward coding agents and sandboxing; excluding all generic shell execution requires additional adjustments |
 
 ### Hermes Agent
 
-Hermes unterstützt eigene OpenAI-kompatible Endpunkte und bietet einen breiten Funktionsumfang mit Terminal, Dateitools, Code Execution, Memory, Skills und weiteren Toolsets.
+Hermes supports custom OpenAI-compatible endpoints and offers terminal, file tools, code execution, memory, skills and additional toolsets.
 
-Mit `agent.disabled_toolsets` können Toolsets global deaktiviert werden. Zusätzlich existiert ein Managed Scope, über den ein Administrator Konfigurationswerte gegenüber der normalen Benutzerkonfiguration priorisieren kann.
+`agent.disabled_toolsets` can disable toolsets globally. Managed Scope can give administrator-provided configuration priority over normal user settings.
 
-Für ein besonders restriktives Desktop-Deployment sind jedoch die dokumentierten Grenzen relevant:
+The documented limits matter in restrictive desktop deployments:
 
-- `HERMES_MANAGED_DIR` kann den Ort des Managed Scope verändern; die Hermes-Dokumentation weist ausdrücklich darauf hin, dass ein Benutzer, der diese Variable kontrollieren kann, den Managed Scope auf ein eigenes Verzeichnis umbiegen kann.
-- Eine fehlerhafte Managed-Konfiguration wird laut Dokumentation geloggt und ignoriert, statt den Start zu blockieren.
-- Der Managed Scope wird als Management-Grenze beschrieben, nicht als unüberwindbare Sandbox.
-- Native Managed Locations für Windows gehören laut der dokumentierten v1 noch nicht zum Umfang.
+- `HERMES_MANAGED_DIR` can relocate managed scope; its documentation explicitly says that users controlling this variable can redirect the managed configuration to their own directory.
+- Invalid managed configuration is reportedly logged and ignored rather than blocking startup.
+- Managed Scope is described as a management boundary, not an unbreakable sandbox.
+- According to the documented v1 scope, native Windows managed locations are not yet supported.
 
-Für weniger restriktive Umgebungen kann dieses Modell sinnvoll sein. Gegenüber `cli-agent` muss jedoch eine größere Capability-Oberfläche abgesichert und teilweise durch zusätzliche Deployment-Maßnahmen begrenzt werden.
+The design can be useful in less restrictive environments, but a larger capability surface needs securing, sometimes with additional deployment measures.
 
-Quellen: [Hermes Managed Scope](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/managed-scope), [Hermes Tools & Toolsets](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools/), [Hermes Code Execution](https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution/), [Hermes Provider](https://hermes-agent.nousresearch.com/docs/integrations/providers/).
+Sources: [Hermes Managed Scope](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/managed-scope), [Hermes Tools & Toolsets](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools/), [Hermes Code Execution](https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution/), [Hermes Provider](https://hermes-agent.nousresearch.com/docs/integrations/providers/).
 
 ### goose
 
-goose unterstützt unter anderem selbst gehostete und private OpenAI-kompatible LLM-Endpunkte sowie MCP-Erweiterungen.
+goose supports privately hosted and self-hosted OpenAI-compatible LLMs as well as MCP extensions.
 
-Die eingebaute Developer Extension stellt ein `shell`-Tool bereit, das beliebige Systemkommandos mit den Rechten des laufenden Benutzerprozesses ausführen kann. Die goose-Dokumentation stuft dieses Tool selbst als hohe Risikoklasse ein. Tool-Permissions können einzelne Tools auf `Always Allow`, `Ask Before` oder `Never Allow` setzen; Permission Modes können während einer Session geändert werden.
+Its built-in Developer Extension exposes a `shell` tool that can execute arbitrary system commands with the running user's privileges. The goose documentation itself assigns this tool a high risk level. Tool permissions may be `Always Allow`, `Ask Before` or `Never Allow`; permission modes can change during a session.
 
-Für den hier beschriebenen Einsatzzweck ist daher entscheidend, ob eine Organisation zusätzlich eine gegen normale Benutzer unveränderbare Deployment-Grenze etabliert. In der hier betrachteten öffentlichen Dokumentation werden die Tool-Permissions primär als Benutzer- und Sessionsteuerung beschrieben.
+For this use case, the decisive question is whether an organization adds a deployment boundary that ordinary users cannot change. In the public documentation considered here, tool permissions are primarily presented as user/session controls.
 
-Quellen: [goose Developer Extension](https://github.com/aaif-goose/goose/blob/main/documentation/docs/mcp/developer-mcp.md), [goose Provider](https://github.com/aaif-goose/goose/blob/main/documentation/docs/getting-started/providers.md).
+Sources: [goose Developer Extension](https://github.com/aaif-goose/goose/blob/main/documentation/docs/mcp/developer-mcp.md), [goose Providers](https://github.com/aaif-goose/goose/blob/main/documentation/docs/getting-started/providers.md).
 
 ### Continue
 
-Continue kann selbst gehostete Modelle und OpenAI-kompatible Endpunkte anbinden und unterstützt MCP.
+Continue supports self-hosted models, OpenAI-compatible endpoints and MCP.
 
-Für Tools gelten `allow`, `ask` und `exclude`. Das eingebaute `Bash`-Tool kann damit ausgeblendet werden. Die persistente Tool-Policy liegt jedoch in der Benutzerdatei `~/.continue/permissions.yaml`. Zusätzlich haben CLI-Flags höhere Priorität, und die Modi `--auto` und `--readonly` überschreiben die übrigen Permission-Quellen.
+Its tools support `allow`, `ask` and `exclude`, so built-in `Bash` can be hidden. Persistent tool permissions reside in the user file `~/.continue/permissions.yaml`. CLI flags have higher precedence, and the `--auto` and `--readonly` modes override other permission sources.
 
-Damit ist das dokumentierte Permission-System gut für Benutzerkontrolle geeignet, entspricht aber nicht derselben maschinenweiten Security-Grenze wie die `admin_config.toml` von `cli-agent`.
+This suits user control but does not provide the same machine-wide security boundary as `cli-agent`'s `admin_config.toml`.
 
-Quellen: [Continue Tool Permissions](https://docs.continue.dev/cli/tool-permissions), [Continue Self-hosted Models](https://docs.continue.dev/guides/how-to-self-host-a-model), [Continue Config Reference](https://docs.continue.dev/reference).
+Sources: [Continue Tool Permissions](https://docs.continue.dev/cli/tool-permissions), [Continue Self-hosted Models](https://docs.continue.dev/guides/how-to-self-host-a-model), [Continue Config Reference](https://docs.continue.dev/reference).
 
 ### OpenHands
 
-OpenHands unterstützt lokale beziehungsweise selbst gehostete LLMs und MCP. Sein Agenten-SDK bietet ein persistentes Terminal-Tool zur Ausführung von Shell-Kommandos.
+OpenHands supports local/self-hosted LLMs and MCP. Its Agent SDK includes a persistent terminal tool for shell commands.
 
-OpenHands setzt für sichere Ausführung stark auf isolierte Laufzeitumgebungen und Sandboxing. Das ist ein valides, aber anderes Sicherheitsmodell. Wenn generische Shell-Ausführung grundsätzlich nicht Teil des freizugebenden Funktionsumfangs sein soll, ist ein Agent mit einer von vornherein kleineren Tool-Oberfläche einfacher zu bewerten.
+OpenHands relies heavily on isolated runtimes and sandboxing for safe execution. That is a valid but different security model. If generic shell execution must be excluded entirely from an approved application, a smaller tool surface is easier to assess.
 
-Quellen: [OpenHands Local LLMs](https://github.com/OpenHands/docs/blob/main/openhands/usage/llms/local-llms.mdx), [OpenHands Terminal Tool](https://github.com/OpenHands/software-agent-sdk/blob/main/openhands-tools/openhands/tools/terminal/README.md), [OpenHands MCP](https://docs.openhands.dev/sdk/guides/mcp).
+Sources: [OpenHands Local LLMs](https://github.com/OpenHands/docs/blob/main/openhands/usage/llms/local-llms.mdx), [OpenHands Terminal Tool](https://github.com/OpenHands/software-agent-sdk/blob/main/openhands-tools/openhands/tools/terminal/README.md), [OpenHands MCP](https://docs.openhands.dev/sdk/guides/mcp).
 
-## Warum eine kleinere Capability-Oberfläche relevant ist
+## Why a smaller capability surface matters
 
-Ein universelles Tool wie eine Shell ist funktional sehr mächtig, vergrößert aber gleichzeitig die zu bewertende Angriffsfläche. Netzwerkzugriff, Prozessstart, Script-Ausführung, Paketinstallation und Dateisystemzugriff können darüber indirekt miteinander kombiniert werden.
+A universal tool such as a shell is powerful but expands the attack surface: network access, process creation, script execution, package installation and filesystem access can be combined indirectly.
 
-`cli-agent` verfolgt deshalb das Gegenmodell: Die Fähigkeiten sollen möglichst semantisch eng sein und einzeln geprüft werden können. Ein fachliches MCP kann beispielsweise genau die Operationen anbieten, die für einen Prozess erforderlich sind, ohne gleichzeitig eine allgemeine Betriebssystem-Schnittstelle bereitzustellen.
+`cli-agent` takes the opposite approach: capabilities should be semantically narrow and individually auditable. A domain MCP can expose exactly the necessary business operations without providing general operating-system control.
 
-Die Sicherheitsbewertung verschiebt sich dadurch von
+The security question changes from:
 
-> „Welche beliebigen Aktionen könnte ein generischer Agent mit Benutzerrechten ausführen?“
+> What arbitrary actions could an agent execute with the user's privileges?
 
-zu
+to:
 
-> „Welche klar definierten Tools werden exponiert, welche Parameter akzeptieren sie und welche administrativen Grenzen gelten dafür?“
+> Which explicitly defined tools are exposed, what parameters do they accept, and which administrative constraints apply?
 
-## Gezielte Weiterentwicklung und organisatorische Kontrolle
+## Targeted development and organizational control
 
-Ein weiterer Vorteil eines kleinen, offenen und bewusst begrenzten Core ist die Möglichkeit, Anforderungen gezielt umzusetzen, ohne auf die Produkt-Roadmap eines externen Herstellers warten zu müssen.
+A small, open, deliberately limited core also enables targeted additions without depending on a third-party manufacturer's product roadmap.
 
-Das bedeutet nicht, dass ungeprüfte Änderungen direkt ausgerollt werden sollten. Für einen gemanagten Einsatz ist vielmehr eine kontrollierte Kette vorgesehen:
+This does **not** justify deploying unreviewed changes. Managed environments should use a controlled release chain:
 
 ```text
-Anforderung
-    -> Implementierung und Review
+Requirement
+    -> Implementation and review
     -> Tests / CI
-    -> Release-Artefakte + SBOM + Prüfsummen
-    -> organisationsspezifische Freigabe
-    -> Pilot / Rollout
+    -> Release artifacts + SBOM + checksums
+    -> Organization-specific approval
+    -> Pilot / rollout
 ```
 
-Dadurch können beispielsweise neue Policy-Regeln, zusätzliche Validierungen oder klar abgegrenzte MCP-Fähigkeiten gezielt ergänzt werden, während ein freigegebener Stand reproduzierbar und versioniert bleibt.
+New policy rules, additional validation or narrowly scoped MCP capabilities can then be added while keeping approved revisions reproducible and versioned.
 
-## Zusammenfassung
+## Summary
 
-`cli-agent` soll nicht dadurch überzeugen, dass er mehr autonome Fähigkeiten als etablierte Agenten bietet. Für den beschriebenen Einsatzzweck ist gerade die **bewusste Begrenzung** ein wesentliches Merkmal:
+`cli-agent` is not designed to outperform established agents in raw autonomy. For this use case, **intentional limitation** is the key feature:
 
-- eigener LLM-Endpunkt statt Bindung an einen bestimmten Modellanbieter;
-- MCP als explizite und überprüfbare Capability-Schnittstelle;
-- keine generische Shell- oder Codeausführung im Core;
-- keine persistente projektübergreifende Memory-Funktion im Core;
-- maschinenweite, vom Benutzer nicht lockerbare Admin-Policy;
-- fail-closed Verhalten bei fehlerhafter Policy;
-- Tool- und Serveridentität für permanente Auto-Approvals;
-- deklarative Flows mit expliziten Fähigkeiten pro Schritt;
-- kleine, gezielt weiterentwickelbare Codebasis und kontrollierbare Release-Kette.
+- Custom LLM endpoints, without binding to one model provider.
+- MCP as an explicit, auditable capability interface.
+- No generic shell or arbitrary code execution in core.
+- No persistent cross-project memory in core.
+- Machine-wide admin policy that users cannot relax.
+- Fail-closed behavior on invalid policy.
+- Server identity and tool-contract pinning for permanent auto-approvals.
+- Declarative flows with explicit per-step capabilities.
+- Small, targeted, evolvable codebase and a controlled release pipeline.
 
-Für einen konkreten Rollout bleibt trotzdem eine unabhängige Security- und Betriebsbewertung erforderlich. Die Abgrenzung beschreibt das Design und den vorgesehenen Einsatzzweck, nicht eine pauschale Sicherheitszertifizierung.
+Independent security and operational assessment is still required for a concrete rollout. This document describes the intended design and scope, **not a blanket security certification**.

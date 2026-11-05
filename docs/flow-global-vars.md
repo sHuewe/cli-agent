@@ -1,6 +1,6 @@
-# Globale Variablen in Flows
+# Global variables in flows
 
-Flow-Dateien können statische Prompt-Variablen einmal auf Root-Ebene definieren:
+A flow may define static prompt variables once at its root:
 
 ```toml
 version = 1
@@ -18,17 +18,17 @@ id = "create"
 prompt_file = "flow/prompts/create.md"
 ```
 
-Ein Prompt kann diese Werte wie normale Prompt-Variablen verwenden:
+Prompts can use these values as ordinary variables:
 
 ```text
-OKF-Root: {{var:knowledgePath}}
+OKF root: {{var:knowledgePath}}
 ```
 
-Globale Variablen müssen nicht von jedem Step verwendet werden. Nicht verwendete Einträge in `[vars]` sind daher zulässig.
+Unused global variables are allowed; not every step must reference each entry.
 
-## Lokale Überschreibungen
+## Local overrides
 
-`[steps.vars]` hat Vorrang vor `[vars]`. Damit kann ein einzelner Step einen globalen Standardwert überschreiben:
+Step-specific `[steps.vars]` overrides root-level `[vars]`:
 
 ```toml
 [vars]
@@ -42,24 +42,17 @@ prompt_file = "english.md"
 language = "en"
 ```
 
-Für `english` hat `{{var:language}}` damit den Wert `en`. Andere Steps verwenden weiterhin den globalen Wert `de`.
+The `english` step receives `en` for `{{var:language}}`; other steps still use `de`.
 
-## Statische Werte
+## Static values
 
-Globale Variablen sind bewusst statisch. Schlüssel und Werte müssen Strings sein; dynamische Flow-Ausdrücke sind in `[vars]` nicht zulässig. Insbesondere gehören diese Ausdrücke weiterhin in `[steps.vars]`:
+Global variable keys and values must be strings. Dynamic expressions are not allowed in `[vars]`. Expressions involving item, conversation, iteration, previous-output or step-output references belong in `[steps.vars]`.
 
-- `${item...}`
-- `${conversation.item...}`
-- `${iteration.id}`
-- `${previous_output...}`
-- `${steps.<id>.output...}`
+This keeps global variable scope independent of step, `foreach` and conversation state.
 
-Dadurch bleibt der Gültigkeitsbereich globaler Variablen unabhängig von Step-, `foreach`- und Conversation-Zuständen.
+## Global variables in subflow inputs
 
-## Globale Variablen in Subflow-Inputs
-
-`[steps.input]` unterstützt außerdem `${var.name}` für statische Werte aus
-der `[vars]`-Tabelle **des aufrufenden Flows**:
+The `[steps.input]` table supports static values from the **calling flow's** `[vars]` using the literal reference syntax `\${var.name}`. For example:
 
 ```toml
 [vars]
@@ -69,19 +62,10 @@ okf_root = "okf-generated"
 id = "build"
 flow = "flows/build.toml"
 [steps.input]
-okf_root = "${var.okf_root}"
-output_dir = "${var.okf_root}/doctrines"
+okf_root = "\${var.okf_root}"
+output_dir = "\${var.okf_root}/doctrines"
 ```
 
-Die Ersetzung findet bereits beim Laden des Flows statt; sie gilt auch für
-verschachtelte Listen und Tabellen in `[steps.input]`. Zusammengesetzte Strings
-dürfen die statischen Werte mit dynamischen `${input...}`- und
-`${item...}`-Referenzen kombinieren; letztere werden erst bei der Ausführung
-aufgelöst. Fehlende oder fehlerhafte `${var...}`-Verweise führen zu einem
-Validierungsfehler. Die globale Variable verleiht keine zusätzlichen
-Dateisystemrechte: Die resultierenden Child-Inputs und Pfade durchlaufen
-unverändert die normalen Workspace-/Flow-Prüfungen.
+Substitution occurs when loading the flow, including nested lists and tables inside `[steps.input]`. Composite strings may mix static variables with dynamic input and item references, which resolve only during execution. Invalid or missing references fail validation.
 
-Die Variablen eines aufgerufenen Child-Flows werden **nicht** implizit als
-Variablen des Parent-Flows verwendet und haben keinen rückwirkenden Einfluss
-auf dessen `[steps.input]`.
+Global variables grant no additional filesystem permissions. Child inputs and paths still pass all workspace and flow checks. Variables of a called child flow are **not** implicitly inherited by its parent or applied retroactively to the parent's `[steps.input]`.

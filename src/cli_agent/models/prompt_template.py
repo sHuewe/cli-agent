@@ -53,14 +53,14 @@ class PromptTemplate:
         unknown = sorted(set(values) - required)
         if unknown:
             raise ValueError(
-                "Unbekannte Prompt-Template-Variable(n): "
+                "Unknown prompt template variable(s): "
                 + ", ".join(unknown)
             )
 
         missing = [name for name in self.variables if name not in values]
         if missing:
             raise ValueError(
-                "Fehlende Prompt-Template-Variable(n): "
+                "Missing prompt template variable(s): "
                 + ", ".join(missing)
             )
 
@@ -84,7 +84,7 @@ class PromptTemplate:
             rendered_bytes += size
             if rendered_bytes > MAX_RENDERED_PROMPT_BYTES:
                 raise ValueError(
-                    "Gerenderter Prompt überschreitet das Sicherheitslimit von "
+                    "Rendered prompt exceeds the safety limit of "
                     f"{MAX_RENDERED_PROMPT_BYTES} UTF-8-Bytes."
                 )
             rendered.write(text)
@@ -107,8 +107,8 @@ def _iter_template_segments(content: str) -> Iterator[tuple[bool, str]]:
         placeholder_count += 1
         if placeholder_count > MAX_PROMPT_TEMPLATE_PLACEHOLDERS:
             raise ValueError(
-                "Prompt-Template überschreitet das Sicherheitslimit von "
-                f"{MAX_PROMPT_TEMPLATE_PLACEHOLDERS} Platzhaltern."
+                "Prompt template exceeds the safety limit of "
+                f"{MAX_PROMPT_TEMPLATE_PLACEHOLDERS} placeholders."
             )
 
         is_escaped = (
@@ -124,7 +124,7 @@ def _iter_template_segments(content: str) -> Iterator[tuple[bool, str]]:
         if name_end < 0:
             kind = "escaped " if is_escaped else ""
             raise ValueError(
-                f"Unvollständiger {kind}Prompt-Template-Platzhalter."
+                f"Incomplete {kind} prompt template placeholder."
             )
 
         name = content[name_start:name_end]
@@ -151,13 +151,13 @@ def parse_variable_assignments(assignments: Iterable[str]) -> dict[str, str]:
     for assignment in assignments:
         if "=" not in assignment:
             raise ValueError(
-                f"Ungültige --var-Angabe {assignment!r}; erwartet wird NAME=WERT."
+                f"Invalid --var assignment {assignment!r}; expected NAME=VALUE."
             )
         name, value = assignment.split("=", 1)
         _validate_variable_name(name)
         if name in values:
             raise ValueError(
-                f"Prompt-Template-Variable {name!r} wurde mehrfach mit --var gesetzt."
+                f"Prompt template variable {name!r} was assigned more than once using --var."
             )
         values[name] = value
     return values
@@ -166,7 +166,7 @@ def parse_variable_assignments(assignments: Iterable[str]) -> dict[str, str]:
 def _validate_variable_name(name: str) -> None:
     if not _VARIABLE_NAME.fullmatch(name):
         raise ValueError(
-            f"Ungültiger Prompt-Template-Variablenname {name!r}; erlaubt sind "
-            "ASCII-Buchstaben, Ziffern, '_' und '-' und der Name muss mit "
-            "einem Buchstaben oder '_' beginnen."
+            f"Invalid prompt template variable name {name!r}; allowed characters are "
+            "ASCII letters, digits, '_' and '-', and the name must start with "
+            "a letter or '_'."
         )

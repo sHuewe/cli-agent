@@ -68,7 +68,7 @@ class BrowserSessionRegistry:
         if not self._valid(session_id):
             raise KeyError("Session nicht gefunden.")
         if self._occupied(session_id):
-            raise SessionOccupiedError("Session ist bereits in einem anderen Tab geöffnet.")
+            raise SessionOccupiedError("Session is already open in another tab.")
         now = time.monotonic()
         self._tickets = {
             ticket: entry for ticket, entry in self._tickets.items()
@@ -86,7 +86,7 @@ class BrowserSessionRegistry:
         if not self._valid(session_id):
             raise KeyError("Session nicht gefunden.")
         if self._occupied(session_id):
-            raise SessionOccupiedError("Session ist bereits in einem anderen Tab geöffnet.")
+            raise SessionOccupiedError("Session is already open in another tab.")
         token = secrets.token_urlsafe(32)
         self._leases[session_id] = _Lease(token, time.monotonic())
         return token
@@ -100,7 +100,7 @@ class BrowserSessionRegistry:
         # Tickets are consumed atomically, even on a failed/occupied claim.
         record = self._tickets.pop(ticket, None)
         if record is None or time.monotonic() > record[1]:
-            raise ValueError("Einmaliger Session-Link ist ungültig oder abgelaufen.")
+            raise ValueError("One-time session link is invalid or expired.")
         session_id = record[0]
         return session_id, self._acquire(session_id)
 

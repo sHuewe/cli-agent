@@ -153,6 +153,6 @@ def test_direct_mcp_checks_structured_payload_size_independently(monkeypatch):
             HugeSession(), "read_file",
             SimpleNamespace(name="os", built_in=True),
         )
-        with pytest.raises(RuntimeError, match="Sicherheitslimit"):
+        with pytest.raises(RuntimeError, match="safety limit"):
             await execute_direct_tool(runtime, "os__read_file", "Datei.txt")
     asyncio.run(scenario())

@@ -87,7 +87,7 @@ def test_approve_tool_call_supports_session_approval(monkeypatch, capsys) -> Non
     result = asyncio.run(cli_module.approve_tool_call("os__write_file", {"path": "a.txt"}))
 
     assert result == "session"
-    assert "Explizite Freigabe erforderlich" in capsys.readouterr().out
+    assert "Explicit approval required" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(("answer", "expected"), [("ja", True), ("yes", True), ("n", False), ("", False)])
@@ -156,7 +156,7 @@ def test_print_error_emits_traceback_in_debug_mode(capsys) -> None:
 
 def test_inspection_rejects_built_in_mcp_tools_before_starting_agent(tmp_path) -> None:
     server = McpServerConfig(name="os", command="ignored", built_in=True)
-    with pytest.raises(ValueError, match="Built-in MCP-Tools"):
+    with pytest.raises(ValueError, match="Built-in MCP tools cannot be granted permanent admin auto-approvals\\."):
         asyncio.run(
             cli_module._inspect_mcp_tool(
                 server=server,
@@ -202,7 +202,7 @@ def test_inspection_reports_missing_tool_and_available_names(tmp_path, monkeypat
 
     monkeypatch.setattr(cli_module, "CliAgent", FakeAgent)
 
-    with pytest.raises(ValueError, match="Verfügbare Tools: fachsoftware__search, fachsoftware__status"):
+    with pytest.raises(ValueError, match="MCP server 'fachsoftware' does not offer tool 'delete'\\. Available tools: fa"):
         asyncio.run(
             cli_module._inspect_mcp_tool(
                 server=server,
@@ -297,8 +297,8 @@ def test_run_admin_rejects_unknown_server(tmp_path, monkeypatch) -> None:
 @pytest.mark.parametrize(
     ("trusted", "existing", "message"),
     [
-        (False, None, "identitätsgleichen"),
-        (True, None, "bereits eine gepinnte Auto-Freigabe"),
+        (False, None, "identity-matching"),
+        (True, None, "existing pinned auto-approval"),
     ],
 )
 def test_run_admin_update_requires_trusted_server_and_existing_pin(
@@ -374,9 +374,9 @@ def test_run_admin_update_warns_when_contract_changed(tmp_path, monkeypatch, cap
     )
 
     output = capsys.readouterr().out
-    assert "Bisheriger Contract: old-contract" in output
-    assert "Tool-Contract hat sich geändert" in output
-    assert "Admin-Konfiguration wurde NICHT geändert" in output
+    assert "Previous contract: old-contract" in output
+    assert "tool contract has changed" in output
+    assert "admin configuration was NOT modified" in output
     assert "contract_sha256 = \"new-contract\"" in output
 
 
@@ -412,7 +412,7 @@ def test_run_admin_reports_unchanged_contract(tmp_path, monkeypatch, capsys) -> 
         )
     )
 
-    assert "Tool-Contract ist unverändert" in capsys.readouterr().out
+    assert "tool contract is unchanged" in capsys.readouterr().out
 
 
 def test_run_rejects_missing_workspace_before_agent_construction(tmp_path, monkeypatch) -> None:
@@ -436,7 +436,7 @@ def test_interactive_mode_ignores_empty_input_runs_prompt_and_quits(tmp_path, mo
 
     assert captured["prompts"] == ["hello"]
     output = capsys.readouterr().out
-    assert "Interaktiver Modus" in output
+    assert "Interactive mode" in output
     assert "answer:hello" in output
 
 

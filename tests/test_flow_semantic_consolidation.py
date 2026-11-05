@@ -70,5 +70,5 @@ def test_incomplete_batch_is_rejected():
             }],
         },
     }]}
-    with pytest.raises(ValueError, match="nicht alle"):
+    with pytest.raises(ValueError, match="not all"):
         assemble_doctrine_consolidation(plan, _taxonomy(), batches, response)

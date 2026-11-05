@@ -56,11 +56,11 @@ def _handle_info(path: Path) -> tuple[int, int, bool]:
             raise ValueError(f"Symlink/Reparse Point bei Inventur: {path}")
         length = final_path(handle, None, 0, 0)
         if not length or length > 32768:
-            raise ValueError(f"Inventurpfad nicht auflösbar: {path}")
+            raise ValueError(f"Inventory path cannot be resolved: {path}")
         buffer = ctypes.create_unicode_buffer(length + 1)
         copied = final_path(handle, buffer, len(buffer), 0)
         if not copied or copied >= len(buffer):
-            raise ValueError(f"Inventurpfad nicht auflösbar: {path}")
+            raise ValueError(f"Inventory path cannot be resolved: {path}")
         def normalize(value: str) -> str:
             if value.startswith("\\\\?\\UNC\\"):
                 value = "\\\\" + value[8:]
@@ -120,7 +120,7 @@ def inventory_windows(
                 raise ValueError(f"Kein Verzeichnis: {current}")
         result = _handle_info(path)
         if expected_dir is not None and result[2] != expected_dir:
-            raise ValueError(f"Dateityp während Inventur geändert: {path}")
+            raise ValueError(f"File type changed during inventory: {path}")
         return result
 
     pending = [start.relative_to(root)]
@@ -133,18 +133,18 @@ def inventory_windows(
         with _pin_directory(current) as pinned_id:
             identity = checked(current, True)[0]
             if identity != pinned_id:
-                raise ValueError(f"Verzeichnis während Inventur geändert: {current}")
+                raise ValueError(f"Directory changed during inventory: {current}")
             with os.scandir(current) as iterator:
                 names = []
                 for entry in iterator:
                     examined += 1
                     if examined > max_entries:
                         raise ValueError(
-                            f"filesystem_operation.inventory überschreitet max_entries={max_entries}."
+                            f"filesystem_operation.inventory exceeds max_entries={max_entries}."
                         )
                     names.append(entry.name)
             if checked(current, True)[0] != identity:
-                raise ValueError(f"Verzeichnis während Inventur geändert: {current}")
+                raise ValueError(f"Directory changed during inventory: {current}")
             for name in sorted(names, key=lambda n: (n.casefold(), n)):
                 relative_path = relative_dir / name
                 _, size, is_dir = checked(root / relative_path)
@@ -158,7 +158,7 @@ def inventory_windows(
                 elif not suffixes or rel.casefold().endswith(suffixes):
                     files.append({"name": name, "path": rel, "size_bytes": size})
             if checked(current, True)[0] != identity:
-                raise ValueError(f"Verzeichnis während Inventur geändert: {current}")
+                raise ValueError(f"Directory changed during inventory: {current}")
     files.sort(key=lambda v: (v["path"].casefold(), v["path"]))
     directories.sort(key=lambda v: (v["path"].casefold(), v["path"]))
     return {

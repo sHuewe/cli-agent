@@ -211,7 +211,7 @@ def test_stdio_user_config_rejects_launch_or_runtime_settings(tmp_path: Path, ex
         f'[[mcp_servers]]\nname = "special"\n{extra}\n',
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="nur.*Namen|nur.*referenziert|Admin-Policy"):
+    with pytest.raises(ValueError, match="The stdio MCP server 'special' may be referenced in user configuration only"):
         load_config(config_file)
 
 
@@ -248,7 +248,7 @@ command = "python"
 """.strip(),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="darf command, args und env"):
+    with pytest.raises(ValueError, match="The HTTP MCP server 'invalid' must not contain command, args or env\\."):
         load_config(config_file)
 
 
@@ -264,7 +264,7 @@ name = "same"
 """.strip(),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="eindeutig"):
+    with pytest.raises(ValueError, match="MCP server names must be unique\\."):
         load_config(config_file)
 
 
@@ -365,5 +365,5 @@ def test_evidence_state_does_not_require_a_config_option(tmp_path: Path) -> None
     assert load_config(path).agent.timezone is None
     # Evidence is always on where tools exist; stale opt-in configs are rejected.
     path.write_text("[agent]\nevidence_state = true\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="unbekannte Optionen"):
+    with pytest.raises(ValueError, match="\\[agent\\] contains unknown options\\."):
         load_config(path)

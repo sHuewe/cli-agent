@@ -53,7 +53,7 @@ def test_approval_summary_truncates_long_payload_with_head_and_tail() -> None:
     summary = _approval_arguments({"content": content})
     assert "A" * 100 in summary
     assert "Z" * 100 in summary
-    assert "Zeichen gekürzt" in summary
+    assert "characters truncated" in summary
     assert len(summary) < len(content)
 
 
@@ -648,5 +648,5 @@ def test_run_rejects_exclude_path_without_os_access(
         debug=False,
     )
 
-    with pytest.raises(ValueError, match="--exclude-path benötigt"):
+    with pytest.raises(ValueError, match="--exclude-path requires --with-os-read or --with-os-write\\."):
         asyncio.run(cli_module.run(args))

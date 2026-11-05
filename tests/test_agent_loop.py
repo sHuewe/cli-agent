@@ -84,7 +84,7 @@ def test_main_loop_returns_placeholder_after_two_empty_responses() -> None:
             {"role": "assistant", "content": ""},
         ]
     )
-    assert _run(agent) == "(Das Modell hat keine Antwort erzeugt.)"
+    assert _run(agent) == "(The model did not produce an answer.)"
 
 
 def test_knowledge_loop_retries_invalid_selection_then_accepts_correction() -> None:

@@ -51,7 +51,7 @@ class RepositoryMetadataMixin:
         match = FRONTMATTER_PATTERN.match(content)
         if match is None:
             raise OkfRepositoryError(
-                "OKF-Konzept besitzt kein gültig begrenztes YAML-Frontmatter."
+                "OKF concept does not have valid bounded YAML frontmatter."
             )
         try:
             # The custom SafeLoader rejects aliases; Bandit cannot infer that
@@ -66,7 +66,7 @@ class RepositoryMetadataMixin:
             ) from exc
         if not isinstance(parsed, dict):
             raise OkfRepositoryError(
-                "YAML-Frontmatter muss eine Zuordnung von Schlüsseln zu Werten sein."
+                "YAML frontmatter must be a key-value mapping."
             )
         concept_type = parsed.get("type")
         if not isinstance(concept_type, str) or not concept_type.strip():

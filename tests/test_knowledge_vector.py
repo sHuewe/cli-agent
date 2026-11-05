@@ -281,14 +281,14 @@ async def test_openai_embedding_rejects_bad_indices(monkeypatch, indices):
         VectorKnowledgeConfig(provider="openai", model="embed", base_url="http://localhost:11434/v1"),
         NetworkConfig(),
     )
-    with pytest.raises(RuntimeError, match="Indizes"):
+    with pytest.raises(RuntimeError, match="indices"):
         await provider.embed(["first", "second"])
 
 
 def test_boolean_embeddings_and_non_finite_stored_vectors_are_rejected(tmp_path):
     import struct
     from cli_agent.context.knowledge_vector import _encode
-    with pytest.raises(ValueError, match="ungültige"):
+    with pytest.raises(ValueError, match="invalid"):
         _encode([True, 0.5])
     store = SQLiteKnowledgeStore(tmp_path / "corrupt.sqlite", readonly=False)
     try:
@@ -299,7 +299,7 @@ def test_boolean_embeddings_and_non_finite_stored_vectors_are_rejected(tmp_path)
             (struct.pack("<2f", float("nan"), 0.0),),
         )
         store.db.commit()
-        with pytest.raises(ValueError, match="ungültige"):
+        with pytest.raises(ValueError, match="invalid"):
             store.search([1.0, 0.0])
     finally:
         store.close()
@@ -337,7 +337,7 @@ def test_okf_verified_read_enforces_configured_limit(tmp_path):
     (tmp_path / "concept.md").write_text(
         "---\ntype: concept\n---\n# A\n" + "content " * 100, encoding="utf-8"
     )
-    with pytest.raises(ValueError, match="Leselimit"):
+    with pytest.raises(ValueError, match="read limit"):
         _read_source(tmp_path, "concept.md", mode="okf", max_read_bytes=64)
     assert "content" in _read_source(
         tmp_path, "concept.md", mode="okf", max_read_bytes=4096

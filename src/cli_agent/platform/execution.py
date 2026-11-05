@@ -137,23 +137,23 @@ def resolve_excluded_paths(
         text = str(raw)
         windows = PureWindowsPath(text)
         if ".." in PurePath(text).parts or ".." in windows.parts:
-            raise ValueError("Ausgeschlossene Pfade dürfen '..' nicht enthalten.")
+            raise ValueError("Excluded paths must not contain '..'.")
         if windows.drive and not raw.is_absolute():
             raise ValueError(
-                "Ausgeschlossene Pfade dürfen kein relatives Windows-Laufwerk verwenden."
+                "Excluded paths must not use a drive-relative Windows path."
             )
         candidate = raw if raw.is_absolute() else resolved_workspace / raw
         try:
             resolved = candidate.resolve(strict=False)
         except (OSError, RuntimeError) as exc:
             raise ValueError(
-                f"Ausgeschlossener Pfad konnte nicht aufgelöst werden: {value}"
+                f"Excluded path could not be resolved: {value}"
             ) from exc
         try:
             resolved.relative_to(resolved_workspace)
         except ValueError as exc:
             raise ValueError(
-                f"Ausgeschlossener Pfad muss innerhalb des Workspace liegen: {value}"
+                f"Excluded path must remain within the workspace: {value}"
             ) from exc
         if resolved not in seen:
             seen.add(resolved)
@@ -332,7 +332,7 @@ def _same_http_mcp_identity(
     def expand(value: str) -> str:
         unsupported = ("{python}", "{config_file}")
         if any(part in value for part in unsupported):
-            raise ValueError("Nicht zulässiger HTTP-MCP-Platzhalter.")
+            raise ValueError("Disallowed HTTP MCP placeholder.")
         if workspace is None:
             return value
         return (
@@ -383,20 +383,20 @@ def apply_named_mcp_overrides(
 
     for raw_name in requested:
         if not isinstance(raw_name, str) or not raw_name.strip():
-            raise ValueError("--with-mcp benötigt einen nicht-leeren MCP-Servernamen.")
+            raise ValueError("--with-mcp requires a nonempty MCP server name.")
         name = raw_name.strip()
         if name.casefold() in {OS_MCP_SERVER_NAME, DATA_MCP_SERVER_NAME, "knowledge_reentry"} or (
             name.casefold() == "okf" and config.okf is not None
         ):
             raise ValueError(
-                f"MCP-Servername {name!r} ist für einen eingebauten Server reserviert."
+                f"MCP server name {name!r} is reserved for a built-in server."
             )
 
         trusted = trusted_by_name.get(name)
         if trusted is None:
             raise ValueError(
-                f"MCP-Server {name!r} ist nicht in [[mcp.trusted_servers]] "
-                "der maschinenweiten Admin-Policy definiert."
+                f"MCP server {name!r} is not defined in [[mcp.trusted_servers]] "
+                "of machine-wide admin policy."
             )
 
         if not workspace_access_allows(
@@ -406,11 +406,11 @@ def apply_named_mcp_overrides(
             required_flag = (
                 "--with-os-write"
                 if trusted.required_workspace_access == "write"
-                else "--with-os-read oder --with-os-write"
+                else "--with-os-read or --with-os-write"
             )
             raise PermissionError(
-                f"MCP-Server {name!r} benötigt Workspace-Zugriff "
-                f"{trusted.required_workspace_access!r}. Bitte {required_flag} verwenden."
+                f"MCP server {name!r} requires workspace access "
+                f"{trusted.required_workspace_access!r}. Use {required_flag}."
             )
 
         if trusted.transport == "stdio":
@@ -424,7 +424,7 @@ def apply_named_mcp_overrides(
             )
         else:
             raise ValueError(
-                f"Nicht unterstützter administrativer MCP-Transport: "
+                f"Unsupported administrative MCP transport: "
                 f"{trusted.transport!r}."
             )
 
@@ -447,8 +447,8 @@ def apply_named_mcp_overrides(
             )
             if not same_identity:
                 raise ValueError(
-                    f"MCP-Server {name!r} ist bereits mit einer anderen "
-                    "Serveridentität konfiguriert."
+                    f"MCP server {name!r} is already configured with a different "
+                    "server identity."
                 )
             continue
 
@@ -506,10 +506,19 @@ def prepare_agent(
     excluded_paths = resolve_excluded_paths(workspace, options.excluded_paths)
     if excluded_paths and options.workspace_access not in {"read", "write"}:
         raise ValueError(
-            "excluded_paths benötigen workspace_access='read' oder 'write'."
+            "excluded_paths requires workspace_access='read' or 'write'."
         )
 
-    config = project_config if project_config is not None else deps.load_config(options.config_file)
+    if project_config is not None:
+        # Explicit SDK configurations remain authoritative over workspace settings.
+        config = project_config
+    else:
+        from cli_agent.settings.project_config import read_project_overrides
+        overrides = read_project_overrides(workspace)
+        config = (
+            load_config(options.config_file, workspace=workspace)
+            if overrides else deps.load_config(options.config_file)
+        )
     policy = admin_config if admin_config is not None else deps.load_admin_config()
     if project_config is not None and options.config_file is None and config.okf is not None:
         # An in-memory SDK project has no config-file directory. Resolve
@@ -576,8 +585,8 @@ def prepare_agent(
     if options.prepared_file_contexts or options.prepared_output_target is not None:
         if options.context_files or options.output is not None:
             raise ValueError(
-                "Vorbereitete Dateioptionen dürfen nicht zusammen mit "
-                "context_files/output übergeben werden."
+                "Prepared file options must not be provided together with "
+                "context_files/output."
             )
         file_contexts = options.prepared_file_contexts
         output_target = options.prepared_output_target
@@ -598,12 +607,15 @@ def prepare_agent(
     )
     if options.retry_policy is not None:
         model_client = RetryingModelClient(model_client, options.retry_policy)
+    from cli_agent.settings.project_config import read_project_system_prompt
+    project_system_prompt = read_project_system_prompt(workspace, config.agent.system_prompt)
     agent = deps.agent_type(
         workspace,
         model_client,
         config.mcp_servers,
         logging_config=config.logging,
         agent_timezone=config.agent.timezone,
+        system_prompt=project_system_prompt,
         config_file=options.config_file or default_config_file(),
         dump_llm_context=config.dump_llm_context,
         dump_file_prefix=options.dump_file_prefix,
@@ -679,12 +691,12 @@ async def run_conversation(
     dependencies: ExecutionDependencies | None = None,
 ) -> OneShotRunResult:
     if not options.prompts:
-        raise ValueError("Conversation benötigt mindestens einen Prompt.")
+        raise ValueError("Conversation requires at least one prompt.")
     if any(not prompt or prompt.isspace() for prompt in options.prompts):
-        raise ValueError("Conversation-Prompts dürfen nicht leer sein.")
+        raise ValueError("Conversation prompts must not be empty.")
     if any(is_local_agent_command(prompt) for prompt in options.prompts):
         raise ValueError(
-            "Conversation-Prompts dürfen keine lokalen Agent-Befehle sein."
+            "Conversation prompts must not contain local agent commands."
         )
     return await _run_prompt_sequence(
         options,

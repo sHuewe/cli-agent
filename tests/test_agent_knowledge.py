@@ -83,13 +83,13 @@ def test_synthesized_index_entries_are_allowed_for_followup_calls() -> None:
 @pytest.mark.parametrize(
     ("answer", "expected"),
     [
-        ("not json", "kein gültiges JSON"),
-        ("[]", "kein JSON-Objekt"),
-        (json.dumps({"found_content": "yes", "selected_okf_tokens": []}), "boolescher"),
-        (json.dumps({"found_content": True, "selected_okf_tokens": "x"}), "Liste von Zeichenketten"),
+        ("not json", "not a valid JSON"),
+        ("[]", "not a JSON object"),
+        (json.dumps({"found_content": "yes", "selected_okf_tokens": []}), "a boolean"),
+        (json.dumps({"found_content": True, "selected_okf_tokens": "x"}), "list of strings"),
         (json.dumps({"found_content": False, "selected_okf_tokens": [], "warnings": "x"}), "warnings"),
-        (json.dumps({"found_content": True, "selected_okf_tokens": []}), "fehlt"),
-        (json.dumps({"found_content": False, "selected_okf_tokens": ["x"]}), "muss `selected_okf_tokens` leer"),
+        (json.dumps({"found_content": True, "selected_okf_tokens": []}), "is missing"),
+        (json.dumps({"found_content": False, "selected_okf_tokens": ["x"]}), "must be empty"),
         (json.dumps({"found_content": False, "selected_okf_tokens": [], "reason_code": "other"}), "reason_code"),
     ],
 )
@@ -121,7 +121,7 @@ def test_validate_selection_accepts_known_token_and_rejects_unknown_token() -> N
     )
     _selection, error = _validate_knowledge_selection(invalid, state)
     assert error is not None
-    assert "keinem erfolgreich gelesenen Concept" in error
+    assert "any successfully read concept" in error
 
 
 def test_validate_not_applicable_only_before_followup_and_not_found_requires_concept() -> None:
@@ -136,7 +136,7 @@ def test_validate_not_applicable_only_before_followup_and_not_found_requires_con
     assert _validate_knowledge_selection(not_applicable, state)[1] is None
 
     state.successful_followup_calls = 1
-    assert "nur vor Beginn" in (_validate_knowledge_selection(not_applicable, state)[1] or "")
+    assert "only allowed before" in (_validate_knowledge_selection(not_applicable, state)[1] or "")
 
     empty = _KnowledgeRunState()
     not_found = json.dumps(
@@ -146,7 +146,7 @@ def test_validate_not_applicable_only_before_followup_and_not_found_requires_con
             "reason_code": "not_found",
         }
     )
-    assert "mindestens ein" in (_validate_knowledge_selection(not_found, empty)[1] or "")
+    assert "at least one" in (_validate_knowledge_selection(not_found, empty)[1] or "")
 
     with_concept, _ = _state_with_concept()
     assert _validate_knowledge_selection(not_found, with_concept)[1] is None
@@ -205,10 +205,10 @@ def test_assemble_payload_deduplicates_tokens_and_warnings() -> None:
 @pytest.mark.parametrize(
     "selection,match",
     [
-        ({"selected_okf_tokens": []}, "keine ausgewählten"),
-        ({"selected_okf_tokens": [7]}, "ungültigen OKF-Token"),
-        ({"selected_okf_tokens": ["missing"]}, "unbekannte OKF-Tokens"),
-        ({"selected_okf_tokens": ["known"], "warnings": "bad"}, "ungültige Warnungen"),
+        ({"selected_okf_tokens": []}, "no selected"),
+        ({"selected_okf_tokens": [7]}, "invalid OKF token"),
+        ({"selected_okf_tokens": ["missing"]}, "unknown OKF tokens"),
+        ({"selected_okf_tokens": ["known"], "warnings": "bad"}, "invalid warnings"),
     ],
 )
 def test_assemble_payload_rejects_invalid_selection(selection: dict, match: str) -> None:
@@ -218,6 +218,6 @@ def test_assemble_payload_rejects_invalid_selection(selection: dict, match: str)
 
 
 def test_knowledge_system_prompt_forbids_repository_hallucination() -> None:
-    assert "Erfinde keine Repository-Fakten" in KNOWLEDGE_SYSTEM_PROMPT
-    assert "Thematische Plausibilität" in KNOWLEDGE_SYSTEM_PROMPT
-    assert "Fülle Wissenslücken niemals durch Vermutungen" in KNOWLEDGE_SYSTEM_PROMPT
+    assert "Never invent repository facts" in KNOWLEDGE_SYSTEM_PROMPT
+    assert "Topical plausibility" in KNOWLEDGE_SYSTEM_PROMPT
+    assert "Do not fill knowledge gaps with guesses" in KNOWLEDGE_SYSTEM_PROMPT

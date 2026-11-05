@@ -46,15 +46,15 @@ def test_read_file_pdf_mixed_pages_and_unchanged_source(tmp_path):
     path.write_bytes(data)
     text = _workspace(tmp_path).read_file(path.name)
     assert isinstance(text, str)
-    assert "--- Seite 1 von 3 ---\nHello PDF" in text
-    assert "--- Seite 2 von 3 ---\n[Kein extrahierbarer Text" in text
-    assert "--- Seite 3 von 3 ---\nFinal page" in text
+    assert "--- Page 1 of 3 ---\nHello PDF" in text
+    assert "--- Page 2 of 3 ---\n[No extractable text" in text
+    assert "--- Page 3 of 3 ---\nFinal page" in text
     assert path.read_bytes() == data
 
 
 @pytest.mark.parametrize("data, message", [
-    (b"not a PDF", "nicht vollständig"),
-    (_pdf("secret", encrypted=True), "Verschlüsselte"),
+    (b"not a PDF", "could not be fully"),
+    (_pdf("secret", encrypted=True), "Encrypted"),
 ])
 def test_read_file_pdf_errors(tmp_path, data, message):
     (tmp_path / "document.pdf").write_bytes(data)
@@ -63,13 +63,13 @@ def test_read_file_pdf_errors(tmp_path, data, message):
 
 
 def test_empty_pdf_and_blank_page():
-    assert "keine Seiten" in pdf_text._extract_text(_pdf())
-    assert "OCR ist nicht verfügbar" in pdf_text._extract_text(_pdf(""))
+    assert "no pages" in pdf_text._extract_text(_pdf())
+    assert "OCR is not available" in pdf_text._extract_text(_pdf(""))
 
 
 def test_page_limit(monkeypatch):
     monkeypatch.setattr(pdf_text, "MAX_PDF_PAGES", 1)
-    with pytest.raises(pdf_text.PdfTextError, match="Seiten"):
+    with pytest.raises(pdf_text.PdfTextError, match="pages"):
         pdf_text._extract_text(_pdf("first", "second"))
 
 
@@ -79,14 +79,14 @@ def test_output_limit_counts_markers(monkeypatch):
     monkeypatch.setattr(pdf_text, "MAX_PDF_TEXT_CHARS", length)
     assert len(pdf_text._extract_text(data)) == length
     monkeypatch.setattr(pdf_text, "MAX_PDF_TEXT_CHARS", length - 1)
-    with pytest.raises(pdf_text.PdfTextError, match="Ausgabelimit"):
+    with pytest.raises(pdf_text.PdfTextError, match="output limit"):
         pdf_text._extract_text(data)
 
 
 def test_size_limit_before_starting_parser(tmp_path, monkeypatch):
     monkeypatch.setattr(pdf_text, "MAX_PDF_BYTES", 10)
     (tmp_path / "large.pdf").write_bytes(b"x" * 11)
-    with pytest.raises(WorkspaceError, match="Leselimit"):
+    with pytest.raises(WorkspaceError, match="read limit"):
         _workspace(tmp_path).read_file("large.pdf")
 
 
@@ -118,7 +118,7 @@ def test_timeout_is_workspace_error(tmp_path, monkeypatch):
         raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
 
     monkeypatch.setattr(pdf_text.subprocess, "run", timeout)
-    with pytest.raises(WorkspaceError, match="Zeitlimit"):
+    with pytest.raises(WorkspaceError, match="time limit"):
         _workspace(tmp_path).read_file("document.pdf")
 
 
@@ -136,7 +136,7 @@ def test_pdf_keeps_sensitive_path_protection(tmp_path, name):
     path = tmp_path / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_pdf("secret"))
-    with pytest.raises(WorkspaceError, match="Secret-/Credential"):
+    with pytest.raises(WorkspaceError, match="secret|credential"):
         _workspace(tmp_path).read_file(name)
 
 
@@ -146,17 +146,17 @@ def test_pdf_keeps_path_and_hardlink_protection(tmp_path):
     path = tmp_path / "document.pdf"
     path.write_bytes(_pdf("secret"))
     os.link(path, tmp_path / "linked.pdf")
-    with pytest.raises(WorkspaceError, match="Hardlinks"):
+    with pytest.raises(WorkspaceError, match="hardlinks"):
         _workspace(tmp_path).read_file("linked.pdf")
-    with pytest.raises(WorkspaceError, match="relativ"):
+    with pytest.raises(WorkspaceError, match="relative"):
         _workspace(tmp_path).read_file(str(path))
-    with pytest.raises(WorkspaceError, match="enthalten"):
+    with pytest.raises(WorkspaceError, match="contain"):
         _workspace(tmp_path).read_file("../document.pdf")
 
 
 @pytest.mark.parametrize("data,message", [
-    (b"invalid PDF", "nicht vollständig"),
-    (_pdf("secret", encrypted=True), "Verschlüsselte"),
+    (b"invalid PDF", "could not be fully"),
+    (_pdf("secret", encrypted=True), "Encrypted"),
 ])
 def test_parser_errors_are_sanitized(data, message):
     with pytest.raises(pdf_text.PdfTextError, match=message) as error:
@@ -166,7 +166,7 @@ def test_parser_errors_are_sanitized(data, message):
 
 def test_worker_rechecks_input_size(monkeypatch):
     monkeypatch.setattr(pdf_text, "MAX_PDF_BYTES", 5)
-    with pytest.raises(pdf_text.PdfTextError, match="Leselimit"):
+    with pytest.raises(pdf_text.PdfTextError, match="read limit"):
         pdf_text._extract_text(b"123456")
 
 
@@ -177,7 +177,7 @@ def test_file_growth_after_stat_is_rejected(tmp_path, monkeypatch):
     path.write_bytes(b"12345")
     monkeypatch.setattr(pdf_text, "MAX_PDF_BYTES", 5)
     monkeypatch.setattr(Path, "open", lambda *args, **kwargs: io.BytesIO(b"123456"))
-    with pytest.raises(pdf_text.PdfTextError, match="Leselimit"):
+    with pytest.raises(pdf_text.PdfTextError, match="read limit"):
         pdf_text.read_pdf_text(path)
 
 
@@ -193,13 +193,13 @@ def test_pdf_worker_and_file_failures(tmp_path, monkeypatch, failure):
         return subprocess.CompletedProcess(args[0], 1, b"", b"")
 
     monkeypatch.setattr(pdf_text.subprocess, "run", run)
-    with pytest.raises(pdf_text.PdfTextError, match="unerwartet" if failure == "crash" else "nicht gelesen"):
+    with pytest.raises(pdf_text.PdfTextError, match="unexpectedly" if failure == "crash" else "could not be read"):
         pdf_text.read_pdf_text(path)
 
 
 @pytest.mark.parametrize("data,status,expected", [
-    (_pdf("hello"), 0, "--- Seite 1 von 1 ---\nhello"),
-    (b"broken", 2, "PDF konnte nicht vollständig als Text gelesen werden."),
+    (_pdf("hello"), 0, "--- Page 1 of 1 ---\nhello"),
+    (b"broken", 2, "PDF could not be fully extracted as text."),
 ])
 def test_worker_stdio_protocol(monkeypatch, data, status, expected):
     import logging
@@ -224,15 +224,15 @@ def test_pdf_page_range_preserves_original_page_numbers(tmp_path):
     workspace = Workspace.from_directory(
         tmp_path, McpServerConfig(name="os", config={"max_pdf_pages": 2})
     )
-    with pytest.raises(WorkspaceError, match="Seiten"):
+    with pytest.raises(WorkspaceError, match="pages"):
         workspace.read_file("long.pdf")
     result = workspace.read_file("long.pdf", start_page=2, end_page=3)
-    assert "--- Seite 2 von 4 ---\ntwo" in result
-    assert "--- Seite 3 von 4 ---\nthree" in result
-    assert "Seite 1" not in result
-    assert "Seite 4" not in result
-    assert workspace.read_file("long.pdf", end_page=2).count("--- Seite") == 2
-    assert workspace.read_file("long.pdf", start_page=4).count("--- Seite") == 1
+    assert "--- Page 2 of 4 ---\ntwo" in result
+    assert "--- Page 3 of 4 ---\nthree" in result
+    assert "Page 1" not in result
+    assert "Page 4" not in result
+    assert workspace.read_file("long.pdf", end_page=2).count("--- Page") == 2
+    assert workspace.read_file("long.pdf", start_page=4).count("--- Page") == 1
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -255,7 +255,7 @@ def test_pdf_page_limit_caps_selected_range(tmp_path):
     workspace = Workspace.from_directory(
         tmp_path, McpServerConfig(name="os", config={"max_pdf_pages": 2})
     )
-    with pytest.raises(WorkspaceError, match="Seiten"):
+    with pytest.raises(WorkspaceError, match="pages"):
         workspace.read_file("long.pdf", start_page=1, end_page=3)
 
 
@@ -274,8 +274,8 @@ def test_worker_page_options_round_trip(monkeypatch):
             patch.setattr(pdf_text.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(_pdf("one", "two", "three"))))
             patch.setattr(pdf_text.sys, "stdout", SimpleNamespace(buffer=output))
             assert pdf_text._main(["--max-pages", "2", "--start-page", "2", "--end-page", "3"]) == 0
-        assert "Seite 2 von 3" in output.getvalue().decode("utf-8")
-        assert "Seite 1 von 3" not in output.getvalue().decode("utf-8")
+        assert "Page 2 of 3" in output.getvalue().decode("utf-8")
+        assert "Page 1 of 3" not in output.getvalue().decode("utf-8")
     finally:
         __import__("logging").disable(old_disable)
 
@@ -283,7 +283,7 @@ def test_worker_page_options_round_trip(monkeypatch):
 def test_total_page_limit_rejects_small_range_of_large_pdf(monkeypatch):
     monkeypatch.setattr(pdf_text, "MAX_TOTAL_PDF_PAGES", 3)
     data = _pdf("one", "two", "three", "four")
-    with pytest.raises(pdf_text.PdfTextError, match="Sicherheitslimit"):
+    with pytest.raises(pdf_text.PdfTextError, match="safety limit"):
         pdf_text._extract_text(data, start_page=1, end_page=1, max_pages=2)
 
 
@@ -295,7 +295,7 @@ def test_page_tree_rejects_lying_count_without_expanding_pages():
     reader = PdfReader(io.BytesIO(data))
     pages_root = reader.trailer["/Root"]["/Pages"]
     pages_root[NameObject("/Count")] = NumberObject(2500)
-    with pytest.raises(pdf_text.PdfTextError, match="Sicherheitslimit"):
+    with pytest.raises(pdf_text.PdfTextError, match="safety limit"):
         pdf_text._bounded_page_count(reader)
 
 
@@ -326,5 +326,5 @@ def test_page_tree_limits_cumulative_pending_queue(monkeypatch):
         current = child
     current[NameObject("/Kids")] = ArrayObject()
 
-    with pytest.raises(pdf_text.PdfTextError, match="Seitenbaum.*Sicherheitslimit"):
+    with pytest.raises(pdf_text.PdfTextError, match="page tree.*safety limit"):
         pdf_text._bounded_page_count(reader)

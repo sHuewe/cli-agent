@@ -1,6 +1,10 @@
 
 (() => {
   "use strict";
+  const i18n = window.cliAgentI18n;
+  const t = (key, values) => i18n.t(key, values);
+
+  void i18n.ready.then(() => {
 
   const chat = document.getElementById("chat");
   const form = document.getElementById("composer");
@@ -9,7 +13,7 @@
   const stopRun = document.getElementById("stop-run");
   const quit = document.getElementById("quit");
   // The API-backed UI supports multiple sessions; this only closes this tab's agent.
-  quit.textContent = "Session beenden";
+  quit.textContent = t("session.end");
   const newSessionButton = document.getElementById("new-session");
   const listSessionsButton = document.getElementById("list-sessions");
   const sessionsDialog = document.getElementById("sessions-dialog");
@@ -24,6 +28,28 @@
   const contextRunSelect = document.getElementById("context-run-select");
   const cleanupProcessingResult = document.getElementById("cleanup-processing-result");
   let currentContextPayload = null;
+  let currentSessionMetadata = null;
+  // Keep the visible connection state independent of cached session metadata.
+  // Translation changes must never make a closed or disconnected tab look active.
+  let sessionStatusKey = "connection.establishing";
+  function renderSessionMeta() {
+    if (sessionStatusKey === "session.meta" && currentSessionMetadata) {
+      meta.textContent = t("session.meta", {
+        ...currentSessionMetadata,
+        servers: currentSessionMetadata.servers || t("session.noneMcp")
+      });
+    } else {
+      meta.textContent = t(sessionStatusKey);
+    }
+  }
+  function setSessionStatus(key) {
+    sessionStatusKey = key;
+    renderSessionMeta();
+  }
+  renderSessionMeta();
+  // Register before validating the browser token: even an invalid start link
+  // must remain accurately translated when the user changes language.
+  window.addEventListener("cli-agent-language-change", renderSessionMeta);
   function renderSelectedWorkingMessages() {
     if (!currentContextPayload) return;
     const selected = contextRunSelect.value;
@@ -40,19 +66,19 @@
     }
     const result = cleanupRun.processing_result || {};
     const labels = {
-      running: "Läuft", cancelled: "Abgebrochen", applied: "Angewendet", unchanged: "Keine Änderung",
-      invalid: "Ungültige Antwort", failed: "Fehlgeschlagen"
+      running: t("cleanup.running"), cancelled: t("cleanup.cancelled"),
+      applied: t("cleanup.applied"), unchanged: t("cleanup.unchanged"),
+      invalid: t("cleanup.invalid"), failed: t("cleanup.failed")
     };
     const bytesBefore = Number(result.bytes_before ?? 0);
     const bytesAfter = Number(result.bytes_after ?? 0);
     const lines = [
-      "Verarbeitung: " + (labels[result.status] || String(result.status || "Unbekannt")),
-      "Evidences: " + (result.evidences_before ?? "?") + " → " + (result.evidences_after ?? "?"),
-      "Größe: " + bytesBefore + " → " + bytesAfter + " Bytes",
-      "Entfernt: " + (result.removed ?? 0) + " · Aktualisiert: " +
-        (result.updated ?? 0) + " · Zusammengeführt: " + (result.merged ?? 0)
+      t("cleanup.processing", {status: labels[result.status] || String(result.status || t("cleanup.unknown"))}),
+      t("cleanup.evidences", {before: result.evidences_before ?? "?", after: result.evidences_after ?? "?"}),
+      t("cleanup.size", {before: bytesBefore, after: bytesAfter}),
+      t("cleanup.changes", {removed: result.removed ?? 0, updated: result.updated ?? 0, merged: result.merged ?? 0})
     ];
-    if (result.error) lines.push("Fehler: " + String(result.error));
+    if (result.error) lines.push(t("cleanup.error", {error: String(result.error)}));
     cleanupProcessingResult.textContent = lines.join("\n");
   }
   contextRunSelect.addEventListener("change", renderSelectedWorkingMessages);
@@ -98,20 +124,20 @@
     add_web_context: {
       argument: true,
       display: "add_web_context",
-      question: "Welche URL soll als Web-Kontext hinzugefügt werden?",
+      question: "commands.webQuestion",
       placeholder: "https://…"
     },
     enable: {
       argument: true,
       display: "enable",
-      question: "Welcher MCP-Server soll aktiviert werden?",
-      placeholder: "Name des MCP-Servers"
+      question: "commands.enableQuestion",
+      placeholder: "commands.serverPlaceholder"
     },
     disable: {
       argument: true,
       display: "disable",
-      question: "Welcher MCP-Server soll deaktiviert werden?",
-      placeholder: "Name des MCP-Servers"
+      question: "commands.disableQuestion",
+      placeholder: "commands.serverPlaceholder"
     }
   };
 
@@ -133,7 +159,7 @@
     details.className = "tool-call-group";
     details.open = true;
     const summary = document.createElement("summary");
-    summary.textContent = "Tool-Aufrufe (0)";
+    summary.textContent = t("tools.group", {count: 0});
     const list = document.createElement("div");
     list.className = "tool-call-list";
     details.append(summary, list);
@@ -157,23 +183,23 @@
     status.className = "tool-call-status";
     status.dataset.state = "running";
     status.dataset.toolName = String(event.toolCallName || "");
-    status.textContent = "Läuft …";
+    status.textContent = t("tools.running");
     row.append(name, status);
     group.list.appendChild(row);
     group.calls.set(id, status);
-    group.summary.textContent = "Tool-Aufrufe (" + group.calls.size + ")";
+    group.summary.textContent = t("tools.group", {count: group.calls.size});
   }
 
   function setToolStatus(id, state) {
     const status = activeToolGroup?.calls.get(String(id || ""));
     if (!status) return;
     const labels = {
-      running: "Läuft …", success: "Erfolgreich", error: "Fehler", denied: "Abgelehnt",
-      approval: "Freigabe nötig", finished: "Beendet"
+      running: "tools.running", success: "tools.success", error: "tools.error",
+      denied: "tools.denied", approval: "tools.approval", finished: "tools.finished"
     };
     const normalized = Object.hasOwn(labels, state) ? state : "finished";
     status.dataset.state = normalized;
-    status.textContent = labels[normalized];
+    status.textContent = t(labels[normalized]);
   }
 
   function renderChromaSearchSummary(event) {
@@ -205,9 +231,11 @@
       summary.className = "tool-call-summary";
       row.appendChild(summary);
     }
-    summary.textContent = value.matches + " Treffer" +
-      " · Collection: " + value.collection +
-      (value.initial ? " · Initiale Suche" : " · Weitere Suche");
+    summary.dataset.vectorMatches = String(value.matches);
+    summary.dataset.vectorCollection = value.collection;
+    summary.dataset.vectorInitial = String(value.initial);
+    summary.textContent = t("vector.summary", {count: value.matches, collection: value.collection,
+      phase: t(value.initial ? "vector.initial" : "vector.next")});
     setToolStatus(event.toolCallId, "success");
     return true;
   }
@@ -235,7 +263,8 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "secondary artifact-download";
-      button.textContent = "Herunterladen: " + filename;
+      button.textContent = t("download.button", {filename});
+      button.dataset.downloadFilename = filename;
       button.addEventListener("click", async () => {
         button.disabled = true;
         try {
@@ -256,7 +285,7 @@
             setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
           }
         } catch (error) {
-          addMessage("error", "Download fehlgeschlagen: " + String(error?.message || error));
+          addMessage("error", t("download.failed", {error: String(error?.message || error)}));
         } finally {
           button.disabled = false;
         }
@@ -301,7 +330,7 @@
 
   function resetPendingCommand() {
     pendingCommand = null;
-    prompt.placeholder = "Nachricht an cli-agent";
+    prompt.placeholder = t("composer.placeholder");
     cancelCommand.classList.add("hidden");
   }
 
@@ -329,9 +358,9 @@
       return;
     }
     pendingCommand = name;
-    prompt.placeholder = spec.placeholder;
+    prompt.placeholder = spec.placeholder === "https://…" ? spec.placeholder : t(spec.placeholder);
     cancelCommand.classList.remove("hidden");
-    addMessage("system", spec.question);
+    addMessage("system", t(spec.question));
     prompt.focus();
   }
 
@@ -354,7 +383,8 @@
     const button = document.createElement("button");
     button.type = "button";
     button.className = enabled ? "secondary" : "";
-    button.textContent = enabled ? "Disable" : "Enable";
+    button.dataset.toggleEnabled = String(enabled);
+    button.textContent = t(enabled ? "toggle.disable" : "toggle.enable");
     button.title = label;
     button.dataset.runtimeToggle = "true";
     button.dataset.permanentlyDisabled = String(Boolean(disabled));
@@ -369,7 +399,7 @@
     if (!tools.length) {
       const empty = document.createElement("div");
       empty.className = "meta";
-      empty.textContent = "Keine MCP-Tools verfügbar.";
+      empty.textContent = t("context.noTools");
       workingToolsList.appendChild(empty);
       return;
     }
@@ -395,7 +425,7 @@
         !serverEnabled
       );
       if (!serverEnabled) {
-        button.title = "MCP-Server ist deaktiviert.";
+        button.title = t("toggle.mcpDisabled");
       }
       row.append(name, description, button);
       workingToolsList.appendChild(row);
@@ -415,8 +445,8 @@
       const description = document.createElement("div");
       description.className = "state-description";
       description.textContent = okf.available
-        ? "Konfigurierter Knowledge-Lauf vor der Hauptanfrage."
-        : "Konfiguriert, aber aktuell nicht verfügbar.";
+        ? t("context.okfReady")
+        : t("context.okfUnavailable");
       const enabled = Boolean(okf.enabled);
       const button = stateToggleButton(
         "OKF Knowledge",
@@ -433,7 +463,7 @@
     if (!contexts.length) {
       const empty = document.createElement("div");
       empty.className = "meta";
-      empty.textContent = "Keine Datei- oder Web-Kontexte vorhanden.";
+      empty.textContent = t("context.noContexts");
       workingContextsList.appendChild(empty);
       return;
     }
@@ -447,8 +477,8 @@
       name.textContent = String(context.label || context.source || "");
       const source = document.createElement("div");
       source.className = "state-source";
-      source.textContent = (context.kind === "file" ? "Datei: " : "Web: ") +
-        String(context.source || "");
+      source.textContent = t(context.kind === "file" ? "context.fileSource" : "context.webSource",
+        {source: String(context.source || "")});
       heading.append(name, source);
 
       const body = document.createElement("div");
@@ -475,7 +505,7 @@
 
   function requestWorkingContext() {
     if (!sessionId) {
-      const message = "Web-UI-Verbindung ist nicht aktiv.";
+      const message = t("context.inactive");
       workingMessagesJson.textContent = message;
       workingToolsList.textContent = message;
       workingContextsList.textContent = message;
@@ -496,7 +526,7 @@
   const entryTicket = new URLSearchParams(window.location.hash.slice(1)).get("ticket");
   const token = tokenFromFragment();
   if (!token) {
-    meta.textContent = "Ungültiger Start-Link: Session-Token fehlt.";
+    setSessionStatus("error.invalidLink");
     prompt.disabled = true;
     send.disabled = true;
     return;
@@ -620,7 +650,7 @@
           } else if (event.type === "RUN_ERROR") {
             dismissApproval();
             finishPendingTools("error");
-            emit({type: "error", content: String(event.message || "Agentenlauf fehlgeschlagen.")});
+            emit({type: "error", content: String(event.message || t("error.runFailed"))});
             finished = true;
           } else if (event.type === "RUN_FINISHED") {
             finished = true;
@@ -633,7 +663,7 @@
                 emit({
                   type: "approval_required",
                   id: item.id,
-                  tool: item.message || "Tool-Freigabe",
+                  tool: item.message || t("approval.fallback"),
                   ...extra,
                   toolCallId: item.toolCallId
                 });
@@ -649,7 +679,7 @@
         aguiMessages.push({id: crypto.randomUUID(), role: "assistant", content: answer});
         emit({type: "answer", content: answer, html: await renderAnswer(answer)});
       }
-      if (!finished) throw new Error("Agenten-Eventstream vorzeitig beendet.");
+      if (!finished) throw new Error(t("error.streamEnded"));
     } catch (error) {
       finishPendingTools("error");
       throw error;
@@ -693,8 +723,7 @@
     if (messages.length - start > MAX_SYNCED_MESSAGES ||
         bytes > MAX_SYNCED_REQUEST_BYTES) {
       throw new Error(
-        "Die aktuelle Nachricht oder Tool-Fortsetzung ist zu groß. " +
-        "Bitte den Inhalt verkürzen."
+        t("error.messageTooLarge")
       );
     }
     return messages.slice(start);
@@ -719,7 +748,7 @@
     // The latest user message cannot be discarded: the agent must either
     // receive the whole request or return a clear size error.
     if (start >= aguiMessages.length) {
-      throw new Error("Letzte Nachricht überschreitet das AG-UI-Limit.");
+      throw new Error(t("error.lastMessageTooLarge"));
     }
     aguiMessages = aguiMessages.slice(start);
     // Avoid sending an orphaned tool result or assistant reply as the
@@ -757,7 +786,7 @@
       return;
     }
     if (msg.type === "message") {
-      if (typeof msg.content !== "string") throw new Error("Ungültiger Prompt.");
+      if (typeof msg.content !== "string") throw new Error(t("error.invalidPrompt"));
       if (["exit", "quit"].includes(msg.content.trim().toLowerCase())) {
         await deleteUnusedSession(sessionId);
         if (sessionId) setBusy(false);
@@ -785,7 +814,7 @@
       const spec = COMMANDS[msg.command];
       if (!spec || (spec.argument && typeof msg.argument !== "string") ||
           (!spec.argument && msg.argument != null && msg.argument !== "")) {
-        throw new Error("Ungültiger lokaler Befehl.");
+        throw new Error(t("error.invalidCommand"));
       }
       const result = await (await api("/ui/command", "POST", {
         session_id: sessionId, command: msg.command,
@@ -858,7 +887,7 @@
     try {
       payload = JSON.parse(event.data);
     } catch (_error) {
-      addMessage("error", "Ungültige Antwort vom lokalen Web-UI-Server.");
+      addMessage("error", t("error.invalidServerResponse"));
       return;
     }
 
@@ -867,10 +896,8 @@
       const servers = Array.isArray(payload.mcp_servers)
         ? payload.mcp_servers.join(", ")
         : "";
-      meta.textContent =
-        "Workspace: " + payload.workspace +
-        " · Modell: " + payload.model +
-        " · MCP: " + (servers || "(keine)");
+      currentSessionMetadata = {workspace: payload.workspace, model: payload.model, servers};
+      setSessionStatus("session.meta");
       for (const message of payload.initial_messages || []) {
         addMessage("system", String(message));
       }
@@ -889,7 +916,7 @@
       return;
     }
     if (payload.type === "error") {
-      addMessage("error", String(payload.content || "Unbekannter Fehler."));
+      addMessage("error", String(payload.content || t("error.unknown")));
       return;
     }
     if (payload.type === "mcp_user_message") {
@@ -908,13 +935,13 @@
       currentContextPayload = payload;
       const previous = contextRunSelect.value;
       contextRunSelect.replaceChildren();
-      contextRunSelect.add(new Option("Hauptlauf", "main"));
+      contextRunSelect.add(new Option(t("context.mainRun"), "main"));
       for (const run of (Array.isArray(payload.sub_runs) ? payload.sub_runs : [])) {
-        contextRunSelect.add(new Option("Sub-Run: " + run.task.slice(0, 75), run.id));
+        contextRunSelect.add(new Option(t("context.subRun", {task: run.task.slice(0, 75)}), run.id));
       }
       for (const run of (Array.isArray(payload.cleanup_runs) ? payload.cleanup_runs : [])) {
-        const cause = run.trigger === "plan_changed" ? "Planänderung" : "20 Toolaufrufe";
-        contextRunSelect.add(new Option("Cleanup #" + String(run.id).replace(/^cleanup-/, "") + " – " + cause, run.id));
+        const cause = t(run.trigger === "plan_changed" ? "context.planChanged" : "context.toolLimit");
+        contextRunSelect.add(new Option(t("context.cleanupRun", {number: String(run.id).replace(/^cleanup-/, ""), cause}), run.id));
       }
       contextRunSelect.value = [...contextRunSelect.options].some(o => o.value === previous) ? previous : "main";
       renderSelectedWorkingMessages();
@@ -926,7 +953,7 @@
       resetPendingCommand();
       chat.replaceChildren();
       activeToolGroup = null;
-      addMessage("system", "History wurde zurückgesetzt.");
+      addMessage("system", t("history.wasReset"));
       return;
     }
     if (payload.type === "approval_required") {
@@ -970,7 +997,7 @@
     // might reject it after waiting for the API response.
     const tab = window.open("about:blank", "_blank");
     if (!tab) {
-      addMessage("error", "Browser hat das Öffnen eines neuen Tabs blockiert.");
+      addMessage("error", t("error.popupBlocked"));
       return;
     }
     try {
@@ -986,7 +1013,7 @@
   async function openExistingSession(sid) {
     const tab = window.open("about:blank", "_blank");
     if (!tab) {
-      addMessage("error", "Browser hat das Öffnen eines neuen Tabs blockiert.");
+      addMessage("error", t("error.popupBlocked"));
       return;
     }
     try {
@@ -1002,7 +1029,7 @@
   }
 
   async function deleteUnusedSession(sid) {
-    if (!window.confirm("Diese Session dauerhaft beenden? Andere Sessions bleiben geöffnet.")) return;
+    if (!window.confirm(t("session.confirmEnd"))) return;
     await api("/ui/sessions/" + encodeURIComponent(sid), "DELETE");
     if (sid === sessionId) {
       // Only the current agent worker was removed, not the API server.
@@ -1020,7 +1047,7 @@
       try { window.sessionStorage.removeItem("cli-agent-session-id"); }
       catch (_error) {}
       chat.replaceChildren();
-      meta.textContent = "Session beendet. Andere Sessions laufen weiter. Neue Session in neuem Tab öffnen.";
+      setSessionStatus("session.ended");
       setBusy(true);
     }
     await refreshSessions();
@@ -1037,18 +1064,18 @@
       const current = item.session_id === sessionId;
       const executing = item.busy && !item.approval_pending;
       name.textContent = item.session_id.slice(0, 12) +
-        (current ? " · aktueller Tab" : item.occupied ? " · geöffnet" : " · frei");
+        " · " + t(current ? "session.currentTab" : item.occupied ? "session.occupied" : "session.available");
       const actions = document.createElement("div");
       const open = document.createElement("button");
       open.type = "button";
       open.className = "secondary";
-      open.textContent = "Öffnen";
+      open.textContent = t("session.open");
       open.disabled = item.occupied || executing;
       open.addEventListener("click", () => { void openExistingSession(item.session_id); });
       const close = document.createElement("button");
       close.type = "button";
       close.className = "secondary";
-      close.textContent = "Beenden";
+      close.textContent = t("session.close");
       close.disabled = (item.occupied && !current) || executing;
       close.addEventListener("click", () => {
         void deleteUnusedSession(item.session_id).catch(showApiError);
@@ -1070,7 +1097,7 @@
         leaseToken = null;
         sessionId = null;
         setBusy(true);
-        meta.textContent = "Session-Bindung verloren. Tab erneut öffnen.";
+        setSessionStatus("session.bindingLost");
       }
     }, 8000);
   }
@@ -1137,7 +1164,7 @@
         setToolStatus(item.toolCallId, "approval");
         emit({
           type: "approval_required", id: item.id,
-          tool: item.message || "Tool-Freigabe",
+          tool: item.message || t("approval.fallback"),
           ...(item.metadata?.["cli-agent"] || {}),
           toolCallId: item.toolCallId
         });
@@ -1151,10 +1178,50 @@
       }
       startHeartbeat();
     } catch (error) {
-      meta.textContent = "Session konnte nicht geöffnet werden.";
+      setSessionStatus("session.openFailed");
       showApiError(error);
     }
   }
+  window.addEventListener("cli-agent-language-change", () => {
+    if (!pendingCommand) {
+      prompt.placeholder = t("composer.placeholder");
+    } else {
+      const spec = COMMANDS[pendingCommand];
+      prompt.placeholder = spec.placeholder === "https://…" ? spec.placeholder : t(spec.placeholder);
+    }
+    for (const group of chat.querySelectorAll(".tool-call-group")) {
+      const count = group.querySelectorAll(".tool-call-row").length;
+      const summary = group.querySelector("summary");
+      if (summary) summary.textContent = t("tools.group", {count});
+      for (const status of group.querySelectorAll(".tool-call-status")) {
+        const state = status.dataset.state || "finished";
+        const keys = {
+          running: "tools.running", success: "tools.success", error: "tools.error",
+          denied: "tools.denied", approval: "tools.approval", finished: "tools.finished"
+        };
+        status.textContent = t(keys[state] || "tools.finished");
+      }
+      for (const summary of group.querySelectorAll(".tool-call-summary[data-vector-matches]")) {
+        summary.textContent = t("vector.summary", {
+          count: Number(summary.dataset.vectorMatches),
+          collection: summary.dataset.vectorCollection,
+          phase: t(summary.dataset.vectorInitial === "true" ? "vector.initial" : "vector.next")
+        });
+      }
+      for (const button of group.querySelectorAll(".artifact-download[data-download-filename]")) {
+        button.textContent = t("download.button", {filename: button.dataset.downloadFilename});
+      }
+    }
+    for (const button of document.querySelectorAll("button[data-runtime-toggle]")) {
+      button.textContent = t(button.dataset.toggleEnabled === "true" ? "toggle.disable" : "toggle.enable");
+      if (button.dataset.permanentlyDisabled === "true") button.title = t("toggle.mcpDisabled");
+    }
+    if (currentContextPayload) {
+      processServerMessage({data: JSON.stringify({type: "working_context", ...currentContextPayload})});
+    }
+    if (sessionsDialog.open) void refreshSessions().catch(showApiError);
+  });
+
   setBusy(true);
   void bootstrap();
 
@@ -1169,9 +1236,9 @@
   });
 
   showWorkingContext.addEventListener("click", () => {
-    workingMessagesJson.textContent = "Wird geladen …";
-    workingToolsList.textContent = "Wird geladen …";
-    workingContextsList.textContent = "Wird geladen …";
+    workingMessagesJson.textContent = t("loading");
+    workingToolsList.textContent = t("loading");
+    workingContextsList.textContent = t("loading");
     okfState.replaceChildren();
     setContextTab("messages");
     if (!workingContextDialog.open) {
@@ -1181,9 +1248,9 @@
   });
 
   refreshWorkingContext.addEventListener("click", () => {
-    workingMessagesJson.textContent = "Wird geladen …";
-    workingToolsList.textContent = "Wird geladen …";
-    workingContextsList.textContent = "Wird geladen …";
+    workingMessagesJson.textContent = t("loading");
+    workingToolsList.textContent = t("loading");
+    workingContextsList.textContent = t("loading");
     okfState.replaceChildren();
     requestWorkingContext();
   });
@@ -1200,7 +1267,7 @@
     if (busy || !sessionId) {
       return;
     }
-    if (!window.confirm("Conversation-History wirklich zurücksetzen?")) {
+    if (!window.confirm(t("history.confirmReset"))) {
       return;
     }
     socket.send(JSON.stringify({ type: "reset_history" }));
@@ -1254,7 +1321,7 @@
 
   cancelCommand.addEventListener("click", () => {
     if (pendingCommand) {
-      addMessage("system", "Befehl abgebrochen.");
+      addMessage("system", t("commands.cancelled"));
     }
     resetPendingCommand();
     prompt.focus();
@@ -1287,5 +1354,6 @@
     if (sessionId && !busy) {
       void deleteUnusedSession(sessionId).catch(showApiError);
     }
+  });
   });
 })();

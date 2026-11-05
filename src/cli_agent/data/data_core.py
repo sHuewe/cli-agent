@@ -69,7 +69,7 @@ class DataOperationError(RuntimeError):
 
 def _reject_json_constant(value: str) -> Any:
     raise DataOperationError(
-        f"JSON enthält eine nicht-endliche Zahl: {value}."
+        f"JSON contains a nonfinite number: {value}."
     )
 
 
@@ -79,17 +79,17 @@ def _json_scalar(value: Any) -> Scalar:
     if isinstance(value, float):
         if not math.isfinite(value):
             raise DataOperationError(
-                "JSON enthält eine nicht-endliche Zahl."
+                "JSON contains a nonfinite number."
             )
         return value
     if isinstance(value, Decimal):
         if not value.is_finite():
             raise DataOperationError(
-                "JSON enthält eine nicht-endliche Zahl."
+                "JSON contains a nonfinite number."
             )
         return value
     raise DataOperationError(
-        "Tabellarische Daten dürfen nur skalare JSON-Werte enthalten."
+        "Tabular data may contain only scalar JSON values."
     )
 
 
@@ -108,9 +108,9 @@ def _validate_column_name(value: Any, *, source: str) -> str:
         or value != value.strip()
     ):
         raise DataOperationError(
-            f"{source} enthält einen ungültigen Spaltennamen. "
-            "Spaltennamen müssen nicht-leer sein und dürfen keine führenden "
-            "oder nachgestellten Leerzeichen enthalten."
+            f"{source} contains an invalid column name. "
+            "Column names must be nonempty and must not contain leading "
+            "or trailing whitespace."
         )
     return value
 
@@ -213,8 +213,8 @@ def _require_finite_float_result(
 ) -> float:
     if not math.isfinite(value):
         raise DataOperationError(
-            f"Aggregation {function!r} erzeugt kein endliches Ergebnis "
-            f"für Spalte {column!r}."
+            f"Aggregation {function!r} produces a nonfinite result "
+            f"for column {column!r}."
         )
     return value
 
@@ -302,8 +302,8 @@ def _decimal_working_precision(values: list[Decimal]) -> int:
     required = max(DECIMAL_PRECISION, span + DECIMAL_PRECISION)
     if required > MAX_DECIMAL_WORKING_PRECISION:
         raise DataOperationError(
-            "Dezimalwerte benötigen eine zu hohe Arbeitspräzision "
-            f"(maximal {MAX_DECIMAL_WORKING_PRECISION} Stellen)."
+            "Decimal values require excessive working precision "
+            f"(maximal {MAX_DECIMAL_WORKING_PRECISION} digits)."
         )
     return required
 

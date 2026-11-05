@@ -229,7 +229,7 @@ def test_api_start_rejects_invalid_static_start_options(tmp_path):
     excluded = build_parser().parse_args([
         "--workspace", str(tmp_path), "--exclude-path", "secret"
     ])
-    with pytest.raises(ValueError, match="OS-Zugriff"):
+    with pytest.raises(ValueError, match="--exclude-path requires OS access\\."):
         build_service(excluded)
 
 
@@ -344,7 +344,7 @@ async def test_browser_run_without_sse_times_out_and_releases_session(monkeypatc
                 break
             await asyncio.sleep(0.005)
         assert waiting.status == "failed"
-        assert "SSE-Client" in (waiting.error or "")
+        assert "SSE client" in (waiting.error or "")
         assert not agents[0].history
         assert not session._busy
         # Headless clients continue to be able to run without an SSE listener.
@@ -468,7 +468,7 @@ async def test_agui_rejects_frontend_tools_shadowing_internal_tools(internal_too
                 headers={**headers(service), "Accept": "text/event-stream"},
             )
             assert response.status_code == 400
-            assert "kollidierender Tool-Name" in response.text
+            assert "MCP-colliding tool name" in response.text
             assert len(agents) == 1
             assert agents[0].history == []
             assert not next(iter(service.sessions.values()))._busy

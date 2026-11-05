@@ -11,6 +11,23 @@ from cli_agent.interfaces.agent_api import AgentApiService, create_app
 from cli_agent.interfaces.web_ui_sessions import BrowserSessionRegistry
 
 
+def _browser_translation_shim() -> str:
+    """Provide the actual German JSON catalog to isolated browser JS tests."""
+    import json
+    from cli_agent.interfaces.web_ui_locales import get_locale
+
+    entries = get_locale("de")
+    assert entries is not None
+    assert "tools.group" in entries and "error.messageTooLarge" in entries
+    return (
+        "const t = (key, values = {}) => { const messages = " +
+        json.dumps(entries, ensure_ascii=False) +
+        "; return Object.entries(values).reduce((text, [name, value]) => " +
+        'text.split("{" + name + "}").join(String(value)), messages[key] || key); };' +
+        chr(10)
+    )
+
+
 class BrowserAgent:
     def __init__(self, session):
         self.session = session
@@ -89,6 +106,28 @@ async def test_embedded_ui_auth_routes_and_state_lifecycle():
     ) as client:
         assert (await client.get("/")).status_code == 200
         assert (await client.get("/assets/app.js")).status_code == 200
+        i18n = await client.get("/assets/i18n.js")
+        assert i18n.status_code == 200
+        assert i18n.headers["content-type"].startswith("application/javascript")
+        assert "script-src 'self'" in i18n.headers["content-security-policy"]
+        assert i18n.headers["cache-control"] == "no-store"
+        assert "cli-agent-ui-language" in i18n.text
+        manifest = await client.get("/assets/i18n/locales.json")
+        assert manifest.status_code == 200
+        from cli_agent.interfaces.web_ui_locales import available_locales
+        assert manifest.json() == available_locales()
+        assert {"en", "de"}.issubset(manifest.json())
+        assert manifest.headers["cache-control"] == "no-store"
+        for code in ("en", "de"):
+            catalog = await client.get(f"/assets/i18n/{code}.json")
+            assert catalog.status_code == 200
+            assert catalog.json()["session.new"]
+            assert catalog.headers["content-security-policy"]
+            assert catalog.headers["cache-control"] == "no-store"
+        assert (await client.get("/assets/i18n/NOT-A-LANGUAGE.json")).status_code == 404
+        assert (await client.get("/assets/i18n/locales.json", headers={"Host": "evil.example"})).status_code == 403
+        assert (await client.get("/assets/i18n/en.json", headers={"Origin": "https://example.com"})).status_code == 403
+        assert (await client.get("/assets/i18n.js", headers={"Host": "evil.example"})).status_code == 403
         assert "WebSocket(wsUrl)" not in (await client.get("/assets/app.js")).text
         assert (await client.post("/ui/bootstrap", json={})).status_code == 401
         headers = browser_headers()
@@ -256,7 +295,7 @@ def test_local_exit_and_quit_are_not_sent_to_agent():
         'api("/ag-ui", "POST", input)'
     )
     assert 'api("/ui/shutdown"' not in API_APP_JS
-    assert 'quit.textContent = "Session beenden";' in API_APP_JS
+    assert 'quit.textContent = t("session.end");' in API_APP_JS
     assert 'quit.disabled = busy || disconnected;' in API_APP_JS
     assert 'void deleteUnusedSession(sessionId).catch(showApiError);' in API_APP_JS
 
@@ -335,8 +374,11 @@ def test_browser_agui_transcript_compaction_with_real_javascript():
       throw new Error("Latest tool result was removed");
     console.log("ok");
     """
+    # Pipe JavaScript through UTF-8 stdin rather than a long Windows command
+    # line. Node's argument decoding/startup may be slow or unreliable there.
     result = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, timeout=60,
+        [node, "-"], input=_browser_translation_shim() + script,
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -662,7 +704,7 @@ function assert(condition, message) {
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
     result = subprocess.run(
-        [node, "-e", script], text=True, capture_output=True, timeout=15,
+        [node, "-e", _browser_translation_shim() + script], text=True, capture_output=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
@@ -779,7 +821,7 @@ function stream(events) {
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
     result = subprocess.run(
-        [node, "-e", script], text=True, capture_output=True, timeout=15,
+        [node, "-e", _browser_translation_shim() + script], text=True, capture_output=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
@@ -810,7 +852,7 @@ def test_cancelled_session_close_does_not_issue_delete_request():
         '})().catch(error => { console.error(error); process.exitCode = 1; });\n'
     )
     result = subprocess.run(
-        [node, "-e", script], text=True, capture_output=True, timeout=15,
+        [node, "-e", _browser_translation_shim() + script], text=True, capture_output=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
@@ -907,7 +949,7 @@ async function action(msg) {
   console.log("ok");
 })().catch(err => {console.error(err); process.exitCode=1;});
 '''
-    result = subprocess.run([node, "-e", script], capture_output=True,
+    result = subprocess.run([node, "-e", _browser_translation_shim() + script], capture_output=True,
                             text=True, timeout=15)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"

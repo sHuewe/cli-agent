@@ -35,11 +35,11 @@ def validate_http_url(
     parsed = urlsplit(value)
     scheme = parsed.scheme.lower()
     if scheme not in {"http", "https"}:
-        raise ValueError(f"{purpose} unterstützt nur http:// und https:// URLs.")
+        raise ValueError(f"{purpose} supports only http:// and https:// URLs.")
     if not parsed.hostname:
-        raise ValueError(f"{purpose} URL enthält keinen Hostnamen.")
+        raise ValueError(f"{purpose} URL contains no hostname.")
     if parsed.username is not None or parsed.password is not None:
-        raise ValueError(f"Credentials in {purpose}-URLs werden nicht unterstützt.")
+        raise ValueError(f"Credentials in {purpose} URLs are not supported.")
 
     hostname = parsed.hostname.lower().rstrip(".")
     allowed = _normalized_hosts(allowed_hosts)
@@ -51,6 +51,6 @@ def validate_http_url(
         )
     if scheme == "http" and hostname not in _normalized_hosts(LOCAL_HOSTS):
         raise ValueError(
-            f"Unverschlüsseltes HTTP ist für {purpose} nur zu lokalen Hosts erlaubt."
+            f"Unencrypted HTTP for {purpose} is permitted only to local hosts."
         )
     return value

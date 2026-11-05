@@ -24,7 +24,7 @@ class ModelResponseTooLargeError(RuntimeError):
         self.max_bytes = max_bytes
         self.observed_bytes = observed_bytes
         self.declared_bytes = declared_bytes
-        super().__init__(f"Modellantwort überschreitet das Größenlimit von {max_bytes} Bytes.")
+        super().__init__(f"Model response exceeds the size limit of {max_bytes} Bytes.")
 
 
 def _declared_content_length(response: httpx.Response) -> int | None:
@@ -52,7 +52,7 @@ async def read_bounded_response_bytes(
     """
 
     if max_bytes < 1:
-        raise ValueError("max_bytes muss größer als 0 sein.")
+        raise ValueError("max_bytes must be greater than zero.")
 
     declared = _declared_content_length(response)
     if declared is not None and declared > max_bytes:
@@ -91,7 +91,7 @@ async def read_response_prefix(
     """Read at most ``max_bytes`` decoded bytes for diagnostic error details."""
 
     if max_bytes < 1:
-        raise ValueError("max_bytes muss größer als 0 sein.")
+        raise ValueError("max_bytes must be greater than zero.")
 
     body = bytearray()
     async for chunk in response.aiter_bytes(chunk_size=min(MODEL_RESPONSE_CHUNK_BYTES, max_bytes + 1)):

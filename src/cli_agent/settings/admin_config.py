@@ -20,11 +20,11 @@ def _normalize_mcp_url(value: str, *, section: str) -> str:
     if scheme not in {"http", "https"}:
         raise ValueError(f"{section}.url muss eine http:// oder https:// URL sein.")
     if not parsed.hostname:
-        raise ValueError(f"{section}.url enthält keinen Hostnamen.")
+        raise ValueError(f"{section}.url contains no hostname.")
     if parsed.username is not None or parsed.password is not None:
-        raise ValueError(f"Credentials in {section}.url werden nicht unterstützt.")
+        raise ValueError(f"Credentials in {section}.url are not supported.")
     if parsed.fragment:
-        raise ValueError(f"{section}.url darf keinen Fragment-Teil enthalten.")
+        raise ValueError(f"{section}.url must not contain a fragment.")
 
     host = parsed.hostname.lower().rstrip(".")
     if ":" in host and not host.startswith("["):
@@ -41,11 +41,11 @@ def _normalize_web_provider_base_url(value: str, *, section: str) -> str:
     if parsed.scheme.lower() != "https":
         raise ValueError(f"{section}.base_url muss eine https:// URL sein.")
     if not parsed.hostname:
-        raise ValueError(f"{section}.base_url enthält keinen Hostnamen.")
+        raise ValueError(f"{section}.base_url contains no hostname.")
     if parsed.username is not None or parsed.password is not None:
-        raise ValueError(f"Credentials in {section}.base_url werden nicht unterstützt.")
+        raise ValueError(f"Credentials in {section}.base_url are not supported.")
     if parsed.query or parsed.fragment:
-        raise ValueError(f"{section}.base_url darf weder Query noch Fragment enthalten.")
+        raise ValueError(f"{section}.base_url must not contain a query or fragment.")
 
     host = parsed.hostname.lower().rstrip(".")
     if ":" in host and not host.startswith("["):
@@ -205,13 +205,13 @@ def _trusted_tool_approvals(values: dict[str, Any], *, section: str) -> tuple[Tr
         return ()
     if not isinstance(raw, list):
         raise ValueError(
-            f"{section}.auto_approve_tools muss über "
-            "[[mcp.trusted_servers.auto_approve_tools]]-Tabellen definiert werden."
+            f"{section}.auto_approve_tools must be defined using "
+            "[[mcp.trusted_servers.auto_approve_tools]] tables."
         )
     if raw and all(isinstance(value, str) for value in raw):
         raise ValueError(
-            f"{section}.auto_approve_tools unterstützt keine name-only Freigaben mehr. "
-            "Erzeuge einen gepinnten Tool-Contract mit "
+            f"{section}.auto_approve_tools no longer supports name-only approvals. "
+            "Generate a pinned tool contract using "
             "'cli-agent admin trust-tool <server> <tool> --config <config>'."
         )
     if not all(isinstance(value, dict) for value in raw):
@@ -248,8 +248,8 @@ def _trusted_http_bearer_token_env(values: Any, *, section: str) -> str:
     if unknown_from_env:
         names = ", ".join(sorted(str(name) for name in unknown_from_env))
         raise ValueError(
-            f"{section}.from_env unterstützt derzeit nur 'authentication'; "
-            f"unbekannt: {names}."
+            f"{section}.from_env currently supports only 'authentication'; "
+            f"unknown: {names}."
         )
 
     authentication = values.get("authentication")
@@ -260,8 +260,8 @@ def _trusted_http_bearer_token_env(values: Any, *, section: str) -> str:
     if unknown_authentication:
         names = ", ".join(sorted(str(name) for name in unknown_authentication))
         raise ValueError(
-            f"{section}.from_env.authentication unterstützt derzeit nur 'bearer'; "
-            f"unbekannt: {names}."
+            f"{section}.from_env.authentication currently supports only 'bearer'; "
+            f"unknown: {names}."
         )
 
     bearer = authentication.get("bearer")
@@ -286,9 +286,9 @@ def _reject_static_authorization_header(
 ) -> None:
     if any(name.strip().casefold() == "authorization" for name, _ in headers):
         raise ValueError(
-            f"{section}.headers darf Authorization nicht statisch setzen. "
-            "Bearer-Authentifizierung wird ausschließlich über "
-            f"{section}.from_env.authentication.bearer konfiguriert."
+            f"{section}.headers must not set a static Authorization header. "
+            "Bearer authentication is configured exclusively through "
+            f"{section}.from_env.authentication.bearer."
         )
 
 
@@ -336,12 +336,12 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
     if transport == "streamable_http":
         if required_workspace_access != "none":
             raise ValueError(
-                f"{section}.required_workspace_access wird derzeit nur für stdio-MCP-Server unterstützt."
+                f"{section}.required_workspace_access is currently supported only for stdio MCP servers."
             )
         if not url:
-            raise ValueError(f"{section} benötigt für streamable_http eine url.")
+            raise ValueError(f"{section} requires a url for streamable_http.")
         if command or raw_args or env:
-            raise ValueError(f"{section} darf für streamable_http kein command, args oder env enthalten.")
+            raise ValueError(f"{section} must not contain command, args or env for streamable_http.")
         _reject_static_authorization_header(headers, section=section)
         if "from_env" in values:
             bearer_token_env = _trusted_http_bearer_token_env(
@@ -351,15 +351,15 @@ def _trusted_server(values: dict[str, Any], index: int) -> TrustedMcpServer:
         url = _normalize_mcp_url(url, section=section)
     else:
         if not command:
-            raise ValueError(f"{section} benötigt für stdio ein command.")
+            raise ValueError(f"{section} requires a command for stdio.")
         if url or headers or "from_env" in values:
             raise ValueError(
-                f"{section} darf für stdio keine url, headers oder from_env enthalten."
+                f"{section} must not contain url, headers or from_env for stdio."
             )
         if not _trusted_stdio_command_is_deterministic(command):
             raise ValueError(
-                f"{section}.command muss für einen trusted stdio-MCP ein absoluter "
-                "Executable-Pfad oder exakt '{{python}}' sein; PATH-basierte Commands sind nicht zulässig."
+                f"{section}.command must be an absolute "
+                "executable path or exactly '{{python}}' for trusted stdio MCPs; PATH-based commands are not allowed."
             )
 
     return TrustedMcpServer(
@@ -429,11 +429,11 @@ def load_admin_config(path: Path | None = None) -> AdminConfig:
     if not isinstance(mcp_values, dict):
         raise ValueError("[mcp] in admin_config.toml muss eine Tabelle sein.")
     if "approval" in mcp_values:
-        raise ValueError("[mcp.approval] ist nicht mehr unterstützt. Permanente Freigaben müssen über [[mcp.trusted_servers]] an eine Serveridentität gebunden werden.")
+        raise ValueError("[mcp.approval] is no longer supported. Permanent approvals must be bound to a server identity through [[mcp.trusted_servers]].")
     if "allow_untrusted_stdio" in mcp_values:
         raise ValueError(
-            "[mcp].allow_untrusted_stdio wird nicht mehr unterstützt. Externe stdio-MCP-Server "
-            "müssen einzeln über [[mcp.trusted_servers]] administrativ definiert werden."
+            "[mcp].allow_untrusted_stdio is no longer supported. External stdio MCP servers "
+            "must be defined individually by administrators through [[mcp.trusted_servers]]."
         )
     raw_trusted_servers = mcp_values.get("trusted_servers", [])
     if not isinstance(raw_trusted_servers, list) or not all(isinstance(value, dict) for value in raw_trusted_servers):

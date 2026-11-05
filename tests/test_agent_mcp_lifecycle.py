@@ -173,7 +173,7 @@ def test_connect_server_times_out_during_initialize(
             0.01,
         )
         try:
-            with pytest.raises(RuntimeError, match="initialize.*Timeout"):
+            with pytest.raises(RuntimeError, match="initialize exceeded the timeout of 0\\.01 seconds\\."):
                 await agent._connect_server(
                     stack,
                     McpServerConfig(
@@ -213,7 +213,7 @@ def test_start_server_times_out_during_list_tools(
             0.01,
         )
         try:
-            with pytest.raises(RuntimeError, match="list_tools.*Timeout"):
+            with pytest.raises(RuntimeError, match="MCP-Server 'slow': list_tools exceeded the timeout of 0\\.01 seconds\\."):
                 await agent._start_server(
                     McpServerConfig(
                         name="slow",
@@ -320,7 +320,7 @@ def test_start_server_rejects_duplicate_native_tool_names(tmp_path: Path) -> Non
         agent._connect_server = connect
         config = McpServerConfig(name="docs", command="unused", built_in=True)
         try:
-            with pytest.raises(RuntimeError, match="mehrfach"):
+            with pytest.raises(RuntimeError, match="search"):
                 await agent._start_server(config, parent)
             assert "docs" not in agent._sessions
             assert "docs__search" not in agent._tool_routes

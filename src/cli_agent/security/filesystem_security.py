@@ -112,10 +112,10 @@ def _windows_open_pinned_file(root: Path, relative_parts: tuple[str, ...], stack
             ):
                 raise ctypes.WinError(ctypes.get_last_error())
             if info.FileAttributes & file_attribute_reparse_point:
-                raise ValueError("OKF-Dateipfad enthält einen Windows-Reparse-Point.")
+                raise ValueError("OKF file path contains a Windows reparse point.")
             is_dir = bool(info.FileAttributes & file_attribute_directory)
             if is_dir != directory:
-                raise ValueError("OKF-Dateipfad hat einen ungültigen Dateityp.")
+                raise ValueError("OKF file path has an invalid file type.")
         except Exception:
             close_handle(handle)
             raise
@@ -162,7 +162,7 @@ def read_bounded_regular_file(
         or any(part in {".", "..", ""} for part in Path(relative).parts)
         or max_bytes < 1
     ):
-        raise ValueError("Ungültiger sicherer Dateipfad oder Leselimit.")
+        raise ValueError("Invalid secure file path or read limit.")
     parts = Path(relative).parts
     read_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
     with ExitStack() as stack:
@@ -181,19 +181,19 @@ def read_bounded_regular_file(
         elif os.name == "nt":
             file_fd = _windows_open_pinned_file(root, parts, stack)
         else:
-            raise OSError("Sicheres Öffnen ist auf diesem Betriebssystem nicht verfügbar.")
+            raise OSError("Secure opening is unavailable on this operating system.")
         stack.callback(os.close, file_fd)
         opened = os.fstat(file_fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise ValueError("Datei ist keine reguläre Datei.")
+            raise ValueError("File is not a regular file.")
         if opened.st_nlink != 1:
-            raise ValueError("Dateien mit mehreren Hardlinks werden nicht gelesen.")
+            raise ValueError("Files with multiple hardlinks cannot be read.")
         if expected_identity is not None and (
             opened.st_dev, opened.st_ino
         ) != expected_identity:
-            raise ValueError("Die Datei wurde während des Öffnens ausgetauscht.")
+            raise ValueError("The file was replaced while being opened.")
         if opened.st_size > max_bytes:
-            raise ValueError(f"Datei ist mit {opened.st_size} Bytes größer als das konfigurierte Leselimit von {max_bytes} Bytes.")
+            raise ValueError(f"File size {opened.st_size} bytes exceeds the configured read limit of {max_bytes} bytes.")
         # Windows ancestors and the final file are pinned in the same stack;
         # checking the pathname again would reintroduce a race.
 
@@ -207,5 +207,5 @@ def read_bounded_regular_file(
             chunks.append(block)
             remaining -= len(block)
         if remaining == 0:
-            raise ValueError("Datei ist größer als das konfigurierte Leselimit.")
+            raise ValueError("File exceeds the configured read limit.")
         return b"".join(chunks)

@@ -58,7 +58,7 @@ def test_foreach_previous_output_snapshot_error_keeps_context(
         raise ValueError("Snapshot fehlt")
 
     monkeypatch.setattr(flow, "_previous_output_from_snapshot", missing_snapshot)
-    with pytest.raises(ValueError, match="Bei foreach muss die Quelle vollständig") as exc:
+    with pytest.raises(ValueError, match="Snapshot fehlt For foreach, the source must be entirely derivable from run-") as exc:
         flow._resolve_iteration_previous_output(
             step, workspace=tmp_path, output=tmp_path / "state.json",
             invocation_known_at_run_start=True,

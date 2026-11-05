@@ -59,7 +59,7 @@ def test_json_transform_rejects_oversized_entry() -> None:
 
 
 def test_json_transform_rejects_nonlist_flatten_entry() -> None:
-    with pytest.raises(ValueError, match="ausschließlich Listen"):
+    with pytest.raises(ValueError, match="flatten expects only lists\\."):
         transform_json(kind="flatten", value=[[1], 2])
 
 
@@ -122,7 +122,7 @@ def test_batch_byte_limit_includes_json_envelope() -> None:
 def test_batch_count_is_bounded_before_unbounded_allocation() -> None:
     import cli_agent.workflows.flow_json_operations as module
 
-    with pytest.raises(ValueError, match="Batch-Anzahllimit"):
+    with pytest.raises(ValueError, match="batch exceeds the batch count limit\\."):
         module.transform_json(
             kind="batch",
             value=list(range(module.MAX_BATCHES + 1)),
@@ -136,7 +136,7 @@ def test_batch_result_limit_is_enforced_incrementally(
     import cli_agent.workflows.flow_json_operations as module
 
     monkeypatch.setattr(module, "MAX_RESULT_BYTES", 200)
-    with pytest.raises(ValueError, match="Ergebnislimit"):
+    with pytest.raises(ValueError, match="batch exceeds the JSON result limit\\."):
         module.transform_json(
             kind="batch",
             value=list(range(30)),
@@ -228,12 +228,12 @@ def test_batch_routes_rejects_indivisible_item() -> None:
 def test_batch_routes_rejects_oversized_metadata() -> None:
     source = [{"document_id": "m001", "chunk_id": "c001", "folder_id": "f",
                "custom": "x" * 2000, "knowledge_items": []}]
-    with pytest.raises(ValueError, match="Routing-Metadaten"):
+    with pytest.raises(ValueError, match="Routing metadata for route 0 exceed max_batch_bytes\\."):
         transform_json(kind="batch_routes", value=source, max_batch_bytes=1024)
 
 
 def test_batch_routes_rejects_malformed_records() -> None:
-    with pytest.raises(ValueError, match="Routing-Objekte"):
+    with pytest.raises(ValueError, match="batch_routes expects routing objects; entry 0 is invalid\\."):
         transform_json(kind="batch_routes", value=[2])
     with pytest.raises(ValueError, match="knowledge_items"):
         transform_json(kind="batch_routes", value=[
@@ -250,5 +250,5 @@ def test_batch_routes_enforces_fragment_limit(monkeypatch: pytest.MonkeyPatch) -
                "knowledge_items": [
                    {"id": str(i), "description": "x" * 600} for i in range(4)
                ]}]
-    with pytest.raises(ValueError, match="Fragment-Anzahllimit"):
+    with pytest.raises(ValueError, match="batch_routes exceeds the fragment count limit\\."):
         transform_json(kind="batch_routes", value=source, max_batch_bytes=1024)

@@ -182,8 +182,8 @@ prompt_file = "prompt.md"
 @pytest.mark.parametrize(
     "retry_toml,match",
     [
-        ('retry = "invalid"', "retry muss eine Tabelle"),
-        ("[retry]\nunknown = 1", "retry enthält unbekannte Schlüssel"),
+        ('retry = "invalid"', "retry must be a table"),
+        ("[retry]\nunknown = 1", "retry contains unknown keys"),
         ("[retry]\nmax_attempts = 0", "max_attempts"),
     ],
 )

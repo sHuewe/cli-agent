@@ -10,10 +10,10 @@ from cli_agent.security import mcp_schema_guard as guard
 @pytest.mark.parametrize(
     ("raw", "message"),
     [
-        (b"", "keine gültige Antwort"),
-        (b"not-json", "keine gültige Antwort"),
-        (b"[]", "keine gültige Antwort"),
-        (b'{"ok":"yes"}', "keine gültige Antwort"),
+        (b"", "valid response"),
+        (b"not-json", "valid response"),
+        (b"[]", "valid response"),
+        (b'{"ok":"yes"}', "valid response"),
         (b'{"ok":false}', "ist fehlgeschlagen"),
         (b'{"ok":false,"error":42}', "ist fehlgeschlagen"),
         (b'{"ok":false,"error":"rejected"}', "rejected"),
@@ -26,7 +26,7 @@ def test_worker_protocol_rejects_malformed_responses(raw, message):
 
 def test_worker_protocol_rejects_oversized_response(monkeypatch):
     monkeypatch.setattr(guard, "MAX_MCP_SCHEMA_WORKER_RESPONSE_BYTES", 10)
-    with pytest.raises(RuntimeError, match="große Antwort"):
+    with pytest.raises(RuntimeError, match="schema-check returned an unexpectedly large response\\."):
         guard._decode_worker_response(b"x" * 11, operation="schema-check")
 
 
@@ -45,7 +45,7 @@ def test_error_truncation_preserves_both_ends_without_exceeding_budget():
     assert len(truncated) == bound
     assert truncated.startswith("prefix-")
     assert truncated.endswith("-suffix")
-    assert "gekürzt" in truncated
+    assert "truncated" in truncated
 
 
 def test_error_truncation_keeps_short_and_missing_messages():
@@ -60,11 +60,11 @@ def test_parent_structure_accepts_small_json_data(value):
 
 def test_parent_structure_enforces_node_limit(monkeypatch):
     monkeypatch.setattr(guard, "MAX_MCP_SCHEMA_PARENT_NODES", 3)
-    with pytest.raises(RuntimeError, match="Knotenlimit"):
+    with pytest.raises(RuntimeError, match="schema-check exceeds the node limit \\(4 > 3\\)\\."):
         guard._validate_parent_structure([1, 2, 3], label="schema-check")
 
 
 def test_parent_structure_enforces_depth_limit(monkeypatch):
     monkeypatch.setattr(guard, "MAX_MCP_SCHEMA_PARENT_DEPTH", 2)
-    with pytest.raises(RuntimeError, match="Tiefenlimit"):
+    with pytest.raises(RuntimeError, match="exceeds the depth limit \\("):
         guard._validate_parent_structure([[[None]]], label="schema-check")

@@ -196,7 +196,7 @@ class Agent:
         if self._closed:
             raise RuntimeError("Agent wurde bereits geschlossen.")
         if self._worker_task is not None:
-            raise RuntimeError("Agent läuft bereits.")
+            raise RuntimeError("Agent is already running.")
         loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
         self._ready = loop.create_future()
@@ -295,7 +295,7 @@ class Agent:
                             # the queue-drain cleanup only covers waiting
                             # requests and the caller must never hang.
                             future.set_exception(RuntimeError(
-                                "Agenten-Worker wurde während des Aufrufs "
+                                "Agent worker was terminated during the call "
                                 "unerwartet abgebrochen."
                             ))
                             raise

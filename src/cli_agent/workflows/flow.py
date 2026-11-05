@@ -156,7 +156,7 @@ def _foreach_output_source(source: str) -> str | None:
         return match.group(1)
     if _INPUT_FOREACH.fullmatch(source):
         return None
-    raise ValueError(f"Ungültige foreach-Quelle: {source!r}.")
+    raise ValueError(f"Invalid foreach source: {source!r}.")
 
 
 from cli_agent.workflows.flow_models import (
@@ -202,7 +202,7 @@ class _SubflowTraversalBudget:
         self.expanded_nodes += 1
         if self.expanded_nodes > MAX_SUBFLOW_GRAPH_EXPANSIONS:
             raise ValueError(
-                f"Subflow-{purpose} überschreitet das Expansionslimit von "
+                f"Subflow {purpose} exceeds the expansion limit of "
                 f"{MAX_SUBFLOW_GRAPH_EXPANSIONS} Flow-Knoten."
             )
 
@@ -210,7 +210,7 @@ class _SubflowTraversalBudget:
 def _reject_parent_reference(path: Path, *, purpose: str) -> None:
     text = str(path)
     if ".." in PurePath(text).parts or ".." in PureWindowsPath(text).parts:
-        raise ValueError(f"{purpose} darf '..' nicht enthalten.")
+        raise ValueError(f"{purpose} must not contain '..'.")
 
 
 def _workspace_path(
@@ -225,18 +225,18 @@ def _workspace_path(
     windows = PureWindowsPath(str(raw))
     if windows.drive and not raw.is_absolute():
         raise ValueError(
-            f"{purpose} verwendet ein nicht unterstütztes Windows-Laufwerk."
+            f"{purpose} uses an unsupported Windows drive."
         )
 
     lexical = raw if raw.is_absolute() else workspace / raw
     try:
         if path_entry_is_symlink_or_reparse(lexical):
             raise ValueError(
-                f"{purpose} darf kein Symlink oder Reparse Point sein: {lexical}"
+                f"{purpose} must not be a symlink or reparse point: {lexical}"
             )
     except OSError as exc:
         raise ValueError(
-            f"{purpose} konnte nicht sicher auf Dateisystem-Indirection geprüft werden: "
+            f"{purpose} could not be safely checked for filesystem indirection: "
             f"{lexical}"
         ) from exc
 
@@ -244,13 +244,13 @@ def _workspace_path(
         resolved = lexical.resolve(strict=must_exist)
     except (OSError, RuntimeError) as exc:
         raise ValueError(
-            f"{purpose} konnte nicht aufgelöst werden: {value}: {exc}"
+            f"{purpose} could not be resolved: {value}: {exc}"
         ) from exc
     try:
         resolved.relative_to(workspace)
     except ValueError as exc:
         raise ValueError(
-            f"{purpose} muss innerhalb des festen Workspace liegen: {value}"
+            f"{purpose} must be inside the fixed workspace: {value}"
         ) from exc
     return resolved
 
@@ -261,7 +261,7 @@ def _ensure_output_parent_directory(workspace: Path, output: Path) -> None:
         relative_parent = output.parent.relative_to(workspace)
     except ValueError as exc:
         raise ValueError(
-            f"Output-Ordner muss innerhalb des festen Workspace liegen: {output.parent}"
+            f"Output directory must be inside the fixed workspace: {output.parent}"
         ) from exc
 
     current = workspace
@@ -269,7 +269,7 @@ def _ensure_output_parent_directory(workspace: Path, output: Path) -> None:
         candidate = current / part
         if path_entry_is_symlink_or_reparse(candidate):
             raise ValueError(
-                f"Output-Ordner darf keinen Symlink oder Reparse Point enthalten: "
+                f"Output directory must not contain symlinks or reparse points: "
                 f"{candidate}"
             )
         try:
@@ -278,19 +278,19 @@ def _ensure_output_parent_directory(workspace: Path, output: Path) -> None:
             pass
         except OSError as exc:
             raise ValueError(
-                f"Output-Ordner konnte nicht erstellt werden: {candidate}: {exc}"
+                f"Output directory could not be created: {candidate}: {exc}"
             ) from exc
 
         if path_entry_is_symlink_or_reparse(candidate) or not candidate.is_dir():
             raise ValueError(
-                f"Output-Ordner ist kein sicherer regulärer Ordner: {candidate}"
+                f"Output directory is not a safe regular directory: {candidate}"
             )
         resolved = candidate.resolve()
         try:
             resolved.relative_to(workspace)
         except ValueError as exc:
             raise ValueError(
-                f"Output-Ordner muss innerhalb des festen Workspace liegen: "
+                f"Output directory must be inside the fixed workspace: "
                 f"{candidate}"
             ) from exc
         current = resolved
@@ -300,11 +300,11 @@ def _flow_source(workspace: Path, path: Path) -> Path:
     resolved = _workspace_path(
         workspace,
         path,
-        purpose="Flow-Datei",
+        purpose="Flow file",
         must_exist=True,
     )
     if not resolved.is_file():
-        raise ValueError(f"Flow-Datei ist keine reguläre Datei: {resolved}")
+        raise ValueError(f"Flow file is not a regular file: {resolved}")
     return resolved
 
 
@@ -405,11 +405,11 @@ def _resolve_subflow_path(
     workspace: Path,
 ) -> Path:
     if step.flow is None:
-        raise ValueError(f"Schritt {step.step_id!r} ist kein Subflow-Schritt.")
+        raise ValueError(f"Step {step.step_id!r} is not a subflow step.")
     return _workspace_path(
         workspace,
         step.flow,
-        purpose=f"Subflow-Datei von Schritt {step.step_id!r}",
+        purpose=f"Subflow file for step {step.step_id!r}",
         must_exist=True,
     )
 
@@ -455,7 +455,7 @@ def _checkpoint_status_input_paths(
         )
         paths.append(_workspace_path(
             workspace, Path(rendered),
-            purpose=f"checkpoint_status-Eingabe von Schritt {step.step_id!r}",
+            purpose=f"checkpoint_status input for step {step.step_id!r}",
             must_exist=False,
         ))
     return tuple(paths)
@@ -491,8 +491,8 @@ def _reserve_checkpoint_status_inputs(
             key = _filesystem_path_key(path)
             if claimed_outputs is not None and key in claimed_outputs:
                 raise ValueError(
-                    f"checkpoint_status-Eingabe {path} kollidiert mit bereits "
-                    f"beanspruchtem Output von {claimed_outputs[key]}."
+                    f"checkpoint_status input {path} conflicts with already "
+                    f"claimed output of {claimed_outputs[key]}."
                 )
             reserved_inputs[key] = path
 
@@ -546,8 +546,8 @@ def _reserve_conditional_checkpoint_status_inputs(
             key = _filesystem_path_key(path)
             if key in claimed_outputs:
                 raise ValueError(
-                    f"Aktive checkpoint_status-Eingabe {path} kollidiert "
-                    f"mit Output von {claimed_outputs[key]}."
+                    f"Aktive checkpoint_status input {path} conflicts "
+                    f"with output of {claimed_outputs[key]}."
                 )
             reserved_inputs[key] = path
 
@@ -561,7 +561,7 @@ def _has_checkpoint_status_descendant(
 ) -> bool:
     key = _filesystem_path_key(flow.source)
     if key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
-        raise ValueError("Zyklischer oder zu tief verschachtelter Subflow.")
+        raise ValueError("Cyclic or excessively nested subflow.")
     next_stack = (*stack, key)
     for step in flow.steps:
         if (step.filesystem_operation is not None
@@ -605,10 +605,10 @@ def _reserve_future_child_checkpoint_inputs(
     budget just because a flow contains more steps.
     """
     scan_budget = budget if budget is not None else _SubflowTraversalBudget()
-    scan_budget.consume(purpose="Checkpoint-Eingabereservierung")
+    scan_budget.consume(purpose="checkpoint input reservation")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in stack or len(stack) >= MAX_SUBFLOW_DEPTH:
-        raise ValueError("Zyklischer oder zu tief verschachtelter Subflow.")
+        raise ValueError("Cyclic or excessively nested subflow.")
     next_stack = (*stack, flow_key)
     for step in flow.steps:
         if step.flow is None or statuses.get(step.step_id) in {"completed", "skipped"}:
@@ -735,7 +735,7 @@ def _reserved_flow_input_paths(
         prompt_path = _workspace_path(
             workspace,
             step.prompt_file,
-            purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
+            purpose=f"Prompt file for step {step.step_id!r}",
             must_exist=True,
         )
         reserved[_filesystem_path_key(prompt_path)] = prompt_path
@@ -744,7 +744,7 @@ def _reserved_flow_input_paths(
                 workspace,
                 step.conversation_final_prompt_file,
                 purpose=(
-                    f"Finale Conversation-Prompt-Datei von Schritt "
+                    f"Finale Conversation-Prompt file for step "
                     f"{step.step_id!r}"
                 ),
                 must_exist=True,
@@ -769,7 +769,7 @@ def _reserved_flow_input_paths(
 
 def _string(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field} muss ein nichtleerer String sein.")
+        raise ValueError(f"{field} must be a nonempty string.")
     return value
 
 
@@ -790,7 +790,7 @@ def _expand_global_input_vars(
             name = match.group(1)
             if name not in variables:
                 raise ValueError(
-                    f"{field} referenziert unbekannte globale Variable {name!r}."
+                    f"{field} references unknown global variable {name!r}."
                 )
             return variables[name]
 
@@ -801,8 +801,8 @@ def _expand_global_input_vars(
         # Other dynamic expression families remain available to the runner.
         if _GLOBAL_INPUT_START_EXPR.search(rendered):
             raise ValueError(
-                f"{field} enthält eine ungültige oder verschachtelte "
-                "globale Variablenreferenz."
+                f"{field} contains an invalid or nested "
+                "global variable reference."
             )
         return rendered
     if isinstance(value, list):
@@ -836,7 +836,7 @@ def _iter_string_values(value: Any) -> list[str]:
     if isinstance(value, (bool, int, float)):
         return []
     raise ValueError(
-        "Subflow-Input unterstützt nur TOML-Strings, Zahlen, boolesche Werte, "
+        "Subflow input supports only TOML strings, numbers, booleans, "
         "Listen und Tabellen."
     )
 
@@ -856,7 +856,7 @@ def _validate_input_references(
             root = path.split(".", 1)[0]
             if root not in declared:
                 raise ValueError(
-                    f"{field} referenziert nicht deklarierten Flow-Input {root!r}."
+                    f"{field} references undeclared flow input {root!r}."
                 )
 
 
@@ -869,15 +869,15 @@ def _path_list(value: Any, *, field: str) -> tuple[Path, ...]:
         for item in raw_values
     ):
         raise ValueError(
-            f"{field} muss ein nichtleerer String oder eine Liste "
-            "nichtleerer Strings sein."
+            f"{field} must be a nonempty string or a list "
+            "of nonempty strings."
         )
     values = tuple(item.strip() for item in raw_values)
     if len(values) != len(set(values)):
-        raise ValueError(f"{field} darf keine doppelten Pfade enthalten.")
+        raise ValueError(f"{field} must not contain duplicate paths.")
     if any(_ITEM_EXPR.search(item) for item in values):
         raise ValueError(
-            f"{field} darf nicht aus foreach-Daten parametrisiert werden."
+            f"{field} must not be parameterized from foreach data."
         )
     return tuple(Path(item) for item in values)
 
@@ -915,12 +915,12 @@ def _validate_when(
     if condition is None:
         return None
     if depth > 6 or not isinstance(condition, dict):
-        raise ValueError(f"{label} benötigt eine when-Tabelle (max. Tiefe 6).")
+        raise ValueError(f"{label} requires a when table (maximum depth 6).")
     if len(condition) == 1 and ("all" in condition or "any" in condition):
         op = "all" if "all" in condition else "any"
         parts = condition[op]
         if not isinstance(parts, list) or not 1 <= len(parts) <= 16:
-            raise ValueError(f"{label}.{op} benötigt 1 bis 16 Bedingungen.")
+            raise ValueError(f"{label}.{op} requires 1 to 16 conditions.")
         return {op: [
             _validate_when(
                 part, prior_ids=prior_ids, inputs=inputs,
@@ -929,31 +929,31 @@ def _validate_when(
             for part in parts
         ]}
     if set(condition) - {"ref", "eq", "neq", "in", "exists"}:
-        raise ValueError(f"{label} enthält unbekannte Schlüssel.")
+        raise ValueError(f"{label} contains unknown keys.")
     ops = [op for op in ("eq", "neq", "in", "exists") if op in condition]
     if len(ops) != 1 or "ref" not in condition:
-        raise ValueError(f"{label} benötigt ref und genau einen Operator.")
+        raise ValueError(f"{label} requires ref and exactly one operator.")
     ref = condition["ref"]
     match = _WHEN_REF.fullmatch(ref) if isinstance(ref, str) else None
     if match is None or (match.group("kind") == "status" and match.group("field")):
-        raise ValueError(f"{label}.ref ist ungültig: {ref!r}.")
+        raise ValueError(f"{label}.ref is invalid: {ref!r}.")
     if match.group("step") and match.group("step") not in prior_ids:
-        raise ValueError(f"{label} darf nur vorherige Steps referenzieren.")
+        raise ValueError(f"{label} may only reference previous steps.")
     if match.group("input") and match.group("input").split(".")[1] not in inputs:
-        raise ValueError(f"{label} verweist auf einen unbekannten Flow-Input.")
+        raise ValueError(f"{label} references an unknown flow input.")
     if (match.group("item") or match.group("iteration")) and not foreach:
-        raise ValueError(f"{label} benötigt foreach für item/iteration.id.")
+        raise ValueError(f"{label} requires foreach for item/iteration.id.")
     op = ops[0]
     value = condition[op]
     if op == "exists":
         if type(value) is not bool:
-            raise ValueError(f"{label}.exists muss boolesch sein.")
+            raise ValueError(f"{label}.exists must be boolean.")
     elif op == "in":
         if (not isinstance(value, list) or not 1 <= len(value) <= 100
                 or any(type(v) not in (str, int, float, bool) for v in value)):
-            raise ValueError(f"{label}.in benötigt 1 bis 100 skalare Werte.")
+            raise ValueError(f"{label}.in requires 1 to 100 scalar values.")
     elif type(value) not in (str, int, float, bool):
-        raise ValueError(f"{label}.{op} benötigt einen skalaren Wert.")
+        raise ValueError(f"{label}.{op} requires a scalar value.")
     return {"ref": ref, op: value}
 
 
@@ -1060,12 +1060,12 @@ def _evaluate_when(
         if allow_unknown:
             return None
         raise _WhenMissingReferenceError(
-            f"when-Referenz {ref!r} besitzt noch keinen verfügbaren Wert."
+            f"when reference {ref!r} has no available value yet."
         )
     if value is _WHEN_MISSING:
         raise _WhenMissingReferenceError(
-            f"when-Referenz {ref!r} ist nicht verfügbar; "
-            "verwenden Sie exists oder sichern Sie abhängige Steps mit when ab."
+            f"when reference {ref!r} is unavailable; "
+            "use exists or guard dependent steps with when."
         )
     def equal(left: Any, right: Any) -> bool:
         if isinstance(left, (_JsonNumber, float)) or isinstance(right, (_JsonNumber, float)):
@@ -1103,27 +1103,27 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
     unknown_root = set(values) - allowed_root
     if unknown_root:
         raise ValueError(
-            "Unbekannte Flow-Schlüssel: "
+            "Unknown flow keys: "
             + ", ".join(sorted(unknown_root))
         )
     if values.get("version") != 1:
-        raise ValueError("Flow-Datei benötigt version = 1.")
+        raise ValueError("Flow file requires version = 1.")
 
     raw_inputs = values.get("inputs", [])
     if (
         not isinstance(raw_inputs, list)
         or not all(isinstance(value, str) and value.strip() for value in raw_inputs)
     ):
-        raise ValueError("inputs muss eine Liste nichtleerer Namen sein.")
+        raise ValueError("inputs must be a list of nonempty names.")
     inputs = tuple(value.strip() for value in raw_inputs)
     if len(inputs) != len(set(inputs)):
-        raise ValueError("inputs darf keine doppelten Namen enthalten.")
+        raise ValueError("inputs must not contain duplicate names.")
     for name in inputs:
         if _STEP_ID.fullmatch(name) is None:
             raise ValueError(
-                f"Ungültiger Flow-Input {name!r}; erlaubt sind ASCII-Buchstaben, "
-                "Ziffern, '_' und '-' und der Name muss mit einem Buchstaben "
-                "oder '_' beginnen."
+                f"Invalid flow input {name!r}; allowed characters are ASCII letters, "
+                "digits, '_' and '-', and the name must begin with a letter "
+                "or '_'."
             )
 
     result_value = values.get("result")
@@ -1139,7 +1139,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
         if fallback_value is not None else None
     )
     if fallback_selector is not None and result_selector is None:
-        raise ValueError("result_fallback benötigt result.")
+        raise ValueError("result_fallback requires result.")
 
     global_config_value = values.get("config")
     global_config = (
@@ -1164,11 +1164,11 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
     global_retry_policy: ModelRetryPolicy | None = None
     if raw_global_retry is not None:
         if not isinstance(raw_global_retry, dict):
-            raise ValueError("retry muss eine Tabelle sein.")
+            raise ValueError("retry must be a table.")
         unknown_retry = set(raw_global_retry) - allowed_retry
         if unknown_retry:
             raise ValueError(
-                "retry enthält unbekannte Schlüssel: "
+                "retry contains unknown keys: "
                 + ", ".join(sorted(unknown_retry))
             )
         global_retry_policy = ModelRetryPolicy(
@@ -1189,21 +1189,21 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
 
     raw_global_vars = values.get("vars", {})
     if not isinstance(raw_global_vars, dict):
-        raise ValueError("vars muss eine Tabelle sein.")
+        raise ValueError("vars must be a table.")
     global_variables: dict[str, str] = {}
     for name, value in raw_global_vars.items():
         if not isinstance(name, str) or _STEP_ID.fullmatch(name) is None:
             raise ValueError(
-                f"Ungültiger globaler Variablenname {name!r}; erlaubt sind "
-                "ASCII-Buchstaben, Ziffern, '_' und '-' und der Name muss mit "
-                "einem Buchstaben oder '_' beginnen."
+                f"Invalid global variable name {name!r}; allowed characters are "
+                "ASCII letters, digits, '_' and '-', and the name must begin with "
+                "a letter or '_'."
             )
         if not isinstance(value, str):
-            raise ValueError("vars darf nur String-zu-String-Werte enthalten.")
+            raise ValueError("vars may contain only string-to-string values.")
         if _DYNAMIC_VALUE_EXPR.search(value):
             raise ValueError(
-                f"Globale Variable {name!r} darf keine dynamischen "
-                "Flow-Platzhalter verwenden."
+                f"Global variable {name!r} must not contain dynamic "
+                "flow placeholders."
             )
         global_variables[name] = value
 
@@ -1215,11 +1215,11 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
     raw_steps = values.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
         raise ValueError(
-            "Flow-Datei benötigt mindestens einen [[steps]]-Eintrag."
+            "Flow file requires at least one [[steps]] entry."
         )
     if len(raw_steps) > MAX_FLOW_STEPS:
         raise ValueError(
-            f"Flow enthält mehr als {MAX_FLOW_STEPS} Schritte."
+            f"Flow contains more than {MAX_FLOW_STEPS} steps."
         )
 
     return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry)
@@ -1228,7 +1228,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
 def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
     workspace = workspace.expanduser().resolve()
     if not workspace.is_dir():
-        raise ValueError(f"Arbeitsordner existiert nicht: {workspace}")
+        raise ValueError(f"Workspace directory does not exist: {workspace}")
 
     source = _flow_source(workspace, path)
     try:
@@ -1236,19 +1236,19 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             raw_flow = handle.read(MAX_FLOW_FILE_BYTES + 1)
         if len(raw_flow) > MAX_FLOW_FILE_BYTES:
             raise ValueError(
-                f"Flow-Datei überschreitet das Limit von "
+                f"Flow file exceeds the limit of "
                 f"{MAX_FLOW_FILE_BYTES} Bytes."
             )
         values = tomllib.loads(raw_flow.decode("utf-8"))
     except UnicodeDecodeError as exc:
-        raise ValueError("Flow-Datei ist nicht als UTF-8 lesbar.") from exc
+        raise ValueError("Flow file is not readable as UTF-8.") from exc
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(
-            f"Flow-Datei enthält ungültiges TOML: {exc}"
+            f"Flow file contains invalid TOML: {exc}"
         ) from exc
     except OSError as exc:
         raise ValueError(
-            f"Flow-Datei konnte nicht gelesen werden: {exc}"
+            f"Flow file could not be read: {exc}"
         ) from exc
 
     (
@@ -1299,12 +1299,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
     for index, raw in enumerate(raw_steps, start=1):
         if not isinstance(raw, dict):
             raise ValueError(
-                f"Flow-Schritt {index} muss eine Tabelle sein."
+                f"Flow step {index} must be a table."
             )
         unknown = set(raw) - allowed_step
         if unknown:
             raise ValueError(
-                f"Flow-Schritt {index} enthält unbekannte Schlüssel: "
+                f"Flow step {index} contains unknown keys: "
                 + ", ".join(sorted(unknown))
             )
 
@@ -1314,11 +1314,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
         if not _STEP_ID.fullmatch(step_id):
             raise ValueError(
-                f"Ungültige Step-ID {step_id!r}; erlaubt sind "
-                "ASCII-Buchstaben, Ziffern, '_' und '-'."
+                f"Invalid step ID {step_id!r}; allowed characters are "
+                "ASCII letters, digits, '_' and '-'."
             )
         if step_id in known_ids:
-            raise ValueError(f"Doppelte Step-ID: {step_id!r}.")
+            raise ValueError(f"Duplicate step ID: {step_id!r}.")
         known_ids.add(step_id)
         when = _validate_when(
             raw.get("when"), prior_ids=known_ids - {step_id},
@@ -1334,64 +1334,64 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
         if child_flow is not None and _DYNAMIC_VALUE_EXPR.search(str(child_flow)):
             raise ValueError(
-                f"steps[{index}].flow muss ein statischer Pfad sein und darf "
-                "keine dynamischen Flow-Platzhalter enthalten."
+                f"steps[{index}].flow must be a static path and must "
+                "not contain dynamic flow placeholders."
             )
         prompt_value = raw.get("prompt_file")
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
             if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "target_chars", "max_sections"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
-                raise ValueError("filesystem_operation benötigt kind=inventory und directory.")
+                raise ValueError("filesystem_operation requires kind=inventory and directory.")
             if op["kind"] == "markdown_sections":
                 if not isinstance(op.get("source_path"), str) or not op["source_path"]:
-                    raise ValueError("markdown_sections.source_path fehlt.")
+                    raise ValueError("markdown_sections.source_path is missing.")
                 if set(op) - {"kind", "source_path", "target_chars", "max_sections"}:
-                    raise ValueError("markdown_sections erlaubt nur source_path, target_chars, max_sections.")
+                    raise ValueError("markdown_sections permits only source_path, target_chars, max_sections.")
                 if type(op.get("target_chars", 30000)) is not int or not 4000 <= op.get("target_chars", 30000) <= 100000:
-                    raise ValueError("markdown_sections.target_chars muss zwischen 4000 und 100000 liegen.")
+                    raise ValueError("markdown_sections.target_chars must be between 4000 and 100000.")
                 if type(op.get("max_sections", 32)) is not int or not 1 <= op.get("max_sections", 32) <= 100:
-                    raise ValueError("markdown_sections.max_sections muss zwischen 1 und 100 liegen.")
+                    raise ValueError("markdown_sections.max_sections must be between 1 and 100.")
             if op["kind"] == "checkpoint_status":
                 if (not isinstance(op.get("paths"), list) or not 1 <= len(op["paths"]) <= 16
                         or any(not isinstance(p, str) or not p.strip() for p in op["paths"])):
-                    raise ValueError("checkpoint_status.paths benötigt 1 bis 16 Pfade.")
+                    raise ValueError("checkpoint_status.paths requires 1 to 16 paths.")
                 if not isinstance(op.get("expected_status"), str) or not op["expected_status"]:
-                    raise ValueError("checkpoint_status.expected_status fehlt.")
+                    raise ValueError("checkpoint_status.expected_status is missing.")
                 if not isinstance(op.get("expected_source_path"), str) or not op["expected_source_path"]:
-                    raise ValueError("checkpoint_status.expected_source_path fehlt.")
+                    raise ValueError("checkpoint_status.expected_source_path is missing.")
                 if set(op) & {"directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs"}:
-                    raise ValueError("checkpoint_status unterstützt keine Inventur-Optionen.")
+                    raise ValueError("checkpoint_status does not support inventory options.")
                 if "release_source_on_miss" in op:
                     if (op["release_source_on_miss"] is not True
                             or index != 1 or when is not None):
                         raise ValueError(
-                            "release_source_on_miss=true ist nur im ersten "
-                            "unbedingten Flow-Schritt erlaubt."
+                            "release_source_on_miss=true is allowed only in the first "
+                            "unconditional flow step."
                         )
             if type(op.get("stable_slugs", False)) is not bool:
-                raise ValueError("filesystem_operation.stable_slugs muss boolesch sein.")
+                raise ValueError("filesystem_operation.stable_slugs must be boolean.")
             if type(op.get("recursive", False)) is not bool:
-                raise ValueError("filesystem_operation.recursive muss boolesch sein.")
+                raise ValueError("filesystem_operation.recursive must be boolean.")
             for key in ("extensions", "exclude_names"):
                 if not isinstance(op.get(key, []), list) or any(not isinstance(x, str) for x in op.get(key, [])):
-                    raise ValueError(f"filesystem_operation.{key} muss eine String-Liste sein.")
+                    raise ValueError(f"filesystem_operation.{key} must be a list of strings.")
             if any(not x.startswith(".") or len(x) < 2 or "/" in x or chr(92) in x for x in op.get("extensions", [])):
-                raise ValueError("filesystem_operation.extensions enthält ungültige Endungen.")
+                raise ValueError("filesystem_operation.extensions contains invalid extensions.")
             if any(not x or x in {".", ".."} or "/" in x or chr(92) in x for x in op.get("exclude_names", [])):
-                raise ValueError("filesystem_operation.exclude_names enthält ungültige Namen.")
+                raise ValueError("filesystem_operation.exclude_names contains invalid names.")
             limit = op.get("max_entries", MAX_INVENTORY_ENTRIES)
             if type(limit) is not int or not 1 <= limit <= MAX_INVENTORY_ENTRIES:
-                raise ValueError("filesystem_operation.max_entries ist ungültig.")
+                raise ValueError("filesystem_operation.max_entries is invalid.")
             if child_flow is not None or prompt_value is not None or raw.get("json_operation") is not None:
-                raise ValueError("filesystem_operation darf nicht mit flow, prompt_file oder json_operation kombiniert werden.")
+                raise ValueError("filesystem_operation cannot be combined with flow, prompt_file or json_operation.")
             if raw.get("foreach") is not None or "output" not in raw:
-                raise ValueError("filesystem_operation benötigt output ohne foreach.")
+                raise ValueError("filesystem_operation requires output without foreach.")
             if op["kind"] == "checkpoint_status" and raw.get("overwrite_output") is not True:
-                raise ValueError("checkpoint_status benötigt overwrite_output=true für aktuelle Prüfungen.")
+                raise ValueError("checkpoint_status requires overwrite_output=true for current checks.")
             forbidden = {"config", "model", "context_file", "add_file_context", "add_web_context", "workspace_access", "with_data", "with_mcp", "retry", "approve_tools", "vars", "conversation_items", "conversation_final_prompt_file", "exclude_paths", "json_inputs", "input"}
             if forbidden & set(raw):
-                raise ValueError("filesystem_operation darf keine Modell- oder Tool-Optionen setzen.")
+                raise ValueError("filesystem_operation must not set model or tool options.")
         if raw_filesystem_operation is not None:
             # Expand declared static root [vars] before directory validation.
             raw_filesystem_operation = dict(raw_filesystem_operation)
@@ -1407,7 +1407,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 name = match.group(1)
                 if name not in global_variables:
                     raise ValueError(
-                        f"Unbekannte Inventory-Variable {name!r} in "
+                        f"Unknown inventory variable {name!r} in "
                         f"steps[{index}].filesystem_operation.directory."
                     )
                 return global_variables[name]
@@ -1438,19 +1438,19 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 for template in [*raw_filesystem_operation["paths"], raw_filesystem_operation["expected_source_path"]]:
                     remainder = _INPUT_EXPR.sub("", template)
                     if "${" in remainder:
-                        raise ValueError("checkpoint_status erlaubt nur Input-Referenzen.")
+                        raise ValueError("checkpoint_status allows only input references.")
                     _validate_input_references([template], declared_inputs=inputs, field="checkpoint_status")
                 for template in raw_filesystem_operation["paths"]:
                     literal = _INPUT_EXPR.sub("placeholder", template)
                     if (Path(literal).is_absolute() or PureWindowsPath(literal).is_absolute()
                             or PureWindowsPath(literal).drive or ".." in Path(literal).parts
                             or ".." in PureWindowsPath(literal).parts):
-                        raise ValueError("checkpoint_status.paths muss workspace-relativ sein.")
+                        raise ValueError("checkpoint_status.paths must be workspace-relative.")
             if raw_filesystem_operation["kind"] == "markdown_sections":
                 source_template = raw_filesystem_operation["source_path"]
                 remainder_source = _INPUT_EXPR.sub("", source_template)
                 if "${" in remainder_source:
-                    raise ValueError("markdown_sections erlaubt nur Input- und Var-Referenzen.")
+                    raise ValueError("markdown_sections allows only input and variable references.")
                 _validate_input_references(
                     [source_template], declared_inputs=inputs,
                     field="markdown_sections.source_path",
@@ -1460,10 +1460,10 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if (Path(literal_source).is_absolute() or windows_source.is_absolute()
                         or windows_source.drive or ".." in Path(literal_source).parts
                         or ".." in windows_source.parts):
-                    raise ValueError("markdown_sections.source_path muss workspace-relativ sein.")
+                    raise ValueError("markdown_sections.source_path must be workspace-relative.")
             remainder = _INPUT_EXPR.sub("", directory_template)
             if raw_filesystem_operation["kind"] == "inventory" and "${" in remainder:
-                raise ValueError("filesystem_operation.directory unterstützt nur Input- und Var-Referenzen.")
+                raise ValueError("filesystem_operation.directory supports only input and variable references.")
             literal_directory = _INPUT_EXPR.sub("placeholder", directory_template)
             if raw_filesystem_operation["kind"] == "inventory" and (
                 not literal_directory.strip()
@@ -1471,7 +1471,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 or any(part == ".." for part in Path(literal_directory).parts)
                 or "\\0" in literal_directory
             ):
-                raise ValueError("filesystem_operation.directory enthält einen ungültigen Pfad.")
+                raise ValueError("filesystem_operation.directory contains an invalid path.")
             _validate_input_references(
                 [directory_template] if raw_filesystem_operation["kind"] == "inventory" else [],
                 declared_inputs=inputs,
@@ -1489,44 +1489,44 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
                 raise ValueError(
-                    f"steps[{index}].json_operation benötigt kind=batch|batch_routes|flatten|group_items|verify_coverage "
+                    f"steps[{index}].json_operation requires kind=batch|batch_routes|flatten|group_items|verify_coverage "
                     "und den Namen eines json_inputs enthalten."
                 )
             if raw_json_operation["kind"] in {"prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "assemble_doctrine_consolidation"}:
                 ref = raw_json_operation.get("results_step")
                 if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
                         or ref not in {step.step_id for step in steps}):
-                    raise ValueError("results_step muss ein voriger Flow-Step sein.")
+                    raise ValueError("results_step must be a prior flow step.")
             if raw_json_operation["kind"] in {"assemble_doctrine_plan", "assemble_section_outlines", "assemble_doctrine_consolidation"}:
                 ref = raw_json_operation.get("batches_step")
                 if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
                         or ref not in {step.step_id for step in steps}):
-                    raise ValueError("batches_step muss ein voriger Flow-Step sein.")
+                    raise ValueError("batches_step must be a prior flow step.")
             if raw_json_operation["kind"] == "assemble_section_outlines":
                 for key in ("expected_source_path", "expected_source_slug"):
                     value = raw_json_operation.get(key)
                     if not isinstance(value, str) or "${" in _INPUT_EXPR.sub("", value):
-                        raise ValueError(f"assemble_section_outlines.{key} benötigt einen Flow-Input.")
+                        raise ValueError(f"assemble_section_outlines.{key} requires a flow input.")
                     _validate_input_references([value], declared_inputs=inputs, field=key)
             if raw_json_operation["kind"] == "validate_okf_plan" and raw_json_operation.get("plan_kind") not in {"doctrine", "themes"}:
-                raise ValueError("validate_okf_plan benötigt plan_kind=doctrine|themes.")
+                raise ValueError("validate_okf_plan requires plan_kind=doctrine|themes.")
             if raw_json_operation["kind"] == "validate_okf_plan":
                 if raw_json_operation["plan_kind"] == "doctrine":
                     for name in ("expected_source_path", "expected_source_slug"):
                         value = raw_json_operation.get(name)
                         if not isinstance(value, str) or not value.strip():
-                            raise ValueError("validate_okf_plan benötigt " + name)
+                            raise ValueError("validate_okf_plan requires " + name)
                         if "${" in _INPUT_EXPR.sub("", value):
-                            raise ValueError(name + " erlaubt nur Flow-Input-Referenzen.")
+                            raise ValueError(name + " allows only flow input references.")
                         _validate_input_references([value], declared_inputs=inputs, field=name)
                 elif "manifests" not in raw.get("json_inputs", {}):
-                    raise ValueError("Theme-Planvalidierung benötigt json_inputs.manifests.")
+                    raise ValueError("Theme plan validation requires json_inputs.manifests.")
             if raw_json_operation["kind"] == "build_okf_manifest":
                 expected = raw_json_operation.get("expected_source_path")
                 if not isinstance(expected, str) or not expected.strip():
-                    raise ValueError("build_okf_manifest benötigt expected_source_path.")
+                    raise ValueError("build_okf_manifest requires expected_source_path.")
                 if "${" in _INPUT_EXPR.sub("", expected):
-                    raise ValueError("expected_source_path erlaubt nur Flow-Input-Referenzen.")
+                    raise ValueError("expected_source_path allows only flow input references.")
                 _validate_input_references(
                     [expected], declared_inputs=inputs,
                     field="build_okf_manifest.expected_source_path",
@@ -1537,10 +1537,10 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 type(size) is not int or not 1 <= size <= 1000
                 or type(max_bytes) is not int or not 1024 <= max_bytes <= 10000000
             ):
-                raise ValueError("Ungültige JSON-Batch-Limits.")
+                raise ValueError("Invalid JSON batch limits.")
             if (type(raw_json_operation.get("max_concept_bytes", 80000)) is not int
                     or not 1024 <= raw_json_operation.get("max_concept_bytes", 80000) <= 10000000):
-                raise ValueError("Ungültiges max_concept_bytes.")
+                raise ValueError("Invalid max_concept_bytes.")
             required_sources = (
                 {"routes", "assignments", "topics"}
                 if raw_json_operation["kind"] == "group_items" else
@@ -1551,18 +1551,18 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
             if required_sources and (raw_json_operation["input"] != ("plan" if raw_json_operation["kind"] == "build_okf_manifest" else sorted(required_sources)[0])
                                      or not required_sources <= set(raw.get("json_inputs", {}))):
-                raise ValueError("JSON-Gruppierungsoperation benötigt die vorgesehenen json_inputs.")
+                raise ValueError("JSON grouping operation requires the specified json_inputs.")
             if child_flow is not None or prompt_value is not None:
                 raise ValueError(
-                    "json_operation darf weder prompt_file noch flow kombinieren."
+                    "json_operation must not be combined with prompt_file or flow."
                 )
         if child_flow is not None and prompt_value is not None:
             raise ValueError(
-                f"steps[{index}] darf nicht gleichzeitig flow und prompt_file setzen."
+                f"steps[{index}] must not set flow and prompt_file simultaneously."
             )
         if child_flow is None and prompt_value is None and raw_json_operation is None and raw_filesystem_operation is None:
             raise ValueError(
-                f"steps[{index}] benötigt prompt_file, flow oder json_operation."
+                f"steps[{index}] requires prompt_file, flow or json_operation."
             )
         prompt_file = (
             Path(_string(prompt_value, field=f"steps[{index}].prompt_file"))
@@ -1572,12 +1572,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
 
         raw_flow_input = raw.get("input", {})
         if not isinstance(raw_flow_input, dict):
-            raise ValueError(f"steps[{index}].input muss eine Tabelle sein.")
+            raise ValueError(f"steps[{index}].input must be a table.")
         flow_input: dict[str, Any] = {}
         for name, value in raw_flow_input.items():
             if not isinstance(name, str) or _STEP_ID.fullmatch(name) is None:
                 raise ValueError(
-                    f"Ungültiger Input-Name {name!r} in steps[{index}].input."
+                    f"Invalid input name {name!r} in steps[{index}].input."
                 )
             flow_input[name] = _expand_global_input_vars(
                 value,
@@ -1594,13 +1594,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             }
             if forbidden & set(raw):
                 raise ValueError(
-                    "json_operation darf keine Modell-, Tool- oder "
+                    "json_operation must not set model, tool or "
                     "Workspace-Optionen konfigurieren."
                 )
             if raw.get("response_format", "json") != "json":
-                raise ValueError("json_operation benötigt response_format=json.")
+                raise ValueError("json_operation requires response_format=json.")
             if "output" not in raw or raw.get("foreach") is not None:
-                raise ValueError("json_operation benötigt output ohne foreach.")
+                raise ValueError("json_operation requires output without foreach.")
         if child_flow is not None:
             regular_only = {
                 "config", "model", "prompt_file", "context_file",
@@ -1613,19 +1613,19 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             conflicting = sorted(regular_only & set(raw))
             if conflicting:
                 raise ValueError(
-                    f"Subflow-Schritt {step_id!r} darf diese Schlüssel nicht setzen: "
+                    f"Subflow step {step_id!r} must not set these keys: "
                     + ", ".join(conflicting)
                 )
         elif raw_flow_input:
             raise ValueError(
-                f"steps[{index}].input ist nur zusammen mit flow erlaubt."
+                f"steps[{index}].input is allowed only together with flow."
             )
 
         context_value = raw.get("context_file")
         add_file_context_value = raw.get("add_file_context")
         if context_value is not None and add_file_context_value is not None:
             raise ValueError(
-                f"steps[{index}] darf nicht gleichzeitig context_file "
+                f"steps[{index}] must not set context_file simultaneously with "
                 "und add_file_context setzen."
             )
         effective_context_value = (
@@ -1651,13 +1651,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 for value in raw_contexts
             ):
                 raise ValueError(
-                    f"{context_field} muss ein nichtleerer String oder "
-                    "eine Liste nichtleerer Strings sein."
+                    f"{context_field} must be a nonempty string or "
+                    "a list of nonempty strings."
                 )
             context_strings = tuple(value.strip() for value in raw_contexts)
             if len(context_strings) != len(set(context_strings)):
                 raise ValueError(
-                    f"{context_field} darf keine doppelten Dateien enthalten."
+                    f"{context_field} must not contain duplicate files."
                 )
             if any(
                 _ITEM_EXPR.search(value)
@@ -1666,8 +1666,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 for value in context_strings
             ):
                 raise ValueError(
-                    f"{context_field} darf nicht aus foreach-, Conversation- "
-                    "oder previous_output-Daten parametrisiert werden."
+                    f"{context_field} must not be parameterized from foreach, conversation "
+                    "or previous_output data."
                 )
             context_files = tuple(Path(value) for value in context_strings)
 
@@ -1680,8 +1680,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         ):
             raise ValueError(
-                f"steps[{index}].add_web_context muss eine Liste "
-                "nichtleerer URLs sein."
+                f"steps[{index}].add_web_context must be a list "
+                "of nonempty URLs."
             )
         add_web_context = tuple(
             value.strip()
@@ -1689,7 +1689,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
         if len(add_web_context) != len(set(add_web_context)):
             raise ValueError(
-                f"steps[{index}].add_web_context darf keine "
+                f"steps[{index}].add_web_context must not contain "
                 "doppelten URLs enthalten."
             )
         if any(
@@ -1699,8 +1699,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             for value in add_web_context
         ):
             raise ValueError(
-                f"steps[{index}].add_web_context darf nicht aus foreach-, "
-                "Conversation- oder previous_output-Daten parametrisiert werden."
+                f"steps[{index}].add_web_context must not be parameterized from foreach, "
+                "Conversation- or previous_output data."
             )
 
         config_value = raw.get("config")
@@ -1738,27 +1738,27 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             or _PREVIOUS_OUTPUT_EXPR.search(output)
         ):
             raise ValueError(
-                f"steps[{index}].output darf nicht aus Conversation- oder "
-                "previous_output-Daten parametrisiert werden."
+                f"steps[{index}].output must not be parameterized from conversation or "
+                "previous_output data."
             )
         overwrite_output = raw.get("overwrite_output", False)
         if not isinstance(overwrite_output, bool):
             raise ValueError(
-                f"steps[{index}].overwrite_output muss boolesch sein."
+                f"steps[{index}].overwrite_output must be boolean."
             )
 
         workspace_access_value = raw.get("workspace_access", "none")
         if workspace_access_value not in {"none", "read", "write"}:
             raise ValueError(
-                f"steps[{index}].workspace_access muss "
-                "'none', 'read' oder 'write' sein."
+                f"steps[{index}].workspace_access must be "
+                "'none', 'read' or 'write'."
             )
         workspace_access = str(workspace_access_value)
 
         with_data = raw.get("with_data", False)
         if not isinstance(with_data, bool):
             raise ValueError(
-                f"steps[{index}].with_data muss boolesch sein."
+                f"steps[{index}].with_data must be boolean."
             )
 
         raw_with_mcp = raw.get("with_mcp", [])
@@ -1770,13 +1770,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         ):
             raise ValueError(
-                f"steps[{index}].with_mcp muss eine Liste "
-                "nichtleerer MCP-Servernamen sein."
+                f"steps[{index}].with_mcp must be a list "
+                "of nonempty MCP server names."
             )
         with_mcp = tuple(name.strip() for name in raw_with_mcp)
         if any("${" in name for name in with_mcp):
             raise ValueError(
-                f"steps[{index}].with_mcp darf keine dynamischen "
+                f"steps[{index}].with_mcp must not contain dynamic "
                 "Flow-Platzhalter enthalten."
             )
 
@@ -1786,8 +1786,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
         if step_excluded_paths and workspace_access == "none":
             raise ValueError(
-                f"steps[{index}].exclude_paths benötigen workspace_access='read' "
-                "oder 'write'."
+                f"steps[{index}].exclude_paths requires workspace_access='read' "
+                "or 'write'."
             )
 
         response_format_value = raw.get(
@@ -1795,7 +1795,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
         if response_format_value not in {"text", "json"}:
             raise ValueError(
-                f"steps[{index}].response_format muss 'text' oder 'json' sein."
+                f"steps[{index}].response_format must be 'text' or 'json'."
             )
         response_format = str(response_format_value)
 
@@ -1804,12 +1804,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         if raw_retry is not None:
             if not isinstance(raw_retry, dict):
                 raise ValueError(
-                    f"steps[{index}].retry muss eine Tabelle sein."
+                    f"steps[{index}].retry must be a table."
                 )
             unknown_retry = set(raw_retry) - allowed_retry
             if unknown_retry:
                 raise ValueError(
-                    f"steps[{index}].retry enthält unbekannte Schlüssel: "
+                    f"steps[{index}].retry contains unknown keys: "
                     + ", ".join(sorted(unknown_retry))
                 )
             inherited_retry = global_retry_policy or ModelRetryPolicy()
@@ -1841,13 +1841,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         ):
             raise ValueError(
-                f"steps[{index}].approve_tools muss eine Liste "
-                "nichtleerer Toolnamen sein."
+                f"steps[{index}].approve_tools must be a list "
+                "of nonempty tool names."
             )
         approve_tools = tuple(value.strip() for value in raw_approve_tools)
         if len(approve_tools) != len(set(approve_tools)):
             raise ValueError(
-                f"steps[{index}].approve_tools darf keine "
+                f"steps[{index}].approve_tools must not contain "
                 "doppelten Toolnamen enthalten."
             )
         if any(
@@ -1857,40 +1857,40 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             for value in approve_tools
         ):
             raise ValueError(
-                f"steps[{index}].approve_tools darf nicht aus foreach-, "
-                "Conversation- oder previous_output-Daten parametrisiert werden."
+                f"steps[{index}].approve_tools must not be parameterized from foreach, "
+                "Conversation- or previous_output data."
             )
 
         raw_vars = raw.get("vars", {})
         if not isinstance(raw_vars, dict):
             raise ValueError(
-                f"steps[{index}].vars muss eine Tabelle sein."
+                f"steps[{index}].vars must be a table."
             )
         variables: dict[str, str] = {}
         for name, value in raw_vars.items():
             if not isinstance(name, str) or not isinstance(value, str):
                 raise ValueError(
-                    f"steps[{index}].vars darf nur "
-                    "String-zu-String-Werte enthalten."
+                    f"steps[{index}].vars may contain only "
+                    "string-to-string values."
                 )
             variables[name] = value
 
         raw_json_inputs = raw.get("json_inputs", {})
         if not isinstance(raw_json_inputs, dict):
-            raise ValueError(f"steps[{index}].json_inputs muss eine Tabelle sein.")
+            raise ValueError(f"steps[{index}].json_inputs must be a table.")
         json_inputs: dict[str, JsonInputSpec] = {}
         for name, definition in raw_json_inputs.items():
             if not isinstance(name, str) or _STEP_ID.fullmatch(name) is None:
-                raise ValueError(f"Ungültiger json_inputs-Name: {name!r}.")
+                raise ValueError(f"Invalid json_inputs name: {name!r}.")
             if name in variables or name in global_variables:
                 raise ValueError(
-                    f"json_inputs-Variable {name!r} kollidiert mit vars."
+                    f"json_inputs variable {name!r} conflicts with vars."
                 )
             if not isinstance(definition, dict) or (
                 set(definition) - {"path", "iterate"}
             ):
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name} benötigt path und "
+                    f"steps[{index}].json_inputs.{name} requires path and "
                     "optional iterate."
                 )
             path_template = _string(
@@ -1908,33 +1908,33 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
             if iterate is not None and _JSON_INPUT_ITERATE.fullmatch(iterate) is None:
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.iterate muss eine "
-                    "input-/item-Liste mit [] auswählen."
+                    f"steps[{index}].json_inputs.{name}.iterate must be a "
+                    "select an input/item list using []."
                 )
             if "${" in _JSON_INPUT_TEMPLATE.sub("", path_template):
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.path enthält "
-                    "nicht unterstützte Platzhalter."
+                    f"steps[{index}].json_inputs.{name}.path contains "
+                    "unsupported placeholders."
                 )
             if "${each" in path_template and iterate is None:
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.path verwendet "
-                    "each ohne iterate."
+                    f"steps[{index}].json_inputs.{name}.path uses "
+                    "each without iterate."
                 )
             if "${item" in path_template and raw.get("foreach") is None:
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.path verwendet "
-                    "item ohne foreach."
+                    f"steps[{index}].json_inputs.{name}.path uses "
+                    "item without foreach."
                 )
             if "${iteration.id}" in path_template and raw.get("foreach") is None:
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.path verwendet "
-                    "iteration.id ohne foreach."
+                    f"steps[{index}].json_inputs.{name}.path uses "
+                    "iteration.id without foreach."
                 )
             if iterate is not None and iterate.startswith("item.") and raw.get("foreach") is None:
                 raise ValueError(
-                    f"steps[{index}].json_inputs.{name}.iterate verwendet "
-                    "item ohne foreach."
+                    f"steps[{index}].json_inputs.{name}.iterate uses "
+                    "item without foreach."
                 )
             _validate_input_references(
                 [path_template],
@@ -1946,7 +1946,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if root_name not in inputs:
                     raise ValueError(
                         f"steps[{index}].json_inputs.{name}.iterate "
-                        f"verweist auf unbekannten Input {root_name!r}."
+                        f"references unknown input {root_name!r}."
                     )
             json_inputs[name] = JsonInputSpec(
                 path=path_template, iterate=iterate,
@@ -1956,7 +1956,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             and raw_json_operation["input"] not in json_inputs
         ):
             raise ValueError(
-                f"steps[{index}].json_operation.input muss ein json_inputs-Name sein."
+                f"steps[{index}].json_operation.input must be a json_inputs name."
             )
 
         input_reference_values = list(variables.values())
@@ -1979,8 +1979,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             for value in flow_input_strings
         ):
             raise ValueError(
-                f"steps[{index}].input darf previous_output und "
-                "conversation.item nicht verwenden."
+                f"steps[{index}].input must not use previous_output and "
+                "conversation.item."
             )
 
         for value in [*variables.values(), *flow_input_strings]:
@@ -1990,8 +1990,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     continue
                 if source_id not in known_ids or source_id == step_id:
                     raise ValueError(
-                        f"steps[{index}] darf nur Output eines vorherigen "
-                        f"Schritts referenzieren: {source_id!r}."
+                        f"steps[{index}] may only reference output from a previous "
+                        f"step: {source_id!r}."
                     )
 
         foreach_value = raw.get("foreach")
@@ -2010,16 +2010,16 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         elif isinstance(conversation_items_value, list):
             if len(conversation_items_value) > MAX_FOREACH_ITEMS:
                 raise ValueError(
-                    f"steps[{index}].conversation_items enthält mehr als "
-                    f"{MAX_FOREACH_ITEMS} Elemente."
+                    f"steps[{index}].conversation_items contains more than "
+                    f"{MAX_FOREACH_ITEMS} items."
                 )
             conversation_items = tuple(conversation_items_value)
         elif isinstance(conversation_items_value, str) and conversation_items_value.strip():
             conversation_items = conversation_items_value.strip()
         else:
             raise ValueError(
-                f"steps[{index}].conversation_items muss eine Liste oder "
-                "ein nichtleerer String sein."
+                f"steps[{index}].conversation_items must be a list or "
+                "a nonempty string."
             )
 
         final_prompt_value = raw.get("conversation_final_prompt_file")
@@ -2035,7 +2035,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
         if conversation_final_prompt_file is not None and conversation_items is None:
             raise ValueError(
-                f"steps[{index}].conversation_final_prompt_file benötigt "
+                f"steps[{index}].conversation_final_prompt_file requires "
                 "conversation_items."
             )
         if isinstance(conversation_items, str):
@@ -2044,21 +2044,21 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if item_match is not None:
                 if foreach is None:
                     raise ValueError(
-                        f"steps[{index}].conversation_items verwendet "
-                        "${item...} ohne foreach."
+                        f"steps[{index}].conversation_items uses "
+                        "${item...} without foreach."
                     )
             elif source_match is not None:
                 source_id = source_match.group(1)
                 if source_id == step_id or source_id not in known_ids:
                     raise ValueError(
-                        f"steps[{index}].conversation_items darf nur auf einen "
-                        f"vorherigen Schritt verweisen: {source_id!r}."
+                        f"steps[{index}].conversation_items may only reference a "
+                        f"previous step: {source_id!r}."
                     )
             else:
                 raise ValueError(
-                    f"steps[{index}].conversation_items muss entweder eine "
-                    "statische Liste, ${item...} oder "
-                    "steps.<id>.output[.<pfad>] sein."
+                    f"steps[{index}].conversation_items must be either a "
+                    "static list, ${item...} or "
+                    "steps.<id>.output[.<path>]."
                 )
         if (
             isinstance(conversation_items, tuple)
@@ -2066,8 +2066,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             and conversation_final_prompt_file is None
         ):
             raise ValueError(
-                f"steps[{index}].conversation_items darf ohne "
-                "conversation_final_prompt_file nicht leer sein."
+                f"steps[{index}].conversation_items cannot be empty without "
+                "conversation_final_prompt_file."
             )
 
         iteration_id_value = raw.get("iteration_id")
@@ -2081,11 +2081,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         )
         if iteration_id is not None and foreach is None:
             raise ValueError(
-                f"steps[{index}].iteration_id ist nur zusammen mit foreach erlaubt."
+                f"steps[{index}].iteration_id is only allowed with foreach."
             )
         if iteration_id is not None and _ITERATION_ID_EXPR.search(iteration_id):
             raise ValueError(
-                f"steps[{index}].iteration_id darf nicht "
+                f"steps[{index}].iteration_id must not "
                 "'${iteration.id}' verwenden."
             )
         if iteration_id is not None:
@@ -2106,14 +2106,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 match = _FOREACH.fullmatch(foreach)
                 if match is None:
                     raise ValueError(
-                        f"steps[{index}].foreach muss auf "
-                        "steps.<id>.output[.<pfad>] oder input.<pfad> verweisen."
+                        f"steps[{index}].foreach must reference "
+                        "steps.<id>.output[.<path>] or input.<path>."
                     )
                 source_id = match.group(1)
                 if source_id not in known_ids:
                     raise ValueError(
-                        f"steps[{index}].foreach darf nur auf einen "
-                        f"vorherigen Schritt verweisen: {source_id!r}."
+                        f"steps[{index}].foreach may only reference a "
+                        f"previous step: {source_id!r}."
                     )
         else:
             dynamic_values = [*variables.values(), *flow_input_strings]
@@ -2124,8 +2124,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 for value in dynamic_values
             ):
                 raise ValueError(
-                    f"steps[{index}] verwendet "
-                    "${item...} ohne foreach."
+                    f"steps[{index}] uses "
+                    "${item...} without foreach."
                 )
 
         if conversation_items is None and any(
@@ -2133,8 +2133,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             for value in variables.values()
         ):
             raise ValueError(
-                f"steps[{index}] verwendet ${{conversation.item...}} "
-                "ohne conversation_items."
+                f"steps[{index}] uses ${{conversation.item...}} "
+                "without conversation_items."
             )
 
         uses_previous_output = any(
@@ -2147,7 +2147,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             or response_format != "json"
         ):
             raise ValueError(
-                f"steps[{index}] darf ${{previous_output...}} nur mit "
+                f"steps[{index}] may use ${{previous_output...}} only with "
                 "response_format='json', output und overwrite_output=true verwenden."
             )
 
@@ -2193,7 +2193,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         match = _FOREACH.fullmatch(selector)
         if match is None or match.group(1) not in known_ids:
             raise ValueError(
-                f"{label} muss auf den Output eines bekannten Schritts verweisen."
+                f"{label} must refer to the output of a known step."
             )
 
     return FlowDefinition(
@@ -2221,7 +2221,7 @@ def _lookup(
         for part in path.split("."):
             if not isinstance(current, dict) or part not in current:
                 raise ValueError(
-                    f"{label} enthält kein Feld {part!r}."
+                    f"{label} has no field {part!r}."
                 )
             current = current[part]
     return current
@@ -2298,7 +2298,7 @@ def _dynamic_value(
 ) -> Any:
     if match.group("iteration") is not None:
         if iteration_id is None:
-            raise ValueError("${iteration.id} ist ohne foreach nicht verfügbar.")
+            raise ValueError("${iteration.id} is unavailable without foreach.")
         return iteration_id
     if match.group("item_path") is not None or match.group(0).startswith("${item"):
         return _lookup(
@@ -2322,7 +2322,7 @@ def _dynamic_value(
         source_id = match.group("step_output_id")
         if source_id not in outputs:
             raise ValueError(
-                f"Output von Schritt {source_id!r} ist noch nicht verfügbar."
+                f"Output of step {source_id!r} is not available yet."
             )
         path = match.group("step_output_path")
         if path is None:
@@ -2334,7 +2334,7 @@ def _dynamic_value(
         return _lookup(
             parsed,
             path,
-            label=f"Output von Schritt {source_id!r}",
+            label=f"Output of step {source_id!r}",
         )
     return _lookup(
         conversation_item,
@@ -2473,8 +2473,8 @@ def _conversation_items_for_iteration(
             source_id, path = match.groups()
             if source_id not in outputs:
                 raise ValueError(
-                    f"conversation_items-Quelle {source_id!r} besitzt keinen "
-                    "verfügbaren Output."
+                    f"conversation_items-Source {source_id!r} besitzt keinen "
+                    "available output."
                 )
             parsed = _parse_structured_output(
                 outputs[source_id],
@@ -2483,21 +2483,21 @@ def _conversation_items_for_iteration(
             values = _lookup(
                 parsed,
                 path,
-                label=f"Output von Schritt {source_id!r}",
+                label=f"Output of step {source_id!r}",
             )
     if not isinstance(values, list):
         raise ValueError(
-            f"conversation_items von Schritt {step.step_id!r} ist keine Liste."
+            f"conversation_items for step {step.step_id!r} is not a list."
         )
     if len(values) > MAX_FOREACH_ITEMS:
         raise ValueError(
-            f"conversation_items enthält {len(values)} Elemente; "
-            f"erlaubt sind höchstens {MAX_FOREACH_ITEMS}."
+            f"conversation_items contains {len(values)} items; "
+            f"at most {MAX_FOREACH_ITEMS}."
         )
     if not values and step.conversation_final_prompt_file is None:
         raise ValueError(
-            f"conversation_items von Schritt {step.step_id!r} ist leer und "
-            "es gibt keinen conversation_final_prompt_file."
+            f"conversation_items for step {step.step_id!r} is empty and "
+            "there is no conversation_final_prompt_file."
         )
     return values
 
@@ -2522,8 +2522,8 @@ def _iteration_ids(
         base = _render_item_text(rendered_template, item).strip()
         if not base or _ITERATION_ID.fullmatch(base) is None:
             raise ValueError(
-                f"Schritt {step.step_id!r} erzeugt eine ungültige iteration_id "
-                f"{base!r}; erlaubt sind ASCII-Buchstaben, Ziffern, '_' und '-'."
+                f"Step {step.step_id!r} produces an invalid iteration_id "
+                f"{base!r}; allowed characters are ASCII letters, Ziffern, '_' und '-'."
             )
         bases.append(base)
 
@@ -2554,12 +2554,12 @@ def _parse_structured_output(
     raw = text.encode("utf-8")
     if len(raw) > MAX_STRUCTURED_OUTPUT_BYTES:
         raise ValueError(
-            f"Output von Schritt {step_id!r} überschreitet das "
-            f"JSON-Limit von {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
+            f"Output of step {step_id!r} exceeds the "
+            f"JSON limit of {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
         )
     def reject_constant(value: str) -> None:
         raise ValueError(
-            f"nicht standardkonstante JSON-Zahl {value!r}"
+            f"nonstandard JSON numeric constant {value!r}"
         )
 
     try:
@@ -2570,7 +2570,7 @@ def _parse_structured_output(
         )
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(
-            f"Output von Schritt {step_id!r} muss gültiges JSON sein: {exc}"
+            f"Output of step {step_id!r} must be valid JSON: {exc}"
         ) from exc
 
 
@@ -2580,8 +2580,8 @@ def _output_owner(
     iteration_id: str | None,
 ) -> str:
     if step.foreach is None:
-        return f"Schritt {step.step_id!r}"
-    return f"Schritt {step.step_id!r}, Iteration {iteration_id!r}"
+        return f"Step {step.step_id!r}"
+    return f"Step {step.step_id!r}, Iteration {iteration_id!r}"
 
 
 def _claim_output(
@@ -2595,9 +2595,9 @@ def _claim_output(
     previous_owner = claimed_outputs.get(key)
     if previous_owner is not None and not allow_replace:
         raise ValueError(
-            f"Output-Datei {path} wird in diesem Flow-Lauf bereits von "
-            f"{previous_owner} beansprucht; {owner} darf denselben Output "
-            "nicht erneut verwenden."
+            f"Output file {path} is already claimed during this flow run by "
+            f"{previous_owner}; {owner} must not reuse the same output "
+            "."
         )
     claimed_outputs[key] = owner
 
@@ -2627,13 +2627,13 @@ def _verified_preflight_checkpoint(
     )
     if checkpoint is None:
         raise ValueError(
-            f"JSON-Checkpoint von Schritt {step.step_id!r} wurde nach dem "
+            f"JSON checkpoint of step {step.step_id!r} was changed after "
             f"Preflight entfernt: {output}"
         )
     if _checkpoint_fingerprint(checkpoint) != expected_fingerprint:
         raise ValueError(
-            f"JSON-Checkpoint von Schritt {step.step_id!r} wurde nach dem "
-            f"Preflight verändert: {output}"
+            f"JSON checkpoint of step {step.step_id!r} was changed after "
+            f"Preflight changed: {output}"
         )
     return checkpoint
 
@@ -2688,8 +2688,8 @@ def _previous_output_from_snapshot(
     key = _checkpoint_snapshot_key(step, output)
     if key not in fingerprints:
         raise ValueError(
-            f"previous_output von Schritt {step.step_id!r} konnte beim "
-            "Run-Start nicht eindeutig bestimmt werden."
+            f"previous_output of step {step.step_id!r} could not be determined at "
+            "run startup."
         )
     expected_fingerprint = fingerprints[key]
     if expected_fingerprint is None:
@@ -2702,13 +2702,13 @@ def _previous_output_from_snapshot(
     )
     if text is None:
         raise ValueError(
-            f"previous_output von Schritt {step.step_id!r} wurde nach dem "
+            f"previous_output of step {step.step_id!r} was changed after "
             f"Run-Start entfernt: {output}"
         )
     if _checkpoint_fingerprint(text) != expected_fingerprint:
         raise ValueError(
-            f"previous_output von Schritt {step.step_id!r} wurde nach dem "
-            f"Run-Start verändert: {output}"
+            f"previous_output of step {step.step_id!r} was changed after "
+            f"Run startup changed: {output}"
         )
     return _parse_structured_output(
         text,
@@ -2838,10 +2838,10 @@ def _capture_run_start_invocation(
     budget.consume(purpose="Run-Start-Planung")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
-        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+        raise ValueError("Cyclic subflow invocation detected.")
     if len(call_stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
-            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+            f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
         )
 
     next_stack = (*call_stack, flow_key)
@@ -3111,10 +3111,10 @@ def _capture_run_start_invocation(
         if source_id is not None and source_id not in available_outputs:
             if _uses_previous_output(step):
                 raise ValueError(
-                    f"previous_output von foreach-Schritt {step.step_id!r} "
-                    "kann beim Run-Start nicht bestimmt werden, weil seine "
-                    f"Quelle {source_id!r} nicht vollständig aus "
-                    "Run-Start-Checkpoints rekonstruierbar ist."
+                    f"previous_output of foreach step {step.step_id!r} "
+                    "cannot be determined at run startup because its "
+                    f"Source {source_id!r} not completely from "
+                    "run-start checkpoints can be reconstructed."
                 )
             continue
 
@@ -3179,8 +3179,8 @@ def _capture_run_start_invocation(
             key = _filesystem_path_key(output)
             if key in seen_output_keys:
                 raise ValueError(
-                    f"Schritt {step.step_id!r} erzeugt für mehrere "
-                    "foreach-Elemente nicht eindeutige Output-Pfade."
+                    f"Step {step.step_id!r} produces for multiple "
+                    "foreach items nonunique output paths."
                 )
             seen_output_keys.add(key)
 
@@ -3327,7 +3327,7 @@ def _snapshot_dynamic_checkpoint_candidates(
         search_root = _workspace_path(
             workspace,
             root,
-            purpose="Verzeichnis für dynamische JSON-Checkpoints",
+            purpose="Directory for dynamic JSON checkpoints",
             must_exist=False,
         )
         if not search_root.is_dir():
@@ -3377,8 +3377,8 @@ def _snapshot_dynamic_checkpoint_candidates(
                     examined_paths.add(key)
                     if len(examined_paths) > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
                         raise ValueError(
-                            "Zu viele eindeutige dynamische JSON-Checkpoint-"
-                            "Kandidaten beim Run-Start."
+                            "Too many distinct dynamic JSON checkpoint "
+                            "candidates at run startup."
                         )
 
             # Never follow symlinks or Windows reparse points.
@@ -3424,7 +3424,7 @@ def _snapshot_dynamic_checkpoint_candidates(
                         continue
                     total_bytes += size
                     if total_bytes > MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES:
-                        raise ValueError("Run-Start-Checkpoint-Budget überschritten.")
+                        raise ValueError("Run-Start-Checkpoint-Budget exceeded.")
                     try:
                         content = read_existing_output_text(
                             workspace,
@@ -3549,8 +3549,8 @@ def _append_foreach_iteration(
     )
     if total_bytes > MAX_STRUCTURED_OUTPUT_BYTES:
         raise ValueError(
-            f"Aggregierter Output von Schritt {step.step_id!r} überschreitet "
-            f"das JSON-Limit von {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
+            f"Aggregated output of step {step.step_id!r} exceeds "
+            f"the JSON limit of {MAX_STRUCTURED_OUTPUT_BYTES} Bytes."
         )
     parts.append(fragment)
     return next_payload_bytes
@@ -3586,8 +3586,8 @@ def _foreach_items(
         source_id, path = match.groups()
         if source_id not in outputs:
             raise ValueError(
-                f"foreach-Quelle {source_id!r} besitzt keinen "
-                "verfügbaren Output."
+                f"foreach source {source_id!r} besitzt keinen "
+                "available output."
             )
         parsed = _parse_structured_output(
             outputs[source_id],
@@ -3596,16 +3596,16 @@ def _foreach_items(
         items = _lookup(
             parsed,
             path,
-            label=f"Output von Schritt {source_id!r}",
+            label=f"Output of step {source_id!r}",
         )
     if not isinstance(items, list):
         raise ValueError(
-            f"foreach-Quelle {step.foreach!r} ist keine Liste."
+            f"foreach source {step.foreach!r} is not a list."
         )
     if len(items) > MAX_FOREACH_ITEMS:
         raise ValueError(
-            f"foreach-Quelle enthält {len(items)} Elemente; "
-            f"erlaubt sind höchstens {MAX_FOREACH_ITEMS}."
+            f"foreach source contains {len(items)} items; "
+            f"at most {MAX_FOREACH_ITEMS}."
         )
     return items
 
@@ -3647,11 +3647,11 @@ def _json_input_items(
         for value in values:
             if not isinstance(value, list):
                 raise ValueError(
-                    f"json_inputs.iterate {selector!r} erwartet Listen."
+                    f"json_inputs.iterate {selector!r} requires lists."
                 )
             if len(next_values) + len(value) > MAX_JSON_INPUT_FILES:
                 raise ValueError(
-                    f"json_inputs.iterate überschreitet {MAX_JSON_INPUT_FILES} Dateien."
+                    f"json_inputs.iterate exceeds {MAX_JSON_INPUT_FILES} Dateien."
                 )
             next_values.extend(value)
         values = next_values
@@ -3685,13 +3685,13 @@ def _render_json_input_path(
             )
         if not isinstance(value, (str, int)) or isinstance(value, bool):
             raise ValueError(
-                "json_inputs.path darf nur Strings oder Ganzzahlen einsetzen."
+                "json_inputs.path may contain only Strings or Ganzzahlen einsetzen."
             )
         return str(value)
 
     rendered = _JSON_INPUT_TEMPLATE.sub(replace, template)
     if "${" in rendered:
-        raise ValueError("json_inputs.path enthält unaufgelöste Platzhalter.")
+        raise ValueError("json_inputs.path contains unresolved placeholders.")
     return rendered
 
 
@@ -3719,7 +3719,7 @@ def _resolve_json_inputs(
             total_files += 1
             if total_files > MAX_JSON_INPUT_FILES:
                 raise ValueError(
-                    f"json_inputs überschreitet {MAX_JSON_INPUT_FILES} Dateien."
+                    f"json_inputs exceeds {MAX_JSON_INPUT_FILES} Dateien."
                 )
             rendered = _render_json_input_path(
                 spec.path,
@@ -3731,14 +3731,14 @@ def _resolve_json_inputs(
             path = _workspace_path(
                 workspace,
                 Path(rendered),
-                purpose=f"JSON-Input {name!r} von Schritt {step.step_id!r}",
+                purpose=f"JSON input {name!r} for step {step.step_id!r}",
                 must_exist=True,
             )
             expected = completed_json_outputs.get(_filesystem_path_key(path))
             if expected is None:
                 raise ValueError(
-                    f"JSON-Input {name!r} darf nur einen bereits abgeschlossenen "
-                    f"Flow-JSON-Output referenzieren: {path}"
+                    f"JSON input {name!r} may reference only a completed "
+                    f"flow JSON output: {path}"
                 )
             raw = read_existing_output_text(
                 workspace,
@@ -3747,13 +3747,13 @@ def _resolve_json_inputs(
             )
             if _checkpoint_fingerprint(raw) != expected:
                 raise ValueError(
-                    f"JSON-Input {name!r} wurde seit seiner Erstellung verändert: "
+                    f"JSON input {name!r} was modified after creation: "
                     f"{path}"
                 )
             total_bytes += len(raw.encode("utf-8"))
             if total_bytes > MAX_JSON_INPUT_TOTAL_BYTES:
                 raise ValueError(
-                    f"json_inputs überschreitet das Gesamtlimit von "
+                    f"json_inputs exceeds the total limit of "
                     f"{MAX_JSON_INPUT_TOTAL_BYTES} Bytes."
                 )
             records.append(_parse_structured_output(raw, step_id=step.step_id))
@@ -3780,9 +3780,9 @@ def _render_prompt_file(
         workspace,
         prompt_file,
         purpose=(
-            f"Finale Conversation-Prompt-Datei von Schritt {step.step_id!r}"
+            f"Finale Conversation-Prompt file for step {step.step_id!r}"
             if final_prompt
-            else f"Prompt-Datei von Schritt {step.step_id!r}"
+            else f"Prompt file for step {step.step_id!r}"
         ),
         must_exist=True,
     )
@@ -3799,13 +3799,13 @@ def _render_prompt_file(
             raw = step.global_variables[name]
         else:
             raise ValueError(
-                f"Schritt {step.step_id!r} setzt Prompt-Variable {name!r} nicht."
+                f"Step {step.step_id!r} does not set prompt variable {name!r}."
             )
         if final_prompt and _CONVERSATION_ITEM_EXPR.search(raw):
             raise ValueError(
-                f"Finaler Conversation-Prompt von Schritt {step.step_id!r} "
-                f"kann Variable {name!r} mit ${{conversation.item...}} "
-                "nicht verwenden."
+                f"Final conversation prompt for step {step.step_id!r} "
+                f"kann Variable {name!r} with ${{conversation.item...}} "
+                "."
             )
         values[name] = _render_dynamic_text(
             raw,
@@ -3819,12 +3819,12 @@ def _render_prompt_file(
     rendered = template.render(values)
     if not rendered or rendered.isspace():
         raise ValueError(
-            f"Gerenderter Prompt von Schritt {step.step_id!r} darf nicht leer sein."
+            f"Gerenderter Prompt for step {step.step_id!r} must not be empty."
         )
     if is_local_agent_command(rendered):
         raise ValueError(
-            f"Gerenderter Prompt von Schritt {step.step_id!r} "
-            "darf kein lokaler Agent-Befehl sein."
+            f"Gerenderter Prompt for step {step.step_id!r} "
+            "must not be a local agent command."
         )
     return rendered
 
@@ -3916,7 +3916,7 @@ def _contexts_for_step(
         _workspace_path(
             workspace,
             context_file,
-            purpose=f"Context-Datei von Schritt {step.step_id!r}",
+            purpose=f"Context file for step {step.step_id!r}",
             must_exist=True,
         )
         for context_file in step.context_files
@@ -3948,7 +3948,7 @@ def _output_for_iteration(
     return _workspace_path(
         workspace,
         path,
-        purpose=f"Output-Datei von Schritt {step.step_id!r}",
+        purpose=f"Output file for step {step.step_id!r}",
         must_exist=False,
     )
 
@@ -3978,8 +3978,8 @@ def _validate_subflow_interface(
 ) -> None:
     if child.result is None:
         raise ValueError(
-            f"Subflow {child.source} benötigt ein root-level result, "
-            f"weil er von Schritt {step.step_id!r} aufgerufen wird."
+            f"Subflow {child.source} requires a root-level result, "
+            f"because it is invoked by step {step.step_id!r}."
         )
     expected = set(child.inputs)
     provided = set(step.flow_input)
@@ -3988,12 +3988,12 @@ def _validate_subflow_interface(
     if missing or unknown:
         parts: list[str] = []
         if missing:
-            parts.append("fehlend: " + ", ".join(missing))
+            parts.append("missing: " + ", ".join(missing))
         if unknown:
-            parts.append("unbekannt: " + ", ".join(unknown))
+            parts.append("unknown: " + ", ".join(unknown))
         raise ValueError(
-            f"Inputs für Subflow-Schritt {step.step_id!r} stimmen nicht mit "
-            f"{child.source} überein ({'; '.join(parts)})."
+            f"Inputs for subflow step {step.step_id!r} do not match "
+            f"{child.source} ({'; '.join(parts)})."
         )
 
 
@@ -4011,10 +4011,10 @@ def _collect_reserved_flow_input_paths(
     key = _filesystem_path_key(flow.source)
     if key in stack:
         chain = " -> ".join((*stack, key))
-        raise ValueError(f"Zyklischer Subflow-Aufruf erkannt: {chain}")
+        raise ValueError(f"Cyclic subflow invocation detected: {chain}")
     if len(stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
-            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+            f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
         )
 
     reserved = _reserved_flow_input_paths(
@@ -4082,7 +4082,7 @@ def _flow_result_value(
         parsed = _parse_structured_output(text, step_id=source_id)
         try:
             value = _lookup(
-                parsed, path, label=f"Result von Flow {flow.source}",
+                parsed, path, label=f"Result of flow {flow.source}",
             )
         except ValueError:
             continue
@@ -4090,7 +4090,7 @@ def _flow_result_value(
             is_found = True
             break
     if not is_found:
-        raise ValueError(f"Kein verfügbarer Flow-Result-Selector für {flow.source}.")
+        raise ValueError(f"No available flow result selector for {flow.source}.")
     is_json = isinstance(value, _JsonNumber) or not isinstance(value, str)
     return _FlowResultValue(
         text=_json_dumps_preserving_numbers(value)
@@ -4148,10 +4148,10 @@ def validate_flow(
     )
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in _stack:
-        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+        raise ValueError("Cyclic subflow invocation detected.")
     if len(_stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
-            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+            f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
         )
     stack = (*_stack, flow_key)
     cache.setdefault(flow_key, flow)
@@ -4205,8 +4205,8 @@ def validate_flow(
                 source_id = _foreach_output_source(step.foreach)
                 if source_id is not None and source_id not in produced:
                     raise ValueError(
-                        f"foreach-Quelle {source_id!r} ist nicht vor "
-                        f"Schritt {step.step_id!r} verfügbar."
+                        f"foreach source {source_id!r} is not before "
+                        f"Step {step.step_id!r} available."
                     )
             produced.add(step.step_id)
             continue
@@ -4214,7 +4214,7 @@ def validate_flow(
         if step.json_operation is not None or step.filesystem_operation is not None:
             if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
                 if os.name not in {"posix", "nt"} or (os.name == "posix" and (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"))):
-                    raise ValueError("Sichere Verzeichnisinventur benötigt POSIX oder Windows.")
+                    raise ValueError("Secure directory inventory requires POSIX or Windows.")
                 directory_template = step.filesystem_operation["directory"]
                 if _INPUT_EXPR.search(directory_template) is None:
                     inventory_root = _workspace_directory(workspace, directory_template)
@@ -4227,13 +4227,13 @@ def validate_flow(
                             or inventory_root in static_inventory_output.parents
                         ):
                             raise ValueError(
-                                "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
+                                "Inventory output must not be inside the inventoried directory."
                             )
             assert step.output is not None
             if step.workspace_access != "none" or step.response_format != "json":
-                raise ValueError("JSON-Operation benötigt workspace_access=none und JSON.")
+                raise ValueError("JSON-Operation requires workspace_access=none und JSON.")
             if step.foreach is not None:
-                raise ValueError("JSON-Operation unterstützt kein foreach.")
+                raise ValueError("JSON operation does not support foreach.")
             if _INPUT_EXPR.search(step.output) is None:
                 static_output = _output_for_iteration(
                     step, workspace=workspace, item=None,
@@ -4241,7 +4241,7 @@ def validate_flow(
                 assert static_output is not None
                 key = _filesystem_path_key(static_output)
                 if key in all_reserved_inputs:
-                    raise ValueError("JSON-Output kollidiert mit reservierter Eingabe.")
+                    raise ValueError("JSON output conflicts with reserved input.")
                 # A conditional writer might be skipped; only reserve its
                 # output after the when condition has been evaluated.
                 if step.when is None:
@@ -4250,7 +4250,7 @@ def validate_flow(
                     )
                     previous = planned_static_outputs.get(key)
                     if previous is not None and not step.overwrite_output:
-                        raise ValueError("JSON-Output kollidiert mit geplantem Output.")
+                        raise ValueError("JSON output conflicts with planned output.")
                     planned_static_outputs[key] = f"{flow.source.name}:{step.step_id}"
             produced.add(step.step_id)
             continue
@@ -4259,7 +4259,7 @@ def validate_flow(
         prompt_path = _workspace_path(
             workspace,
             step.prompt_file,
-            purpose=f"Prompt-Datei von Schritt {step.step_id!r}",
+            purpose=f"Prompt file for step {step.step_id!r}",
             must_exist=True,
         )
         prompt = prepare_prompt_file(workspace, prompt_path)
@@ -4279,7 +4279,7 @@ def validate_flow(
                 workspace,
                 step.conversation_final_prompt_file,
                 purpose=(
-                    f"Finale Conversation-Prompt-Datei von Schritt "
+                    f"Finale Conversation-Prompt file for step "
                     f"{step.step_id!r}"
                 ),
                 must_exist=True,
@@ -4292,9 +4292,9 @@ def validate_flow(
                 raw = step.variables.get(name, step.global_variables.get(name))
                 if raw is not None and _CONVERSATION_ITEM_EXPR.search(raw):
                     raise ValueError(
-                        f"Finaler Conversation-Prompt von Schritt "
-                        f"{step.step_id!r} kann Variable {name!r} mit "
-                        "${conversation.item...} nicht verwenden."
+                        f"Final conversation prompt for step "
+                        f"{step.step_id!r} cannot use variable {name!r} with "
+                        "${conversation.item...}."
                     )
 
         supplied = set(step.variables)
@@ -4313,14 +4313,14 @@ def validate_flow(
         missing = sorted(required - available)
         if unknown:
             raise ValueError(
-                f"Schritt {step.step_id!r} setzt unbekannte "
+                f"Step {step.step_id!r} setzt unknowne "
                 "Prompt-Variable(n): "
                 + ", ".join(unknown)
             )
         if missing:
             raise ValueError(
-                f"Schritt {step.step_id!r} setzt nicht alle "
-                "Prompt-Variablen: "
+                f"Step {step.step_id!r} does not set all "
+                "prompt variables: "
                 + ", ".join(missing)
             )
 
@@ -4344,21 +4344,21 @@ def validate_flow(
         if step.config is not None:
             if not config.exists():
                 raise ValueError(
-                    f"Konfiguration von Schritt {step.step_id!r} "
-                    f"existiert nicht: {config}"
+                    f"Configuration for step {step.step_id!r} "
+                    f"does not exist: {config}"
                 )
             if not config.is_file():
                 raise ValueError(
-                    f"Konfiguration von Schritt {step.step_id!r} "
-                    f"ist keine Datei: {config}"
+                    f"Configuration for step {step.step_id!r} "
+                    f"is not a file: {config}"
                 )
             config_argument = config
         try:
             config = config_loader(config_argument)
         except Exception as exc:
             raise ValueError(
-                f"Konfiguration von Schritt {step.step_id!r} "
-                f"ist ungültig: {exc}"
+                f"Configuration for step {step.step_id!r} "
+                f"is invalid: {exc}"
             ) from exc
 
         if step.with_mcp:
@@ -4374,8 +4374,8 @@ def validate_flow(
                 )
             except (ValueError, PermissionError) as exc:
                 raise type(exc)(
-                    f"MCP-Auswahl von Schritt {step.step_id!r} "
-                    f"ist ungültig: {exc}"
+                    f"MCP selection for step {step.step_id!r} "
+                    f"is invalid: {exc}"
                 ) from exc
 
         if (
@@ -4393,8 +4393,8 @@ def validate_flow(
             reserved_input = all_reserved_inputs.get(static_output_key)
             if reserved_input is not None:
                 raise ValueError(
-                    f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                    "mit einer reservierten Flow-Eingabe: "
+                    f"Output file for step {step.step_id!r} conflicts "
+                    "with a reserved flow input: "
                     f"{reserved_input}"
                 )
             if step.when is None:
@@ -4406,9 +4406,9 @@ def validate_flow(
                 previous_writer = planned_static_outputs.get(static_output_key)
                 if previous_writer is not None and not step.overwrite_output:
                     raise ValueError(
-                        f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                        f"mit dem geplanten Output von Schritt {previous_writer!r}; "
-                        "der spätere Schritt erlaubt kein Überschreiben."
+                        f"Output file for step {step.step_id!r} conflicts "
+                        f"with the planned output of step {previous_writer!r}; "
+                        "the later step does not permit overwriting."
                     )
                 planned_static_outputs[static_output_key] = (
                     f"{flow.source.name}:{step.step_id}"
@@ -4418,8 +4418,8 @@ def validate_flow(
             source_id = _foreach_output_source(step.foreach)
             if source_id is not None and source_id not in produced:
                 raise ValueError(
-                    f"foreach-Quelle {source_id!r} ist nicht vor "
-                    f"Schritt {step.step_id!r} verfügbar."
+                    f"foreach source {source_id!r} is not before "
+                    f"Step {step.step_id!r} available."
                 )
 
         if isinstance(step.conversation_items, str):
@@ -4428,8 +4428,8 @@ def validate_flow(
                 source_id = source_match.group(1)
                 if source_id not in produced:
                     raise ValueError(
-                        f"conversation_items-Quelle {source_id!r} ist nicht vor "
-                        f"Schritt {step.step_id!r} verfügbar."
+                        f"conversation_items-Source {source_id!r} is not before "
+                        f"Step {step.step_id!r} available."
                     )
 
         produced.add(step.step_id)
@@ -4459,10 +4459,10 @@ def _preflight_concrete_invocation_outputs(
     budget.consume(purpose="Preflight")
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
-        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+        raise ValueError("Cyclic subflow invocation detected.")
     if len(call_stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
-            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+            f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
         )
     next_stack = (*call_stack, flow_key)
     # Resolve all checkpoint inputs for this concrete invocation before
@@ -4490,7 +4490,7 @@ def _preflight_concrete_invocation_outputs(
     for step in flow.steps:
         # An outputless, unconditional predecessor that reaches this point is
         # structurally completed. Its status must not remain unknown during
-        # child preflight, otherwise skipped-status guards can claim outputs
+        # child preflight, orrwise skipped-status guards can claim outputs
         # belonging to later executable steps.
         condition = _evaluate_when(
             step.when, outputs=available_outputs, statuses=known_statuses,
@@ -4503,7 +4503,7 @@ def _preflight_concrete_invocation_outputs(
         if condition is None:
             # This condition depends on an output produced later during the
             # invocation. Do not claim its output path (or descend into its
-            # subflow) speculatively: another mutually exclusive branch may
+            # subflow) speculatively: anorr mutually exclusive branch may
             # target the same path. Runtime preflight still checks the
             # selected branch before that step executes.
             continue
@@ -4679,8 +4679,8 @@ def _preflight_concrete_invocation_outputs(
                 key = _filesystem_path_key(output)
                 if key in seen_output_keys:
                     raise ValueError(
-                        f"Schritt {step.step_id!r} erzeugt für mehrere "
-                        "foreach-Elemente nicht eindeutige Output-Pfade."
+                        f"Step {step.step_id!r} produces for multiple "
+                        "foreach items nonunique output paths."
                     )
                 seen_output_keys.add(key)
 
@@ -4695,8 +4695,8 @@ def _preflight_concrete_invocation_outputs(
             reserved_input = reserved_inputs.get(key)
             if reserved_input is not None:
                 raise ValueError(
-                    f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                    "mit einer reservierten Flow-Eingabe: "
+                    f"Output file for step {step.step_id!r} conflicts "
+                    "with a reserved flow input: "
                     f"{reserved_input}"
                 )
             _claim_output(
@@ -4776,13 +4776,13 @@ def _reject_markdown_source_output_alias(
     source = _workspace_path(
         workspace,
         Path(_render_input_text(operation["source_path"], flow_input)),
-        purpose=f"Markdown-Quelldatei von Schritt {step.step_id!r}",
+        purpose=f"Markdown-sourcedatei for step {step.step_id!r}",
         must_exist=False,
     )
     if _filesystem_path_key(source) == _filesystem_path_key(output):
         raise ValueError(
-            "markdown_sections.output darf die Markdown-Quelldatei "
-            f"nicht überschreiben: {source}"
+            "markdown_sections.output must not overwrite the Markdown source file "
+            f"must not overwrite: {source}"
         )
 
 
@@ -4818,14 +4818,14 @@ def _execute_filesystem_step(
         ]
         source_path = _workspace_path(
             workspace, Path(expected_source),
-            purpose="Checkpoint-Quelldatei", must_exist=False,
+            purpose="Checkpoint-sourcedatei", must_exist=False,
         )
         protected_inputs = [*candidates, source_path]
         if any(_filesystem_path_key(candidate) == _filesystem_path_key(output)
                for candidate in protected_inputs):
             raise ValueError(
-                "checkpoint_status.output darf weder einen Eingabe-Checkpoint "
-                "noch die Quelldatei überschreiben."
+                "checkpoint_status.output must not overwrite an input checkpoint "
+                "nor overwrite the source file."
             )
         # A matching verification record is insufficient if
         # its source file has since been removed or replaced by
@@ -4851,7 +4851,7 @@ def _execute_filesystem_step(
         answer = _json_dumps_preserving_numbers(result)
         if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
             raise ValueError(
-                "checkpoint_status überschreitet Output-Größenlimit."
+                "checkpoint_status exceeds the output size limit."
             )
         target = prepare_output_target(workspace, output, overwrite=True)
         target.write_text(answer)
@@ -4881,7 +4881,7 @@ def _execute_filesystem_step(
     directory = _render_input_text(op["directory"], flow_input)
     inventory_root = _workspace_directory(workspace, directory)
     if output == inventory_root or inventory_root in output.parents:
-        raise ValueError("Inventur-Output darf nicht im inventarisierten Verzeichnis liegen.")
+        raise ValueError("Inventory output must not be inside the inventoried directory.")
     transformed = inventory_directory(
         workspace, directory,
         recursive=op.get("recursive", False),
@@ -4892,7 +4892,7 @@ def _execute_filesystem_step(
     )
     answer = _json_dumps_preserving_numbers(transformed)
     if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
-        raise ValueError("Inventur überschreitet Output-Größenlimit.")
+        raise ValueError("Inventory exceeds the output size limit.")
     target = prepare_output_target(
         workspace, output, overwrite=step.overwrite_output,
     )
@@ -5018,7 +5018,7 @@ def _execute_json_step(
         )
     answer = _json_dumps_preserving_numbers(transformed)
     if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
-        raise ValueError("JSON-Operation überschreitet Output-Größenlimit.")
+        raise ValueError("JSON operation exceeds the output size limit.")
     target = prepare_output_target(
         workspace, output, overwrite=step.overwrite_output,
     )
@@ -5346,8 +5346,8 @@ def _preflight_foreach_output_batch(
         key = _filesystem_path_key(output)
         if key in seen_output_keys:
             raise ValueError(
-                f"Schritt {step.step_id!r} erzeugt für mehrere "
-                "foreach-Elemente nicht eindeutige Output-Pfade."
+                f"Step {step.step_id!r} produces for multiple "
+                "foreach items nonunique output paths."
             )
         seen_output_keys.add(key)
     for output, iteration_id in zip(
@@ -5365,8 +5365,8 @@ def _preflight_foreach_output_batch(
         )
         if reserved_input is not None:
             raise ValueError(
-                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                "mit einer reservierten Flow-Eingabe: "
+                f"Output file for step {step.step_id!r} conflicts "
+                "with a reserved flow input: "
                 f"{reserved_input}"
             )
         key = _filesystem_path_key(output)
@@ -5377,9 +5377,9 @@ def _preflight_foreach_output_batch(
                 iteration_id=iteration_id,
             )
             raise ValueError(
-                f"Output-Datei {output} wird in diesem Flow-Lauf bereits "
-                f"von {previous_owner} beansprucht; {owner} darf denselben "
-                "Output nicht erneut verwenden."
+                f"Output file {output} is already claimed in this flow run "
+                f"by {previous_owner}; {owner} must not reuse the same "
+                "output."
             )
 
     for output, iteration_id in zip(
@@ -5482,7 +5482,7 @@ async def _execute_subflow_iteration(
         iteration_id=iteration_id,
         case_colliding_step_ids=case_colliding_step_ids,
     )
-    # Preserve parent and other sibling input protections, but
+    # Preserve parent and orr sibling input protections, but
     # exclude this concrete child's speculative projections.
     # It recomputes its own conditional readers at each frontier.
     child_inherited_inputs = dict(parent_protected_inputs)
@@ -5508,7 +5508,7 @@ async def _execute_subflow_iteration(
     )
     if child_result is None:
         raise ValueError(
-            f"Subflow {child.source} besitzt kein Ergebnis."
+            f"Subflow {child.source} besitzt no Ergebnis."
         )
     _set_flow_diagnostic(
         phase="aggregate-subflow-result", flow=flow.source,
@@ -5561,8 +5561,8 @@ def _prepare_iteration_checkpoint(
         )
         if reserved_input is not None:
             raise ValueError(
-                f"Output-Datei von Schritt {step.step_id!r} kollidiert "
-                "mit einer reservierten Flow-Eingabe: "
+                f"Output file for step {step.step_id!r} conflicts "
+                "with a reserved flow input: "
                 f"{reserved_input}"
             )
         if preflight_outputs is None:
@@ -5611,7 +5611,7 @@ def _prepare_iteration_checkpoint(
                 inventory_root = _workspace_directory(workspace, directory)
                 if output == inventory_root or inventory_root in output.parents:
                     raise ValueError(
-                        "Inventur-Output darf nicht im inventarisierten Verzeichnis liegen."
+                        "Inventory output must not be inside the inventoried directory."
                     )
             _ensure_output_parent_directory(workspace, output)
             prepare_output_target(
@@ -5647,8 +5647,8 @@ def _resolve_iteration_previous_output(
     except ValueError as exc:
         if step.foreach is not None and _uses_previous_output(step):
             raise ValueError(
-                f"{exc} Bei foreach muss die Quelle vollständig aus "
-                "Run-Start-Checkpoints ableitbar sein."
+                f"{exc} For foreach, the source must be entirely derivable from "
+                "run-start checkpoints."
             ) from exc
         raise
     return previous_output
@@ -5668,10 +5668,10 @@ async def _run_flow_internal(
 ) -> _FlowResultValue | None:
     flow_key = _filesystem_path_key(flow.source)
     if flow_key in call_stack:
-        raise ValueError("Zyklischer Subflow-Aufruf erkannt.")
+        raise ValueError("Cyclic subflow invocation detected.")
     if len(call_stack) >= MAX_SUBFLOW_DEPTH:
         raise ValueError(
-            f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+            f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
         )
 
     expected_inputs = set(flow.inputs)
@@ -5681,12 +5681,12 @@ async def _run_flow_internal(
         unknown = sorted(provided_inputs - expected_inputs)
         parts: list[str] = []
         if missing:
-            parts.append("fehlend: " + ", ".join(missing))
+            parts.append("missing: " + ", ".join(missing))
         if unknown:
-            parts.append("unbekannt: " + ", ".join(unknown))
+            parts.append("unknown: " + ", ".join(unknown))
         raise ValueError(
-            f"Flow-Inputs für {flow.source} stimmen nicht mit der Deklaration "
-            f"überein ({'; '.join(parts)})."
+            f"Flow inputs for {flow.source} do not match the declaration "
+            f"({'; '.join(parts)})."
         )
 
     next_stack = (*call_stack, flow_key)
@@ -5772,7 +5772,7 @@ async def _run_flow_internal(
         )
         if step_condition is False:
             statuses[step.step_id] = "skipped"
-            print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
+            print(f"Flow step {namespace}{step.step_id}: skipped (when=false)")
             continue
         _set_flow_diagnostic(
             phase="prepare-step", flow=flow.source,
@@ -5787,7 +5787,7 @@ async def _run_flow_internal(
         )
         if _when_uses_item(step.when) and not items:
             statuses[step.step_id] = "skipped"
-            print(f"Flow-Schritt {namespace}{step.step_id}: skipped (when=false)")
+            print(f"Flow step {namespace}{step.step_id}: skipped (when=false)")
             continue
 
         preflight_outputs: list[Path | None] | None = None
@@ -5856,8 +5856,8 @@ async def _run_flow_internal(
             context.executed_steps += 1
             if context.executed_steps > MAX_FLOW_EXECUTIONS:
                 raise ValueError(
-                    f"Flow-Ausführung überschreitet das globale Limit von "
-                    f"{MAX_FLOW_EXECUTIONS} Step-Iterationen."
+                    f"Flow execution exceeds the global limit of "
+                    f"{MAX_FLOW_EXECUTIONS} step iterations."
                 )
 
             suffix = (
@@ -5868,7 +5868,7 @@ async def _run_flow_internal(
             display_name = namespace + step.step_id
             print(
                 sanitize_terminal_text(
-                    f"Flow-Schritt {display_name}{suffix}",
+                    f"Flow step {display_name}{suffix}",
                     multiline=False,
                     escape_invisible_formatting=True,
                     escape_literal_backslashes=True,
@@ -5913,8 +5913,8 @@ async def _run_flow_internal(
                 )
                 print(
                     sanitize_terminal_text(
-                        f"Flow-Schritt {display_name}{suffix}: "
-                        f"vorhandenen JSON-Checkpoint verwendet: {output}",
+                        f"Flow step {display_name}{suffix}: "
+                        f"existing JSON checkpoint used: {output}",
                         multiline=False,
                         escape_invisible_formatting=True,
                         escape_literal_backslashes=True,
@@ -6007,8 +6007,8 @@ async def run_flow(
     )
     if flow.inputs:
         raise ValueError(
-            f"Flow {flow.source} deklariert Inputs und kann nicht direkt ohne "
-            "aufrufenden Flow ausgeführt werden: "
+            f"Flow {flow.source} declares inputs and cannot run directly without an "
+            "invoking flow: "
             + ", ".join(flow.inputs)
         )
     _set_flow_diagnostic(phase="collect-reserved-inputs", flow=flow.source)
@@ -6093,7 +6093,7 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument(
             "--debug",
             action="store_true",
-            help="Bei einem Fehler zusätzlich den vollständigen Traceback ausgeben.",
+            help="Also display the complete traceback on failure.",
         )
         sub.add_argument(
             "--workspace",
@@ -6125,14 +6125,14 @@ def _initial_flow_logging_config(
         current, depth = pending.pop()
         if depth >= MAX_SUBFLOW_DEPTH:
             raise ValueError(
-                f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+                f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
             )
         key = _filesystem_path_key(current.source)
         if key in visited:
             continue
         visited.add(key)
         if len(visited) > MAX_SUBFLOW_GRAPH_EXPANSIONS:
-            raise ValueError("Subflow-Logging-Konfigurationssuche überschreitet das Limit.")
+            raise ValueError("Subflow logging configuration discovery exceeds the limit.")
         for step in current.steps:
             _set_flow_diagnostic(
                 phase="discover-logging-config",
@@ -6141,7 +6141,7 @@ def _initial_flow_logging_config(
             if step.flow is not None:
                 if depth + 1 >= MAX_SUBFLOW_DEPTH:
                     raise ValueError(
-                        f"Maximale Subflow-Tiefe von {MAX_SUBFLOW_DEPTH} überschritten."
+                        f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
                     )
                 pending.append((
                     _load_subflow_definition(
@@ -6191,20 +6191,20 @@ def main() -> None:
             )
             if not config_path.exists():
                 raise ValueError(
-                    f"Konfiguration von Schritt {config_step!r} "
-                    f"existiert nicht: {config_path}"
+                    f"Configuration for step {config_step!r} "
+                    f"does not exist: {config_path}"
                 )
             if not config_path.is_file():
                 raise ValueError(
-                    f"Konfiguration von Schritt {config_step!r} "
-                    f"ist keine Datei: {config_path}"
+                    f"Configuration for step {config_step!r} "
+                    f"is not a file: {config_path}"
                 )
             try:
                 config = load_config(config_path)
             except Exception as exc:
                 raise ValueError(
-                    f"Konfiguration von Schritt {config_step!r} "
-                    f"ist ungültig: {exc}"
+                    f"Configuration for step {config_step!r} "
+                    f"is invalid: {exc}"
                 ) from exc
         configure_logging(config.logging)
         logging_initialized = True
@@ -6216,8 +6216,8 @@ def main() -> None:
         if args.command == "validate":
             print(
                 sanitize_terminal_text(
-                    f"Flow gültig: {flow.source} "
-                    f"({len(flow.steps)} Schritte, "
+                    f"Flow valid: {flow.source} "
+                    f"({len(flow.steps)} steps, "
                     f"Workspace: {workspace})",
                     multiline=False,
                     escape_invisible_formatting=True,
@@ -6247,7 +6247,7 @@ def main() -> None:
         if details:
             message += f"\nFlow-Diagnose: {details}"
         print(
-            "Fehler: " + sanitize_terminal_text(
+            "Error: " + sanitize_terminal_text(
                 message, multiline=True,
                 escape_invisible_formatting=True,
             ),

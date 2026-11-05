@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from cli_agent.security.mcp_path_policy import read_path_policy
 from cli_agent.settings.config import AppConfig, McpServerConfig, default_config_file, load_config
@@ -47,6 +47,29 @@ class DataFilter:
     column: str
     op: FilterOperator
     value: FilterValue = None
+
+
+class DataAggregation(BaseModel):
+    """A typed aggregation specification exposed in the MCP JSON schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    column: Annotated[str, Field(description="Existing input column to aggregate.")]
+    function: Annotated[
+        Literal["count", "sum", "mean", "min", "max", "median", "nunique", "std"],
+        Field(description="Aggregation function. count counts non-null column values."),
+    ]
+    alias: Annotated[str | None, Field(description="Optional output column name; defaults to <column>_<function>.")] = None
+
+
+def _serialize_aggregations(
+    aggregations: list[DataAggregation],
+) -> list[dict[str, str]]:
+    """Pass typed MCP arguments to the unchanged DataOperations validator."""
+    return [
+        item.model_dump(exclude_none=True) if isinstance(item, DataAggregation) else dict(item)
+        for item in aggregations
+    ]
 
 
 def _serialize_filters(
@@ -341,7 +364,10 @@ def create_server(
 
     @mcp.tool(structured_output=False)
     def aggregate_data(
-        aggregations: list[dict[str, str]],
+        aggregations: Annotated[
+            list[DataAggregation],
+            Field(min_length=1, description="Nonempty list of typed column/function/alias specifications."),
+        ],
         path: str,
         table_index: int = 0,
         group_by: list[str] | None = None,
@@ -350,14 +376,29 @@ def create_server(
         descending: bool = False,
         records_path: str | None = None,
     ) -> CallToolResult:
-        """Group and aggregate workspace data with deterministic operations.
+        """Group or aggregate rows from an existing workspace dataset.
 
-        Propagate the source records_path, including for generated tables.
-        The complete result becomes a structured session artifact.
-        Functions: count, sum, mean, min, max, median, nunique, std.
+        Required: path and a nonempty list of aggregations. Every item must
+        provide "column" (existing input column) and "function" (count, sum,
+        mean, min, max, median, nunique, std); "alias" is optional and defaults
+        to "<column>_<function>". Do not use "op", "agg", "operation" or "func"
+        in place of "function". Alias names must be unique, including group_by.
+
+        Example arguments:
+          {"path": "measurements.csv", "group_by": ["day"],
+           "aggregations": [{"column": "power", "function": "sum",
+                             "alias": "total_power"}]}
+
+        count counts non-null values of the chosen column, not every row.
+        nunique counts distinct non-null values. sum, mean, median and std
+        require numeric (non-boolean) column values. Without group_by, all
+        filtered rows form one group. Filters use column/op/value and AND logic.
+        Preserve the source records_path, including for generated tables.
+        The full result is a structured session artifact; pass its
+        workspace_path and records_path for subsequent data operations.
         """
         result_columns, result_rows = operations._aggregate_records(
-            path, data=None, data_format=None, table_index=table_index, aggregations=aggregations,
+            path, data=None, data_format=None, table_index=table_index, aggregations=_serialize_aggregations(aggregations),
             group_by=group_by, filters=_serialize_filters(filters),
             sort_by=sort_by, descending=descending, records_path=records_path,
         )
@@ -419,22 +460,56 @@ def create_server(
             @mcp.tool(structured_output=False)
             def resample_data(
                 path: str,
-                frequency: str,
-                aggregations: list[ResampleAggregation],
-                time_column: str | None = None,
-                records_path: str | None = None,
+                frequency: Annotated[
+                    str,
+                    Field(
+                        pattern=r"^[1-9][0-9]{0,3}(?:s|min|h|d)$",
+                        description="Positive fixed-length bucket width: 1-9999 followed by s, min, h or d (e.g. '30s', '5min', '1h', '1d'). Use lowercase units.",
+                    ),
+                ],
+                aggregations: Annotated[
+                    list[ResampleAggregation],
+                    Field(min_length=1, max_length=20, description="1-20 objects, each with required column, method, and alias."),
+                ],
+                time_column: Annotated[
+                    str | None,
+                    Field(description="Name of the ISO datetime input column; omit only if it can be inferred unambiguously."),
+                ] = None,
+                records_path: Annotated[
+                    str | None,
+                    Field(description="JSON Pointer to input rows, e.g. '/points' or '/rows'; propagate it from the source artifact."),
+                ] = None,
             ) -> CallToolResult:
-                """Aggregate a time series into fixed buckets to reduce data volume.
+                """Resample time series into fixed-width [start, end) buckets.
 
-                Specify a frequency like '5min', '30s', '1h' or '1d'. Supported
-                aggregation methods: mean, min, max, sum, count. Omit
-                time_column to infer the unique ISO datetime column; specify
-                it explicitly if more than one candidate exists. Each resulting
-                timestamp labels the start of its [start, end) bucket. No
-                interpolation; empty buckets may have null aggregates. Beware:
-                summing power samples is not the same as integrating energy.
-                Pass the prior records_path as input. Reuse the result via
-                workspace_path and records_path='/rows'.
+                Each aggregation REQUIRES "column" (existing numeric input
+                column), "method" (mean|min|max|sum|count), and "alias"
+                (unique output name, not "timestamp"). Unlike aggregate_data,
+                resample_data uses "method", not "function", and alias is
+                mandatory. Example arguments:
+                  {"path":"measurements.json", "records_path":"/points",
+                   "time_column":"time", "frequency":"5min",
+                   "aggregations":[{"column":"value", "method":"mean",
+                                    "alias":"avg_value"},
+                                   {"column":"value", "method":"count",
+                                    "alias":"sample_count"}]}
+
+                Use lowercase frequencies such as "30s", "5min", "1h", "1d".
+                time_column may be omitted only when exactly one ISO datetime
+                column is detectable; otherwise specify it. Buckets are
+                left-closed and labeled by their starting timestamp, with no
+                interpolation or extrapolation. Values must be numeric even
+                for count. count gives the number of non-null numeric samples
+                per bucket; empty buckets have count=0 and other aggregates
+                null, including sum when there are no valid samples.
+
+                Timezone-aware timestamps are normalized to UTC; buckets
+                such as "1d" are UTC calendar days, NOT local calendar days
+                (and not daylight-saving-aware local day lengths). UTC labels
+                are returned. Summing sampled power (W) does NOT yield
+                energy (Wh); use integrate_data for time-weighted integration.
+                Propagate source records_path. Results are session artifacts;
+                chain via workspace_path and records_path="/rows".
                 """
                 return frames.resample_data(
                     path, frequency, aggregations,
@@ -598,7 +673,10 @@ def main() -> None:
     sdk_configless = bool(getattr(args, "sdk_configless", False))
     if sdk_configless and args.config_file is not None:
         raise ValueError("--sdk-configless und --config-file sind nicht kombinierbar.")
-    config = AppConfig() if sdk_configless else load_config(path=args.config_file)
+    config = (
+        AppConfig() if sdk_configless
+        else load_config(path=args.config_file, workspace=args.project_directory)
+    )
     effective_config_file = (
         args.config_file.expanduser()
         if args.config_file is not None
