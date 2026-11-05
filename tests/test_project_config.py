@@ -151,3 +151,78 @@ def test_direct_private_files_cannot_be_exposed_even_when_parent_allowed(tmp_pat
     with pytest.raises(WorkspaceError):
         workspace.read_file(".cli-agent/project.toml")
     assert '"x": 1' in workspace.read_file(".cli-agent/mcp-data-123/rows.json")
+
+def test_one_shot_preparation_receives_merged_config_and_prompt(tmp_path: Path):
+    from cli_agent.platform.execution import (
+        ExecutionDependencies, OneShotRunOptions, prepare_agent,
+    )
+    from cli_agent.settings.admin_config import AdminConfig
+
+    global_config = tmp_path / "global.toml"
+    global_config.write_text(
+        '[model]\\nprovider = "openai"\\nmodel = "base"\\n'
+        'base_url = "http://localhost:11434/v1"\\n', encoding="utf-8",
+    )
+    folder = _project(
+        tmp_path,
+        '[model]\\nmodel = "project-model"\\n'
+        '[agent]\\nsystem_prompt = "system.md"\\n',
+    )
+    (folder / "system.md").write_text("You are a project analyst.", encoding="utf-8")
+    captured = {}
+
+    class Agent:
+        def __init__(self, workspace, model_client, servers, **kwargs):
+            captured.update(kwargs)
+
+    deps = ExecutionDependencies(
+        load_config=lambda path: load_config(path),
+        load_admin_config=AdminConfig,
+        configure_logging=lambda config: None,
+        create_model_client=lambda *args, **kwargs: object(),
+        agent_type=Agent,
+    )
+    prepared = prepare_agent(
+        OneShotRunOptions(workspace=tmp_path, prompt="work", config_file=global_config),
+        dependencies=deps,
+    )
+    assert prepared.config.model.model == "project-model"
+    assert prepared.config.model.provider == "openai"
+    assert captured["system_prompt"] == "You are a project analyst."
+
+
+def test_main_and_sub_run_inherit_project_prompt_without_removing_internal_rules(
+    tmp_path: Path, monkeypatch,
+):
+    import asyncio
+    import json
+    from cli_agent.runtime.agent import CliAgent
+    from cli_agent.models.ollama import OllamaClient
+    from cli_agent.state.sub_runs import execute_sub_run
+    import cli_agent.runtime.agent_loop as agent_loop
+
+    agent = CliAgent(
+        tmp_path, OllamaClient(base_url="http://localhost:11434", model="test"),
+        (), system_prompt="You are a project analyst.",
+    )
+    prompt = agent._build_system_prompt()
+    assert "You are a project analyst." in prompt
+    assert "You are a local CLI assistant." not in prompt
+    assert "Use agent__update_plan" in prompt
+    seen = []
+
+    async def fake_run_model_loop(agent, *, messages, **kwargs):
+        seen.append(messages[0]["content"])
+        return json.dumps({
+            "status": "partial", "summary": "No verified findings.",
+            "evidence_ids": [], "confidence": "low", "uncertainties": [],
+        })
+
+    monkeypatch.setattr(agent_loop, "run_model_loop", fake_run_model_loop)
+    asyncio.run(execute_sub_run(agent, {
+        "task": "Inspect only one small time-series dataset and report its coverage.",
+    }))
+    assert len(seen) == 1
+    assert "You are a project analyst." in seen[0]
+    assert "You are a local CLI assistant." not in seen[0]
+    assert "Sub-runs have NO local plan." in seen[0]
