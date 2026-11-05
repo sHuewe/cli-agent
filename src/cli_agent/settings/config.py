@@ -462,7 +462,7 @@ def load_config(path: Path | None = None, *, workspace: Path | None = None) -> A
         config_file = path.expanduser()
         if not config_file.exists():
             raise FileNotFoundError(
-                f"Explicit configuration file does not exist: {config_file}"
+                f"Explizit angegebene Konfigurationsdatei existiert nicht: {config_file}"
             )
     values: dict[str, Any] = {}
     if config_file.exists():
