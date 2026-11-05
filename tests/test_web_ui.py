@@ -753,3 +753,21 @@ def test_project_image_icon_rendering_and_css():
     assert 'class="app-icon app-icon-custom app-icon-image"' in rendered
     assert ".app-icon-image img" in web_ui.APP_CSS
     assert 'id="session-meta"' in rendered
+
+
+def test_default_header_icon_is_left_of_title_and_metadata():
+    from cli_agent.settings.config import UiConfig
+
+    rendered = web_ui.render_index_html(UiConfig())
+    brand = rendered.index('class="app-brand"')
+    icon = rendered.index('class="app-icon"', brand)
+    copy = rendered.index('class="app-brand-copy"', icon)
+    title = rendered.index('<h1>cli-agent</h1>', copy)
+    meta = rendered.index('id="session-meta"', title)
+    assert brand < icon < copy < title < meta
+
+    # The old :first-child selector overrode header .app-brand due to specificity.
+    assert "header > div:first-child:not(.app-brand)" in web_ui.APP_CSS
+    assert "header .app-brand, header > div:first-child {" not in web_ui.APP_CSS
+    assert "header .app-brand-copy {" in web_ui.APP_CSS
+    assert "flex-direction: row;" in web_ui.APP_CSS

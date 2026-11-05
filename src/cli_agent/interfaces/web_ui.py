@@ -692,7 +692,9 @@ header { position: sticky; top: 0;
   box-shadow: var(--ui-shadow, 0 8px 28px rgb(25 38 69 / .06));
   gap: 26px;
 }
-header .app-brand, header > div:first-child {
+/* Preserve a fallback for custom headers without app-brand.
+   The :first-child selector must not override app-brand's row layout. */
+header > div:first-child:not(.app-brand) {
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -701,12 +703,22 @@ header .app-brand, header > div:first-child {
   flex: 1 1 290px;
 }
 header .app-brand {
+  display: flex;
+  flex: 1 1 290px;
+  min-width: 0;
   flex-direction: row;
   align-items: center;
   justify-content: flex-start;
   gap: 16px;
 }
-header .app-brand-copy { flex: 1 1 auto; min-width: 0; }
+header .app-brand-copy {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
 .app-icon {
   display: inline-flex;
   position: relative;
@@ -915,7 +927,7 @@ pre, .state-content {
 @media (max-width: 850px) {
   .shell { padding: 12px 12px 16px; }
   header { align-items: stretch; flex-direction: column; gap: 15px; padding: 15px 16px; }
-  header .app-brand, header > div:first-child { flex-basis: auto; }
+  header .app-brand, header > div:first-child:not(.app-brand) { flex-basis: auto; }
   .header-actions { justify-content: flex-start; flex-basis: auto; }
   .chat { padding: 20px 5px; }
 }
