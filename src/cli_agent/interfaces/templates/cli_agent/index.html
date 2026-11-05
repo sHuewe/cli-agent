@@ -19,8 +19,15 @@
     <header>
       {% block app_info %}
       <div class="app-brand">
-        {% block app_title %}<h1>{{ ui.title }}</h1>{% endblock app_title %}
-        {% block session_meta %}<div id="session-meta" class="meta">Connecting …</div>{% endblock session_meta %}
+        {% block app_icon %}
+        {% if ui.icon != "" %}
+        <span class="app-icon{% if ui.icon is not none %} app-icon-custom{% endif %}" aria-hidden="true">{% if ui.icon is not none %}{{ ui.icon }}{% endif %}</span>
+        {% endif %}
+        {% endblock app_icon %}
+        <div class="app-brand-copy">
+          {% block app_title %}<h1>{{ ui.title }}</h1>{% endblock app_title %}
+          {% block session_meta %}<div id="session-meta" class="meta">Connecting …</div>{% endblock session_meta %}
+        </div>
       </div>
       {% endblock app_info %}
       {% block header_buttons %}

@@ -121,6 +121,7 @@ class UiButtonsConfig:
 @dataclass(frozen=True)
 class UiConfig:
     title: str = "cli-agent"
+    icon: str | None = None
     default_language: str | None = None
     template: str | None = None
     theme: str = "bright"
@@ -433,7 +434,7 @@ def _ui_config(values: Any) -> UiConfig:
     """Parse presentation-only browser settings, with strict field validation."""
     if not isinstance(values, dict):
         raise ValueError("[ui] must be a table.")
-    if set(values) - {"title", "default_language", "template", "theme", "stylesheets", "buttons"}:
+    if set(values) - {"title", "icon", "default_language", "template", "theme", "stylesheets", "buttons"}:
         raise ValueError("[ui] contains unknown options.")
 
     title = values.get("title", "cli-agent")
@@ -445,6 +446,17 @@ def _ui_config(values: Any) -> UiConfig:
         or any(ord(char) < 32 or ord(char) == 127 for char in title)
     ):
         raise ValueError("ui.title must be a nonempty title of at most 120 characters without control characters.")
+
+    # None retains the built-in CSS logo; "" hides the logo entirely.
+    # Other strings are rendered as HTML-escaped text (e.g. an emoji or initial).
+    icon = values.get("icon")
+    if icon is not None and (
+        not isinstance(icon, str)
+        or len(icon) > 16
+        or icon != icon.strip()
+        or any(ord(char) < 32 or ord(char) == 127 for char in icon)
+    ):
+        raise ValueError("ui.icon must be a short symbol (at most 16 characters), or an empty string.")
 
     default_language = values.get("default_language")
     if default_language is not None:
@@ -505,7 +517,7 @@ def _ui_config(values: Any) -> UiConfig:
         commands=command_config,
     )
     return UiConfig(
-        title=title, default_language=default_language, template=template,
+        title=title, icon=icon, default_language=default_language, template=template,
         theme=theme, stylesheets=tuple(stylesheets), buttons=button_config,
     )
 

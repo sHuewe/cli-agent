@@ -700,29 +700,37 @@ header .app-brand, header > div:first-child {
   min-width: 0;
   flex: 1 1 290px;
 }
-header .app-brand { position: relative; padding-left: 56px; }
-header .app-brand::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 3px;
+header .app-brand {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+}
+header .app-brand-copy { flex: 1 1 auto; min-width: 0; }
+.app-icon {
+  display: inline-flex;
+  position: relative;
+  flex: 0 0 40px;
   width: 40px;
   height: 40px;
+  align-items: center;
+  justify-content: center;
   border-radius: 14px;
+  color: #fff;
+  font-size: 1.3rem;
+  line-height: 1;
   background: linear-gradient(135deg, var(--ui-accent, #4169e1), var(--ui-accent-alt, #708bf5));
   box-shadow: 0 7px 17px var(--ui-accent-shadow, rgb(65 105 225 / .22));
 }
-header .app-brand::after {
+.app-icon::after {
   content: "";
-  position: absolute;
   width: 14px;
   height: 14px;
-  top: 16px;
-  left: 13px;
   border: 3px solid #fff;
   border-radius: 5px;
   transform: rotate(-14deg);
 }
+.app-icon-custom::after { content: none; }
 h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.52rem); font-weight: 740; letter-spacing: -.035em; line-height: 1.28; }
 .meta { font-size: .83rem; line-height: 1.5; color: var(--ui-muted, #64748b); opacity: 1; overflow-wrap: anywhere; }
 .header-actions { display: flex; flex: 0 1 630px; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 7px; }
@@ -912,9 +920,9 @@ pre, .state-content {
 @media (max-width: 640px) {
   .shell { height: 100dvh; min-height: 400px; padding: 8px 8px 12px; }
   header { padding: 12px; border-radius: 15px; }
-  header .app-brand { padding-left: 46px; }
-  header .app-brand::before { width: 34px; height: 34px; border-radius: 11px; }
-  header .app-brand::after { width: 12px; height: 12px; left: 10px; top: 13px; }
+  header .app-brand { gap: 12px; }
+  .app-icon { flex-basis: 34px; width: 34px; height: 34px; border-radius: 11px; font-size: 1.12rem; }
+  .app-icon::after { width: 12px; height: 12px; }
   .header-actions { gap: 6px; }
   .header-actions button { font-size: .78rem; padding: 7px 9px; }
   .language-picker { padding: 0 4px; }

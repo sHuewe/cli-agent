@@ -478,3 +478,26 @@ def test_project_ui_stylesheet_is_protected_from_workspace_mcp(tmp_path: Path):
         workspace._reject_protected_read(filename)
     with pytest.raises(WorkspaceError):
         workspace._reject_protected_mutation(filename)
+
+
+
+@pytest.mark.parametrize("value", [
+    'icon = 7',
+    'icon = false',
+    'icon = " too much "',
+    'icon = "this label is much too long"',
+    'icon = "bad\\nicon"',
+])
+def test_ui_rejects_invalid_app_icons(tmp_path: Path, value: str):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text("", encoding="utf-8")
+    _project(tmp_path, "[ui]\n" + value + "\n")
+    with pytest.raises(ValueError, match="ui.icon"):
+        load_config(global_config, workspace=tmp_path)
+
+
+def test_project_ui_app_icon_override(tmp_path: Path):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text('[ui]\nicon = "X"\n', encoding="utf-8")
+    _project(tmp_path, '[ui]\nicon = "⚡"\n')
+    assert load_config(global_config, workspace=tmp_path).ui.icon == "⚡"

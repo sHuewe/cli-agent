@@ -251,12 +251,26 @@ Example:
 {% endblock %}
 ```
 
-Nested extension blocks include `header_row`, `app_info`, `app_title`,
-`session_meta`, `header_buttons`, `button_*`, `commands`,
+Nested extension blocks include `header_row`, `app_info`, `app_icon`,
+`app_title`, `session_meta`, `header_buttons`, `button_*`, `commands`,
 `command_*`, `chat`, `composer`, `dialogs` and its individual
 dialog blocks, as well as `extra_head` and `footer`. Use
 `{{ self.name_of_block() }}` to reuse a component in a different order,
 or `{{ super() }}` to retain and extend a parent block.
+
+The default top-left logo is created from CSS, not a downloaded image.
+It is now implemented inside the `app_icon` block, which can be overridden
+independently. For a quick change without overriding templates, configure:
+
+```toml
+[ui]
+icon = "⚡"  # A short symbol or emoji
+```
+
+Omit `icon` for the built-in CSS logo, or set `icon = ""` to hide
+the icon. A Jinja2 override of `app_icon` may instead render custom
+markup, including an inline SVG. The existing CSP blocks external images,
+so use inline markup or a CSS-designed icon.
 
 The JavaScript still relies on certain DOM elements being present exactly
 once, even if a control is hidden. Rendered pages are validated before

@@ -709,3 +709,38 @@ def test_built_in_ui_has_modern_styles_and_theme_links():
     assert "#composer:focus-within" in web_ui.APP_CSS
     assert ".chat > * { flex-shrink: 0; }" in web_ui.APP_CSS
     assert "[hidden] { display: none !important; }" in web_ui.APP_CSS
+
+
+
+def test_configurable_app_icon_and_nested_block():
+    from cli_agent.settings.config import UiConfig
+
+    default = web_ui.render_index_html(UiConfig())
+    assert 'class="app-icon"' in default
+    assert "app-icon-custom" not in default
+    assert ".app-icon::after {" in web_ui.APP_CSS
+    assert "header .app-brand::before {" not in web_ui.APP_CSS
+
+    custom = web_ui.render_index_html(UiConfig(icon="⚡"))
+    assert 'class="app-icon app-icon-custom" aria-hidden="true">⚡</span>' in custom
+    assert '<h1>cli-agent</h1>' in custom
+    assert 'id="session-meta"' in custom
+
+    escaped = web_ui.render_index_html(UiConfig(icon="<&>"))
+    assert '>&lt;&amp;&gt;</span>' in escaped
+    assert '<&>' not in escaped
+
+    hidden = web_ui.render_index_html(UiConfig(icon=""))
+    assert 'class="app-icon"' not in hidden
+    assert 'class="app-icon app-icon-custom"' not in hidden
+    assert 'id="session-meta"' in hidden
+
+    project = """{% extends "cli_agent/index.html" %}
+{% block app_icon %}
+<span class="app-icon app-icon-custom" aria-hidden="true">Project</span>
+{% endblock app_icon %}
+"""
+    override = web_ui.render_index_html(UiConfig(), project_template=project)
+    assert '>Project</span>' in override
+    assert '<h1>cli-agent</h1>' in override
+    assert 'id="session-meta"' in override
