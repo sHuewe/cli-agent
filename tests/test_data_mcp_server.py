@@ -612,7 +612,7 @@ def test_main_uses_shared_workspace_and_runs_stdio(
     monkeypatch.setattr(
         data_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=object()),
+        lambda path, **_kwargs: SimpleNamespace(logging=object()),
     )
     monkeypatch.setattr(
         data_mcp_server,
@@ -687,7 +687,7 @@ def test_main_payload_only_mode_does_not_create_workspace(
     monkeypatch.setattr(
         data_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=object()),
+        lambda path, **_kwargs: SimpleNamespace(logging=object()),
     )
     monkeypatch.setattr(
         data_mcp_server,
@@ -739,7 +739,7 @@ def test_main_converts_workspace_initialization_error_to_system_exit(
     monkeypatch.setattr(
         data_mcp_server,
         "load_config",
-        lambda path: SimpleNamespace(logging=object()),
+        lambda path, **_kwargs: SimpleNamespace(logging=object()),
     )
     monkeypatch.setattr(
         data_mcp_server,
