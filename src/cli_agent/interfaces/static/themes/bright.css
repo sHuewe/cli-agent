@@ -1,0 +1,32 @@
+/* cli-agent bright: crisp, welcoming surfaces with restrained cobalt accents. */
+:root {
+  color-scheme: light;
+  --ui-page: #f3f6fb;
+  --ui-panel: #ffffff;
+  --ui-subtle: #f6f8fd;
+  --ui-border: #e2e8f2;
+  --ui-text: #1b2942;
+  --ui-muted: #64748b;
+  --ui-accent: #4367df;
+  --ui-accent-alt: #8298fc;
+  --ui-accent-text: #304dbc;
+  --ui-accent-soft: #ebefff;
+  --ui-accent-border: #d3dcff;
+  --ui-accent-shadow: rgb(67 103 223 / .24);
+  --ui-focus: #9cb0ff;
+  --ui-focus-ring: rgb(67 103 223 / .12);
+  --ui-button-text: #ffffff;
+  --ui-user-bg: #eaf0ff;
+  --ui-user-border: #d7e0ff;
+  --ui-user-text: #223c80;
+  --ui-code-inline: #edf1fa;
+  --ui-code-text: #365187;
+  --ui-code-bg: #f7f9fc;
+  --ui-shadow: 0 8px 28px rgb(32 53 93 / .065);
+  --ui-shadow-strong: 0 11px 34px rgb(32 53 93 / .095);
+  --ui-message-shadow: rgb(22 44 80 / .035);
+  --ui-scroll: #c9d2e3;
+  --ui-empty-accent: rgb(67 103 223 / .085);
+  --ui-empty-line: rgb(67 103 223 / .035);
+  --ui-danger: #d04458;
+}

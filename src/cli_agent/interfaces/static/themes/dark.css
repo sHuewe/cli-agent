@@ -1,0 +1,32 @@
+/* cli-agent dark: deep slate surfaces and legible violet-blue accents. */
+:root {
+  color-scheme: dark;
+  --ui-page: #0b1220;
+  --ui-panel: #141e30;
+  --ui-subtle: #1c2940;
+  --ui-border: #2b3850;
+  --ui-text: #eaf0fa;
+  --ui-muted: #9aabc3;
+  --ui-accent: #829fff;
+  --ui-accent-alt: #b8a4ff;
+  --ui-accent-text: #c4d0ff;
+  --ui-accent-soft: #222f51;
+  --ui-accent-border: #405780;
+  --ui-accent-shadow: rgb(130 159 255 / .22);
+  --ui-focus: #b0c4ff;
+  --ui-focus-ring: rgb(130 159 255 / .18);
+  --ui-button-text: #111c35;
+  --ui-user-bg: #263f70;
+  --ui-user-border: #375789;
+  --ui-user-text: #eef3ff;
+  --ui-code-inline: #273750;
+  --ui-code-text: #cadbff;
+  --ui-code-bg: #192438;
+  --ui-shadow: 0 10px 28px rgb(1 6 16 / .27);
+  --ui-shadow-strong: 0 12px 38px rgb(1 6 16 / .4);
+  --ui-message-shadow: rgb(1 6 16 / .1);
+  --ui-scroll: #41536c;
+  --ui-empty-accent: rgb(130 159 255 / .11);
+  --ui-empty-line: rgb(130 159 255 / .045);
+  --ui-danger: #ef8492;
+}

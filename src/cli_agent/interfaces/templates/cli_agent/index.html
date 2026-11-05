@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ ui.title }}</title>
   <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/themes/{{ ui.theme }}.css">
+  {% for stylesheet in ui.stylesheets %}
+  <link rel="stylesheet" href="/assets/{{ stylesheet }}">
+  {% endfor %}
   <script src="/assets/i18n.js" defer></script>
   <script src="/assets/app.js" defer></script>
 {% block extra_head %}{% endblock extra_head %}
@@ -14,7 +18,7 @@
     {% block header_row %}
     <header>
       {% block app_info %}
-      <div>
+      <div class="app-brand">
         {% block app_title %}<h1>{{ ui.title }}</h1>{% endblock app_title %}
         {% block session_meta %}<div id="session-meta" class="meta">Connecting …</div>{% endblock session_meta %}
       </div>
