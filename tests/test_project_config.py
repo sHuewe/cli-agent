@@ -127,6 +127,7 @@ def test_private_root_files_remain_hidden_with_allowed_data_checkpoints(tmp_path
         tmp_path, McpServerConfig(name="data", config={"allow_write_files": True}),
         allowed_paths=(AllowedPath(data, "write"),),
     )
+    assert "checkpoint.json" in workspace.list_files(".cli-agent/mcp-data-123")
     assert '"value": 7' in workspace.read_file(".cli-agent/mcp-data-123/checkpoint.json")
     workspace.write_file(".cli-agent/mcp-data-123/checkpoint.json", '{"value": 8}')
     assert '"value": 8' in workspace.read_file(".cli-agent/mcp-data-123/checkpoint.json")
