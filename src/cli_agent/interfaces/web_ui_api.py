@@ -14,10 +14,10 @@ async def run_web_ui_via_api(
     config,
     admin_config,
     workspace,
-    system_prompt,
     file_contexts,
     output_target,
     excluded_paths,
+    system_prompt=None,
 ):
     """Keep cli-agent --with-web-ui a one-command localhost launch.
 
