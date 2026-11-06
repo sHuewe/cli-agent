@@ -195,7 +195,8 @@ class SessionPersistence:
         evidence = getattr(agent, "_evidence_state", None)
         if evidence is None:
             evidence = EvidenceState()
-        if snapshot_id is None:
+        creating_new = snapshot_id is None
+        if creating_new:
             if len(self.list()) >= MAX_SAVED_SESSIONS:
                 raise RuntimeError("Maximum number of saved sessions reached.")
             snapshot_id = uuid.uuid4().hex
@@ -223,7 +224,7 @@ class SessionPersistence:
         if path.exists() or path.is_symlink():
             if path_entry_is_symlink_or_reparse(path) or regular_file_has_multiple_links(path):
                 raise ValueError("Unsafe session snapshot target.")
-            if snapshot_id is None:
+            if creating_new:
                 raise ValueError("Snapshot already exists.")
         temp = path.parent / (".tmp-" + uuid.uuid4().hex)
         try:
