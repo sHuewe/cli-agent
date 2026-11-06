@@ -298,6 +298,11 @@ Set `icon = "ui/logo.png"` to use a project image from
 `.cli-agent/ui/logo.png` instead. PNG, JPEG and WebP are supported,
 up to 1 MiB. SVG, external URLs and nested paths are not accepted.
 
+The browser tab uses the same icon: project images are used directly,
+symbols become a local SVG favicon, and unset/empty icons show the
+built-in logo in the tab. The favicon can be customized separately through
+the Jinja2 `favicon` block.
+
 Omit `icon` for the built-in CSS logo, or set `icon = ""` to hide
 the icon. A Jinja2 override of `app_icon` may instead render custom
 markup, including an inline SVG. The existing CSP blocks external images,

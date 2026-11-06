@@ -41,6 +41,26 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
             return browser_security_headers(PlainTextResponse("Not found", status_code=404))
         return browser_security_headers(PlainTextResponse(data, media_type="text/css"))
 
+    async def ui_favicon_svg(_request: Request) -> Response:
+        """Serve the CSS-equivalent default logo or the configured symbol as SVG."""
+        from importlib.resources import files
+        from xml.sax.saxutils import escape
+
+        icon = getattr(ui.get("ui_config"), "icon", None)
+        symbol = bool(icon and not icon.startswith("ui/"))
+        filename = "favicon-symbol.svg" if symbol else "favicon-default.svg"
+        svg = files("cli_agent.interfaces").joinpath(
+            "static", filename,
+        ).read_text(encoding="utf-8")
+        if symbol:
+            svg = svg.replace("__CLI_AGENT_SYMBOL__", escape(icon))
+        response = browser_security_headers(Response(svg, media_type="image/svg+xml"))
+        # The SVG is self-contained: no script, styles, network or navigation.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; script-src 'none'; style-src 'none'; sandbox"
+        )
+        return response
+
     async def ui_icon_image(request: Request) -> Response:
         # Serve only the exact image read from private project configuration
         # at startup. Unknown filenames are never resolved from disk.
@@ -317,6 +337,7 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         ("ui_css", ui_css),
         ("ui_theme_css", ui_theme_css),
         ("ui_project_css", ui_project_css),
+        ("ui_favicon_svg", ui_favicon_svg),
         ("ui_icon_image", ui_icon_image),
         ("ui_js", ui_js),
         ("ui_i18n", ui_i18n),

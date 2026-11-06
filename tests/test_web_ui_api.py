@@ -1095,3 +1095,65 @@ async def test_local_ui_icon_route_only_serves_configured_image():
         assert (await client.get("/assets/ui/icon/logo.svg")).status_code == 404
         assert (await client.get("/assets/ui/icon/logo.png", headers={"Origin": "https://example.org"})).status_code == 403
     await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_favicon_svg_and_project_icon_browser_assets():
+    from cli_agent.settings.config import UiConfig
+
+    service = AgentApiService(lambda session: BrowserAgent(session))
+    session = await service.create()
+    base_ui = {
+        "token": "browser-secret",
+        "session_id": session.id,
+        "registry": BrowserSessionRegistry(service, session.id),
+        "origin": "http://127.0.0.1:9191",
+        "info": {"model": "test", "workspace": "/workspace", "mcp_servers": []},
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service, ui={
+            **base_ui, "ui_config": UiConfig(),
+        })),
+        base_url="http://127.0.0.1:9191",
+    ) as client:
+        response = await client.get("/assets/favicon.svg")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("image/svg+xml")
+        assert response.headers["cache-control"] == "no-store"
+        assert "script-src 'none'" in response.headers["content-security-policy"]
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert b"linearGradient" in response.content
+        assert b"__CLI_AGENT_SYMBOL__" not in response.content
+        assert (await client.get("/", headers={"Origin": "https://evil.example"})).status_code == 403
+        assert (await client.get("/assets/favicon.svg", headers={"Origin": "https://evil.example"})).status_code == 403
+        assert (await client.get("/assets/favicon.svg", headers={"Host": "evil.example"})).status_code == 403
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service, ui={
+            **base_ui, "ui_config": UiConfig(icon="<&>"),
+        })),
+        base_url="http://127.0.0.1:9191",
+    ) as client:
+        favicon = await client.get("/assets/favicon.svg")
+        assert favicon.status_code == 200
+        assert b"&lt;&amp;&gt;" in favicon.content
+        assert b"__CLI_AGENT_SYMBOL__" not in favicon.content
+        assert b"<&>" not in favicon.content
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service, ui={
+            **base_ui, "ui_config": UiConfig(icon="ui/logo.png"),
+            "ui_icon_asset": ("logo.png", b"project-icon", "image/png"),
+        })),
+        base_url="http://127.0.0.1:9191",
+    ) as client:
+        page = await client.get("/")
+        assert 'href="/assets/ui/icon/logo.png"' in page.text
+        icon = await client.get("/assets/ui/icon/logo.png")
+        assert icon.status_code == 200
+        assert icon.content == b"project-icon"
+        # The fallback route does not reveal a private project file.
+        svg = await client.get("/assets/favicon.svg")
+        assert svg.status_code == 200
+        assert b"project-icon" not in svg.content
+    await service.shutdown()

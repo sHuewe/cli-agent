@@ -1,6 +1,6 @@
 # Web UI customization reference
 
-This page documents the embedded browser UI's configuration and all 26
+This page documents the embedded browser UI's configuration and all 27
 Jinja2 extension blocks. The parent template is
 `src/cli_agent/interfaces/templates/cli_agent/index.html`.
 
@@ -82,10 +82,11 @@ each item in `stylesheets`. CSS paths are direct children of
 `.cli-agent/ui/` (up to eight files, 128 KiB each and 512 KiB total).
 A Jinja template must also be a direct child of `.cli-agent/ui/`.
 
-## All 26 Jinja2 extension blocks
+## All 27 Jinja2 extension blocks
 
 ```text
 cli_agent/index.html
+├── favicon
 ├── extra_head
 ├── header_row
 │   ├── app_info
@@ -116,6 +117,7 @@ cli_agent/index.html
 
 | Block | Purpose |
 | --- | --- |
+| `favicon` | Browser-tab icon linked to the configured UI icon |
 | `extra_head` | Additional HTML head markup |
 | `header_row` | Complete app header |
 | `app_info` | Logo, title, model/workspace/MCP metadata |
@@ -185,6 +187,12 @@ at startup and served only at `/assets/ui/icon/logo.png`. Other files
 in the directory are not exposed. SVG and external image URLs are not
 supported. The CSP permits only local same-origin images. Restart the UI
 after changing the file.
+
+The browser-tab favicon follows `ui.icon` automatically: PNG/JPEG/WebP
+files use the existing secure image URL, symbols/emoji render as a small local
+SVG and an omitted or empty icon uses the standard CSS logo recreated as SVG.
+A separately overridden Jinja `app_icon` block does not automatically alter
+the favicon; override the independent `favicon` block if needed.
 
 The default icon is a CSS-drawn shape. Override only `app_icon` for a
 different icon, for example:

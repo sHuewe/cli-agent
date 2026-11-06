@@ -4,6 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ ui.title }}</title>
+  {% block favicon %}
+  {% if ui.icon and ui.icon.startswith("ui/") %}
+  <link rel="icon" type="{% if ui.icon.endswith('.png') %}image/png{% elif ui.icon.endswith('.webp') %}image/webp{% else %}image/jpeg{% endif %}" href="/assets/ui/icon/{{ ui.icon[3:] }}">
+  {% else %}
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg{% if ui.icon %}?v={{ ui.icon|urlencode }}{% endif %}">
+  {% endif %}
+  {% endblock favicon %}
   <link rel="stylesheet" href="/assets/app.css">
   <link rel="stylesheet" href="/assets/themes/{{ ui.theme }}.css">
   {% for stylesheet in ui.stylesheets %}
