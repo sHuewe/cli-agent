@@ -32,6 +32,7 @@ async def run_web_ui_via_api(
     import uvicorn
 
     from cli_agent.interfaces.agent_api import API_HOST, AgentApiService, create_app
+    from cli_agent.interfaces.session_persistence import SessionPersistence
     from cli_agent.interfaces.cli import build_preapproval_callback
     from cli_agent.settings.config import McpServerConfig, default_config_file
     from cli_agent.context.file_context import ContextFileCliAgent
@@ -104,6 +105,7 @@ async def run_web_ui_via_api(
     service = AgentApiService(
         factory,
         approval_workspace=preview_workspace,
+        session_storage=SessionPersistence(workspace),
         output_target=output_target,
         debug_errors=bool(getattr(args, 'debug', False)),
         initial_commands=tuple(
