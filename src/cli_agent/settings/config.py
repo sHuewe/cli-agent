@@ -105,6 +105,7 @@ class UiCommandButtonsConfig:
     clear_web_context: bool = True
     enable: bool = True
     disable: bool = True
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ class UiButtonsConfig:
     end_session: bool = True
     language_selector: bool = True
     commands: UiCommandButtonsConfig = field(default_factory=UiCommandButtonsConfig)
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -431,6 +433,43 @@ def _mcp_server_config(values: dict[str, Any]) -> McpServerConfig:
     )
 
 
+def _ui_button_setting(
+    options: dict[str, Any], name: str, *, section: str,
+) -> tuple[bool, str | None]:
+    """Accept the legacy boolean or an explicit {visible, label} table."""
+    value = options.get(name, True)
+    if isinstance(value, bool):
+        return value, None
+    if not isinstance(value, dict):
+        raise ValueError(f"{section}.{name} must be a boolean or a button settings table.")
+    if set(value) - {"visible", "label"}:
+        raise ValueError(f"{section}.{name} contains unknown options.")
+    visible = _bool_value(value, "visible", True, section=f"{section}.{name}")
+    label = value.get("label")
+    if label is not None and (
+        not isinstance(label, str)
+        or not label
+        or label != label.strip()
+        or len(label) > 120
+        or any(ord(char) < 32 or ord(char) == 127 for char in label)
+    ):
+        raise ValueError(f"{section}.{name}.label must be nonempty text of at most 120 characters without control characters.")
+    return visible, label
+
+
+def _ui_button_group(
+    options: dict[str, Any], names: tuple[str, ...], *, section: str,
+) -> tuple[dict[str, bool], dict[str, str]]:
+    parsed = {
+        name: _ui_button_setting(options, name, section=section)
+        for name in names
+    }
+    return (
+        {name: visible for name, (visible, _label) in parsed.items()},
+        {name: label for name, (_visible, label) in parsed.items() if label is not None},
+    )
+
+
 def _ui_config(values: Any) -> UiConfig:
     """Parse presentation-only browser settings, with strict field validation."""
     if not isinstance(values, dict):
@@ -509,16 +548,17 @@ def _ui_config(values: Any) -> UiConfig:
     if set(commands) - set(command_fields):
         raise ValueError("[ui.buttons.commands] contains unknown options.")
 
-    command_config = UiCommandButtonsConfig(**{
-        name: _bool_value(commands, name, True, section="ui.buttons.commands")
-        for name in command_fields
-    })
+    command_visible, command_labels = _ui_button_group(
+        commands, command_fields, section="ui.buttons.commands",
+    )
+    button_visible, button_labels = _ui_button_group(
+        buttons, button_fields, section="ui.buttons",
+    )
+    command_config = UiCommandButtonsConfig(
+        **command_visible, labels=command_labels,
+    )
     button_config = UiButtonsConfig(
-        **{
-            name: _bool_value(buttons, name, True, section="ui.buttons")
-            for name in button_fields
-        },
-        commands=command_config,
+        **button_visible, commands=command_config, labels=button_labels,
     )
     return UiConfig(
         title=title, show_metadata=_bool_value(values, "show_metadata", True, section="ui"),
