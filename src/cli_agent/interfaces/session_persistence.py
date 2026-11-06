@@ -220,8 +220,11 @@ class SessionPersistence:
         if len(raw) > MAX_SNAPSHOT_BYTES:
             raise ValueError("Session snapshot exceeds 32 MiB.")
         path = self._file(snapshot_id, create=True)
-        if path.exists() and (path_entry_is_symlink_or_reparse(path) or regular_file_has_multiple_links(path)):
-            raise ValueError("Unsafe session snapshot target.")
+        if path.exists() or path.is_symlink():
+            if path_entry_is_symlink_or_reparse(path) or regular_file_has_multiple_links(path):
+                raise ValueError("Unsafe session snapshot target.")
+            if snapshot_id is None:
+                raise ValueError("Snapshot already exists.")
         temp = path.parent / (".tmp-" + uuid.uuid4().hex)
         try:
             with temp.open("xb") as stream:
