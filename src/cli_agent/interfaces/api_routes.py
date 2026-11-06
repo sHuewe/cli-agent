@@ -468,7 +468,13 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         agent = session.agent
         messages = agent.working_messages_snapshot()
         restored_preview = False
-        if not messages and getattr(session, "_restored_from_snapshot", False):
+        # Evidence projection alone can produce a non-empty snapshot even
+        # though no main loop has run since restoration. Check the raw
+        # working-message state instead, never the projected payload.
+        if (
+            getattr(session, "_restored_from_snapshot", False)
+            and not getattr(agent, "_last_working_messages", None)
+        ):
             preview = getattr(agent, "restored_working_messages_snapshot", None)
             if callable(preview):
                 messages = preview()
