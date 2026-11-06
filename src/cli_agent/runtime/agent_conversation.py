@@ -402,6 +402,21 @@ class ConversationMixin:
         """Return cleanup diagnostics, never include them in model history."""
         return copy.deepcopy(getattr(self, "_cleanup_runs", []))
 
+    def restored_working_messages_snapshot(self) -> list[dict[str, Any]]:
+        """Preview the resumed context from persisted dialogue and current policy.
+
+        Saved sessions deliberately omit the previous run's transient tool
+        calls, reference material, sub-runs and working-message snapshot.
+        This is a *reconstructed preview*, not a replay of that run.
+        The actual model context is built afresh on the next question.
+        """
+        messages = [
+            {"role": "system", "content": self._build_system_prompt()},
+            *copy.deepcopy(self.history),
+        ]
+        evidence = getattr(self, "_evidence_state", None)
+        return evidence.project(messages) if evidence is not None else messages_for_model(messages)
+
     def working_messages_snapshot(self) -> list[dict[str, Any]]:
         """Return the exact model-visible view of the current/last main loop."""
 

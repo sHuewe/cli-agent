@@ -466,8 +466,16 @@ def build_api_handlers(service: Any, ui: dict[str, Any] | None, error: Any, chec
         if session is None:
             return error(404, "Session nicht gefunden.")
         agent = session.agent
+        messages = agent.working_messages_snapshot()
+        restored_preview = False
+        if not messages and getattr(session, "_restored_from_snapshot", False):
+            preview = getattr(agent, "restored_working_messages_snapshot", None)
+            if callable(preview):
+                messages = preview()
+                restored_preview = True
         return JSONResponse({
-            "messages": agent.working_messages_snapshot(),
+            "messages": messages,
+            "restored_preview": restored_preview,
             "sub_runs": agent.sub_run_snapshots() if callable(getattr(agent, "sub_run_snapshots", None)) else [],
             "cleanup_runs": agent.cleanup_run_snapshots() if callable(getattr(agent, "cleanup_run_snapshots", None)) else [],
             "tools": agent.tool_states_snapshot(),
