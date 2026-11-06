@@ -187,7 +187,7 @@ class Workspace(WorkspaceIoMixin):
         # Unrelated .cli-agent/mcp-data-* exceptions remain unaffected.
         if (len(relative.parts) >= 2
                 and relative.parts[0].casefold() == ".cli-agent"
-                and relative.parts[1].casefold() == "ui"):
+                and relative.parts[1].casefold() in {"ui", "sessions"}):
             return True
         if (len(relative.parts) == 2
                 and relative.parts[0].casefold() == ".cli-agent"

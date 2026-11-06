@@ -468,6 +468,7 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
 
     created = []
     shutdowns = []
+    services = []
     opened = []
     previews = []
     model_calls = []
@@ -502,6 +503,7 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
         def __init__(self, factory, **kwargs):
             self.factory = factory
             self.options = kwargs
+            services.append(self)
             self.agent_session = FakeSession()
             self.agent = factory(self.agent_session)
         async def create(self):
@@ -568,6 +570,10 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
         output_target=None, excluded_paths=(tmp_path / "secret",),
     )
     assert shutdowns == [True]
+    from cli_agent.interfaces.session_persistence import SessionPersistence
+    assert len(services) == 1
+    assert isinstance(services[0].options["session_storage"], SessionPersistence)
+    assert services[0].options["session_storage"].workspace == tmp_path.resolve()
     assert len(created) == 1
     assert created[0].args[1] is fake_model
     assert created[0].kwargs["workspace_access"] == os_access

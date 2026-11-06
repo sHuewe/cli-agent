@@ -126,6 +126,82 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
             return error(409, "Session could not be opened.")
         return JSONResponse({"session_id": session.id, "ticket": ticket}, status_code=201)
 
+    async def ui_saved_sessions(_request: Request) -> Response:
+        if service.session_storage is None:
+            return JSONResponse({"sessions": []})
+        try:
+            return JSONResponse({"sessions": service.session_storage.list()})
+        except (OSError, ValueError):
+            return error(500, "Unable to list saved sessions.")
+
+    async def ui_save_session(request: Request) -> Response:
+        if service.session_storage is None:
+            return error(503, "Saved sessions are not configured.")
+        registry = ui["registry"]
+        try:
+            async with checked_json(request) as body:
+                if (set(body) - {"session_id", "name", "snapshot_id"}
+                        or not isinstance(body.get("session_id"), str)
+                        or not isinstance(body.get("name"), str)):
+                    return error(400, "Invalid save request.")
+                sid = body["session_id"]
+                if not registry.is_owner(sid, request.headers.get("x-cli-agent-lease")):
+                    return error(403, "No valid tab lease.")
+                snapshot_id = body.get("snapshot_id")
+                if snapshot_id is not None and not isinstance(snapshot_id, str):
+                    return error(400, "Invalid saved session ID.")
+                target = service.sessions[sid]
+                result = service.session_storage.save(
+                    target, body["name"], snapshot_id=snapshot_id or getattr(target, "saved_snapshot_id", None))
+                target.saved_snapshot_id = result["id"]
+            return JSONResponse(result, status_code=201)
+        except KeyError:
+            return error(404, "Session not found.")
+        except (ValueError, OSError) as exc:
+            return error(400, str(exc))
+        except RuntimeError as exc:
+            return error(409, str(exc))
+
+    async def ui_load_saved_session(request: Request) -> Response:
+        if service.session_storage is None:
+            return error(503, "Saved sessions are not configured.")
+        registry = ui["registry"]
+        try:
+            session = await service.restore_saved_session(request.path_params["snapshot_id"])
+        except FileNotFoundError:
+            return error(404, "Saved session not found.")
+        except OverflowError:
+            return error(429, "Maximum active sessions reached.")
+        except (ValueError, KeyError, OSError):
+            return error(400, "Invalid saved session.")
+        except Exception:
+            return error(503, "Unable to restore saved session.")
+        registry.register(session.id)
+        try:
+            ticket = registry.invitation(session.id)
+        except Exception:
+            registry.forget(session.id)
+            await service.remove(session.id)
+            return error(409, "Unable to open restored session.")
+        return JSONResponse({"session_id": session.id, "ticket": ticket}, status_code=201)
+
+    async def ui_delete_saved_session(request: Request) -> Response:
+        if service.session_storage is None:
+            return error(503, "Saved sessions are not configured.")
+        try:
+            snapshot_id = request.path_params["snapshot_id"]
+            service.session_storage.delete(snapshot_id)
+            # A removed snapshot cannot remain an implicit overwrite target.
+            # Multiple live sessions may have been restored from the same file.
+            for session in service.sessions.values():
+                if getattr(session, "saved_snapshot_id", None) == snapshot_id:
+                    session.saved_snapshot_id = None
+            return Response(status_code=204)
+        except FileNotFoundError:
+            return error(404, "Saved session not found.")
+        except (ValueError, OSError):
+            return error(400, "Invalid saved session.")
+
     async def ui_session_ticket(request: Request) -> Response:
         assert ui is not None
         from cli_agent.interfaces.web_ui_sessions import SessionOccupiedError
@@ -249,6 +325,10 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         ("ui_bootstrap", ui_bootstrap),
         ("ui_sessions", ui_sessions),
         ("ui_session_new", ui_session_new),
+        ("ui_saved_sessions", ui_saved_sessions),
+        ("ui_save_session", ui_save_session),
+        ("ui_load_saved_session", ui_load_saved_session),
+        ("ui_delete_saved_session", ui_delete_saved_session),
         ("ui_session_ticket", ui_session_ticket),
         ("ui_session_delete", ui_session_delete),
         ("ui_release", ui_release),

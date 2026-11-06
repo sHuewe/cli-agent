@@ -161,6 +161,10 @@ def create_app(service: AgentApiService, *, ui: dict[str, Any] | None = None) ->
             Route("/ui/bootstrap", browser["ui_bootstrap"], methods=["POST"]),
             Route("/ui/sessions", browser["ui_sessions"], methods=["GET"]),
             Route("/ui/sessions", browser["ui_session_new"], methods=["POST"]),
+            Route("/ui/saved-sessions", browser["ui_saved_sessions"], methods=["GET"]),
+            Route("/ui/saved-sessions", browser["ui_save_session"], methods=["POST"]),
+            Route("/ui/saved-sessions/{snapshot_id}/load", browser["ui_load_saved_session"], methods=["POST"]),
+            Route("/ui/saved-sessions/{snapshot_id}", browser["ui_delete_saved_session"], methods=["DELETE"]),
             Route("/ui/sessions/{session_id}/ticket", browser["ui_session_ticket"], methods=["POST"]),
             Route("/ui/sessions/{session_id}", browser["ui_session_delete"], methods=["DELETE"]),
             Route("/ui/release", browser["ui_release"], methods=["POST"]),
@@ -278,7 +282,9 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
         session.broker.set_event_sender(session._send_user_message)
         return agent
 
-    return AgentApiService(factory, approval_workspace=approval_workspace)
+    from cli_agent.interfaces.session_persistence import SessionPersistence
+    return AgentApiService(factory, approval_workspace=approval_workspace,
+                           session_storage=SessionPersistence(workspace))
 
 
 def main() -> None:

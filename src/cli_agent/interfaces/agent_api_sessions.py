@@ -703,12 +703,13 @@ class AgentSession:
 
 
 class AgentApiService:
-    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None, output_target: Any = None, initial_commands: tuple[str, ...] = (), debug_errors: bool = False) -> None:
+    def __init__(self, factory: Callable[[AgentSession], Any], *, approval_workspace: Any = None, output_target: Any = None, initial_commands: tuple[str, ...] = (), debug_errors: bool = False, session_storage: Any = None) -> None:
         self.debug_errors = debug_errors
         self.initial_commands = initial_commands
         self.factory = factory
         self.output_target = output_target
         self.approval_workspace = approval_workspace
+        self.session_storage = session_storage
         # Slots are reserved before MCP startup (which may suspend indefinitely).
         self.sessions: dict[str, AgentSession] = {}
         self._lifecycle_lock = asyncio.Lock()
@@ -744,6 +745,23 @@ class AgentApiService:
         if not active:
             await session.close()
             raise RuntimeError("Session wurde beim Start geschlossen.")
+        return session
+
+    async def restore_saved_session(self, snapshot_id: str) -> AgentSession:
+        if self.session_storage is None:
+            raise RuntimeError("Saved sessions are not configured.")
+        restored = self.session_storage.load(snapshot_id)
+        session = await self.create()
+        try:
+            agent = session.agent
+            agent.history[:] = restored["history"]
+            agent._evidence_state = restored["evidence"]
+            session.ui_messages[:] = restored["ui_messages"]
+            session.agui_messages[:] = restored["agui_messages"]
+            session.saved_snapshot_id = snapshot_id
+        except BaseException:
+            await self.remove(session.id)
+            raise
         return session
 
     async def create_standalone_session(self) -> AgentSession:
