@@ -737,9 +737,9 @@ header .app-brand-copy {
 .app-icon {
   display: inline-flex;
   position: relative;
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
+  flex: 0 0 100px;
+  width: 100px;
+  height: 100px;
   align-items: center;
   justify-content: center;
   border-radius: 14px;
