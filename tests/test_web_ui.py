@@ -961,3 +961,32 @@ def test_packaged_base_css_is_unchanged_and_loadable() -> None:
     assert "[hidden] { display: none !important; }" in web_ui.APP_CSS
     assert ".chat > * { flex-shrink: 0; }" in web_ui.APP_CSS
     assert "#composer:focus-within" in web_ui.APP_CSS
+
+
+def test_favicon_matches_icon_configuration_and_stays_customizable():
+    from cli_agent.settings.config import UiConfig
+
+    default = web_ui.render_index_html(UiConfig())
+    assert '<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">' in default
+    disabled_header = web_ui.render_index_html(UiConfig(icon=""))
+    assert '<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">' in disabled_header
+    assert 'class="app-icon"' not in disabled_header
+
+    emoji = web_ui.render_index_html(UiConfig(icon="⚡"))
+    assert '<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=%E2%9A%A1">' in emoji
+
+    for name, content_type in [
+        ("logo.png", "image/png"), ("logo.webp", "image/webp"),
+        ("logo.jpg", "image/jpeg"), ("logo.jpeg", "image/jpeg"),
+    ]:
+        html = web_ui.render_index_html(UiConfig(icon="ui/" + name))
+        assert (
+            f'<link rel="icon" type="{content_type}" href="/assets/ui/icon/{name}">'
+        ) in html
+
+    override = """{% extends "cli_agent/index.html" %}
+{% block favicon %}<link rel="icon" href="/assets/other.svg">{% endblock favicon %}
+"""
+    html = web_ui.render_index_html(UiConfig(), project_template=override)
+    assert '<link rel="icon" href="/assets/other.svg">' in html
+    assert 'href="/assets/favicon.svg"' not in html
