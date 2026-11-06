@@ -121,6 +121,7 @@ class UiButtonsConfig:
 @dataclass(frozen=True)
 class UiConfig:
     title: str = "cli-agent"
+    show_metadata: bool = True
     icon: str | None = None
     default_language: str | None = None
     template: str | None = None
@@ -434,7 +435,7 @@ def _ui_config(values: Any) -> UiConfig:
     """Parse presentation-only browser settings, with strict field validation."""
     if not isinstance(values, dict):
         raise ValueError("[ui] must be a table.")
-    if set(values) - {"title", "icon", "default_language", "template", "theme", "stylesheets", "buttons"}:
+    if set(values) - {"title", "show_metadata", "icon", "default_language", "template", "theme", "stylesheets", "buttons"}:
         raise ValueError("[ui] contains unknown options.")
 
     title = values.get("title", "cli-agent")
@@ -520,7 +521,8 @@ def _ui_config(values: Any) -> UiConfig:
         commands=command_config,
     )
     return UiConfig(
-        title=title, icon=icon, default_language=default_language, template=template,
+        title=title, show_metadata=_bool_value(values, "show_metadata", True, section="ui"),
+        icon=icon, default_language=default_language, template=template,
         theme=theme, stylesheets=tuple(stylesheets), buttons=button_config,
     )
 

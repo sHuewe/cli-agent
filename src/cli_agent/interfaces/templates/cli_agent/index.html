@@ -14,7 +14,6 @@
 {% block extra_head %}{% endblock extra_head %}
 </head>
 <body>
-  <main class="shell">
     {% block header_row %}
     <header>
       {% block app_info %}
@@ -30,7 +29,7 @@
         {% endblock app_icon %}
         <div class="app-brand-copy">
           {% block app_title %}<h1>{{ ui.title }}</h1>{% endblock app_title %}
-          {% block session_meta %}<div id="session-meta" class="meta">Connecting …</div>{% endblock session_meta %}
+          {% block session_meta %}<div id="session-meta" class="meta"{% if not ui.show_metadata %} hidden{% endif %}>Connecting …</div>{% endblock session_meta %}
         </div>
       </div>
       {% endblock app_info %}
@@ -46,6 +45,7 @@
       {% endblock header_buttons %}
     </header>
     {% endblock header_row %}
+  <main class="shell">
     {% block chat %}<section id="chat" class="chat" aria-live="polite"></section>{% endblock chat %}
     {% block commands %}
     <div id="commands"{% if not (ui.buttons.commands.tokens or ui.buttons.commands.add_web_context or ui.buttons.commands.clear_web_context or ui.buttons.commands.enable or ui.buttons.commands.disable) %} hidden{% endif %} class="commands" data-i18n-aria-label="commands.label" aria-label="Local commands">

@@ -11,6 +11,7 @@ Create `.cli-agent/project.toml` in the project workspace:
 ```toml
 [ui]
 title = "SignalDeck AI"
+show_metadata = false
 icon = "⚡"
 default_language = "de"
 theme = "dark"
@@ -34,7 +35,13 @@ disable = true
 ```
 
 All settings are optional. Missing fields inherit global configuration or
-defaults. `theme` accepts `bright` (default) or `dark`. `icon` defaults
+defaults. The default header spans the full viewport width and sits flush
+against the top and side edges. The chat and composer remain width-limited.
+
+Use `show_metadata = false` to hide the model, workspace and MCP summary
+under the title. The title then remains vertically centered alongside the
+icon. The metadata DOM node is retained for the browser JavaScript and Jinja
+block overrides; the option controls its visibility, not its data source. `theme` accepts `bright` (default) or `dark`. `icon` defaults
 to the CSS-drawn logo; `icon = ""` hides it, and a short symbol replaces it.
 The supported languages are `en` and `de`; when the selector is visible a
 saved selection overrides the default, while hiding it enforces the default.

@@ -668,27 +668,36 @@ pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: an
   -webkit-font-smoothing: antialiased;
 }
 body {
-  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   background: var(--ui-page, #f4f6fb);
   color: var(--ui-text, #17243b);
 }
 .shell {
   max-width: 1240px;
   width: 100%;
-  height: 100dvh;
-  min-height: 520px;
-  padding: 18px clamp(14px, 3vw, 36px) 22px;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  padding: 0 clamp(14px, 3vw, 36px) 22px;
   gap: 0;
   overflow: hidden;
 }
-header { position: sticky; top: 0;
+header {
+  position: relative;
   flex: 0 0 auto;
+  width: 100%;
   z-index: 30;
-  padding: 19px 24px;
+  margin: 0;
+  padding: 18px clamp(14px, 3vw, 36px);
   align-items: center;
   background: var(--ui-panel, #fff);
-  border: 1px solid var(--ui-border, #e3e8f0);
-  border-radius: 20px;
+  border: 0;
+  border-bottom: 1px solid var(--ui-border, #e3e8f0);
+  border-radius: 0;
   box-shadow: var(--ui-shadow, 0 8px 28px rgb(25 38 69 / .06));
   gap: 26px;
 }
@@ -925,15 +934,15 @@ pre, .state-content {
   .shell { max-width: 1340px; }
 }
 @media (max-width: 850px) {
-  .shell { padding: 12px 12px 16px; }
+  .shell { padding: 0 12px 16px; }
   header { align-items: stretch; flex-direction: column; gap: 15px; padding: 15px 16px; }
   header .app-brand, header > div:first-child:not(.app-brand) { flex-basis: auto; }
   .header-actions { justify-content: flex-start; flex-basis: auto; }
   .chat { padding: 20px 5px; }
 }
 @media (max-width: 640px) {
-  .shell { height: 100dvh; min-height: 400px; padding: 8px 8px 12px; }
-  header { padding: 12px; border-radius: 15px; }
+  .shell { height: auto; min-height: 0; padding: 0 8px 12px; }
+  header { padding: 12px; border-radius: 0; }
   header .app-brand { gap: 12px; }
   .app-icon { flex-basis: 34px; width: 34px; height: 34px; border-radius: 11px; font-size: 1.12rem; }
   .app-icon::after { width: 12px; height: 12px; }
@@ -947,6 +956,29 @@ pre, .state-content {
   #composer { grid-template-columns: minmax(0, 1fr) auto; gap: 4px; padding: 6px; }
   #prompt { min-height: 60px; }
   #send { min-width: 67px; padding: 9px 11px; }
+}
+/* When the viewport is short (landscape phones, compact windows or a
+   reduced visual viewport), the document must remain scrollable. Do not
+   clip the composer behind the fixed-height app shell. The chat retains
+   its own bounded scroll area even when the page needs to scroll. */
+@media (max-height: 700px) {
+  body {
+    height: auto;
+    min-height: 100dvh;
+    overflow-y: auto;
+  }
+  .shell {
+    flex: 0 0 auto;
+    min-height: 0;
+    overflow: visible;
+  }
+  .chat {
+    flex: 0 0 auto;
+    min-height: 0;
+    max-height: clamp(80px, 35dvh, 220px);
+    overflow-y: auto;
+  }
+  .chat:empty::before { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   button { transition: none; }

@@ -771,3 +771,77 @@ def test_default_header_icon_is_left_of_title_and_metadata():
     assert "header .app-brand, header > div:first-child {" not in web_ui.APP_CSS
     assert "header .app-brand-copy {" in web_ui.APP_CSS
     assert "flex-direction: row;" in web_ui.APP_CSS
+
+
+def test_default_header_spans_viewport_and_chat_remains_bounded():
+    from cli_agent.settings.config import UiConfig
+
+    html = web_ui.render_index_html(UiConfig())
+    # Header is a direct body child, not inside the width-limited chat shell.
+    assert html.index("<body>") < html.index("<header>") < html.index('<main class="shell">')
+    assert html.index("</header>") < html.index('<main class="shell">')
+    css = web_ui.APP_CSS
+    assert "width: 100%;" in css
+    assert "flex-direction: column;" in css
+    assert "height: 100dvh;" in css
+    assert "border-radius: 0;" in css
+    assert "max-width: 1240px;" in css
+    assert ".chat > * { flex-shrink: 0; }" in css
+    assert "height: auto;" in css
+
+
+def test_header_metadata_visibility_and_centered_brand_title():
+    from cli_agent.settings.config import UiConfig
+
+    visible = web_ui.render_index_html(UiConfig())
+    hidden = web_ui.render_index_html(UiConfig(show_metadata=False))
+    assert 'id="session-meta" class="meta">Connecting' in visible
+    assert 'id="session-meta" class="meta" hidden>Connecting' in hidden
+    assert hidden.count('id="session-meta"') == 1
+    assert '<h1>cli-agent</h1>' in hidden
+    assert 'class="app-icon"' in hidden
+    # app-brand remains horizontally aligned; title is centered vertically
+    # beside its icon when the metadata row is hidden.
+    css = web_ui.APP_CSS
+    assert "header .app-brand-copy {" in css
+    assert "justify-content: center;" in css
+    assert "align-items: center;" in css
+
+
+def test_project_template_works_with_hidden_metadata():
+    from cli_agent.settings.config import UiConfig
+
+    override = """{% extends "cli_agent/index.html" %}
+{% block app_info %}
+<div class="app-brand">
+  {{ self.app_icon() }}
+  <div class="app-brand-copy">{{ self.app_title() }}{{ self.session_meta() }}</div>
+</div>
+{% endblock %}
+"""
+    html = web_ui.render_index_html(
+        UiConfig(show_metadata=False, icon="⚡"), project_template=override,
+    )
+    assert 'id="session-meta" class="meta" hidden' in html
+    assert '<h1>cli-agent</h1>' in html
+
+
+def test_short_viewport_fallback_keeps_composer_accessible():
+    """A short/mobile viewport must scroll the page, never clip the composer."""
+    css = web_ui.APP_CSS
+    start = css.index("@media (max-height: 700px)")
+    end = css.index("@media (prefers-reduced-motion: reduce)", start)
+    short_viewport = css[start:end]
+
+    # The normal full-height page is not changed for ordinary desktop layouts.
+    assert "height: 100dvh;" in css[:start]
+    assert "overflow: hidden;" in css[:start]
+
+    # In compact layouts, scrolling the document keeps the composer
+    # reachable regardless of header/command wrap and keyboard height.
+    assert "height: auto;" in short_viewport
+    assert "overflow-y: auto;" in short_viewport
+    assert "overflow: visible;" in short_viewport
+    assert "max-height: clamp(80px, 35dvh, 220px);" in short_viewport
+    assert "min-height: 0;" in short_viewport
+    assert "flex: 0 0 auto;" in short_viewport
