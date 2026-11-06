@@ -97,5 +97,12 @@
   "error.invalidCommand": "Invalid local command.",
   "error.invalidServerResponse": "Invalid response from the local Web UI server.",
   "error.unknown": "Unknown error.",
-  "error.popupBlocked": "The browser blocked opening a new tab."
+  "error.popupBlocked": "The browser blocked opening a new tab.",
+  "saved.title": "Saved sessions",
+  "saved.namePrompt": "Name of the saved session",
+  "saved.defaultName": "My session",
+  "saved.save": "Save",
+  "saved.load": "Load",
+  "saved.delete": "Delete",
+  "saved.confirmDelete": "Permanently delete this saved session?"
 }
