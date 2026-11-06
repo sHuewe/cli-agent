@@ -189,7 +189,13 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
         if service.session_storage is None:
             return error(503, "Saved sessions are not configured.")
         try:
-            service.session_storage.delete(request.path_params["snapshot_id"])
+            snapshot_id = request.path_params["snapshot_id"]
+            service.session_storage.delete(snapshot_id)
+            # A removed snapshot cannot remain an implicit overwrite target.
+            # Multiple live sessions may have been restored from the same file.
+            for session in service.sessions.values():
+                if getattr(session, "saved_snapshot_id", None) == snapshot_id:
+                    session.saved_snapshot_id = None
             return Response(status_code=204)
         except FileNotFoundError:
             return error(404, "Saved session not found.")
