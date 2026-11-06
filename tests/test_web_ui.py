@@ -824,3 +824,24 @@ def test_project_template_works_with_hidden_metadata():
     )
     assert 'id="session-meta" class="meta" hidden' in html
     assert '<h1>cli-agent</h1>' in html
+
+
+def test_short_viewport_fallback_keeps_composer_accessible():
+    """A short/mobile viewport must scroll the page, never clip the composer."""
+    css = web_ui.APP_CSS
+    start = css.index("@media (max-height: 700px)")
+    end = css.index("@media (prefers-reduced-motion: reduce)", start)
+    short_viewport = css[start:end]
+
+    # The normal full-height page is not changed for ordinary desktop layouts.
+    assert "height: 100dvh;" in css[:start]
+    assert "overflow: hidden;" in css[:start]
+
+    # In compact layouts, scrolling the document keeps the composer
+    # reachable regardless of header/command wrap and keyboard height.
+    assert "height: auto;" in short_viewport
+    assert "overflow-y: auto;" in short_viewport
+    assert "overflow: visible;" in short_viewport
+    assert "max-height: clamp(80px, 35dvh, 220px);" in short_viewport
+    assert "min-height: 0;" in short_viewport
+    assert "flex: 0 0 auto;" in short_viewport

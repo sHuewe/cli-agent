@@ -957,6 +957,29 @@ pre, .state-content {
   #prompt { min-height: 60px; }
   #send { min-width: 67px; padding: 9px 11px; }
 }
+/* When the viewport is short (landscape phones, compact windows or a
+   reduced visual viewport), the document must remain scrollable. Do not
+   clip the composer behind the fixed-height app shell. The chat retains
+   its own bounded scroll area even when the page needs to scroll. */
+@media (max-height: 700px) {
+  body {
+    height: auto;
+    min-height: 100dvh;
+    overflow-y: auto;
+  }
+  .shell {
+    flex: 0 0 auto;
+    min-height: 0;
+    overflow: visible;
+  }
+  .chat {
+    flex: 0 0 auto;
+    min-height: 0;
+    max-height: clamp(80px, 35dvh, 220px);
+    overflow-y: auto;
+  }
+  .chat:empty::before { display: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   button { transition: none; }
 }
