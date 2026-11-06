@@ -990,3 +990,35 @@ def test_favicon_matches_icon_configuration_and_stays_customizable():
     html = web_ui.render_index_html(UiConfig(), project_template=override)
     assert '<link rel="icon" href="/assets/other.svg">' in html
     assert 'href="/assets/favicon.svg"' not in html
+
+
+def test_composer_placeholder_uses_project_title_and_escapes_markup():
+    from cli_agent.settings.config import UiConfig
+
+    default = web_ui.render_index_html(UiConfig())
+    assert 'data-app-title="cli-agent"' in default
+    assert 'placeholder="Message to cli-agent"' in default
+
+    custom = web_ui.render_index_html(UiConfig(title="SignalDeck"))
+    assert 'data-app-title="SignalDeck"' in custom
+    assert 'placeholder="Message to SignalDeck"' in custom
+
+    escaped = web_ui.render_index_html(UiConfig(title="A & B"))
+    assert 'data-app-title="A &amp; B"' in escaped
+    assert 'placeholder="Message to A &amp; B"' in escaped
+
+
+def test_default_icon_inner_shape_scales_with_enlarged_header():
+    from importlib.resources import files
+
+    css = files("cli_agent.interfaces").joinpath(
+        "static", "app.css",
+    ).read_text(encoding="utf-8")
+    block = css.split(".app-icon::after {", 1)[1].split("}", 1)[0]
+    assert "width: 38px;" in block
+    assert "height: 38px;" in block
+    assert "border: 5px solid #fff;" in block
+    assert "border-radius: 11px;" in block
+    assert "transform: rotate(-14deg);" in block
+    # Custom image icons still suppress the CSS shape.
+    assert ".app-icon-custom::after { content: none; }" in css
