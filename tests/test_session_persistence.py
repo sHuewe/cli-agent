@@ -140,5 +140,26 @@ async def test_browser_save_and_restore_requires_owning_lease(tmp_path):
             assert storage.list()[0]["id"] == snapshot_id
             assert (await client.delete(f"/ui/saved-sessions/{snapshot_id}",
                                         headers=headers)).status_code == 204
+            # Both the original and the restored live session referenced the
+            # deleted snapshot. Neither may try to overwrite it on next save.
+            assert original.saved_snapshot_id is None
+            assert service.sessions[restored_id].saved_snapshot_id is None
+            again = await client.post("/ui/saved-sessions", headers=own,
+                                      json={"session_id": original.id,
+                                            "name": "Saved again"})
+            assert again.status_code == 201, again.text
+            assert again.json()["id"] != snapshot_id
+            ticket = restored.json()["ticket"]
+            restored_boot = await client.post("/ui/bootstrap", headers=headers,
+                                              json={"ticket": ticket})
+            assert restored_boot.status_code == 200
+            restored_lease = restored_boot.json()["lease"]
+            saved_restored = await client.post(
+                "/ui/saved-sessions",
+                headers={**headers, "X-Cli-Agent-Lease": restored_lease},
+                json={"session_id": restored_id, "name": "Restored and saved"},
+            )
+            assert saved_restored.status_code == 201, saved_restored.text
+            assert saved_restored.json()["id"] not in {snapshot_id, again.json()["id"]}
     finally:
         await service.shutdown()
