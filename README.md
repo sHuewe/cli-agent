@@ -166,6 +166,7 @@ JavaScript. Put the following in the workspace's
 ```toml
 [ui]
 title = "SignalDeck AI"
+show_metadata = false
 default_language = "de"
 
 [ui.buttons]
@@ -185,7 +186,11 @@ disable = false
 ```
 
 All fields are optional. The default title is `cli-agent`; all controls
-remain visible unless explicitly disabled. Without a configured default
+remain visible unless explicitly disabled. The header spans the complete
+window width with no outer top/side margin; the conversation area stays
+centered and width-limited. `show_metadata = false` hides the workspace,
+model and MCP description beneath the title, vertically centering the title
+next to its icon. The default is `true`. Without a configured default
 language the browser's preferred language is used, as before. When the
 language selector is visible, a previously saved manual selection takes
 precedence over `default_language`. When the selector is hidden, the

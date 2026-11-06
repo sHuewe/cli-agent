@@ -561,3 +561,29 @@ def test_image_icon_rejects_invalid_file_and_links(tmp_path: Path):
         pytest.skip("Symlinks not available")
     with pytest.raises(ValueError, match="symlink|junction"):
         read_project_ui_icon(tmp_path, "ui/logo.png")
+
+
+@pytest.mark.parametrize("setting", [
+    "show_metadata = 1",
+    'show_metadata = "false"',
+    "show_metadata = []",
+])
+def test_project_ui_rejects_non_boolean_metadata_visibility(
+    tmp_path: Path, setting: str,
+):
+    config_file = tmp_path / "global.toml"
+    config_file.write_text("", encoding="utf-8")
+    _project(tmp_path, "[ui]\n" + setting + "\n")
+    with pytest.raises(ValueError, match="ui.show_metadata"):
+        load_config(config_file, workspace=tmp_path)
+
+
+def test_project_ui_metadata_visibility_inherits_from_global_config(tmp_path: Path):
+    config_file = tmp_path / "global.toml"
+    config_file.write_text('[ui]\nshow_metadata = false\ntitle = "Global"\n', encoding="utf-8")
+    _project(tmp_path, '[ui]\ntitle = "Project"\n')
+    ui = load_config(config_file, workspace=tmp_path).ui
+    assert ui.title == "Project"
+    assert ui.show_metadata is False
+    _project(tmp_path, "[ui]\nshow_metadata = true\n")
+    assert load_config(config_file, workspace=tmp_path).ui.show_metadata is True
