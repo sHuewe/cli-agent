@@ -255,3 +255,47 @@ console.log("ok");
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_custom_end_session_label_survives_app_startup_and_language_changes():
+    """app.js must not replace a project label with the i18n translation."""
+    from cli_agent.interfaces.web_ui import render_index_html
+    from cli_agent.settings.config import UiButtonsConfig, UiConfig
+
+    html = render_index_html(
+        UiConfig(buttons=UiButtonsConfig(labels={"end_session": "Schließen"})),
+    )
+    from html.parser import HTMLParser
+
+    class ButtonParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.in_quit = False
+            self.quit_attrs = {}
+            self.quit_text = []
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == "button" and attrs.get("id") == "quit":
+                self.in_quit = True
+                self.quit_attrs = attrs
+
+        def handle_data(self, data):
+            if self.in_quit:
+                self.quit_text.append(data)
+
+        def handle_endtag(self, tag):
+            if self.in_quit and tag == "button":
+                self.in_quit = False
+
+    parser = ButtonParser()
+    parser.feed(html)
+    assert "".join(parser.quit_text) == "Schließen"
+    assert "data-i18n" not in parser.quit_attrs
+
+    js = files("cli_agent.interfaces").joinpath("static", "app.js").read_text(encoding="utf-8")
+    assert 'quit.textContent = t("session.end")' not in js
+    assert 'const quit = document.getElementById("quit");' in js
+    # The normal translation pipeline remains responsible for default labels.
+    i18n = files("cli_agent.interfaces").joinpath("static", "i18n.js").read_text(encoding="utf-8")
+    assert 'document.querySelectorAll("[data-i18n]")' in i18n

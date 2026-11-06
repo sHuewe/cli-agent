@@ -902,3 +902,16 @@ def test_project_ui_language_selector_label_can_be_customized():
     assert "Sprache</span>" in html
     assert 'data-i18n="language.label"' not in html
     assert 'id="language-select"' in html
+
+
+def test_end_session_button_default_is_still_localizable():
+    from cli_agent.settings.config import UiButtonsConfig, UiConfig
+
+    default = web_ui.render_index_html(UiConfig())
+    assert 'data-i18n="session.end">End session</button>' in default
+    custom = web_ui.render_index_html(
+        UiConfig(buttons=UiButtonsConfig(labels={"end_session": "Schließen"})),
+    )
+    assert '>Schließen</button>' in custom
+    assert 'data-i18n="session.end"' not in custom
+    assert 'id="quit"' in custom
