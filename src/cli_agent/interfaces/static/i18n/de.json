@@ -97,5 +97,12 @@
   "error.invalidCommand": "Ungültiger lokaler Befehl.",
   "error.invalidServerResponse": "Ungültige Antwort vom lokalen Web-UI-Server.",
   "error.unknown": "Unbekannter Fehler.",
-  "error.popupBlocked": "Browser hat das Öffnen eines neuen Tabs blockiert."
+  "error.popupBlocked": "Browser hat das Öffnen eines neuen Tabs blockiert.",
+  "saved.title": "Gespeicherte Sessions",
+  "saved.namePrompt": "Name der gespeicherten Session",
+  "saved.defaultName": "Meine Session",
+  "saved.save": "Speichern",
+  "saved.load": "Laden",
+  "saved.delete": "Löschen",
+  "saved.confirmDelete": "Gespeicherte Session endgültig löschen?"
 }
