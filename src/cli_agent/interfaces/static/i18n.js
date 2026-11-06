@@ -86,7 +86,9 @@
     for (const node of document.querySelectorAll("[data-i18n-placeholder]")) {
       const key = node.dataset.i18nPlaceholder;
       if (messages.get(locale)?.[key] !== undefined || messages.get("en")?.[key] !== undefined) {
-        node.setAttribute("placeholder", t(key));
+        node.setAttribute("placeholder", t(key, {
+          name: document.documentElement.dataset?.appTitle || "cli-agent"
+        }));
       }
     }
     for (const node of document.querySelectorAll("[data-i18n-aria-label]")) {

@@ -3,12 +3,15 @@
   "use strict";
   const i18n = window.cliAgentI18n;
   const t = (key, values) => i18n.t(key, values);
+  const appTitle = document.documentElement.dataset.appTitle || "cli-agent";
+  const composerPlaceholder = () => t("composer.placeholder", {name: appTitle});
 
   void i18n.ready.then(() => {
 
   const chat = document.getElementById("chat");
   const form = document.getElementById("composer");
   const prompt = document.getElementById("prompt");
+  prompt.placeholder = composerPlaceholder();
   const send = document.getElementById("send");
   const stopRun = document.getElementById("stop-run");
   const quit = document.getElementById("quit");
@@ -27,6 +30,7 @@
   const showWorkingContext = document.getElementById("show-working-context");
   const workingContextDialog = document.getElementById("working-context-dialog");
   const workingMessagesJson = document.getElementById("working-messages-json");
+  const contextRestoredNote = document.getElementById("context-restored-note");
   const contextRunSelect = document.getElementById("context-run-select");
   const cleanupProcessingResult = document.getElementById("cleanup-processing-result");
   let currentContextPayload = null;
@@ -59,6 +63,7 @@
     const cleanupRun = (currentContextPayload.cleanup_runs || []).find(item => item.id === selected);
     const run = cleanupRun || subRun;
     workingMessagesJson.textContent = JSON.stringify(run ? run.messages : currentContextPayload.messages, null, 2);
+    contextRestoredNote.hidden = !(selected === "main" && currentContextPayload.restored_preview === true);
     cleanupProcessingResult.classList.toggle("hidden", !cleanupRun);
     cleanupProcessingResult.classList.toggle("error", Boolean(cleanupRun &&
       ["invalid", "failed"].includes(cleanupRun.processing_result?.status)));
@@ -336,7 +341,7 @@
 
   function resetPendingCommand() {
     pendingCommand = null;
-    prompt.placeholder = t("composer.placeholder");
+    prompt.placeholder = composerPlaceholder();
     cancelCommand.classList.add("hidden");
   }
 
@@ -1248,7 +1253,7 @@
   }
   window.addEventListener("cli-agent-language-change", () => {
     if (!pendingCommand) {
-      prompt.placeholder = t("composer.placeholder");
+      prompt.placeholder = composerPlaceholder();
     } else {
       const spec = COMMANDS[pendingCommand];
       prompt.placeholder = spec.placeholder === "https://…" ? spec.placeholder : t(spec.placeholder);
