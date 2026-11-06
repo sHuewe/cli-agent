@@ -365,3 +365,32 @@ console.log("ok");
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_composer_placeholder_uses_configured_title_across_i18n_changes():
+    from importlib.resources import files
+    from cli_agent.interfaces.web_ui_api import API_APP_JS, API_I18N_JS
+
+    import json
+    catalog_dir = files("cli_agent.interfaces").joinpath("static", "i18n")
+    en = json.loads(catalog_dir.joinpath("en.json").read_text(encoding="utf-8"))
+    de = json.loads(catalog_dir.joinpath("de.json").read_text(encoding="utf-8"))
+    assert en["composer.placeholder"].format(name="SignalDeck") == "Message to SignalDeck"
+    assert de["composer.placeholder"].format(name="SignalDeck") == "Nachricht an SignalDeck"
+    assert 'const appTitle = document.documentElement.dataset.appTitle || "cli-agent"' in API_APP_JS
+    assert 't("composer.placeholder", {name: appTitle})' in API_APP_JS
+    assert 'prompt.placeholder = composerPlaceholder();' in API_APP_JS
+    assert 'prompt.placeholder = t("composer.placeholder");' not in API_APP_JS
+    assert 'document.documentElement.dataset?.appTitle || "cli-agent"' in API_I18N_JS
+
+
+def test_restored_context_has_explicit_preview_indicator_in_ui():
+    from cli_agent.interfaces.web_ui import render_index_html
+    from cli_agent.interfaces.web_ui_api import API_APP_JS
+    from cli_agent.settings.config import UiConfig
+
+    page = render_index_html(UiConfig())
+    assert 'id="context-restored-note"' in page
+    assert 'data-i18n="context.restoredPreview"' in page
+    assert 'currentContextPayload.restored_preview === true' in API_APP_JS
+    assert 'contextRestoredNote.hidden =' in API_APP_JS

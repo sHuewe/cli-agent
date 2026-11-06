@@ -174,10 +174,10 @@ header .app-brand-copy {
 }
 .app-icon::after {
   content: "";
-  width: 14px;
-  height: 14px;
-  border: 3px solid #fff;
-  border-radius: 5px;
+  width: 38px;
+  height: 38px;
+  border: 5px solid #fff;
+  border-radius: 11px;
   transform: rotate(-14deg);
 }
 .app-icon-custom::after { content: none; }

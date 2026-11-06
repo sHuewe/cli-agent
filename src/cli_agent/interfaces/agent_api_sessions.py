@@ -756,9 +756,17 @@ class AgentApiService:
             agent = session.agent
             agent.history[:] = restored["history"]
             agent._evidence_state = restored["evidence"]
+            # A freshly initialized agent might have performed startup
+            # commands. Their working context is not from the saved session.
+            # Clear it so the UI can show the reconstructed persisted state.
+            if hasattr(agent, "_last_working_messages"):
+                agent._last_working_messages = []
+            if hasattr(agent, "_last_working_tools"):
+                agent._last_working_tools = []
             session.ui_messages[:] = restored["ui_messages"]
             session.agui_messages[:] = restored["agui_messages"]
             session.saved_snapshot_id = snapshot_id
+            session._restored_from_snapshot = True
         except BaseException:
             await self.remove(session.id)
             raise

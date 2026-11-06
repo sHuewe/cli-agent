@@ -163,3 +163,104 @@ async def test_browser_save_and_restore_requires_owning_lease(tmp_path):
             assert saved_restored.json()["id"] not in {snapshot_id, again.json()["id"]}
     finally:
         await service.shutdown()
+
+
+def test_restored_context_preview_uses_current_policy_and_saved_history():
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+
+    class Agent(ConversationMixin):
+        history = [
+            {"role": "user", "content": "Earlier question"},
+            {"role": "assistant", "content": "Earlier answer"},
+        ]
+        _evidence_state = EvidenceState()
+
+        def _build_system_prompt(self):
+            return "Current configured policy"
+
+    agent = Agent()
+    before = list(agent.history)
+    preview = agent.restored_working_messages_snapshot()
+    assert preview[0] == {"role": "system", "content": "Current configured policy"}
+    assert preview[1:] == before
+    preview[1]["content"] = "Modified preview"
+    assert agent.history == before
+
+
+@pytest.mark.asyncio
+async def test_saved_session_working_context_shows_reconstructed_preview(tmp_path):
+    class ContextAgent(FakeAgent):
+        def __init__(self):
+            super().__init__()
+            # Simulate working messages from agent initial commands: they
+            # must not leak into a restored session's diagnostic view.
+            self._last_working_messages = [
+                {"role": "user", "content": "Startup initialization"},
+            ]
+            self._last_working_tools = [{"type": "function"}]
+
+        def working_messages_snapshot(self):
+            if self._last_working_messages:
+                return list(self._last_working_messages)
+            # Evidence can generate a non-empty projection even when no
+            # model loop has run yet. This must not mask restored history.
+            return [{"role": "user", "content": "Evidence-only projection"}]
+
+        def restored_working_messages_snapshot(self):
+            return [
+                {"role": "system", "content": "Current policy"},
+                *self.history,
+            ]
+
+        def tool_states_snapshot(self):
+            return []
+
+        def context_states_snapshot(self):
+            return []
+
+        def okf_status_snapshot(self):
+            return {"configured": False}
+
+    storage = SessionPersistence(tmp_path)
+    service = AgentApiService(lambda session: ContextAgent(), session_storage=storage)
+    try:
+        original = await service.create()
+        original.agent.history = [
+            {"role": "user", "content": "Saved question"},
+            {"role": "assistant", "content": "Saved answer"},
+        ]
+        original.ui_messages[:] = list(original.agent.history)
+        saved = storage.save(original, "Saved investigation")
+        restored = await service.restore_saved_session(saved["id"])
+        assert restored._restored_from_snapshot is True
+        assert restored.agent._last_working_messages == []
+        assert restored.agent._last_working_tools == []
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(service)),
+            base_url="http://127.0.0.1",
+        ) as client:
+            url = f"/sessions/{restored.id}/working-context"
+            resp = await client.get(
+                url, headers={"Authorization": "Bearer " + service.token},
+            )
+            assert resp.status_code == 200, resp.text
+            payload = resp.json()
+            assert payload["restored_preview"] is True
+            assert payload["messages"] == [
+                {"role": "system", "content": "Current policy"},
+                *original.agent.history,
+            ]
+            assert payload["tools"] == []
+            # Once a real main loop has populated working messages, the
+            # original diagnostics take precedence over the preview.
+            restored.agent._last_working_messages = [
+                {"role": "user", "content": "Actual model context"},
+            ]
+            resp = await client.get(
+                url, headers={"Authorization": "Bearer " + service.token},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["restored_preview"] is False
+            assert resp.json()["messages"] == restored.agent._last_working_messages
+    finally:
+        await service.shutdown()
