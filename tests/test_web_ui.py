@@ -773,7 +773,7 @@ def test_default_header_icon_is_left_of_title_and_metadata():
     assert "flex-direction: row;" in web_ui.APP_CSS
 
 
-def test_default_header_spans_viewport_and_chat_remains_bounded():
+def test_header_and_chat_scrollbar_span_viewport_but_chat_content_is_centered():
     from cli_agent.settings.config import UiConfig
 
     html = web_ui.render_index_html(UiConfig())
@@ -785,7 +785,21 @@ def test_default_header_spans_viewport_and_chat_remains_bounded():
     assert "flex-direction: column;" in css
     assert "height: 100dvh;" in css
     assert "border-radius: 0;" in css
-    assert "max-width: 1240px;" in css
+    modern = css[css.index("/* Modern application layout."):]
+    shell = modern[modern.index(".shell {"):modern.index("\nheader {")]
+    chat = modern[modern.index(".chat {"):modern.index("/* The chat is the scroll container.")]
+    assert "max-width: none;" in shell
+    assert "width: 100%;" in shell
+    assert "padding: 0 0 22px;" in shell
+    assert "--ui-content-width: 1168px;" in shell
+    assert "width: 100%;" in chat
+    assert "overflow-y: auto;" in chat
+    assert "var(--ui-content-width)" in chat
+    assert ".shell > .commands, .shell > #composer {" in modern
+    assert "align-self: center;" in modern
+    assert ".shell { --ui-content-width: 1268px; }" in modern
+    assert "width: calc(100% - 24px);" in modern
+    assert "width: calc(100% - 16px);" in modern
     assert ".chat > * { flex-shrink: 0; }" in css
     assert "height: auto;" in css
 

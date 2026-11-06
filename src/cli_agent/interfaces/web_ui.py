@@ -677,14 +677,20 @@ body {
   color: var(--ui-text, #17243b);
 }
 .shell {
-  max-width: 1240px;
+  /* The chat scroll viewport spans the window; only its content is narrow. */
+  --ui-content-width: 1168px;
+  max-width: none;
   width: 100%;
   flex: 1 1 auto;
   min-height: 0;
   height: auto;
-  padding: 0 clamp(14px, 3vw, 36px) 22px;
+  padding: 0 0 22px;
   gap: 0;
   overflow: hidden;
+}
+.shell > .commands, .shell > #composer {
+  width: min(var(--ui-content-width), calc(100% - 2 * clamp(14px, 3vw, 36px)));
+  align-self: center;
 }
 header {
   position: relative;
@@ -792,7 +798,13 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focu
 .chat {
   flex: 1 1 auto;
   min-height: 120px;
-  padding: 28px clamp(4px, 2.5vw, 28px) 24px;
+  width: 100%;
+  /* Match the former centered content column without constraining the
+     scrollable element itself. Its scrollbar now sits at the viewport edge. */
+  padding: 28px max(
+    calc(clamp(14px, 3vw, 36px) + clamp(4px, 2.5vw, 28px)),
+    calc((100% - var(--ui-content-width)) / 2 + clamp(4px, 2.5vw, 28px))
+  ) 24px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
@@ -931,17 +943,20 @@ pre, .state-content {
 .context-tabs button.active { background: var(--ui-accent, #4169e1); color: var(--ui-button-text, #fff); }
 .cleanup-processing-result { background: var(--ui-subtle, #f3f6fc); border-color: var(--ui-border, #e3e8f0); }
 @media (min-width: 1450px) {
-  .shell { max-width: 1340px; }
+  .shell { --ui-content-width: 1268px; }
 }
 @media (max-width: 850px) {
-  .shell { padding: 0 12px 16px; }
+  .shell { padding: 0 0 16px; }
+  .shell > .commands, .shell > #composer { width: calc(100% - 24px); }
   header { align-items: stretch; flex-direction: column; gap: 15px; padding: 15px 16px; }
   header .app-brand, header > div:first-child:not(.app-brand) { flex-basis: auto; }
   .header-actions { justify-content: flex-start; flex-basis: auto; }
-  .chat { padding: 20px 5px; }
+  .chat { padding: 20px 17px; }
 }
 @media (max-width: 640px) {
-  .shell { height: auto; min-height: 0; padding: 0 8px 12px; }
+  .shell { height: auto; min-height: 0; padding: 0 0 12px; }
+  .shell > .commands, .shell > #composer { width: calc(100% - 16px); }
+  .chat { padding-inline: 13px; }
   header { padding: 12px; border-radius: 0; }
   header .app-brand { gap: 12px; }
   .app-icon { flex-basis: 34px; width: 34px; height: 34px; border-radius: 11px; font-size: 1.12rem; }
