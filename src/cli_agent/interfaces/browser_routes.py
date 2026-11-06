@@ -128,7 +128,7 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
 
     async def ui_saved_sessions(_request: Request) -> Response:
         if service.session_storage is None:
-            return error(503, "Saved sessions are not configured.")
+            return JSONResponse({"sessions": []})
         try:
             return JSONResponse({"sessions": service.session_storage.list()})
         except (OSError, ValueError):
@@ -150,8 +150,10 @@ def build_browser_handlers(service: Any, ui: dict[str, Any], error: Any, checked
                 snapshot_id = body.get("snapshot_id")
                 if snapshot_id is not None and not isinstance(snapshot_id, str):
                     return error(400, "Invalid saved session ID.")
+                target = service.sessions[sid]
                 result = service.session_storage.save(
-                    service.sessions[sid], body["name"], snapshot_id=snapshot_id)
+                    target, body["name"], snapshot_id=snapshot_id or getattr(target, "saved_snapshot_id", None))
+                target.saved_snapshot_id = result["id"]
             return JSONResponse(result, status_code=201)
         except KeyError:
             return error(404, "Session not found.")
