@@ -758,6 +758,7 @@ class AgentApiService:
             agent._evidence_state = restored["evidence"]
             session.ui_messages[:] = restored["ui_messages"]
             session.agui_messages[:] = restored["agui_messages"]
+            session.saved_snapshot_id = snapshot_id
         except BaseException:
             await self.remove(session.id)
             raise
