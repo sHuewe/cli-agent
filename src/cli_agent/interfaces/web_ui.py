@@ -677,14 +677,20 @@ body {
   color: var(--ui-text, #17243b);
 }
 .shell {
-  max-width: 1240px;
+  /* The chat scroll viewport spans the window; only its content is narrow. */
+  --ui-content-width: 1168px;
+  max-width: none;
   width: 100%;
   flex: 1 1 auto;
   min-height: 0;
   height: auto;
-  padding: 0 clamp(14px, 3vw, 36px) 22px;
+  padding: 0 0 22px;
   gap: 0;
   overflow: hidden;
+}
+.shell > .commands, .shell > #composer {
+  width: min(var(--ui-content-width), calc(100% - 2 * clamp(14px, 3vw, 36px)));
+  align-self: center;
 }
 header {
   position: relative;
@@ -792,7 +798,13 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focu
 .chat {
   flex: 1 1 auto;
   min-height: 120px;
-  padding: 28px clamp(4px, 2.5vw, 28px) 24px;
+  width: 100%;
+  /* Match the former centered content column without constraining the
+     scrollable element itself. Its scrollbar now sits at the viewport edge. */
+  padding: 28px max(
+    calc(clamp(14px, 3vw, 36px) + clamp(4px, 2.5vw, 28px)),
+    calc((100% - var(--ui-content-width)) / 2 + clamp(4px, 2.5vw, 28px))
+  ) 24px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
@@ -904,14 +916,46 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focu
 #prompt::placeholder { color: var(--ui-muted, #64748b); opacity: .85; }
 #prompt:focus-visible { outline: none; }
 #composer:focus-within { border-color: var(--ui-accent-border, #ccd7ff); box-shadow: 0 0 0 3px var(--ui-focus-ring, rgb(65 105 225 / .12)), var(--ui-shadow-strong, 0 10px 34px rgb(25 38 69 / .09)); }
+/* Send and Stop are mutually exclusive actions in the same grid cell.
+   Keep the original button IDs for the existing JavaScript and Jinja UI. */
+#composer > #prompt { grid-column: 1; grid-row: 1; }
+#composer > #send, #composer > #stop-run {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 96px;
+  align-self: stretch;
+  justify-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: .9rem;
+}
 #send {
   background: var(--ui-accent, #4169e1);
   color: var(--ui-button-text, #fff);
   border: 0;
-  min-width: 96px;
-  font-size: .9rem;
 }
-#stop-run { min-width: 82px; align-self: center; }
+#send::before {
+  content: "↑";
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1;
+}
+#stop-run {
+  background: #b43e49;
+  border: 0;
+  color: #fff;
+}
+#stop-run::before {
+  content: "";
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
 dialog {
   background: var(--ui-panel, #fff);
   color: var(--ui-text, #17243b);
@@ -931,17 +975,20 @@ pre, .state-content {
 .context-tabs button.active { background: var(--ui-accent, #4169e1); color: var(--ui-button-text, #fff); }
 .cleanup-processing-result { background: var(--ui-subtle, #f3f6fc); border-color: var(--ui-border, #e3e8f0); }
 @media (min-width: 1450px) {
-  .shell { max-width: 1340px; }
+  .shell { --ui-content-width: 1268px; }
 }
 @media (max-width: 850px) {
-  .shell { padding: 0 12px 16px; }
+  .shell { padding: 0 0 16px; }
+  .shell > .commands, .shell > #composer { width: calc(100% - 24px); }
   header { align-items: stretch; flex-direction: column; gap: 15px; padding: 15px 16px; }
   header .app-brand, header > div:first-child:not(.app-brand) { flex-basis: auto; }
   .header-actions { justify-content: flex-start; flex-basis: auto; }
-  .chat { padding: 20px 5px; }
+  .chat { padding: 20px 17px; }
 }
 @media (max-width: 640px) {
-  .shell { height: auto; min-height: 0; padding: 0 8px 12px; }
+  .shell { height: auto; min-height: 0; padding: 0 0 12px; }
+  .shell > .commands, .shell > #composer { width: calc(100% - 16px); }
+  .chat { padding-inline: 13px; }
   header { padding: 12px; border-radius: 0; }
   header .app-brand { gap: 12px; }
   .app-icon { flex-basis: 34px; width: 34px; height: 34px; border-radius: 11px; font-size: 1.12rem; }
@@ -955,7 +1002,7 @@ pre, .state-content {
   .commands button { font-size: .74rem; padding: 6px 9px; }
   #composer { grid-template-columns: minmax(0, 1fr) auto; gap: 4px; padding: 6px; }
   #prompt { min-height: 60px; }
-  #send { min-width: 67px; padding: 9px 11px; }
+  #composer > #send, #composer > #stop-run { min-width: 67px; padding: 9px 11px; gap: 5px; }
 }
 /* When the viewport is short (landscape phones, compact windows or a
    reduced visual viewport), the document must remain scrollable. Do not

@@ -773,7 +773,7 @@ def test_default_header_icon_is_left_of_title_and_metadata():
     assert "flex-direction: row;" in web_ui.APP_CSS
 
 
-def test_default_header_spans_viewport_and_chat_remains_bounded():
+def test_header_and_chat_scrollbar_span_viewport_but_chat_content_is_centered():
     from cli_agent.settings.config import UiConfig
 
     html = web_ui.render_index_html(UiConfig())
@@ -785,7 +785,21 @@ def test_default_header_spans_viewport_and_chat_remains_bounded():
     assert "flex-direction: column;" in css
     assert "height: 100dvh;" in css
     assert "border-radius: 0;" in css
-    assert "max-width: 1240px;" in css
+    modern = css[css.index("/* Modern application layout."):]
+    shell = modern[modern.index(".shell {"):modern.index("\nheader {")]
+    chat = modern[modern.index(".chat {"):modern.index("/* The chat is the scroll container.")]
+    assert "max-width: none;" in shell
+    assert "width: 100%;" in shell
+    assert "padding: 0 0 22px;" in shell
+    assert "--ui-content-width: 1168px;" in shell
+    assert "width: 100%;" in chat
+    assert "overflow-y: auto;" in chat
+    assert "var(--ui-content-width)" in chat
+    assert ".shell > .commands, .shell > #composer {" in modern
+    assert "align-self: center;" in modern
+    assert ".shell { --ui-content-width: 1268px; }" in modern
+    assert "width: calc(100% - 24px);" in modern
+    assert "width: calc(100% - 16px);" in modern
     assert ".chat > * { flex-shrink: 0; }" in css
     assert "height: auto;" in css
 
@@ -915,3 +929,22 @@ def test_end_session_button_default_is_still_localizable():
     assert '>Schließen</button>' in custom
     assert 'data-i18n="session.end"' not in custom
     assert 'id="quit"' in custom
+
+
+def test_composer_send_and_stop_share_single_grid_cell():
+    from cli_agent.interfaces.web_ui import APP_CSS, render_index_html
+    from cli_agent.settings.config import UiConfig
+
+    html = render_index_html(UiConfig())
+    assert '<button id="send" type="submit" data-i18n="composer.send">Send</button>' in html
+    assert 'id="stop-run"' in html
+    assert 'type="button" hidden data-i18n="composer.stop"' in html
+    modern = APP_CSS[APP_CSS.index("/* Modern application layout."):]
+    assert "#composer > #prompt { grid-column: 1; grid-row: 1; }" in modern
+    assert "#composer > #send, #composer > #stop-run {" in modern
+    assert "grid-column: 2;" in modern
+    assert "grid-row: 1;" in modern
+    assert "#stop-run::before {" in modern
+    assert "background: #b43e49;" in modern
+    assert "#send::before {" in modern
+    assert "#composer > #send, #composer > #stop-run { min-width: 67px;" in modern
