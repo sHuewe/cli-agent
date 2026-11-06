@@ -19,6 +19,7 @@
   const listSessionsButton = document.getElementById("list-sessions");
   const sessionsDialog = document.getElementById("sessions-dialog");
   const sessionsList = document.getElementById("sessions-list");
+  const savedSessionsList = document.getElementById("saved-sessions-list");
   const closeSessionsButton = document.getElementById("close-sessions");
   const refreshSessionsButton = document.getElementById("refresh-sessions");
   const resetHistory = document.getElementById("reset-history");
@@ -1058,9 +1059,36 @@
     await refreshSessions();
   }
 
+  async function saveCurrentSession() {
+    if (!sessionId || busy) return;
+    const name = window.prompt(t("saved.namePrompt"), t("saved.defaultName"));
+    if (name === null || !name.trim()) return;
+    try {
+      await api("/ui/saved-sessions", "POST", {session_id: sessionId, name: name.trim()});
+      await refreshSessions();
+    } catch (error) { showApiError(error); }
+  }
+
+  async function loadSavedSession(id) {
+    const tab = window.open("about:blank", "_blank");
+    if (!tab) { addMessage("error", t("error.popupBlocked")); return; }
+    try {
+      const result = await (await api("/ui/saved-sessions/" + encodeURIComponent(id) + "/load", "POST", {})).json();
+      openTicketInTab(result.ticket, tab);
+      await refreshSessions();
+    } catch (error) { tab.close(); showApiError(error); }
+  }
+
+  async function deleteSavedSession(id) {
+    if (!window.confirm(t("saved.confirmDelete"))) return;
+    await api("/ui/saved-sessions/" + encodeURIComponent(id), "DELETE");
+    await refreshSessions();
+  }
+
   async function refreshSessions() {
     const result = await (await api("/ui/sessions")).json();
     sessionsList.replaceChildren();
+    savedSessionsList.replaceChildren();
     for (const item of result.sessions) {
       const row = document.createElement("div");
       row.className = "state-row";
@@ -1085,9 +1113,40 @@
       close.addEventListener("click", () => {
         void deleteUnusedSession(item.session_id).catch(showApiError);
       });
+      if (current) {
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "secondary";
+        save.textContent = t("saved.save");
+        save.disabled = executing || busy;
+        save.addEventListener("click", () => { void saveCurrentSession(); });
+        actions.append(save);
+      }
       actions.append(open, close);
       row.append(name, actions);
       sessionsList.appendChild(row);
+    }
+    const saved = await (await api("/ui/saved-sessions")).json();
+    for (const item of saved.sessions) {
+      const row = document.createElement("div");
+      row.className = "state-row";
+      const name = document.createElement("div");
+      name.className = "state-name";
+      name.textContent = item.name + " · " + new Date(item.saved_at).toLocaleString();
+      const actions = document.createElement("div");
+      const load = document.createElement("button");
+      load.type = "button";
+      load.className = "secondary";
+      load.textContent = t("saved.load");
+      load.addEventListener("click", () => { void loadSavedSession(item.id); });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary";
+      remove.textContent = t("saved.delete");
+      remove.addEventListener("click", () => { void deleteSavedSession(item.id).catch(showApiError); });
+      actions.append(load, remove);
+      row.append(name, actions);
+      savedSessionsList.appendChild(row);
     }
   }
 
