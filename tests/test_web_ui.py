@@ -845,3 +845,60 @@ def test_short_viewport_fallback_keeps_composer_accessible():
     assert "max-height: clamp(80px, 35dvh, 220px);" in short_viewport
     assert "min-height: 0;" in short_viewport
     assert "flex: 0 0 auto;" in short_viewport
+
+
+def test_project_ui_button_labels_override_i18n_without_removing_actions():
+    from cli_agent.settings.config import (
+        UiButtonsConfig, UiCommandButtonsConfig, UiConfig,
+    )
+
+    config = UiConfig(
+        buttons=UiButtonsConfig(
+            reset_history=True,
+            labels={"reset_history": "Neu", "new_session": "<&>"},
+            commands=UiCommandButtonsConfig(
+                labels={"tokens": "Verbrauch", "enable": "MCP einschalten"},
+            ),
+        ),
+    )
+    html = web_ui.render_index_html(config)
+    import re
+    reset = re.search(r'<button id="reset-history"[^>]*>.*?</button>', html)
+    assert reset is not None
+    assert ">Neu</button>" in reset.group(0)
+    assert 'data-i18n="history.reset"' not in reset.group(0)
+    assert 'id="reset-history"' in reset.group(0)
+    custom = re.search(r'<button id="new-session"[^>]*>.*?</button>', html)
+    assert custom is not None
+    assert ">&lt;&amp;&gt;</button>" in custom.group(0)
+    assert 'data-i18n="session.new"' not in custom.group(0)
+    tokens = re.search(r'<button class="secondary" data-command="tokens"[^>]*>.*?</button>', html)
+    assert tokens is not None
+    assert ">Verbrauch</button>" in tokens.group(0)
+    assert 'data-i18n="commands.tokens"' not in tokens.group(0)
+    assert 'data-command="tokens"' in tokens.group(0)
+    enabled = re.search(r'<button class="secondary" data-command="enable"[^>]*>.*?</button>', html)
+    assert enabled is not None
+    assert ">MCP einschalten</button>" in enabled.group(0)
+    assert 'data-i18n="commands.enableMcp"' not in enabled.group(0)
+
+
+def test_project_ui_unmodified_buttons_remain_localizable():
+    from cli_agent.settings.config import UiConfig
+
+    html = web_ui.render_index_html(UiConfig())
+    assert 'data-i18n="history.reset">Reset history</button>' in html
+    assert 'data-i18n="commands.tokens">Tokens</button>' in html
+    assert 'data-i18n="session.new">New session in new tab</button>' in html
+    assert 'data-i18n="language.label">Language</span>' in html
+
+
+def test_project_ui_language_selector_label_can_be_customized():
+    from cli_agent.settings.config import UiButtonsConfig, UiConfig
+
+    html = web_ui.render_index_html(
+        UiConfig(buttons=UiButtonsConfig(labels={"language_selector": "Sprache"})),
+    )
+    assert "Sprache</span>" in html
+    assert 'data-i18n="language.label"' not in html
+    assert 'id="language-select"' in html
