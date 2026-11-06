@@ -299,3 +299,69 @@ def test_custom_end_session_label_survives_app_startup_and_language_changes():
     # The normal translation pipeline remains responsible for default labels.
     i18n = files("cli_agent.interfaces").joinpath("static", "i18n.js").read_text(encoding="utf-8")
     assert 'document.querySelectorAll("[data-i18n]")' in i18n
+
+
+def test_send_stop_replacement_tracks_cancellable_run_state():
+    """Send and Stop share a place, but Stop must require a real runId."""
+    import shutil
+    import subprocess
+    import pytest
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+
+    source = API_APP_JS
+    start = source.index("  function setBusy(value) {")
+    end = source.index("  function resetPendingCommand()", start)
+    set_busy = source[start:end]
+    script = r'''
+const assert = require("node:assert/strict");
+let busy = false;
+let sessionId = "session";
+let runId = null;
+const prompt = {disabled: false, focus() {}};
+const send = {disabled: false, hidden: false};
+const stopRun = {disabled: false, hidden: true};
+const showWorkingContext = {disabled: false};
+const resetHistory = {disabled: false};
+const quit = {disabled: false};
+const commandButtons = [];
+const cancelCommand = {disabled: false};
+const document = {querySelectorAll() {return [];}};
+''' + set_busy + r'''
+setBusy(false);
+assert.equal(send.hidden, false);
+assert.equal(stopRun.hidden, true);
+assert.equal(send.disabled, false);
+
+setBusy(true); // Bootstrapping or non-AG-UI command, no cancellable run.
+assert.equal(send.hidden, false);
+assert.equal(send.disabled, true);
+assert.equal(stopRun.hidden, true);
+
+runId = "run-1";
+setBusy(true);
+assert.equal(send.hidden, true);
+assert.equal(stopRun.hidden, false);
+assert.equal(stopRun.disabled, false);
+
+runId = null;
+setBusy(false);
+assert.equal(send.hidden, false);
+assert.equal(stopRun.hidden, true);
+assert.equal(send.disabled, false);
+
+sessionId = null;
+setBusy(true);
+assert.equal(send.hidden, false);
+assert.equal(send.disabled, true);
+assert.equal(stopRun.hidden, true);
+console.log("ok");
+'''
+    result = subprocess.run(
+        [node, "-e", script], text=True, encoding="utf-8",
+        capture_output=True, check=False, timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"

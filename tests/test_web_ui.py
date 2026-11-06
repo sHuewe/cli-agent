@@ -929,3 +929,22 @@ def test_end_session_button_default_is_still_localizable():
     assert '>Schließen</button>' in custom
     assert 'data-i18n="session.end"' not in custom
     assert 'id="quit"' in custom
+
+
+def test_composer_send_and_stop_share_single_grid_cell():
+    from cli_agent.interfaces.web_ui import APP_CSS, render_index_html
+    from cli_agent.settings.config import UiConfig
+
+    html = render_index_html(UiConfig())
+    assert '<button id="send" type="submit" data-i18n="composer.send">Send</button>' in html
+    assert 'id="stop-run"' in html
+    assert 'type="button" hidden data-i18n="composer.stop"' in html
+    modern = APP_CSS[APP_CSS.index("/* Modern application layout."):]
+    assert "#composer > #prompt { grid-column: 1; grid-row: 1; }" in modern
+    assert "#composer > #send, #composer > #stop-run {" in modern
+    assert "grid-column: 2;" in modern
+    assert "grid-row: 1;" in modern
+    assert "#stop-run::before {" in modern
+    assert "background: #b43e49;" in modern
+    assert "#send::before {" in modern
+    assert "#composer > #send, #composer > #stop-run { min-width: 67px;" in modern

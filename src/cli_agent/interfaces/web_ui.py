@@ -916,14 +916,46 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focu
 #prompt::placeholder { color: var(--ui-muted, #64748b); opacity: .85; }
 #prompt:focus-visible { outline: none; }
 #composer:focus-within { border-color: var(--ui-accent-border, #ccd7ff); box-shadow: 0 0 0 3px var(--ui-focus-ring, rgb(65 105 225 / .12)), var(--ui-shadow-strong, 0 10px 34px rgb(25 38 69 / .09)); }
+/* Send and Stop are mutually exclusive actions in the same grid cell.
+   Keep the original button IDs for the existing JavaScript and Jinja UI. */
+#composer > #prompt { grid-column: 1; grid-row: 1; }
+#composer > #send, #composer > #stop-run {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 96px;
+  align-self: stretch;
+  justify-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: .9rem;
+}
 #send {
   background: var(--ui-accent, #4169e1);
   color: var(--ui-button-text, #fff);
   border: 0;
-  min-width: 96px;
-  font-size: .9rem;
 }
-#stop-run { min-width: 82px; align-self: center; }
+#send::before {
+  content: "↑";
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1;
+}
+#stop-run {
+  background: #b43e49;
+  border: 0;
+  color: #fff;
+}
+#stop-run::before {
+  content: "";
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
 dialog {
   background: var(--ui-panel, #fff);
   color: var(--ui-text, #17243b);
@@ -970,7 +1002,7 @@ pre, .state-content {
   .commands button { font-size: .74rem; padding: 6px 9px; }
   #composer { grid-template-columns: minmax(0, 1fr) auto; gap: 4px; padding: 6px; }
   #prompt { min-height: 60px; }
-  #send { min-width: 67px; padding: 9px 11px; }
+  #composer > #send, #composer > #stop-run { min-width: 67px; padding: 9px 11px; gap: 5px; }
 }
 /* When the viewport is short (landscape phones, compact windows or a
    reduced visual viewport), the document must remain scrollable. Do not

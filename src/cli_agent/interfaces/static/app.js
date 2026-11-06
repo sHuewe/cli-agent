@@ -309,7 +309,11 @@
     const disconnected = !sessionId;
     prompt.disabled = busy;
     send.disabled = busy || disconnected;
-    stopRun.hidden = !busy || !runId;
+    // Only a running AG-UI request can be cancelled. For local commands
+    // or initial connection the disabled Send button remains visible.
+    const canStopRun = busy && Boolean(runId);
+    send.hidden = canStopRun;
+    stopRun.hidden = !canStopRun;
     stopRun.disabled = disconnected || !runId;
     showWorkingContext.disabled = disconnected;
     resetHistory.disabled = busy || disconnected;
