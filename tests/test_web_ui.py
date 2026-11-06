@@ -161,8 +161,10 @@ def test_web_ui_renders_local_command_buttons() -> None:
         assert f'data-command="{command}"' in web_ui.INDEX_HTML
 
 
-def test_web_ui_header_is_sticky() -> None:
-    assert "header { position: sticky; top: 0;" in web_ui.APP_CSS
+def test_web_ui_header_is_full_width() -> None:
+    assert "header {\n  position: relative;" in web_ui.APP_CSS
+    assert "  width: 100%;" in web_ui.APP_CSS
+    assert "  margin: 0;" in web_ui.APP_CSS
 
 
 def test_working_messages_snapshot_is_detached() -> None:
@@ -948,3 +950,14 @@ def test_composer_send_and_stop_share_single_grid_cell():
     assert "background: #b43e49;" in modern
     assert "#send::before {" in modern
     assert "#composer > #send, #composer > #stop-run { min-width: 67px;" in modern
+
+
+def test_packaged_base_css_is_unchanged_and_loadable() -> None:
+    from importlib.resources import files
+
+    stylesheet = files("cli_agent.interfaces").joinpath("static", "app.css")
+    assert web_ui.APP_CSS == stylesheet.read_text(encoding="utf-8")
+    assert ":root {" in web_ui.APP_CSS
+    assert "[hidden] { display: none !important; }" in web_ui.APP_CSS
+    assert ".chat > * { flex-shrink: 0; }" in web_ui.APP_CSS
+    assert "#composer:focus-within" in web_ui.APP_CSS

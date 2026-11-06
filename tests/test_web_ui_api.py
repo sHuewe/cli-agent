@@ -1033,6 +1033,14 @@ async def test_browser_ui_theme_assets_are_scoped_and_delivered_with_csp():
         page = await client.get("/")
         assert page.status_code == 200
         assert 'href="/assets/app.css"' in page.text
+        from importlib.resources import files
+        base_css = await client.get("/assets/app.css")
+        assert base_css.status_code == 200
+        assert base_css.headers["content-type"].startswith("text/css")
+        assert base_css.headers["x-content-type-options"] == "nosniff"
+        assert base_css.text == files("cli_agent.interfaces").joinpath(
+            "static", "app.css",
+        ).read_text(encoding="utf-8")
         assert 'href="/assets/themes/dark.css"' in page.text
         assert 'href="/assets/ui/branding.css"' in page.text
         assert 'href="/assets/ui/extra.css"' in page.text
