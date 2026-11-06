@@ -295,7 +295,10 @@ def test_local_exit_and_quit_are_not_sent_to_agent():
         'api("/ag-ui", "POST", input)'
     )
     assert 'api("/ui/shutdown"' not in API_APP_JS
-    assert 'quit.textContent = t("session.end");' in API_APP_JS
+    # Label text comes from the Jinja template and data-i18n, not a
+    # startup assignment that would overwrite custom project labels.
+    assert 'quit.textContent = t("session.end");' not in API_APP_JS
+    assert 'const quit = document.getElementById("quit");' in API_APP_JS
     assert 'quit.disabled = busy || disconnected;' in API_APP_JS
     assert 'void deleteUnusedSession(sessionId).catch(showApiError);' in API_APP_JS
 

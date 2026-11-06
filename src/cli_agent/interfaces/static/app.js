@@ -13,7 +13,8 @@
   const stopRun = document.getElementById("stop-run");
   const quit = document.getElementById("quit");
   // The API-backed UI supports multiple sessions; this only closes this tab's agent.
-  quit.textContent = t("session.end");
+  // Button labels are rendered by Jinja and localized by i18n.js when
+  // data-i18n is present. Do not override project-defined labels here.
   const newSessionButton = document.getElementById("new-session");
   const listSessionsButton = document.getElementById("list-sessions");
   const sessionsDialog = document.getElementById("sessions-dialog");

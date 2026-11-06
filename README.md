@@ -185,6 +185,26 @@ enable = false
 disable = false
 ```
 
+Buttons can also use individual `visible` and `label` settings, alongside
+the original boolean syntax. A custom label stays unchanged when the UI
+language changes:
+
+```toml
+[ui.buttons]
+new_session = false
+list_sessions = true
+
+[ui.buttons.reset_history]
+label = "Neu"       # visible = true by default
+
+[ui.buttons.commands.tokens]
+label = "Verbrauch"
+visible = true
+```
+
+To hide a button using the table form, set `visible = false`.
+Unspecified labels continue to use the normal language translations.
+
 All fields are optional. The default title is `cli-agent`; all controls
 remain visible unless explicitly disabled. The header spans the complete
 window width with no outer top/side margin; the conversation area stays

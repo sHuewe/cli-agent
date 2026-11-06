@@ -34,6 +34,37 @@ enable = true
 disable = true
 ```
 
+### Per-button labels (mixed syntax)
+
+The simple boolean format remains valid and can be freely mixed with
+`visible`/`label` tables. For example:
+
+```toml
+[ui.buttons]
+new_session = false
+list_sessions = true
+
+[ui.buttons.reset_history]
+label = "Neu"
+# visible = true is implicit
+
+[ui.buttons.commands.tokens]
+visible = true
+label = "Verbrauch"
+```
+
+The supported keys are `visible` (boolean, defaults to `true`) and
+`label` (nonempty text, up to 120 characters). Any header button, the
+language selector or command button can be customized in this way.
+A custom label takes precedence over built-in translations, including after
+a language change; all other labels still follow the selected language.
+
+The workspace overlay preserves inherited values across both forms:
+if a globally configured button is hidden (`reset_history = false`),
+a project that sets only `[ui.buttons.reset_history] label = "Neu"`
+will **not** make the button visible again. Likewise, overriding a global
+label with a boolean visibility value does not discard the inherited label.
+
 All settings are optional. Missing fields inherit global configuration or
 defaults. The default header spans the full viewport width and sits flush
 against the top and side edges. The chat and composer remain width-limited.

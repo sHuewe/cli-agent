@@ -65,13 +65,25 @@ def read_project_overrides(workspace: Path) -> dict:
     return values
 
 
-def merge_project_overrides(global_values: dict, project_values: dict) -> dict:
-    """Deep-merge tables; explicit scalar values and arrays replace the base."""
+def merge_project_overrides(
+    global_values: dict, project_values: dict, *, _path: tuple[str, ...] = (),
+) -> dict:
+    """Deep-merge tables; button visibility/labels also merge across representations.
+
+    A project-only label preserves an inherited boolean visibility value,
+    and a project-only boolean preserves an inherited custom label.
+    Unrelated scalar and array values continue to replace their base values.
+    """
     merged = dict(global_values)
     for key, value in project_values.items():
         previous = merged.get(key)
+        if _path in {("ui", "buttons"), ("ui", "buttons", "commands")} and key != "commands":
+            if isinstance(previous, bool) and isinstance(value, dict):
+                previous = {"visible": previous}
+            elif isinstance(previous, dict) and isinstance(value, bool):
+                value = {"visible": value}
         if isinstance(value, dict) and isinstance(previous, dict):
-            merged[key] = merge_project_overrides(previous, value)
+            merged[key] = merge_project_overrides(previous, value, _path=(*_path, key))
         else:
             merged[key] = value
     return merged

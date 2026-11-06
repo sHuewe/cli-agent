@@ -587,3 +587,101 @@ def test_project_ui_metadata_visibility_inherits_from_global_config(tmp_path: Pa
     assert ui.show_metadata is False
     _project(tmp_path, "[ui]\nshow_metadata = true\n")
     assert load_config(config_file, workspace=tmp_path).ui.show_metadata is True
+
+
+def test_project_ui_mixed_button_syntax_and_label_overrides(tmp_path: Path):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text(
+        '[ui.buttons]\nnew_session = false\nreset_history = false\n'
+        '[ui.buttons.commands]\ntokens = true\n',
+        encoding="utf-8",
+    )
+    _project(
+        tmp_path,
+        '[ui.buttons]\nlist_sessions = false\n'
+        '[ui.buttons.reset_history]\nlabel = "Neu"\n'
+        '[ui.buttons.commands.tokens]\nlabel = "Verbrauch"\n',
+    )
+    buttons = load_config(global_config, workspace=tmp_path).ui.buttons
+    assert not buttons.new_session
+    assert not buttons.list_sessions
+    assert not buttons.reset_history  # Global visibility survives label-only override
+    assert buttons.end_session
+    assert buttons.labels == {"reset_history": "Neu"}
+    assert buttons.commands.tokens
+    assert buttons.commands.labels == {"tokens": "Verbrauch"}
+
+
+def test_project_ui_visibility_override_preserves_global_label(tmp_path: Path):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text(
+        '[ui.buttons.reset_history]\nlabel = "Neu"\nvisible = false\n'
+        '[ui.buttons.commands.tokens]\nlabel = "Tokens today"\nvisible = false\n',
+        encoding="utf-8",
+    )
+    _project(
+        tmp_path,
+        '[ui.buttons]\nreset_history = true\n'
+        '[ui.buttons.commands]\ntokens = true\n',
+    )
+    buttons = load_config(global_config, workspace=tmp_path).ui.buttons
+    assert buttons.reset_history
+    assert buttons.labels["reset_history"] == "Neu"
+    assert buttons.commands.tokens
+    assert buttons.commands.labels["tokens"] == "Tokens today"
+
+
+def test_project_ui_button_settings_table_defaults_and_boolean_compatibility(tmp_path: Path):
+    config = tmp_path / "global.toml"
+    config.write_text("", encoding="utf-8")
+    _project(
+        tmp_path,
+        '[ui.buttons]\nnew_session = false\n'
+        '[ui.buttons.reset_history]\nlabel = "Neu"\n'
+        '[ui.buttons.commands]\nenable = false\n'
+        '[ui.buttons.commands.tokens]\nlabel = "Verbrauch"\n',
+    )
+    buttons = load_config(config, workspace=tmp_path).ui.buttons
+    assert buttons.new_session is False
+    assert buttons.reset_history is True
+    assert buttons.labels["reset_history"] == "Neu"
+    assert buttons.commands.enable is False
+    assert buttons.commands.tokens is True
+    assert buttons.commands.labels["tokens"] == "Verbrauch"
+
+
+@pytest.mark.parametrize("definition,expected_error", [
+    ('[ui.buttons.reset_history]\nvisible = "false"\n', "ui.buttons.reset_history.visible"),
+    ('[ui.buttons.reset_history]\nlabel = ""\n', "ui.buttons.reset_history.label"),
+    ('[ui.buttons.reset_history]\nlabel = " blank "\n', "ui.buttons.reset_history.label"),
+    ('[ui.buttons.reset_history]\nlabel = 42\n', "ui.buttons.reset_history.label"),
+    ('[ui.buttons.reset_history]\nunknown = true\n', "ui.buttons.reset_history"),
+    ('[ui.buttons.reset_history]\nlabel = "x"\nvisible = 1\n', "ui.buttons.reset_history.visible"),
+    ('[ui.buttons]\nnew_session = 42\n', "ui.buttons.new_session"),
+    ('[ui.buttons.commands.tokens]\nlabel = []\n', "ui.buttons.commands.tokens.label"),
+    ('[ui.buttons.commands.disable]\nunknown = true\n', "ui.buttons.commands.disable"),
+])
+def test_project_ui_rejects_invalid_button_tables(
+    tmp_path: Path, definition: str, expected_error: str,
+):
+    global_config = tmp_path / "global.toml"
+    global_config.write_text("", encoding="utf-8")
+    _project(tmp_path, definition)
+    with pytest.raises(ValueError) as failure:
+        load_config(global_config, workspace=tmp_path)
+    assert expected_error in str(failure.value)
+
+
+def test_project_ui_legacy_booleans_keep_no_custom_labels(tmp_path: Path):
+    config = tmp_path / "global.toml"
+    config.write_text("", encoding="utf-8")
+    _project(
+        tmp_path,
+        "[ui.buttons]\nreset_history = false\n"
+        "[ui.buttons.commands]\ntokens = false\n",
+    )
+    buttons = load_config(config, workspace=tmp_path).ui.buttons
+    assert buttons.reset_history is False
+    assert buttons.commands.tokens is False
+    assert buttons.labels == {}
+    assert buttons.commands.labels == {}
