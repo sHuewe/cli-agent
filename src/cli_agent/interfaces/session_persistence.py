@@ -47,6 +47,8 @@ def _conversation(messages: Any, *, allow_ids: bool = False) -> list[dict[str, s
         if not isinstance(message, dict):
             raise ValueError("Invalid snapshot message.")
         role, content = message.get("role"), message.get("content")
+        if allow_ids and (role not in {"user", "assistant"} or not isinstance(content, str)):
+            continue  # AG-UI may include tool messages; only persist dialogue text.
         if role not in {"user", "assistant"} or not isinstance(content, str):
             raise ValueError("Snapshot messages must be user/assistant text.")
         if len(content) > 100_000:
