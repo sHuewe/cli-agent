@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import stat
@@ -28,7 +29,9 @@ MARKDOWN_SUFFIXES = frozenset({".md", ".markdown"})
 MAX_QUESTION_CHARS = 4_000
 MAX_ANSWER_CHARS = 32_000
 MAX_RESPONSE_BYTES = 256_000
-VISION_TIMEOUT_SECONDS = 90.0
+DEFAULT_VISION_TIMEOUT_SECONDS = 300.0
+# The outer MCP tool deadline is 600 seconds; leave time for transport overhead.
+MAX_VISION_TIMEOUT_SECONDS = 540
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class VisionConfig:
     model: str
     base_url: str
     api_key: str | None
+    timeout_seconds: float = DEFAULT_VISION_TIMEOUT_SECONDS
 
 
 def vision_config_from_environment() -> VisionConfig | None:
@@ -45,6 +49,12 @@ def vision_config_from_environment() -> VisionConfig | None:
         return None
     if len(model) > 200:
         raise ValueError("VISION_MODEL ist zu lang.")
+    raw_timeout = os.getenv("VISION_TIMEOUT", "300").strip()
+    if not re.fullmatch(r"[0-9]{1,3}", raw_timeout):
+        raise ValueError("VISION_TIMEOUT must be an integer between 1 and 540 seconds.")
+    timeout_seconds = int(raw_timeout)
+    if not 1 <= timeout_seconds <= MAX_VISION_TIMEOUT_SECONDS:
+        raise ValueError("VISION_TIMEOUT must be an integer between 1 and 540 seconds.")
     base_url = os.getenv("VISION_BASE_URL", "https://openrouter.ai/api/v1").strip()
     parsed = urlsplit(base_url)
     if parsed.query or parsed.fragment:
@@ -72,7 +82,7 @@ def vision_config_from_environment() -> VisionConfig | None:
         )
     elif (parsed.hostname or "").lower().rstrip(".") not in LOCAL_HOSTS:
         raise ValueError(f"Die Vision-Credential-Variable {key_env!r} ist nicht gesetzt.")
-    return VisionConfig(model=model, base_url=base_url, api_key=key)
+    return VisionConfig(model=model, base_url=base_url, api_key=key, timeout_seconds=timeout_seconds)
 
 
 def _image_mime(data: bytes) -> str | None:
@@ -222,7 +232,7 @@ def analyze_image(
         headers["Authorization"] = f"Bearer {vision.api_key}"
     try:
         with httpx.Client(
-            timeout=VISION_TIMEOUT_SECONDS,
+            timeout=vision.timeout_seconds,
             follow_redirects=False,
             trust_env=False,
         ) as client:
@@ -232,8 +242,20 @@ def analyze_image(
                 headers=headers,
                 json=payload,
             ) as response:
+                if response.status_code == 429:
+                    raise WorkspaceError("Vision service rate-limited the request (HTTP 429); retry later.")
+                if response.status_code in (401, 403):
+                    raise WorkspaceError(
+                        f"Vision service denied authentication or permission (HTTP {response.status_code})."
+                    )
+                if 500 <= response.status_code < 600:
+                    raise WorkspaceError(
+                        f"Vision service is temporarily unavailable (HTTP {response.status_code}); retry later."
+                    )
                 if not 200 <= response.status_code < 300:
-                    raise WorkspaceError(f"Vision-Modell antwortete mit HTTP {response.status_code}.")
+                    raise WorkspaceError(
+                        f"Vision service rejected the request (HTTP {response.status_code})."
+                    )
                 chunks: list[bytes] = []
                 total = 0
                 for chunk in response.iter_bytes():
@@ -241,11 +263,33 @@ def analyze_image(
                     if total > MAX_RESPONSE_BYTES:
                         raise WorkspaceError("Vision model response is too large.")
                     chunks.append(chunk)
-        import json
+    except httpx.TimeoutException as exc:
+        stage = (
+            "connection" if isinstance(exc, httpx.ConnectTimeout)
+            else "upload" if isinstance(exc, httpx.WriteTimeout)
+            else "response" if isinstance(exc, httpx.ReadTimeout)
+            else "request"
+        )
+        raise WorkspaceError(
+            f"Vision {stage} timed out (inactivity limit: {vision.timeout_seconds:g} seconds). "
+            "Retry or increase VISION_TIMEOUT."
+        ) from None
+    except httpx.ConnectError:
+        raise WorkspaceError("Vision service connection failed; check connectivity or retry.") from None
+    except httpx.RemoteProtocolError:
+        raise WorkspaceError("Vision service returned an invalid HTTP response; retry later.") from None
+    except httpx.RequestError:
+        raise WorkspaceError("Vision service transport failed; retry later.") from None
+    try:
         reply = json.loads(b"".join(chunks))
+    except (ValueError, UnicodeError):
+        raise WorkspaceError("Vision service returned invalid JSON; retry later.") from None
+    try:
         content = reply["choices"][0]["message"]["content"]
-    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-        raise WorkspaceError("Vision model returned no valid response.") from exc
+    except (KeyError, IndexError, TypeError):
+        raise WorkspaceError(
+            "Vision service returned an unexpected response structure; retry later."
+        ) from None
     if isinstance(content, list):
         if not all(isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str) for item in content):
             raise WorkspaceError("Vision response contains unsupported content.")
