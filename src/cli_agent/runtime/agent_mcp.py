@@ -472,7 +472,7 @@ class McpLifecycleMixin:
                 # built-in OS process; the generic stdio environment is sanitized.
                 import re
 
-                for name in ("VISION_MODEL", "VISION_BASE_URL", "VISION_API_KEY_ENV"):
+                for name in ("VISION_MODEL", "VISION_BASE_URL", "VISION_API_KEY_ENV", "VISION_TIMEOUT"):
                     if name in os.environ:
                         environment[name] = os.environ[name]
                 credential_name = os.getenv("VISION_API_KEY_ENV", "VISION_API_KEY")
