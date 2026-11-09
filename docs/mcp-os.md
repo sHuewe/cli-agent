@@ -64,12 +64,17 @@ Example using OpenRouter (PowerShell):
 ```powershell
 $env:VISION_MODEL = "z-ai/glm-5.3-flash"
 $env:VISION_BASE_URL = "https://openrouter.ai/api/v1"
+$env:VISION_TIMEOUT = "300"
 $env:VISION_API_KEY_ENV = "OPENROUTER_API_KEY"
 $env:OPENROUTER_API_KEY = "<TOKEN>"
 cli-agent --with-os-read
 ```
 
 `VISION_API_KEY_ENV` names the credential environment variable (default `VISION_API_KEY`). For OpenRouter, `openrouter.ai` must be permitted in `network.model_allowed_hosts`, and this credential variable must be allowed for the host and `openai` provider by `[[model.credentials]].allowed_api_key_envs` in **admin configuration**. Without `VISION_BASE_URL`, the OpenRouter API is the default. Local OpenAI-compatible endpoints may be configured without credentials.
+
+`VISION_TIMEOUT` sets the HTTP inactivity timeout in seconds for Vision requests (default: **300**; valid integers: **1–540**). It is inherited by the built-in OS MCP process from the agent process, independently of the main model timeout. The upper bound leaves room under the agent's 600-second outer MCP tool deadline. As an HTTPX inactivity timeout, it is not a strict end-to-end request deadline. Set the environment variable before starting `cli-agent` or `cli-agent-api` and restart the agent after changing it. Invalid values fail Vision initialization rather than silently falling back to the default.
+
+Vision tool failures classify timeouts, connection/transport errors, malformed JSON, unexpected response schemas, and selected HTTP statuses. Errors returned to the agent omit the model name, URL, tokens, provider response body, and low-level exception text. The agent should not assume that retrying with different wording will fix a transport failure.
 
 **The call always requires separate tool approval, even with `--with-os-read`.** Approving permits the image content and freely formulated question to be sent to the configured model server. Unlike `read_file`, image bytes do not enter the main agent's textual context. `--approve-tool os__analyze_image` explicitly preapproves it for the current process.
 
