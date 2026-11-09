@@ -490,3 +490,48 @@ def test_stdio_mcp_connector_passes_valid_errlog_in_notebook(monkeypatch, tmp_pa
         assert seen[0].closed
 
     asyncio.run(scenario())
+
+
+def test_builtin_os_mcp_forwards_vision_timeout_only_when_enabled(monkeypatch, tmp_path):
+    from contextlib import asynccontextmanager
+    from cli_agent.runtime import agent_mcp
+
+    captured = []
+
+    @asynccontextmanager
+    async def fake_stdio(parameters, *, errlog):
+        captured.append(parameters.env)
+        yield object(), object()
+
+    class FakeSession:
+        def __init__(self, *_args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def initialize(self):
+            return SimpleNamespace(instructions=None)
+
+    monkeypatch.setattr(agent_mcp, "stdio_client", fake_stdio)
+    monkeypatch.setattr(agent_mcp, "CancellableClientSession", FakeSession)
+    monkeypatch.setenv("VISION_MODEL", "test")
+    monkeypatch.setenv("VISION_TIMEOUT", "420")
+
+    async def run():
+        async with AsyncExitStack() as stack:
+            agent = _agent(tmp_path)
+            await agent._connect_server(
+                stack, McpServerConfig(name="os", command="unused", built_in=True),
+            )
+            assert captured[-1]["VISION_TIMEOUT"] == "420"
+            assert captured[-1]["VISION_MODEL"] == "test"
+            await agent._connect_server(
+                stack, McpServerConfig(name="other", command="unused", built_in=True),
+            )
+            assert "VISION_TIMEOUT" not in captured[-1]
+
+    asyncio.run(run())
