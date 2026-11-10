@@ -523,6 +523,7 @@ class ConversationMixin:
             if not active_vector:
                 if vector_config.required:
                     raise RuntimeError("The configured ChromaDB is unavailable.")
+                trace_observe(self, "outcome", status="error")
                 return None
             return await self._collect_chroma_knowledge(
                 prompt, required=bool(vector_config.required),
@@ -535,6 +536,7 @@ class ConversationMixin:
         if active_okf and self._knowledge_session is None:
             if okf_required:
                 raise RuntimeError("The configured OKF Knowledge server is unavailable.")
+            trace_observe(self, "outcome", status="error")
             return None
         if vector_config is not None and not active_vector and vector_required:
             raise RuntimeError("The configured vector index is unavailable.")
