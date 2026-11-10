@@ -94,12 +94,19 @@ def test_okf_verifiable_read_and_selected_payload():
 
 
 def test_trace_failures_dont_interrupt_agent():
+    class BrokenCollector:
+        truncated = False
+
+        def search(self, **_kwargs):
+            raise ValueError("Simulated telemetry failure")
+
     class Agent:
-        _sdk_knowledge_trace_collector = object()
+        _sdk_knowledge_trace_collector = BrokenCollector()
+
     agent = Agent()
     trace_observe(agent, "search", backend="chroma", stage="initial", result={})
-    # A recording error must not bubble to Knowledge execution.
-    assert True
+    # Telemetry is fail-open and exposes that its result is incomplete.
+    assert agent._sdk_knowledge_trace_collector.truncated is True
 
 
 def test_builder_opt_in_and_no_option_leak():
@@ -152,3 +159,53 @@ def test_sdk_result_has_per_request_trace_without_changing_answer(monkeypatch, t
             assert first.knowledge_trace is not second.knowledge_trace
 
     asyncio.run(check())
+
+
+
+def test_explicit_optional_knowledge_outcomes_are_monotonic():
+    from cli_agent.runtime.knowledge_trace import KnowledgeTraceCollector
+    collector = KnowledgeTraceCollector()
+    collector.begin("initial")
+    collector.outcome("not_applicable")
+    collector.finish(result=None)
+    collector.begin("reentry")
+    collector.outcome("error")
+    collector.finish(result=None)
+    assert [call.status for call in collector.snapshot().calls] == [
+        "not_applicable", "error",
+    ]
+
+
+def test_followup_chroma_preserves_query_specific_distance():
+    from cli_agent.context.agent_knowledge import _KnowledgeRunState, _register_chroma_results
+
+    collector = KnowledgeTraceCollector(include_content=True)
+    state = _KnowledgeRunState()
+    first = {"query": "first", "entries": [
+        {"id": "same-id", "content": "host verified text",
+         "source": "doc.md", "metadata": {}, "distance": 0.8},
+    ]}
+    subsequent = {"query": "second", "entries": [
+        {"id": "same-id", "content": "host verified text",
+         "source": "doc.md", "metadata": {}, "distance": 0.1},
+    ]}
+    collector.search(backend="chroma", stage="initial", result=first)
+    registered_first = _register_chroma_results(state, first)
+    collector.search(backend="chroma", stage="followup", result=subsequent)
+    registered_subsequent = _register_chroma_results(state, subsequent)
+    # Runtime's tokenized payload intentionally keeps the first snapshot.
+    assert registered_first["entries"][0]["distance"] == 0.8
+    assert registered_subsequent["entries"][0]["distance"] == 0.8
+    # Retrieval trace must keep the REAL distance from the second query.
+    assert [s.hits[0].distance for s in collector.snapshot().searches] == [0.8, 0.1]
+
+
+def test_backend_selection_budget_safely_marks_incomplete_trace():
+    collector = KnowledgeTraceCollector(include_content=True)
+    collector.search(backend="chroma", stage="followup",
+                     result={"query": "search", "entries": [
+                         {"id": "chunk", "content": "text", "distance": 0.2},
+                     ]})
+    collector.mark_truncated()
+    assert collector.snapshot().truncated
+    assert not collector.snapshot().complete_selected_content

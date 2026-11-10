@@ -637,8 +637,10 @@ class ConversationMixin:
                 self._dump_value("knowledge_result.json", selection)
                 reason_code = selection.get("reason_code")
                 if reason_code == "not_applicable":
+                    trace_observe(self, "outcome", status="not_applicable")
                     return None
                 if reason_code == "not_found":
+                    trace_observe(self, "outcome", status="not_found")
                     if required:
                         return json.dumps(selection, ensure_ascii=False)
                     return None
@@ -660,6 +662,7 @@ class ConversationMixin:
             self._dump_value("knowledge_result.json", payload)
             return json.dumps(payload, ensure_ascii=False)
         except Exception as exc:
+            trace_observe(self, "outcome", status="error")
             self._dump_value(
                 "knowledge_result.json",
                 {
@@ -703,11 +706,16 @@ class ConversationMixin:
                 })
             try:
                 raw_initial = await session.search(prompt)
-                initial = _register_chroma_results(state, raw_initial)
+                # Record actual query-specific ranking/distance; token
+                # registration can substitute an earlier snapshot for IDs
+                # seen in prior searches or omit hits due to selection budget.
                 trace_observe(
                     self, "search", backend="chroma", stage="initial",
-                    result=initial,
+                    result=raw_initial,
                 )
+                initial = _register_chroma_results(state, raw_initial)
+                if state.chroma_budget_exhausted:
+                    trace_observe(self, "mark_truncated")
             except BaseException:
                 if callback is not None:
                     await callback("tool_finished", {
@@ -764,8 +772,10 @@ class ConversationMixin:
                 self._dump_value("knowledge_result.json", selection)
                 reason = selection.get("reason_code")
                 if reason == "not_applicable":
+                    trace_observe(self, "outcome", status="not_applicable")
                     return None
                 if reason == "not_found":
+                    trace_observe(self, "outcome", status="not_found")
                     return json.dumps(selection, ensure_ascii=False) if required else None
                 raise RuntimeError(f"Incomplete Chroma retrieval: {reason!r}")
             payload = _assemble_chroma_payload(selection, state)
@@ -773,6 +783,7 @@ class ConversationMixin:
             self._dump_value("knowledge_result.json", payload)
             return json.dumps(payload, ensure_ascii=False)
         except Exception as exc:
+            trace_observe(self, "outcome", status="error")
             self._dump_value("knowledge_result.json", {
                 "status": "error", "error": f"{type(exc).__name__}: {exc}",
             })

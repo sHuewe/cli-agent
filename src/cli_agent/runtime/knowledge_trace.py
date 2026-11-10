@@ -86,6 +86,7 @@ class KnowledgeTraceCollector:
         self._hit_count = 0
         self._call_started: float | None = None
         self._call_origin: str | None = None
+        self._explicit_status: str | None = None
 
     def begin(self, origin: str) -> None:
         if self._call_started is not None:
@@ -93,6 +94,17 @@ class KnowledgeTraceCollector:
             raise RuntimeError("Nested Knowledge trace call")
         self._call_started = monotonic()
         self._call_origin = origin
+        self._explicit_status = None
+
+    def outcome(self, status: str) -> None:
+        """Preserve results that runtime normalizes to None for optional knowledge."""
+        if status not in {"selected", "not_found", "not_applicable", "no_content", "error"}:
+            raise ValueError("Invalid Knowledge outcome")
+        self._explicit_status = status
+
+    def mark_truncated(self) -> None:
+        """Indicate that a backend's context budget excluded raw search hits."""
+        self.truncated = True
 
     def finish(self, result: str | None = None, *, error: bool = False) -> None:
         started = self._call_started
@@ -108,12 +120,17 @@ class KnowledgeTraceCollector:
             if isinstance(payload, dict) and payload.get("found_content") is False:
                 reason = payload.get("reason_code")
                 status = reason if reason in {"not_found", "not_applicable"} else "no_content"
+        if self._explicit_status is not None:
+            status = self._explicit_status
+        if error:
+            status = "error"
         self.calls.append(KnowledgeCall(
             origin=self._call_origin or "initial", status=status,
             duration_ms=round((monotonic() - started) * 1000, 3),
         ))
         self._call_started = None
         self._call_origin = None
+        self._explicit_status = None
 
     def _string(self, value: Any, *, limit: int = 2048) -> str | None:
         if value is None:

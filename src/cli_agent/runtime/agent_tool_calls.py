@@ -379,13 +379,18 @@ async def process_tool_calls(
                     raise RuntimeError("Chroma-Suche lieferte kein strukturiertes Ergebnis.")
                 # The host, not the LLM, assigns tokens to newly discovered
                 # chunks. Return the tokens together with the original text.
+                # Capture the original query-specific distance and complete
+                # candidate list BEFORE selection token registration reuses
+                # first-seen snapshots or enforces the cumulative budget.
+                trace_observe(
+                    agent, "search", backend="chroma", stage="followup",
+                    result=raw_chroma,
+                )
                 result.structuredContent = _register_chroma_results(
                     knowledge_state, raw_chroma,
                 )
-                trace_observe(
-                    agent, "search", backend="chroma", stage="followup",
-                    result=result.structuredContent,
-                )
+                if knowledge_state.chroma_budget_exhausted:
+                    trace_observe(agent, "mark_truncated")
                 if (
                     knowledge_state.chroma_budget_exhausted
                     or (
