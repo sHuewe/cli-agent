@@ -236,6 +236,10 @@ def trace_observe(agent: Any, action: str, **data: Any) -> None:
     try:
         getattr(collector, action)(**data)
     except Exception:
+        # Even a malformed collector must not affect the normal agent run.
         # Do not log source data, query text, or raw exception messages.
-        collector.truncated = True
+        try:
+            collector.truncated = True
+        except Exception:
+            pass
         _LOGGER.warning("sdk_knowledge_trace_record_failed action=%s", action)
