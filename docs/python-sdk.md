@@ -293,6 +293,63 @@ approval-requiring actions are denied. The `approval_requested` and
 `approval_decided` event metadata are observable but never grant access.
 
 
+## Optional Knowledge retrieval trace (Python SDK only)
+
+By default SDK answers expose only metadata-only ToolCallRecord / AgentEvent
+objects. You can explicitly opt into a structured, bounded trace of the
+Knowledge **retrieval and selection** pipeline:
+
+```python
+from cli_agent.sdk import AgentBuilder
+
+agent = (
+    AgentBuilder()
+    .with_project_config(path="config.toml", workspace=".")
+    .with_knowledge_trace(include_content=True)
+    .build()
+)
+async with agent:
+    result = await agent.ask("Which requirements apply?")
+    trace = result.knowledge_trace
+    if trace is not None:
+        for search in trace.searches:
+            print(search.backend, search.stage, [h.source for h in search.hits])
+        print([hit.source for hit in trace.selected])
+        if trace.complete_selected_content:
+            retrieval_context = [hit.content for hit in trace.selected]
+```
+
+- `.with_knowledge_trace()` captures **metadata only** (no source text).
+- `.with_knowledge_trace(include_content=True)` includes bounded, host-verified
+  retrieved text in `trace.searches[*].hits` and selected content in
+  `trace.selected` for notebook evaluation. There is a 512k character
+  cumulative text cap and hard caps on searches, hits and selected entries.
+  `trace.truncated` signals incomplete capture; do not use truncated
+  selected context for automated faithfulness/recall metrics.
+- `trace.calls` records initial Knowledge invocation and further
+  Knowledge reentry calls, including completion status and duration.
+- Chroma search hits include IDs, source, rank (per search), metadata and
+  distance when provided by the backend. Selected hits reflect the **actual
+  context sent to the main agent**, rather than every candidate from search.
+- OKF search hits are path/score candidates (when a vector index is enabled),
+  while `knowledge_read` yields verified Concept text. Selected OKF
+  Concepts contain a source path and full content, not automatically
+  a passage-level chunk ranking.
+- The trace is isolated per `ask()`, includes only data already retrieved
+  through normal Knowledge execution, and does **not** modify selection,
+  prompts, model responses, authorization or runtime events.
+- The SDK never includes raw Knowledge content in its existing
+  `AgentEvent` callbacks. The trace is returned to trusted Python code only.
+  Do not log/upload/store sensitive source texts without appropriate controls.
+- When no Knowledge backend is active, an explicitly enabled trace is empty;
+  disabled tracing returns `result.knowledge_trace is None`.
+
+For a benchmark, compare selected trace sources to the required sources in
+goldens to distinguish retrieval misses from selection misses. An observed
+retrieval hit does not prove the model actually *used* a passage in reasoning.
+A question may trigger multiple searches; `rank` is local to each search,
+not a globally calibrated score across different queries.
+
 ## Session reset, token usage and server controls
 
 These methods are serialized with `ask()` on the same MCP-owning worker.

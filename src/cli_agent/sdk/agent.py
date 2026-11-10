@@ -15,6 +15,7 @@ from cli_agent.platform.execution import OneShotRunOptions, prepare_agent
 from cli_agent.platform.local_commands import classify_local_command
 from cli_agent.settings.config import AppConfig
 from cli_agent.settings.admin_config import AdminConfig
+from cli_agent.runtime.knowledge_trace import KnowledgeTrace, KnowledgeTraceCollector
 from .events import AgentEvent, ToolCallRecord
 from .usage import UsageSummary, summarize_usage, usage_history
 from .tools import ToolInfo, available_tools
@@ -34,6 +35,7 @@ class AgentResult:
     session_usage: UsageSummary | None = None
     parsed: Any = None
     artifacts: tuple[AgentArtifact, ...] = ()
+    knowledge_trace: KnowledgeTrace | None = None
 
 
 class Agent:
@@ -41,6 +43,7 @@ class Agent:
         self, *, project_config: AppConfig, admin_config: AdminConfig,
         project_path: Path | None, run_options: dict[str, Any],
         event_callback: Any = None, python_tools: tuple = (),
+        knowledge_trace_include_content: bool | None = None,
     ) -> None:
         self._config = project_config
         self._policy = admin_config
@@ -48,6 +51,7 @@ class Agent:
         self._options = dict(run_options)
         self._event_callback = event_callback
         self._python_tools = python_tools
+        self._knowledge_trace_include_content = knowledge_trace_include_content
         self.mcp = McpInterface(self)
         self._event_queue: asyncio.Queue[AgentEvent | None] | None = None
         self._event_worker: asyncio.Task[None] | None = None
@@ -158,6 +162,12 @@ class Agent:
         old_callback = getattr(runtime, "event_callback", None)
         runtime.event_callback = emit
         runtime._sdk_event_reporting = True
+        collector = (
+            KnowledgeTraceCollector(include_content=self._knowledge_trace_include_content)
+            if self._knowledge_trace_include_content is not None else None
+        )
+        if collector is not None:
+            runtime._sdk_knowledge_trace_collector = collector
         await emit("run_started", {})
         status = "success"
         try:
@@ -169,6 +179,8 @@ class Agent:
             await emit("run_finished", {"status": status})
             runtime.event_callback = old_callback
             runtime._sdk_event_reporting = False
+            if collector is not None:
+                runtime._sdk_knowledge_trace_collector = None
         for call_id, name in open_tools.items():
             calls.append(ToolCallRecord(name=name, call_id=call_id, status="interrupted"))
         history = usage_history(client)
@@ -190,6 +202,7 @@ class Agent:
             parsed=parsed, artifacts=tuple(published),
             usage=summarize_usage(history[before:]),
             session_usage=summarize_usage(history[self._usage_start:]),
+            knowledge_trace=collector.snapshot() if collector is not None else None,
         )
 
     async def start(self) -> None:

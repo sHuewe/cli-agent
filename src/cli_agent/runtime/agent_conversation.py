@@ -16,6 +16,7 @@ from cli_agent.context.agent_knowledge import (
     tool_result_text,
 )
 from cli_agent.runtime.agent_loop import ModelLoopRunState, run_model_loop
+from cli_agent.runtime.knowledge_trace import trace_observe
 from cli_agent.state.agent_types import ToolRoute
 from cli_agent.state.message_visibility import messages_for_model
 from cli_agent.state.evidence_state import EvidenceState
@@ -185,7 +186,14 @@ class ConversationMixin:
             self._evidence_state.begin_task()
         from cli_agent.state.evidence_cleanup import reset_cleanup_tracking
         reset_cleanup_tracking(self, prompt)
-        knowledge = await self._collect_knowledge(prompt)
+        trace_observe(self, "begin", origin="initial")
+        try:
+            knowledge = await self._collect_knowledge(prompt)
+        except BaseException:
+            trace_observe(self, "finish", error=True)
+            raise
+        else:
+            trace_observe(self, "finish", result=knowledge)
         reference_context = self._build_reference_context_message(knowledge=knowledge)
         working_messages = [
             {
@@ -515,6 +523,7 @@ class ConversationMixin:
             if not active_vector:
                 if vector_config.required:
                     raise RuntimeError("The configured ChromaDB is unavailable.")
+                trace_observe(self, "outcome", status="error")
                 return None
             return await self._collect_chroma_knowledge(
                 prompt, required=bool(vector_config.required),
@@ -527,6 +536,7 @@ class ConversationMixin:
         if active_okf and self._knowledge_session is None:
             if okf_required:
                 raise RuntimeError("The configured OKF Knowledge server is unavailable.")
+            trace_observe(self, "outcome", status="error")
             return None
         if vector_config is not None and not active_vector and vector_required:
             raise RuntimeError("The configured vector index is unavailable.")
@@ -567,6 +577,10 @@ class ConversationMixin:
                     logger.warning("optional_vector_search_failed_fallback_to_okf", exc_info=True)
                     active_vector = False
                 else:
+                    trace_observe(
+                        self, "search", backend="okf", stage="initial",
+                        result=initial_search,
+                    )
                     knowledge_request_data["initial_search"] = initial_search
                     for path, names in _knowledge_allowed_calls(
                         type("_Result", (), {"structuredContent": initial_search})()
@@ -625,8 +639,10 @@ class ConversationMixin:
                 self._dump_value("knowledge_result.json", selection)
                 reason_code = selection.get("reason_code")
                 if reason_code == "not_applicable":
+                    trace_observe(self, "outcome", status="not_applicable")
                     return None
                 if reason_code == "not_found":
+                    trace_observe(self, "outcome", status="not_found")
                     if required:
                         return json.dumps(selection, ensure_ascii=False)
                     return None
@@ -644,9 +660,11 @@ class ConversationMixin:
                 selection,
                 knowledge_state.concepts,
             )
+            trace_observe(self, "selection", backend="okf", payload=payload)
             self._dump_value("knowledge_result.json", payload)
             return json.dumps(payload, ensure_ascii=False)
         except Exception as exc:
+            trace_observe(self, "outcome", status="error")
             self._dump_value(
                 "knowledge_result.json",
                 {
@@ -690,7 +708,16 @@ class ConversationMixin:
                 })
             try:
                 raw_initial = await session.search(prompt)
+                # Record actual query-specific ranking/distance; token
+                # registration can substitute an earlier snapshot for IDs
+                # seen in prior searches or omit hits due to selection budget.
+                trace_observe(
+                    self, "search", backend="chroma", stage="initial",
+                    result=raw_initial,
+                )
                 initial = _register_chroma_results(state, raw_initial)
+                if state.chroma_budget_exhausted:
+                    trace_observe(self, "mark_truncated")
             except BaseException:
                 if callback is not None:
                     await callback("tool_finished", {
@@ -747,14 +774,18 @@ class ConversationMixin:
                 self._dump_value("knowledge_result.json", selection)
                 reason = selection.get("reason_code")
                 if reason == "not_applicable":
+                    trace_observe(self, "outcome", status="not_applicable")
                     return None
                 if reason == "not_found":
+                    trace_observe(self, "outcome", status="not_found")
                     return json.dumps(selection, ensure_ascii=False) if required else None
                 raise RuntimeError(f"Incomplete Chroma retrieval: {reason!r}")
             payload = _assemble_chroma_payload(selection, state)
+            trace_observe(self, "selection", backend="chroma", payload=payload)
             self._dump_value("knowledge_result.json", payload)
             return json.dumps(payload, ensure_ascii=False)
         except Exception as exc:
+            trace_observe(self, "outcome", status="error")
             self._dump_value("knowledge_result.json", {
                 "status": "error", "error": f"{type(exc).__name__}: {exc}",
             })
