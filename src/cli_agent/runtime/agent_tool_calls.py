@@ -18,6 +18,7 @@ from cli_agent.context.agent_knowledge import (
     _normalize_knowledge_path,
     tool_result_text,
 )
+from cli_agent.runtime.knowledge_trace import trace_observe
 from cli_agent.state.agent_types import ToolRoute
 from cli_agent.state.evidence_tools import annotate_source_result
 from cli_agent.security.mcp_limits import (
@@ -381,6 +382,10 @@ async def process_tool_calls(
                 result.structuredContent = _register_chroma_results(
                     knowledge_state, raw_chroma,
                 )
+                trace_observe(
+                    agent, "search", backend="chroma", stage="followup",
+                    result=result.structuredContent,
+                )
                 if (
                     knowledge_state.chroma_budget_exhausted
                     or (
@@ -392,8 +397,19 @@ async def process_tool_calls(
                     # reached. The next LLM turn can select known tokens only.
                     knowledge_selection_only_mode = True
                     knowledge_concept_limit_notice_pending = True
+            if (
+                original_name == "knowledge_search"
+                and getattr(getattr(agent, "_vector_config", None), "mode", None) != "chroma"
+            ):
+                raw_vector = getattr(result, "structuredContent", None)
+                if isinstance(raw_vector, dict):
+                    trace_observe(
+                        agent, "search", backend="okf", stage="followup",
+                        result=raw_vector,
+                    )
             if original_name == "knowledge_read":
                 document = _knowledge_document(result)
+                trace_observe(agent, "read", document=document)
                 knowledge_selection_token = knowledge_state.register_concept(document)
                 if knowledge_selection_token is not None:
                     knowledge_document_path = str(document["path"])

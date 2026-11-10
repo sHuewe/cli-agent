@@ -122,6 +122,7 @@ class AgentBuilder:
         self._run_options: dict[str, Any] = {}
         self._event_callback = None
         self._python_tools = []
+        self._knowledge_trace_include_content: bool | None = None
 
     def with_admin_config(self, *, path: str | Path | None = None, **overrides: Any) -> AgentBuilder:
         if path is not None:
@@ -229,6 +230,17 @@ class AgentBuilder:
         self._python_tools.append(tool)
         return self
 
+    def with_knowledge_trace(self, *, include_content: bool = False) -> AgentBuilder:
+        """Record host-verified Knowledge search and selection in SDK results.
+
+        Disabled by default; raw document/chunk text is captured only when
+        include_content=True. Neither setting changes Knowledge behavior.
+        """
+        if not isinstance(include_content, bool):
+            raise TypeError("include_content must be a bool")
+        self._knowledge_trace_include_content = include_content
+        return self
+
     def build(self) -> "Agent":
         from .agent import Agent
         # An instance is a snapshot; subsequent builder updates do not affect it.
@@ -239,4 +251,5 @@ class AgentBuilder:
             run_options=dict(self._run_options),
             event_callback=self._event_callback,
             python_tools=tuple(self._python_tools),
+            knowledge_trace_include_content=self._knowledge_trace_include_content,
         )

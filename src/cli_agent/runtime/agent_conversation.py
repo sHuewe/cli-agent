@@ -16,6 +16,7 @@ from cli_agent.context.agent_knowledge import (
     tool_result_text,
 )
 from cli_agent.runtime.agent_loop import ModelLoopRunState, run_model_loop
+from cli_agent.runtime.knowledge_trace import trace_observe
 from cli_agent.state.agent_types import ToolRoute
 from cli_agent.state.message_visibility import messages_for_model
 from cli_agent.state.evidence_state import EvidenceState
@@ -185,7 +186,14 @@ class ConversationMixin:
             self._evidence_state.begin_task()
         from cli_agent.state.evidence_cleanup import reset_cleanup_tracking
         reset_cleanup_tracking(self, prompt)
-        knowledge = await self._collect_knowledge(prompt)
+        trace_observe(self, "begin", origin="initial")
+        try:
+            knowledge = await self._collect_knowledge(prompt)
+        except BaseException:
+            trace_observe(self, "finish", error=True)
+            raise
+        else:
+            trace_observe(self, "finish", result=knowledge)
         reference_context = self._build_reference_context_message(knowledge=knowledge)
         working_messages = [
             {
@@ -567,6 +575,10 @@ class ConversationMixin:
                     logger.warning("optional_vector_search_failed_fallback_to_okf", exc_info=True)
                     active_vector = False
                 else:
+                    trace_observe(
+                        self, "search", backend="okf", stage="initial",
+                        result=initial_search,
+                    )
                     knowledge_request_data["initial_search"] = initial_search
                     for path, names in _knowledge_allowed_calls(
                         type("_Result", (), {"structuredContent": initial_search})()
@@ -644,6 +656,7 @@ class ConversationMixin:
                 selection,
                 knowledge_state.concepts,
             )
+            trace_observe(self, "selection", backend="okf", payload=payload)
             self._dump_value("knowledge_result.json", payload)
             return json.dumps(payload, ensure_ascii=False)
         except Exception as exc:
@@ -691,6 +704,10 @@ class ConversationMixin:
             try:
                 raw_initial = await session.search(prompt)
                 initial = _register_chroma_results(state, raw_initial)
+                trace_observe(
+                    self, "search", backend="chroma", stage="initial",
+                    result=initial,
+                )
             except BaseException:
                 if callback is not None:
                     await callback("tool_finished", {
@@ -752,6 +769,7 @@ class ConversationMixin:
                     return json.dumps(selection, ensure_ascii=False) if required else None
                 raise RuntimeError(f"Incomplete Chroma retrieval: {reason!r}")
             payload = _assemble_chroma_payload(selection, state)
+            trace_observe(self, "selection", backend="chroma", payload=payload)
             self._dump_value("knowledge_result.json", payload)
             return json.dumps(payload, ensure_ascii=False)
         except Exception as exc:

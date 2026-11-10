@@ -16,6 +16,7 @@ from mcp import ClientSession
 
 from cli_agent.settings.admin_config import McpPolicy, TrustedMcpServer, _normalize_mcp_url
 from cli_agent.runtime.agent_conversation import ConversationMixin
+from cli_agent.runtime.knowledge_trace import trace_observe
 from cli_agent.runtime.context_dumps import ContextDumpMixin, MAX_DUMP_FILENAME_BYTES, MAX_LEGACY_WINDOWS_DUMP_PATH_CHARS, DUMP_PREFIX_HASH_HEX_CHARS
 from cli_agent.context.agent_knowledge import (
     DEFAULT_OKF_MAX_CONCEPT_READS,
@@ -212,13 +213,16 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
             )
         self._knowledge_reentry_calls += 1
         self._knowledge_reentry_seen.add(normalized)
+        trace_observe(self, "begin", origin="reentry")
         try:
             result = await self._collect_knowledge(question)
+            trace_observe(self, "finish", result=result)
             return SimpleNamespace(
                 structuredContent={"status": "ok" if result is not None else "no_new_information", "knowledge": json.loads(result) if result is not None else None},
                 content=[], isError=False,
             )
         except Exception:
+            trace_observe(self, "finish", error=True)
             logger.exception("additional_knowledge_failed")
             return SimpleNamespace(
                 structuredContent={"status": "error", "reason": "Additional Knowledge retrieval failed."},
