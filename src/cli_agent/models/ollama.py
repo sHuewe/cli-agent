@@ -14,6 +14,7 @@ from cli_agent.models.model_http import (
     MAX_MODEL_RESPONSE_BYTES,
     ModelResponseTooLargeError,
     read_bounded_json_response,
+    is_retryable_model_http_status,
 )
 from cli_agent.security.network_policy import LOCAL_HOSTS, validate_http_url
 
@@ -141,7 +142,7 @@ class OllamaClient:
             ) from exc
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
-            retryable = status == 429 or 500 <= status <= 599
+            retryable = is_retryable_model_http_status(status)
             raise OllamaError(
                 f"Ollama unter {self.base_url} antwortete mit HTTP {status}: {exc}",
                 retryable=retryable,

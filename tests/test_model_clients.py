@@ -433,3 +433,23 @@ def test_ollama_chat_discards_response_at_context_limit(monkeypatch) -> None:
         asyncio.run(client.chat([], []))
 
     assert client._context_limit_reached is True
+
+
+
+@pytest.mark.parametrize("status,expected", [(408, True), (504, True), (400, False)])
+def test_ollama_server_timeout_status_classification(monkeypatch, status, expected):
+    monkeypatch.setattr("cli_agent.models.ollama.httpx.AsyncClient", FakeAsyncClient)
+    FakeAsyncClient.response = FakeResponse(
+        {},
+        error=httpx.HTTPStatusError(
+            str(status),
+            request=SimpleNamespace(),
+            response=SimpleNamespace(status_code=status),
+        ),
+    )
+    client = OllamaClient(base_url="http://localhost:11434", model="m")
+
+    with pytest.raises(OllamaError, match=f"HTTP {status}") as exc:
+        asyncio.run(client.chat([], []))
+
+    assert exc.value.retryable is expected

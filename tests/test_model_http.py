@@ -130,3 +130,39 @@ def test_error_prefix_stops_after_requested_bytes() -> None:
 
     assert body == b"01234567"
     assert truncated is True
+
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [(408, True), (429, True), (500, True), (502, True),
+     (504, True), (524, True), (400, False), (401, False),
+     (403, False), (404, False), (413, False), (422, False)],
+)
+def test_retryable_model_http_status(status, expected):
+    from cli_agent.models.model_http import is_retryable_model_http_status
+
+    assert is_retryable_model_http_status(status) is expected
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        ({"code": 408}, True),
+        ({"code": "408"}, True),
+        ({"code": 504}, True),
+        ({"code": 429}, True),
+        ({"type": "timeout_error"}, True),
+        ({"code": 400, "type": "timeout_error"}, False),
+        ({"code": 400, "message": "request timed out"}, False),
+        ({"code": "context_length_exceeded"}, False),
+        ({"message": "request timed out"}, False),
+        ({"code": 401}, False),
+        ("timed out", False),
+        (None, False),
+    ],
+)
+def test_provider_error_classifier_avoids_message_heuristics(error, expected):
+    from cli_agent.models.model_http import is_retryable_provider_error
+
+    assert is_retryable_provider_error(error) is expected
