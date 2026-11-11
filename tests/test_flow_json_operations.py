@@ -374,7 +374,7 @@ def test_batch_topic_profiles_reuses_upstream_completed_checkpoint(
                    for _ in range(4)],
         "warnings": [],
     }
-    (tmp_path / "source.json").write_text(json.dumps(source), encoding="utf-8")
+    (tmp_path / "source.json").write_text(json.dumps([source]), encoding="utf-8")
     (tmp_path / "flow.toml").write_text(
         'version = 1\n'
         '[[steps]]\nid = "source"\nprompt_file = "source.md"\n'
