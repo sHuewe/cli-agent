@@ -118,6 +118,7 @@ def transform_json(
     batch_size: int = 5,
     max_batch_bytes: int = 80_000,
     serializer: Callable[[Any], str] | None = None,
+    target_fragment_bytes: int | None = None,
 ) -> dict[str, Any]:
     def size(item: Any) -> int:
         return _serialized_size(item, serializer=serializer)
@@ -135,12 +136,35 @@ def transform_json(
         if size({"items": result}) > MAX_RESULT_BYTES:
             raise ValueError("flatten exceeds the JSON result limit.")
         return {"items": result}
-    if kind not in {"batch", "batch_routes"}:
+    if kind not in {"batch", "batch_routes", "batch_topic_profiles"}:
         raise ValueError(f"Unbekannte JSON-Operation: {kind!r}")
     if not 1 <= batch_size <= 1000:
         raise ValueError("batch_size muss zwischen 1 und 1000 liegen.")
     if not 1024 <= max_batch_bytes <= 10_000_000:
         raise ValueError("max_batch_bytes muss zwischen 1024 und 10000000 liegen.")
+    if kind == "batch_topic_profiles":
+        from cli_agent.workflows.flow_json_topic_profiles import split_topic_profiles
+
+        target = min(12000, max_batch_bytes) if target_fragment_bytes is None else target_fragment_bytes
+        if type(target) is not int or not 1024 <= target <= max_batch_bytes:
+            raise ValueError(
+                "batch_topic_profiles.target_fragment_bytes must be between "
+                "1024 and max_batch_bytes."
+            )
+        fragments = split_topic_profiles(
+            value,
+            max_batch_bytes=max_batch_bytes,
+            target_fragment_bytes=target,
+            serializer=serializer,
+        )
+        return transform_json(
+            kind="batch",
+            value=fragments,
+            batch_size=batch_size,
+            max_batch_bytes=max_batch_bytes,
+            serializer=serializer,
+        )
+
     if kind == "batch_routes":
         fragments = _split_route_records(
             value, max_batch_bytes=max_batch_bytes, serializer=serializer,

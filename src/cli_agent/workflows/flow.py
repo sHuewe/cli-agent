@@ -1482,9 +1482,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step"
+                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_topic_profiles", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
@@ -1538,6 +1538,16 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 or type(max_bytes) is not int or not 1024 <= max_bytes <= 10000000
             ):
                 raise ValueError("Invalid JSON batch limits.")
+            fragment_target = raw_json_operation.get("target_fragment_bytes")
+            if fragment_target is not None and (
+                raw_json_operation["kind"] != "batch_topic_profiles"
+                or type(fragment_target) is not int
+                or not 1024 <= fragment_target <= max_bytes
+            ):
+                raise ValueError(
+                    "target_fragment_bytes requires batch_topic_profiles "
+                    "and must fit within max_batch_bytes."
+                )
             if (type(raw_json_operation.get("max_concept_bytes", 80000)) is not int
                     or not 1024 <= raw_json_operation.get("max_concept_bytes", 80000) <= 10000000):
                 raise ValueError("Invalid max_concept_bytes.")
@@ -5014,6 +5024,7 @@ def _execute_json_step(
             value=source,
             batch_size=operation.get("batch_size", 5),
             max_batch_bytes=operation.get("max_batch_bytes", 80000),
+            target_fragment_bytes=operation.get("target_fragment_bytes"),
             serializer=_json_dumps_preserving_numbers,
         )
     answer = _json_dumps_preserving_numbers(transformed)

@@ -252,3 +252,150 @@ def test_batch_routes_enforces_fragment_limit(monkeypatch: pytest.MonkeyPatch) -
                ]}]
     with pytest.raises(ValueError, match="batch_routes exceeds the fragment count limit\\."):
         transform_json(kind="batch_routes", value=source, max_batch_bytes=1024)
+
+
+
+def test_batch_topic_profiles_splits_large_merge_without_losing_evidence():
+    from cli_agent.workflows.flow import _json_dumps_preserving_numbers
+
+    original = {
+        "status": "needs_attention", "source_path": "doctrines/ä.md",
+        "topics": [
+            {"key": f"t{i:02d}", "title": "Übersicht", "summary": "ä" * 700,
+             "keywords": ["alpha", "beta"],
+             "evidence": [{"path": "doctrines/ä.md",
+                           "start_line": i + 1, "end_line": i + 2,
+                           "claim": "proof-" + "é" * 130}]}
+            for i in range(10)
+        ],
+        "warnings": ["warning-" + ("é" * 550), "incomplete scope"],
+        "extra_provenance": {"origin": "b0005"},
+    }
+    result = transform_json(
+        kind="batch_topic_profiles", value=[original], batch_size=4,
+        max_batch_bytes=4400, target_fragment_bytes=1900,
+        serializer=_json_dumps_preserving_numbers,
+    )
+    fragments = [v for b in result["batches"] for v in b["items"]]
+    assert len(fragments) > 1
+    assert all(f["status"] == "needs_attention" for f in fragments)
+    assert all(f["source_path"] == original["source_path"] for f in fragments)
+    assert all(f["extra_provenance"] == original["extra_provenance"] for f in fragments)
+    assert [t for f in fragments for t in f["topics"]] == original["topics"]
+    assert [w for f in fragments for w in f["warnings"]] == original["warnings"]
+    assert result["total_items"] == len(fragments)
+    assert all(
+        len(_json_dumps_preserving_numbers(b).encode("utf-8")) <= 4400
+        for b in result["batches"]
+    )
+
+
+def test_batch_topic_profiles_preserves_empty_and_ok_profiles():
+    profiles = [
+        {"status": "ok", "source_path": "doc-a", "topics": [], "warnings": []},
+        {"status": "ok", "source_path": "doc-b",
+         "topics": [{"key": "x", "evidence": []}], "warnings": []},
+    ]
+    result = transform_json(
+        kind="batch_topic_profiles", value=profiles, max_batch_bytes=1024,
+        target_fragment_bytes=1024,
+    )
+    flat = [x for group in result["batches"] for x in group["items"]]
+    assert flat == profiles
+
+
+def test_batch_topic_profiles_fails_on_indivisible_topic():
+    profile = {
+        "status": "ok", "source_path": "doc",
+        "topics": [{"evidence": [{"claim": "x" * 3000}]}],
+        "warnings": [],
+    }
+    with pytest.raises(ValueError, match=r"indivisible topics\[0\]"):
+        transform_json(
+            kind="batch_topic_profiles", value=[profile],
+            max_batch_bytes=1024, target_fragment_bytes=1024,
+        )
+
+
+def test_batch_topic_profiles_fails_on_indivisible_warning():
+    profile = {
+        "status": "needs_attention", "source_path": "doc",
+        "topics": [], "warnings": ["x" * 3000],
+    }
+    with pytest.raises(ValueError, match=r"indivisible warnings\[0\]"):
+        transform_json(
+            kind="batch_topic_profiles", value=[profile],
+            max_batch_bytes=1024,
+        )
+
+
+@pytest.mark.parametrize("profile", [
+    {"status": "unknown", "source_path": "doc", "topics": [], "warnings": []},
+    {"status": "ok", "source_path": "doc", "topics": "invalid", "warnings": []},
+    {"status": "ok", "source_path": "doc", "topics": [], "warnings": None},
+    {"status": "ok", "source_path": "", "topics": [], "warnings": []},
+    {"status": "ok", "source_path": "doc", "topics": [None], "warnings": []},
+])
+def test_batch_topic_profiles_rejects_bad_record(profile):
+    with pytest.raises(ValueError, match="batch_topic_profiles"):
+        transform_json(kind="batch_topic_profiles", value=[profile])
+
+
+def test_topic_batch_flow_step_requires_legal_fragment_limits(tmp_path: Path) -> None:
+    (tmp_path / "sample.toml").write_text(
+        'version = 1\n[[steps]]\nid = "pack"\noutput = "batch.json"\n'
+        '[steps.json_operation]\nkind = "batch_topic_profiles"\n'
+        'input = "merges"\nbatch_size = 4\nmax_batch_bytes = 30000\n'
+        'target_fragment_bytes = 12000\n'
+        '[steps.json_inputs.merges]\npath = "merged.json"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("sample.toml"), workspace=tmp_path)
+    assert flow.steps[0].json_operation["target_fragment_bytes"] == 12000
+    file = tmp_path / "sample.toml"
+    content = file.read_text()
+    file.write_text(content.replace(
+        "target_fragment_bytes = 12000", "target_fragment_bytes = 30001"
+    ))
+    with pytest.raises(ValueError, match="target_fragment_bytes"):
+        load_flow(Path("sample.toml"), workspace=tmp_path)
+
+
+def test_batch_topic_profiles_reuses_upstream_completed_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "source.md").write_text("The model must not run", encoding="utf-8")
+    source = {
+        "status": "ok", "source_path": "doctrines/doc.md",
+        "topics": [{"key": "x", "summary": "x" * 620,
+                    "evidence": [{"path": "doctrines/doc.md",
+                                  "start_line": 1, "end_line": 2,
+                                  "claim": "observed"}]}
+                   for _ in range(4)],
+        "warnings": [],
+    }
+    (tmp_path / "source.json").write_text(json.dumps(source), encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "source"\nprompt_file = "source.md"\n'
+        'output = "source.json"\nresponse_format = "json"\n'
+        '[[steps]]\nid = "pack"\noutput = "batch.json"\n'
+        '[steps.json_operation]\nkind = "batch_topic_profiles"\ninput = "merges"\n'
+        'batch_size = 3\nmax_batch_bytes = 1800\n'
+        'target_fragment_bytes = 1100\n'
+        '[steps.json_inputs.merges]\npath = "source.json"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+
+    from cli_agent.workflows import flow as flow_module
+
+    async def no_model(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Should resume source checkpoint; no LLM needed")
+
+    monkeypatch.setattr(flow_module, "run_once", no_model)
+    asyncio.run(run_flow(flow, workspace=tmp_path))
+    result = json.loads((tmp_path / "batch.json").read_text())
+    fragments = [x for group in result["batches"] for x in group["items"]]
+    assert [t for f in fragments for t in f["topics"]] == source["topics"]
+    asyncio.run(run_flow(flow, workspace=tmp_path))
