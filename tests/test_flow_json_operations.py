@@ -393,3 +393,47 @@ def test_batch_arrays_preserves_old_checkpoint_without_llm(tmp_path, monkeypatch
     assert [t for f in frags for t in f["topics"]] == original["topics"]
     assert [w for f in frags for w in f["warnings"]] == original["warnings"]
     asyncio.run(run_flow(flow, workspace=tmp_path))
+
+
+
+def test_batch_arrays_splits_at_hard_limit_when_soft_target_is_higher():
+    """Regression: a splittable JSON array must not fail as indivisible."""
+    from cli_agent.workflows.flow import _json_dumps_preserving_numbers
+
+    original = {"items": ["x" * 500, "y" * 500]}
+    result = transform_json(
+        kind="batch_arrays", value=[original], array_paths=["/items"],
+        max_batch_bytes=1024, target_fragment_bytes=1024,
+        serializer=_json_dumps_preserving_numbers,
+    )
+    fragments = [fragment for batch in result["batches"]
+                 for fragment in batch["items"]]
+    assert len(fragments) == 2
+    assert [entry for f in fragments for entry in f["items"]] == original["items"]
+    assert all(len(_json_dumps_preserving_numbers(batch).encode("utf-8")) <= 1024
+               for batch in result["batches"])
+
+
+def test_batch_arrays_fragment_count_can_exceed_packed_batch_count():
+    """Regression: 1001 fragments are valid when packed into 201 batches."""
+    original = [{"metadata": index, "items": []} for index in range(1001)]
+    result = transform_json(
+        kind="batch_arrays", value=original, array_paths=["/items"],
+        max_batch_bytes=1024, target_fragment_bytes=1024, batch_size=5,
+    )
+    assert result["total_items"] == 1001
+    assert len(result["batches"]) == 201
+    assert [fragment for batch in result["batches"]
+            for fragment in batch["items"]] == original
+
+
+def test_batch_arrays_keeps_independent_fragment_resource_guard(monkeypatch):
+    import cli_agent.workflows.flow_json_arrays as arrays
+
+    monkeypatch.setattr(arrays, "MAX_ARRAY_FRAGMENTS", 2)
+    with pytest.raises(ValueError, match="fragment count limit"):
+        transform_json(
+            kind="batch_arrays", value=[
+                {"items": []}, {"items": []}, {"items": []},
+            ], array_paths=["/items"], max_batch_bytes=1024,
+        )

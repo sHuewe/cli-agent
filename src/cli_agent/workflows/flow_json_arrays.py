@@ -15,6 +15,10 @@ from cli_agent.workflows.flow_json_operations import (
     MAX_BATCHES, MAX_RESULT_BYTES, _serialized_size,
 )
 
+# Fragment allocation is bounded independently of the number of packed
+# batches. A batch may contain multiple fragments.
+MAX_ARRAY_FRAGMENTS = 50_000
+
 
 def parse_array_paths(paths: Any) -> tuple[tuple[str, ...], ...]:
     """Validate non-overlapping RFC 6901 JSON Pointers to object array fields.
@@ -102,7 +106,7 @@ def split_json_arrays(
             raise ValueError(
                 f"batch_arrays: entry {record_index} exceeds max_batch_bytes."
             )
-        if len(fragments) >= MAX_BATCHES:
+        if len(fragments) >= MAX_ARRAY_FRAGMENTS:
             raise ValueError("batch_arrays exceeds the fragment count limit.")
         result_bytes += bytes_used + (1 if fragments else 0)
         if result_bytes > MAX_RESULT_BYTES:
@@ -134,7 +138,13 @@ def split_json_arrays(
                 destination = _find_array(current, path, record_index)
                 destination.append(entry)
                 used = size(current)
-                if used > target_fragment_bytes and has_values:
+                # The soft target can exceed the envelope-adjusted hard
+                # limit (e.g. max_batch_bytes=1024, target=1024). Flush a
+                # nonempty fragment on EITHER bound before deciding whether
+                # the new element is indivisible.
+                if has_values and (
+                    used > target_fragment_bytes or used > hard_limit
+                ):
                     destination.pop()
                     emit(current, record_index)
                     current = deepcopy(skeleton)
