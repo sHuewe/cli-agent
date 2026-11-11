@@ -252,3 +252,248 @@ def test_batch_routes_enforces_fragment_limit(monkeypatch: pytest.MonkeyPatch) -
                ]}]
     with pytest.raises(ValueError, match="batch_routes exceeds the fragment count limit\\."):
         transform_json(kind="batch_routes", value=source, max_batch_bytes=1024)
+
+
+
+
+def test_batch_arrays_is_schema_independent_and_lossless():
+    from cli_agent.workflows.flow import _json_dumps_preserving_numbers
+    original = {
+        "id": "record-1",
+        "context": {"origin": "agent", "trace": "é"},
+        "data": {
+            "rows": [{"value": i, "note": "ä" * 350} for i in range(10)],
+        },
+        "errors": [{"reason": "x" * 300}, {"reason": "y" * 500}],
+    }
+    result = transform_json(
+        kind="batch_arrays", value=[original],
+        array_paths=["/data/rows", "/errors"], batch_size=4,
+        max_batch_bytes=3000, target_fragment_bytes=1100,
+        serializer=_json_dumps_preserving_numbers,
+    )
+    fragments = [f for batch in result["batches"] for f in batch["items"]]
+    assert len(fragments) > 1
+    assert all(f["id"] == "record-1" for f in fragments)
+    assert all(f["context"] == original["context"] for f in fragments)
+    assert [row for f in fragments for row in f["data"]["rows"]] == original["data"]["rows"]
+    assert [e for f in fragments for e in f["errors"]] == original["errors"]
+    assert all(
+        len(_json_dumps_preserving_numbers(batch).encode("utf-8")) <= 3000
+        for batch in result["batches"]
+    )
+    assert original["data"]["rows"][0]["note"] == "ä" * 350
+
+
+def test_batch_arrays_supports_primitive_array_members_and_empty_arrays():
+    data = [
+        {"meta": 123, "items": [1, True, None, ["nested"], {"x": 1}],
+         "empty": []},
+        {"meta": 456, "items": [], "empty": []},
+    ]
+    result = transform_json(
+        kind="batch_arrays", value=data,
+        array_paths=["/items", "/empty"], max_batch_bytes=1024,
+    )
+    fragments = [f for batch in result["batches"] for f in batch["items"]]
+    assert fragments == data
+
+
+def test_batch_arrays_handles_json_pointer_escaping():
+    data = [{"meta": "ok", "nested": {"a/b": {"~list": list(range(20))}}}]
+    result = transform_json(
+        kind="batch_arrays", value=data, array_paths=["/nested/a~1b/~0list"],
+        max_batch_bytes=1024, target_fragment_bytes=1024,
+    )
+    fragments = [f for batch in result["batches"] for f in batch["items"]]
+    assert [i for f in fragments for i in f["nested"]["a/b"]["~list"]] == list(range(20))
+
+
+def test_batch_arrays_rejects_oversized_atomic_value_and_metadata():
+    with pytest.raises(ValueError, match="indivisible array entry"):
+        transform_json(
+            kind="batch_arrays", value=[{"items": ["x" * 2000]}],
+            array_paths=["/items"], max_batch_bytes=1024,
+        )
+    with pytest.raises(ValueError, match="non-selected fields"):
+        transform_json(
+            kind="batch_arrays", value=[{"meta": "x" * 2000, "items": []}],
+            array_paths=["/items"], max_batch_bytes=1024,
+        )
+
+
+@pytest.mark.parametrize("value,paths,pattern", [
+    ([{"items": []}], [], "array_paths"),
+    ([{"items": []}], ["/items", "/items"], "duplicate"),
+    ([{"items": []}], ["/items", "/items/sub"], "overlap"),
+    ([{"items": []}], ["items"], "start"),
+    ([{"items": []}], ["/bad~3escape"], "invalid"),
+    ([{"items": None}], ["/items"], "expects an array"),
+    ([{"items": []}], ["/unknown"], "has no object array"),
+    ([4], ["/items"], "JSON object"),
+])
+def test_batch_arrays_rejects_bad_input(value, paths, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        transform_json(kind="batch_arrays", value=value,
+                       array_paths=paths, max_batch_bytes=1024)
+
+
+def test_batch_arrays_flow_parses_paths_and_limits(tmp_path: Path):
+    path = tmp_path / "flow.toml"
+    original = (
+        'version = 1\n[[steps]]\nid = "pack"\noutput = "packed.json"\n'
+        '[steps.json_operation]\nkind = "batch_arrays"\n'
+        'input = "merges"\narray_paths = ["/topics", "/warnings"]\n'
+        'batch_size = 4\nmax_batch_bytes = 30000\n'
+        'target_fragment_bytes = 12000\n'
+        '[steps.json_inputs.merges]\npath = "merged.json"\n'
+    )
+    path.write_text(original, encoding="utf-8")
+    flow = load_flow(path, workspace=tmp_path)
+    assert flow.steps[0].json_operation["array_paths"] == ["/topics", "/warnings"]
+    path.write_text(original.replace("target_fragment_bytes = 12000",
+                                    "target_fragment_bytes = 30001"))
+    with pytest.raises(ValueError, match="target_fragment_bytes"):
+        load_flow(path, workspace=tmp_path)
+    path.write_text(original.replace("array_paths = [\"/topics\", \"/warnings\"]",
+                                    'array_paths = ["/topics", "/topics"]'))
+    with pytest.raises(ValueError, match="duplicate"):
+        load_flow(path, workspace=tmp_path)
+
+
+def test_batch_arrays_preserves_old_checkpoint_without_llm(tmp_path, monkeypatch):
+    (tmp_path / "source.md").write_text("Not executed", encoding="utf-8")
+    original = {"status": "needs_attention", "source_path": "doc.md",
+                "topics": [{"id": i, "text": "x" * 590} for i in range(4)],
+                "warnings": ["unresolved"] }
+    (tmp_path / "source.json").write_text(json.dumps([original]), encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "source"\nprompt_file = "source.md"\n'
+        'output = "source.json"\nresponse_format = "json"\n'
+        '[[steps]]\nid = "pack"\noutput = "batch.json"\n'
+        '[steps.json_operation]\nkind = "batch_arrays"\ninput = "merges"\n'
+        'array_paths = ["/topics", "/warnings"]\n'
+        'batch_size = 3\nmax_batch_bytes = 1800\n'
+        'target_fragment_bytes = 1100\n'
+        '[steps.json_inputs.merges]\npath = "source.json"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    import cli_agent.workflows.flow as fm
+
+    async def fail_model(*args, **kwargs):
+        raise AssertionError("A checkpoint should be reused")
+
+    monkeypatch.setattr(fm, "run_once", fail_model)
+    asyncio.run(run_flow(flow, workspace=tmp_path))
+    result = json.loads((tmp_path / "batch.json").read_text())
+    frags = [f for b in result["batches"] for f in b["items"]]
+    assert all(f["status"] == "needs_attention" for f in frags)
+    assert [t for f in frags for t in f["topics"]] == original["topics"]
+    assert [w for f in frags for w in f["warnings"]] == original["warnings"]
+    asyncio.run(run_flow(flow, workspace=tmp_path))
+
+
+
+def test_batch_arrays_splits_at_hard_limit_when_soft_target_is_higher():
+    """Regression: a splittable JSON array must not fail as indivisible."""
+    from cli_agent.workflows.flow import _json_dumps_preserving_numbers
+
+    original = {"items": ["x" * 500, "y" * 500]}
+    result = transform_json(
+        kind="batch_arrays", value=[original], array_paths=["/items"],
+        max_batch_bytes=1024, target_fragment_bytes=1024,
+        serializer=_json_dumps_preserving_numbers,
+    )
+    fragments = [fragment for batch in result["batches"]
+                 for fragment in batch["items"]]
+    assert len(fragments) == 2
+    assert [entry for f in fragments for entry in f["items"]] == original["items"]
+    assert all(len(_json_dumps_preserving_numbers(batch).encode("utf-8")) <= 1024
+               for batch in result["batches"])
+
+
+def test_batch_arrays_fragment_count_can_exceed_packed_batch_count():
+    """Regression: 1001 fragments are valid when packed into 201 batches."""
+    original = [{"metadata": index, "items": []} for index in range(1001)]
+    result = transform_json(
+        kind="batch_arrays", value=original, array_paths=["/items"],
+        max_batch_bytes=1024, target_fragment_bytes=1024, batch_size=5,
+    )
+    assert result["total_items"] == 1001
+    assert len(result["batches"]) == 201
+    assert [fragment for batch in result["batches"]
+            for fragment in batch["items"]] == original
+
+
+def test_batch_arrays_keeps_independent_fragment_resource_guard(monkeypatch):
+    import cli_agent.workflows.flow_json_arrays as arrays
+
+    monkeypatch.setattr(arrays, "MAX_ARRAY_FRAGMENTS", 2)
+    with pytest.raises(ValueError, match="fragment count limit"):
+        transform_json(
+            kind="batch_arrays", value=[
+                {"items": []}, {"items": []}, {"items": []},
+            ], array_paths=["/items"], max_batch_bytes=1024,
+        )
+
+
+
+def test_batch_arrays_serialization_work_scales_with_array_elements():
+    """Regression: never re-serialize every growing prefix of a large array."""
+    from cli_agent.workflows.flow import _json_dumps_preserving_numbers
+
+    serialized_bytes = 0
+
+    def counting_serializer(value):
+        nonlocal serialized_bytes
+        result = _json_dumps_preserving_numbers(value)
+        serialized_bytes += len(result.encode("utf-8"))
+        return result
+
+    values = list(range(8000))
+    result = transform_json(
+        kind="batch_arrays",
+        value=[{"metadata": {"source": "sample"}, "data": {"rows": values}}],
+        array_paths=["/data/rows"],
+        batch_size=4,
+        max_batch_bytes=100_000,
+        target_fragment_bytes=100_000,
+        serializer=counting_serializer,
+    )
+    fragments = [fragment for batch in result["batches"]
+                 for fragment in batch["items"]]
+    assert [value for fragment in fragments for value in fragment["data"]["rows"]] == values
+    assert len(fragments) == 1
+    # Incremental element sizing is linear. Re-serializing all prefixes
+    # would process many megabytes for this small input.
+    assert serialized_bytes < 150_000
+
+
+def test_batch_arrays_incremental_sizing_matches_exact_utf8_output():
+    from cli_agent.workflows.flow import _JsonNumber, _json_dumps_preserving_numbers
+
+    original = {
+        "metadata": "ä" * 18,
+        "nested": {
+            "entries": [
+                {"label": "é" * 160, "value": _JsonNumber("1e-200")}
+                for _ in range(12)
+            ],
+            "flags": [True, None, False, "a\\b", "🦋" * 12],
+        },
+    }
+    result = transform_json(
+        kind="batch_arrays", value=[original],
+        array_paths=["/nested/entries", "/nested/flags"],
+        max_batch_bytes=1024, target_fragment_bytes=1024,
+        serializer=_json_dumps_preserving_numbers,
+    )
+    fragments = [fragment for batch in result["batches"]
+                 for fragment in batch["items"]]
+    assert len(fragments) > 1
+    assert [item for fragment in fragments for item in fragment["nested"]["entries"]] == original["nested"]["entries"]
+    assert [item for fragment in fragments for item in fragment["nested"]["flags"]] == original["nested"]["flags"]
+    for batch in result["batches"]:
+        assert len(_json_dumps_preserving_numbers(batch).encode("utf-8")) <= 1024
