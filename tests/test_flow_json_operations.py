@@ -437,3 +437,63 @@ def test_batch_arrays_keeps_independent_fragment_resource_guard(monkeypatch):
                 {"items": []}, {"items": []}, {"items": []},
             ], array_paths=["/items"], max_batch_bytes=1024,
         )
+
+
+
+def test_batch_arrays_serialization_work_scales_with_array_elements():
+    """Regression: never re-serialize every growing prefix of a large array."""
+    from cli_agent.workflows.flow import _json_dumps_preserving_numbers
+
+    serialized_bytes = 0
+
+    def counting_serializer(value):
+        nonlocal serialized_bytes
+        result = _json_dumps_preserving_numbers(value)
+        serialized_bytes += len(result.encode("utf-8"))
+        return result
+
+    values = list(range(8000))
+    result = transform_json(
+        kind="batch_arrays",
+        value=[{"metadata": {"source": "sample"}, "data": {"rows": values}}],
+        array_paths=["/data/rows"],
+        batch_size=4,
+        max_batch_bytes=100_000,
+        target_fragment_bytes=100_000,
+        serializer=counting_serializer,
+    )
+    fragments = [fragment for batch in result["batches"]
+                 for fragment in batch["items"]]
+    assert [value for fragment in fragments for value in fragment["data"]["rows"]] == values
+    assert len(fragments) == 1
+    # Incremental element sizing is linear. Re-serializing all prefixes
+    # would process many megabytes for this small input.
+    assert serialized_bytes < 150_000
+
+
+def test_batch_arrays_incremental_sizing_matches_exact_utf8_output():
+    from cli_agent.workflows.flow import _JsonNumber, _json_dumps_preserving_numbers
+
+    original = {
+        "metadata": "ä" * 18,
+        "nested": {
+            "entries": [
+                {"label": "é" * 160, "value": _JsonNumber("1e-200")}
+                for _ in range(12)
+            ],
+            "flags": [True, None, False, "a\\b", "🦋" * 12],
+        },
+    }
+    result = transform_json(
+        kind="batch_arrays", value=[original],
+        array_paths=["/nested/entries", "/nested/flags"],
+        max_batch_bytes=1024, target_fragment_bytes=1024,
+        serializer=_json_dumps_preserving_numbers,
+    )
+    fragments = [fragment for batch in result["batches"]
+                 for fragment in batch["items"]]
+    assert len(fragments) > 1
+    assert [item for fragment in fragments for item in fragment["nested"]["entries"]] == original["nested"]["entries"]
+    assert [item for fragment in fragments for item in fragment["nested"]["flags"]] == original["nested"]["flags"]
+    for batch in result["batches"]:
+        assert len(_json_dumps_preserving_numbers(batch).encode("utf-8")) <= 1024

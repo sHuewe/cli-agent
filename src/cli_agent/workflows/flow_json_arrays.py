@@ -125,39 +125,50 @@ def split_json_arrays(
         for path in paths:
             _set_array(skeleton, path, [])
 
-        if size(skeleton) > hard_limit:
+        # With compact JSON serialization, inserting an element into an
+        # empty selected array adds exactly its serialized byte count; each
+        # subsequent element adds one comma byte too. All other fields are
+        # unchanged. Track this incrementally rather than serializing the
+        # growing fragment after every append (quadratic for long arrays).
+        skeleton_bytes = size(skeleton)
+        if skeleton_bytes > hard_limit:
             raise ValueError(
                 f"batch_arrays: non-selected fields in entry {record_index} "
                 "exceed max_batch_bytes."
             )
 
         current = deepcopy(skeleton)
+        current_bytes = skeleton_bytes
         has_values = False
         for path, entries in zip(paths, sources):
             for item_index, entry in enumerate(entries):
                 destination = _find_array(current, path, record_index)
-                destination.append(entry)
-                used = size(current)
+                entry_bytes = size(entry)
+                candidate_bytes = (
+                    current_bytes + entry_bytes + (1 if destination else 0)
+                )
                 # The soft target can exceed the envelope-adjusted hard
                 # limit (e.g. max_batch_bytes=1024, target=1024). Flush a
                 # nonempty fragment on EITHER bound before deciding whether
                 # the new element is indivisible.
                 if has_values and (
-                    used > target_fragment_bytes or used > hard_limit
+                    candidate_bytes > target_fragment_bytes
+                    or candidate_bytes > hard_limit
                 ):
-                    destination.pop()
                     emit(current, record_index)
                     current = deepcopy(skeleton)
+                    current_bytes = skeleton_bytes
                     has_values = False
                     destination = _find_array(current, path, record_index)
-                    destination.append(entry)
-                    used = size(current)
-                if used > hard_limit:
+                    candidate_bytes = current_bytes + entry_bytes
+                if candidate_bytes > hard_limit:
                     raise ValueError(
                         f"batch_arrays: indivisible array entry {item_index} "
                         f"at /{'/'.join(path)} of input {record_index} "
                         "exceeds max_batch_bytes."
                     )
+                destination.append(entry)
+                current_bytes = candidate_bytes
                 has_values = True
         # Keep metadata-only records (all selected arrays empty).
         emit(current, record_index)
