@@ -11,6 +11,38 @@ MODEL_RESPONSE_CHUNK_BYTES = 64 * 1024
 MAX_MODEL_ERROR_BODY_BYTES = 32_000
 
 
+def is_retryable_model_http_status(status: int) -> bool:
+    """Classify transient model HTTP failures, including request timeouts.
+
+    408 must be explicit: unlike 5xx, it is a 4xx but is caused by a
+    temporarily exceeded request deadline rather than a malformed prompt.
+    Never retry authorization, validation or context-window errors.
+    """
+    return status in {408, 429} or 500 <= status <= 599
+
+
+def is_retryable_provider_error(error: Any) -> bool:
+    """Detect a provider timeout/error embedded in a successful HTTP response.
+
+    Some OpenAI-compatible gateways return HTTP 200 containing
+    {"error": {"code": 408}} instead of a chat-completion message. Trust
+    only structured error codes/types, not free-text message matching.
+    """
+    if not isinstance(error, dict):
+        return False
+    code = error.get("code")
+    if type(code) is int:
+        return is_retryable_model_http_status(code)
+    if isinstance(code, str) and len(code) == 3 and code.isascii() and code.isdecimal():
+        return is_retryable_model_http_status(int(code))
+    if code is not None:
+        return False
+    return error.get("type") in {
+        "timeout", "timeout_error", "request_timeout", "upstream_timeout",
+        "gateway_timeout",
+    }
+
+
 class ModelResponseTooLargeError(RuntimeError):
     """A model endpoint returned more response data than the client accepts."""
 

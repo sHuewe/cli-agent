@@ -17,6 +17,8 @@ from cli_agent.models.model_http import (
     ModelResponseTooLargeError,
     read_bounded_json_response,
     read_response_prefix,
+    is_retryable_model_http_status,
+    is_retryable_provider_error,
 )
 from cli_agent.security.network_policy import LOCAL_HOSTS, validate_http_url
 
@@ -270,7 +272,7 @@ class OpenAIClient:
                             detail += "... [HTTP error response truncated]"
                         suffix = f": {detail}" if detail else ""
                         status = response.status_code
-                        retryable = status == 429 or 500 <= status <= 599
+                        retryable = is_retryable_model_http_status(status)
                         raise OpenAIError(
                             f"OpenAI-kompatibles Modell unter {self.base_url} hat die Anfrage "
                             f"mit HTTP {status} abgelehnt{suffix}",
@@ -298,6 +300,16 @@ class OpenAIClient:
             raise OpenAIError(
                 "Unerwartete Modellantwort: JSON-Root ist kein Objekt.",
                 retryable=False,
+            )
+        if is_retryable_provider_error(data.get("error")):
+            # An OpenAI-compatible gateway may send a timeout/temporary
+            # provider error with HTTP 200. This is not a model message.
+            # Leave usage history and conversation state unchanged so
+            # RetryingModelClient can repeat ONLY the failed request.
+            raise OpenAIError(
+                f"OpenAI-kompatibles Modell unter {self.base_url} hat einen "
+                "wiederholbaren Provider-Fehler im Antwortkörper gemeldet.",
+                retryable=True,
             )
         self.last_usage = self._token_usage(data)
         self.usage_history.append(self.last_usage)
