@@ -293,7 +293,9 @@ def prepare_doctrine_concept_batches(
         _obj(x, "section_analyses.iterations[]").get("output")
         for x in _array(_obj(analyses, "section_analyses").get("iterations"), "section_analyses.iterations")
     ]
-    if len(sections) > 100:
+    # Keep the downstream doctrine planner aligned with the 512-section
+    # ceiling accepted by markdown_sections and the Flow validator.
+    if len(sections) > 512:
         raise ValueError("Zu viele Abschnittsanalysen.")
     verified: list[dict[str, Any]] = []
     for section in sections:

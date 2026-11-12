@@ -90,3 +90,39 @@ def test_short_document_empty_sections_is_supported():
     )
     assert len(batch["batches"]) == 1
     assert batch["batches"][0]["sections"] == []
+
+
+
+def _many_section_analyses(count: int) -> dict:
+    return {"iterations": [
+        {"id": f"s{index:03d}", "output": {
+            "status": "ok", "section_id": f"s{index:03d}",
+            "source_path": "sources/doc.md",
+            "start_line": index, "end_line": index,
+            "summary": f"Section {index}", "topics": [],
+        }}
+        for index in range(1, count + 1)
+    ]}
+
+
+@pytest.mark.parametrize("section_count", [101, 120, 512])
+def test_concept_batching_accepts_up_to_512_section_analyses(section_count):
+    plan = outline()
+    # One concept references the very last section so the downstream
+    # planning step must validate and retrieve sections beyond the old cap.
+    plan["concepts"][0]["section_ids"] = [f"s{section_count:03d}"]
+    plan["concepts"][1]["section_ids"] = ["s001"]
+    plan["concepts"][2]["section_ids"] = ["s002"]
+    result = prepare_doctrine_concept_batches(
+        plan, _many_section_analyses(section_count), batch_size=2,
+    )
+    assert len(result["batches"]) == 2
+    assert [s["section_id"] for s in result["batches"][0]["sections"]] == [
+        "s001", f"s{section_count:03d}",
+    ]
+    assert result["batches"][1]["sections"][0]["section_id"] == "s002"
+
+
+def test_concept_batching_rejects_more_than_512_section_analyses():
+    with pytest.raises(ValueError, match="Zu viele Abschnittsanalysen"):
+        prepare_doctrine_concept_batches(outline(), _many_section_analyses(513))
