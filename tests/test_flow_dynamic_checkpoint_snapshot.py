@@ -224,11 +224,11 @@ def test_dynamic_discovery_distinct_entry_limit_still_enforced(
     _flow(tmp_path)
     for i in range(24):
         (tmp_path / "work" / f"unrelated-{i}.txt").write_text("not JSON", encoding="utf-8")
-    monkeypatch.setattr(flow_module, "MAX_DYNAMIC_CHECKPOINT_CANDIDATES", 10)
     with pytest.raises(ValueError, match="Too many distinct dynamic JSON checkpoint"):
         flow_module._snapshot_dynamic_checkpoint_candidates(
             workspace=tmp_path,
             cache={"child": load_flow(tmp_path / "child.toml", workspace=tmp_path)},
+            max_candidates=10,
         )
 
 
@@ -271,11 +271,11 @@ def test_dynamic_discovery_counts_symlink_entries_not_targets(
     except (OSError, NotImplementedError):
         pytest.skip("Creating file symlinks is not permitted on this platform")
 
-    monkeypatch.setattr(flow_module, "MAX_DYNAMIC_CHECKPOINT_CANDIDATES", 10)
     with pytest.raises(ValueError, match="Too many distinct dynamic JSON checkpoint"):
         flow_module._snapshot_dynamic_checkpoint_candidates(
             workspace=tmp_path,
             cache={"child": load_flow(tmp_path / "child.toml", workspace=tmp_path)},
+            max_candidates=10,
         )
 
 
