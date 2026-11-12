@@ -428,3 +428,69 @@ def test_root_checkpoint_candidate_budget_rejects_invalid_values(tmp_path, value
     )
     with pytest.raises(ValueError, match="checkpoint.max_candidates"):
         load_flow(flow_file, workspace=tmp_path)
+
+
+
+def _static_unknown_child_flow(tmp_path: Path) -> Path:
+    """A static child output whose invocation cannot be planned at run start."""
+    _flow(tmp_path)
+    child = tmp_path / "child.toml"
+    child.write_text(
+        child.read_text(encoding="utf-8").replace(
+            'output = "work/\${input.item.id}.json"',
+            'output = "work/fixed.json"',
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path / "work" / "fixed.json"
+
+
+def test_nested_static_checkpoint_can_resume_without_reinvoking_model(
+    tmp_path, monkeypatch,
+):
+    output = _static_unknown_child_flow(tmp_path)
+    output.write_text('{"status":"ok","items":[1,2,3]}', encoding="utf-8")
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == "discover":
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"}]}', web_context_statuses=(),
+            )
+        raise AssertionError("static child checkpoint should be reused")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    asyncio.run(run_flow(
+        load_flow(tmp_path / "parent.toml", workspace=tmp_path),
+        workspace=tmp_path,
+    ))
+    assert calls == ["discover"]
+    assert output.read_text(encoding="utf-8") == '{"status":"ok","items":[1,2,3]}'
+
+
+@pytest.mark.parametrize("exists_at_start", [False, True])
+def test_nested_static_checkpoint_does_not_adopt_new_or_changed_file(
+    tmp_path, monkeypatch, exists_at_start,
+):
+    output = _static_unknown_child_flow(tmp_path)
+    if exists_at_start:
+        output.write_text('{"status":"old"}', encoding="utf-8")
+
+    async def fake_run_once(options, *, dependencies=None):
+        if options.prompt == "discover":
+            output.write_text('{"status":"new"}', encoding="utf-8")
+            return SimpleNamespace(
+                answer='{"items":[{"id":"one"}]}', web_context_statuses=(),
+            )
+        raise AssertionError("new/modified static output must not be adopted")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    with pytest.raises(
+        ValueError,
+        match="changed" if exists_at_start else "Output-Datei existiert bereits:",
+    ):
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "parent.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
