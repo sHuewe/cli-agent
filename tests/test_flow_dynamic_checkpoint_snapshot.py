@@ -508,7 +508,7 @@ def test_static_checkpoint_discovery_skips_workspace_directory(
     _flow(tmp_path)
     child = tmp_path / "child.toml"
     original = child.read_text(encoding="utf-8")
-    replacement = str(tmp_path.resolve()).replace("\\\\", "/") if as_absolute else "."
+    replacement = tmp_path.resolve().as_posix() if as_absolute else "."
     child.write_text(
         original.replace(
             'output = "work/${input.item.id}.json"',
