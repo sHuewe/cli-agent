@@ -3352,6 +3352,9 @@ def _snapshot_dynamic_checkpoint_candidates(
     known_fingerprints = known_checkpoint_fingerprints or {}
     # Combine identical search templates while retaining all declaring owners.
     owners_by_template: dict[str, list[tuple[str, str]]] = {}
+    # A child with late-bound inputs can still declare a *static* checkpoint.
+    # Capture exact paths separately, never through a dynamic wildcard.
+    static_by_path: dict[str, tuple[Path, list[tuple[str, str]]]] = {}
     for flow in cache.values():
         for step in flow.steps:
             if (
@@ -3359,7 +3362,6 @@ def _snapshot_dynamic_checkpoint_candidates(
                 or step.output is None
                 or step.response_format != "json"
                 or step.overwrite_output
-                or not _DYNAMIC_VALUE_EXPR.search(step.output)
             ):
                 continue
             template_path = Path(step.output)
@@ -3368,10 +3370,39 @@ def _snapshot_dynamic_checkpoint_candidates(
                     template_path = template_path.relative_to(workspace)
                 except ValueError:
                     continue
+            owner = (_filesystem_path_key(flow.source), step.step_id)
+            if not _DYNAMIC_VALUE_EXPR.search(step.output):
+                # Foreach outputs with a constant path have no unique
+                # invocation identity; exclude them from static snapshots.
+                if step.foreach is not None:
+                    continue
+                try:
+                    exact_path = _workspace_path(
+                        workspace, template_path,
+                        purpose="Static JSON checkpoint candidate",
+                        must_exist=False,
+                    )
+                    # The workspace itself is a directory, not a valid
+                    # output file. Without this guard the parent traversal
+                    # would walk above workspace and loop forever at root.
+                    if exact_path == workspace:
+                        continue
+                    ancestor = exact_path.parent
+                    while ancestor != workspace:
+                        if ancestor == ancestor.parent:
+                            raise ValueError("Checkpoint parent escapes workspace.")
+                        if path_entry_is_symlink_or_reparse(ancestor):
+                            raise ValueError("Unsafe checkpoint parent.")
+                        ancestor = ancestor.parent
+                except (OSError, ValueError):
+                    continue
+                path_key = _filesystem_path_key(exact_path)
+                if path_key not in static_by_path:
+                    static_by_path[path_key] = (exact_path, [])
+                static_by_path[path_key][1].append(owner)
+                continue
             template = template_path.as_posix()
-            owners_by_template.setdefault(template, []).append(
-                (_filesystem_path_key(flow.source), step.step_id)
-            )
+            owners_by_template.setdefault(template, []).append(owner)
 
     # A busy flow can have many dynamic templates under the same state
     # directory. Walking that directory once per template repeatedly counts
@@ -3423,6 +3454,7 @@ def _snapshot_dynamic_checkpoint_candidates(
     examined_paths: set[str] = set()
     total_bytes = 0
     content_fingerprints: dict[str, bytes] = dict(known_fingerprints)
+    dynamic_owners_by_path: dict[str, set[tuple[str, str]]] = {}
     for search_root, patterns in patterns_by_root.values():
         for directory, subdirectories, filenames in os.walk(
             search_root, followlinks=False
@@ -3514,6 +3546,56 @@ def _snapshot_dynamic_checkpoint_candidates(
                     paths[key] = path
                 for flow_key, step_id in dict.fromkeys(declaring_steps):
                     fingerprints[(flow_key, step_id, key)] = fingerprint
+                    dynamic_owners_by_path.setdefault(key, set()).add(
+                        (flow_key, step_id)
+                    )
+
+    # Snapshot declaration-owned static JSON files that could not be reached
+    # during startup planning. Never adopt a conflicting declaration, an
+    # already-snapshotted output of another invocation, or a file created
+    # after startup.
+    for key, (candidate, owners) in static_by_path.items():
+        if (len(set(owners)) != 1
+                or key in known_fingerprints
+                or key in dynamic_owners_by_path):
+            continue
+        if not candidate.is_file():
+            continue
+        lexical_key = os.path.normpath(os.path.abspath(candidate))
+        if case_insensitive:
+            lexical_key = lexical_key.casefold()
+        if lexical_key not in examined_paths:
+            examined_paths.add(lexical_key)
+            if len(examined_paths) > max_candidates:
+                raise ValueError(
+                    "Too many distinct dynamic JSON checkpoint candidates "
+                    f"at run startup: {len(examined_paths)} examined entries "
+                    f"(limit {max_candidates}, last entry {candidate})."
+                )
+        try:
+            size = candidate.stat().st_size
+        except OSError:
+            continue
+        if size > MAX_STRUCTURED_OUTPUT_BYTES:
+            continue
+        total_bytes += size
+        if total_bytes > max_snapshot_bytes:
+            raise ValueError(
+                "Run-Start-Checkpoint-Budget exceeded: "
+                f"{total_bytes} bytes of JSON checkpoints "
+                f"(limit {max_snapshot_bytes} bytes, last file {candidate})."
+            )
+        try:
+            content = read_existing_output_text(
+                workspace, candidate, max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+            )
+        except (OSError, ValueError):
+            continue
+        fingerprint = _checkpoint_fingerprint(content)
+        flow_key, step_id = owners[0]
+        fingerprints[(flow_key, step_id, key)] = fingerprint
+        paths[key] = candidate
+
     return fingerprints, tuple(paths.values())
 
 
@@ -3532,7 +3614,6 @@ def _run_start_fingerprint(
         step.response_format != "json"
         or step.overwrite_output
         or step.output is None
-        or not _DYNAMIC_VALUE_EXPR.search(step.output)
     ):
         return None
     return (dynamic or {}).get(
