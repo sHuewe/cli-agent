@@ -1089,6 +1089,7 @@ def _evaluate_when(
 def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
     """Validate top-level TOML options independently from step parsing."""
     allowed_root = {
+        "checkpoint",
         "version",
         "config",
         "model",
@@ -1187,6 +1188,19 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             ),
         )
 
+    checkpoint_options = values.get("checkpoint", {})
+    if (not isinstance(checkpoint_options, dict)
+            or set(checkpoint_options) - {"max_snapshot_bytes"}):
+        raise ValueError("checkpoint supports only max_snapshot_bytes.")
+    max_snapshot_bytes = checkpoint_options.get(
+        "max_snapshot_bytes", MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES,
+    )
+    if (type(max_snapshot_bytes) is not int
+            or not MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES <= max_snapshot_bytes <= 1_000_000_000):
+        raise ValueError(
+            "checkpoint.max_snapshot_bytes must be between 200000000 and 1000000000."
+        )
+
     raw_global_vars = values.get("vars", {})
     if not isinstance(raw_global_vars, dict):
         raise ValueError("vars must be a table.")
@@ -1222,7 +1236,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             f"Flow contains more than {MAX_FLOW_STEPS} steps."
         )
 
-    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry)
+    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry, max_snapshot_bytes)
 
 
 def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
@@ -1262,6 +1276,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         excluded_paths,
         raw_steps,
         allowed_retry,
+        max_snapshot_bytes,
     ) = _parse_flow_root(values)
 
     steps: list[FlowStep] = []
@@ -1282,6 +1297,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "exclude_paths",
         "retry",
         "response_format",
+        "json_restart_attempts",
         "approve_tools",
         "vars",
         "foreach",
@@ -1813,6 +1829,24 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 f"steps[{index}].response_format must be 'text' or 'json'."
             )
         response_format = str(response_format_value)
+        json_restart_attempts = raw.get("json_restart_attempts", 0)
+        if (type(json_restart_attempts) is not int
+                or not 0 <= json_restart_attempts <= 2):
+            raise ValueError(
+                f"steps[{index}].json_restart_attempts must be between 0 and 2."
+            )
+        if json_restart_attempts and (
+            response_format != "json"
+            or raw_json_operation is not None
+            or raw_filesystem_operation is not None
+            or child_flow is not None
+            or prompt_value is None
+            or raw.get("conversation_items") is not None
+        ):
+            raise ValueError(
+                f"steps[{index}].json_restart_attempts requires a JSON model "
+                "prompt step without conversation_items."
+            )
 
         raw_retry = raw.get("retry")
         retry_policy = global_retry_policy
@@ -2184,6 +2218,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 retry_policy=retry_policy,
                 retry_overrides=dict(raw_retry) if raw_retry is not None else None,
                 response_format=response_format,
+                json_restart_attempts=json_restart_attempts,
                 approve_tools=approve_tools,
                 variables=variables,
                 global_variables=global_variables,
@@ -2219,6 +2254,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         result=result_selector,
         result_fallback=fallback_selector,
         retry_policy=global_retry_policy,
+        checkpoint_snapshot_max_bytes=max_snapshot_bytes,
     )
 
 
@@ -3289,6 +3325,7 @@ def _snapshot_dynamic_checkpoint_candidates(
     workspace: Path,
     cache: dict[str, FlowDefinition],
     known_checkpoint_fingerprints: dict[str, bytes] | None = None,
+    max_snapshot_bytes: int = MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES,
 ) -> tuple[dict[tuple[str, str, str], bytes], tuple[Path, ...]]:
     """Snapshot startup JSON outputs, scoped to their declaring flow/step.
 
@@ -3438,8 +3475,14 @@ def _snapshot_dynamic_checkpoint_candidates(
                     if size > MAX_STRUCTURED_OUTPUT_BYTES:
                         continue
                     total_bytes += size
-                    if total_bytes > MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES:
-                        raise ValueError("Run-Start-Checkpoint-Budget exceeded.")
+                    if total_bytes > max_snapshot_bytes:
+                        raise ValueError(
+                            "Run-Start-Checkpoint-Budget exceeded: "
+                            f"{total_bytes} bytes of dynamic JSON checkpoints "
+                            f"(limit {max_snapshot_bytes} bytes, "
+                            f"last file {path}). Set [checkpoint].max_snapshot_bytes "
+                            "in the root Flow TOML (up to 1000000000)."
+                        )
                     try:
                         content = read_existing_output_text(
                             workspace,
@@ -5148,64 +5191,78 @@ async def _execute_model_iteration(
         flow_input=flow_input,
         json_input_values=json_input_values,
     )
-    if conversation_prompts is None:
-        prompt = _prompt_for_iteration(
-            step,
-            workspace=workspace,
-            item=item,
-            iteration_id=iteration_id,
-            previous_output=previous_output,
-            outputs=outputs,
-            flow_input=flow_input,
-            json_input_values=json_input_values,
-        )
-        result = await run_once(
-            OneShotRunOptions(
-                workspace=workspace,
-                prompt=prompt,
-                config_file=config_file,
-                model=step.model,
-                workspace_access=step.workspace_access,
-                with_data=step.with_data,
-                with_mcp=step.with_mcp,
-                retry_policy=effective_retry_policy,
-                response_format=step.response_format,
-                context_files=contexts,
-                add_web_context=step.add_web_context,
-                output=output,
-                overwrite_output=step.overwrite_output,
-                approval_callback=callback,
-                user_message_callback=context.user_message_callback,
-                mutation_protected_paths=mutation_protected_paths,
-                excluded_paths=excluded_paths,
-                dump_file_prefix=dump_file_prefix,
-            ),
-            dependencies=context.dependencies,
-        )
-    else:
-        result = await run_conversation(
-            ConversationRunOptions(
-                workspace=workspace,
-                prompts=conversation_prompts,
-                config_file=config_file,
-                model=step.model,
-                workspace_access=step.workspace_access,
-                with_data=step.with_data,
-                with_mcp=step.with_mcp,
-                retry_policy=effective_retry_policy,
-                response_format=step.response_format,
-                context_files=contexts,
-                add_web_context=step.add_web_context,
-                output=output,
-                overwrite_output=step.overwrite_output,
-                approval_callback=callback,
-                user_message_callback=context.user_message_callback,
-                mutation_protected_paths=mutation_protected_paths,
-                excluded_paths=excluded_paths,
-                dump_file_prefix=dump_file_prefix,
-            ),
-            dependencies=context.dependencies,
-        )
+    # Fresh agent/model context on each optional JSON-format restart. Do
+    # not re-run HTTP retries or non-format failures as whole tasks.
+    for json_attempt in range(step.json_restart_attempts + 1):
+        try:
+            if conversation_prompts is None:
+                prompt = _prompt_for_iteration(
+                    step,
+                    workspace=workspace,
+                    item=item,
+                    iteration_id=iteration_id,
+                    previous_output=previous_output,
+                    outputs=outputs,
+                    flow_input=flow_input,
+                    json_input_values=json_input_values,
+                )
+                result = await run_once(
+                    OneShotRunOptions(
+                        workspace=workspace,
+                        prompt=prompt,
+                        config_file=config_file,
+                        model=step.model,
+                        workspace_access=step.workspace_access,
+                        with_data=step.with_data,
+                        with_mcp=step.with_mcp,
+                        retry_policy=effective_retry_policy,
+                        response_format=step.response_format,
+                        context_files=contexts,
+                        add_web_context=step.add_web_context,
+                        output=output,
+                        overwrite_output=step.overwrite_output,
+                        approval_callback=callback,
+                        user_message_callback=context.user_message_callback,
+                        mutation_protected_paths=mutation_protected_paths,
+                        excluded_paths=excluded_paths,
+                        dump_file_prefix=dump_file_prefix,
+                    ),
+                    dependencies=context.dependencies,
+                )
+            else:
+                result = await run_conversation(
+                    ConversationRunOptions(
+                        workspace=workspace,
+                        prompts=conversation_prompts,
+                        config_file=config_file,
+                        model=step.model,
+                        workspace_access=step.workspace_access,
+                        with_data=step.with_data,
+                        with_mcp=step.with_mcp,
+                        retry_policy=effective_retry_policy,
+                        response_format=step.response_format,
+                        context_files=contexts,
+                        add_web_context=step.add_web_context,
+                        output=output,
+                        overwrite_output=step.overwrite_output,
+                        approval_callback=callback,
+                        user_message_callback=context.user_message_callback,
+                        mutation_protected_paths=mutation_protected_paths,
+                        excluded_paths=excluded_paths,
+                        dump_file_prefix=dump_file_prefix,
+                    ),
+                    dependencies=context.dependencies,
+                )
+            break
+        except ValueError as exc:
+            if (not str(exc).startswith("Das Modell hat auch nach ")
+                    or "Korrekturversuchen kein valid JSON:" not in str(exc)
+                    or json_attempt >= step.json_restart_attempts):
+                raise
+            _flow_logger.warning(
+                "flow_json_restart step=%s iteration=%s next_attempt=%d",
+                step.step_id, iteration_id, json_attempt + 2,
+            )
     if output is not None and step.response_format == "json":
         _parse_structured_output(result.answer, step_id=step.step_id)
         # OutputTarget writes UTF-8 text with unmodified newlines.
@@ -6060,6 +6117,7 @@ async def run_flow(
             workspace=workspace,
             cache=cache,
             known_checkpoint_fingerprints=known_fingerprints,
+            max_snapshot_bytes=flow.checkpoint_snapshot_max_bytes,
         )
     )
     context = _FlowExecutionContext(

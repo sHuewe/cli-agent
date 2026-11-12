@@ -7560,3 +7560,99 @@ def test_run_start_nested_duplicate_output_reports_actual_collision(
     assert "iteration=two" in error
     assert "out-same.json" in error
     assert "iteration=three" not in error
+
+
+
+def test_json_restart_attempts_fresh_model_run_then_success(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import asyncio
+
+    (tmp_path / "request.md").write_text("Return a JSON object.", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "model"\n'
+        'prompt_file = "request.md"\nresponse_format = "json"\n'
+        'json_restart_attempts = 1\noutput = "result.json"\n',
+        encoding="utf-8",
+    )
+    from cli_agent.workflows import flow as flow_module
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if len(calls) == 1:
+            raise ValueError(
+                "Das Modell hat auch nach 2 Korrekturversuchen kein valid JSON: "
+                "Expecting ',' delimiter"
+            )
+        return SimpleNamespace(answer='{"status":"ok"}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    flow = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(flow, workspace=tmp_path))
+    assert calls == ["Return a JSON object.", "Return a JSON object."]
+    assert len(calls) == 2
+
+
+def test_json_restart_attempts_does_not_retry_unrelated_failures(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import asyncio
+
+    (tmp_path / "request.md").write_text("Return JSON.", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "model"\n'
+        'prompt_file = "request.md"\nresponse_format = "json"\n'
+        'json_restart_attempts = 2\noutput = "result.json"\n',
+        encoding="utf-8",
+    )
+    from cli_agent.workflows import flow as flow_module
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(1)
+        raise ValueError("Unrelated tool failure")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    with pytest.raises(ValueError, match="Unrelated tool failure"):
+        asyncio.run(run_flow(load_flow(tmp_path / "flow.toml", workspace=tmp_path),
+                             workspace=tmp_path))
+    assert len(calls) == 1
+
+
+def test_json_restart_attempts_exhaustion(tmp_path, monkeypatch):
+    import asyncio
+
+    (tmp_path / "request.md").write_text("Return JSON.", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "model"\n'
+        'prompt_file = "request.md"\nresponse_format = "json"\n'
+        'json_restart_attempts = 1\noutput = "result.json"\n',
+        encoding="utf-8",
+    )
+    from cli_agent.workflows import flow as flow_module
+    calls = []
+
+    async def fake_run_once(options, *, dependencies=None):
+        calls.append(1)
+        raise ValueError("Das Modell hat auch nach 2 Korrekturversuchen kein valid JSON: bad")
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    with pytest.raises(ValueError, match="Korrekturversuchen kein valid JSON"):
+        asyncio.run(run_flow(load_flow(tmp_path / "flow.toml", workspace=tmp_path),
+                             workspace=tmp_path))
+    assert len(calls) == 2
+    assert not (tmp_path / "result.json").exists()
+
+
+@pytest.mark.parametrize("value,format", [
+    ("3", "json"), ("true", "json"), ('"1"', "json"), ("1", "text"),
+])
+def test_json_restart_attempts_validate_opt_in(tmp_path, value, format):
+    (tmp_path / "request.md").write_text("Prompt", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "model"\n'
+        f'prompt_file = "request.md"\nresponse_format = "{format}"\n'
+        f'json_restart_attempts = {value}\noutput = "result.json"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="json_restart_attempts"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
