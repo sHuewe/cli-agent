@@ -123,3 +123,60 @@ def test_outline_metadata_failure_reports_section_and_field():
             tasks, results,
             source_path="sources/doc.md", source_slug="doc-123",
         )
+
+
+
+def _large_outline_inputs(count: int):
+    sections = {
+        "mode": "sections", "source_path": "sources/doc.md",
+        "sections": [
+            {"id": f"s{i:03d}", "start_line": i, "end_line": i}
+            for i in range(1, count + 1)
+        ],
+    }
+    analyses = {"iterations": [
+        {"id": section["id"], "output": {
+            "status": "ok", "section_id": section["id"],
+            "source_path": "sources/doc.md",
+            "start_line": section["start_line"],
+            "end_line": section["end_line"],
+        }}
+        for section in sections["sections"]
+    ]}
+    tasks = prepare_section_outline_tasks(sections, analyses)
+    results = {"iterations": [
+        {"id": task["id"], "output": {
+            "status": "ok", "section_id": task["id"],
+            "concepts": [
+                {"topic_key": "shared-procedure",
+                 "title": "Shared procedure",
+                 "description": "Evidence grounded in each section.",
+                 "tags": ["test"]}
+            ],
+        }}
+        for task in tasks["tasks"]
+    ]}
+    return tasks, results
+
+
+@pytest.mark.parametrize("count", [101, 120, 512])
+def test_section_outline_assembly_accepts_up_to_512_sections(count):
+    tasks, results = _large_outline_inputs(count)
+    assembled = assemble_section_outlines(
+        tasks, results,
+        source_path="sources/doc.md", source_slug="doc-123",
+    )
+    assert len(tasks["tasks"]) == count
+    assert assembled["status"] == "ok"
+    assert len(assembled["concepts"]) == 1
+    assert assembled["concepts"][0]["section_ids"] == [
+        f"s{i:03d}" for i in range(1, count + 1)
+    ]
+
+
+def test_section_outline_assembly_rejects_more_than_512_sections():
+    tasks, results = _large_outline_inputs(513)
+    with pytest.raises(ValueError, match="Section outlines are missing or too numerous"):
+        assemble_section_outlines(
+            tasks, results, source_path="sources/doc.md", source_slug="doc-123",
+        )

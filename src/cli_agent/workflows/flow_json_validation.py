@@ -513,7 +513,8 @@ def assemble_section_outlines(
     source_slug = _slug(source_slug, "source_slug")
     task_list = _array(_obj(tasks, "outline_tasks").get("tasks"), "outline_tasks.tasks")
     iteration_list = _array(_obj(results, "outlines").get("iterations"), "outlines.iterations")
-    if not 1 <= len(task_list) <= 100 or len(iteration_list) != len(task_list):
+    # Match the 512-section cap accepted by markdown_sections and task planning.
+    if not 1 <= len(task_list) <= 512 or len(iteration_list) != len(task_list):
         raise ValueError("Section outlines are missing or too numerous.")
     expected = {}
     for task in task_list:
