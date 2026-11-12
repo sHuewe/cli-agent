@@ -105,3 +105,79 @@ def test_many_headings_preserve_full_line_coverage(tmp_path: Path) -> None:
     assert sections[0]["start_line"] == 1
     assert sections[-1]["end_line"] == 50000
     assert all(a["end_line"] + 1 == b["start_line"] for a, b in zip(sections, sections[1:]))
+
+
+
+def test_heading_before_two_thirds_does_not_create_short_sections(tmp_path: Path) -> None:
+    # At 12,000 chars, the only candidate heading is around 5,000 chars.
+    # The old one-third threshold cut there, creating a needlessly small
+    # section. The new rule reaches a line boundary near the 12,000 limit.
+    content = (
+        "# Introduction\n"
+        + ("a" * 99 + "\n") * 50
+        + "# Early heading\n"
+        + ("b" * 99 + "\n") * 120
+    )
+    (tmp_path / "early.md").write_text(content, encoding="utf-8")
+    result = markdown_sections(
+        tmp_path, "early.md", target_chars=12000, max_sections=512,
+    )
+    sections = result["sections"]
+    assert result["mode"] == "sections"
+    assert 100 <= sections[0]["end_line"] <= 121
+    assert sections[0]["start_line"] == 1
+    assert sections[-1]["end_line"] == len(content.splitlines())
+    assert all(a["end_line"] + 1 == b["start_line"]
+               for a, b in zip(sections, sections[1:]))
+
+
+def test_more_than_one_hundred_sections_are_supported(tmp_path: Path) -> None:
+    # A single long line can occupy an entire section; this document
+    # deterministically produces 120 sections without approaching the
+    # 8 MB source-size limit or the 200,000-line guard.
+    content = ("x" * 4000 + "\n") * 120
+    (tmp_path / "many.md").write_text(content, encoding="utf-8")
+    result = markdown_sections(
+        tmp_path, "many.md", target_chars=4000, max_sections=512,
+    )
+    sections = result["sections"]
+    assert len(sections) == 120
+    assert sections[0]["start_line"] == 1
+    assert sections[-1]["end_line"] == 120
+    assert [section["id"] for section in sections] == [
+        f"s{i:03d}" for i in range(1, 121)
+    ]
+
+
+def test_markdown_sections_maximum_of_512_is_enforced(tmp_path: Path) -> None:
+    (tmp_path / "large.md").write_text(
+        ("x" * 4000 + "\n") * 513, encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="too many sections"):
+        markdown_sections(
+            tmp_path, "large.md", target_chars=4000, max_sections=512,
+        )
+    with pytest.raises(ValueError, match="max_sections is invalid"):
+        markdown_sections(
+            tmp_path, "large.md", target_chars=4000, max_sections=513,
+        )
+
+
+def test_flow_validator_accepts_max_512_but_rejects_513(tmp_path: Path) -> None:
+    path = tmp_path / "flow.toml"
+    original = (
+        'version = 1\n'
+        '[[steps]]\nid = "sections"\noutput = "sections.json"\n'
+        '[steps.filesystem_operation]\n'
+        'kind = "markdown_sections"\n'
+        'source_path = "doc.md"\n'
+        'target_chars = 12000\nmax_sections = 512\n'
+    )
+    path.write_text(original, encoding="utf-8")
+    flow = load_flow(path, workspace=tmp_path)
+    assert flow.steps[0].filesystem_operation["max_sections"] == 512
+    path.write_text(original.replace(
+        "max_sections = 512", "max_sections = 513",
+    ), encoding="utf-8")
+    with pytest.raises(ValueError, match="between 1 and 512"):
+        load_flow(path, workspace=tmp_path)
