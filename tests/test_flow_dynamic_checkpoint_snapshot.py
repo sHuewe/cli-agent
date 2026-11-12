@@ -494,3 +494,31 @@ def test_nested_static_checkpoint_does_not_adopt_new_or_changed_file(
             load_flow(tmp_path / "parent.toml", workspace=tmp_path),
             workspace=tmp_path,
         ))
+
+
+@pytest.mark.parametrize("as_absolute", [False, True])
+def test_static_checkpoint_discovery_skips_workspace_directory(
+    tmp_path, as_absolute,
+):
+    """A JSON output pointing to the workspace must never hang discovery.
+
+    This can arise in conditional branches that will be skipped at runtime,
+    because discovery examines their declarations before conditions resolve.
+    """
+    _flow(tmp_path)
+    child = tmp_path / "child.toml"
+    original = child.read_text(encoding="utf-8")
+    replacement = str(tmp_path.resolve()).replace("\\\\", "/") if as_absolute else "."
+    child.write_text(
+        original.replace(
+            'output = "work/${input.item.id}.json"',
+            f'output = "{replacement}"',
+        ),
+        encoding="utf-8",
+    )
+    fingerprints, paths = flow_module._snapshot_dynamic_checkpoint_candidates(
+        workspace=tmp_path.resolve(),
+        cache={"child": load_flow(child, workspace=tmp_path)},
+    )
+    assert fingerprints == {}
+    assert paths == ()

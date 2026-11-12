@@ -3382,8 +3382,15 @@ def _snapshot_dynamic_checkpoint_candidates(
                         purpose="Static JSON checkpoint candidate",
                         must_exist=False,
                     )
+                    # The workspace itself is a directory, not a valid
+                    # output file. Without this guard the parent traversal
+                    # would walk above workspace and loop forever at root.
+                    if exact_path == workspace:
+                        continue
                     ancestor = exact_path.parent
                     while ancestor != workspace:
+                        if ancestor == ancestor.parent:
+                            raise ValueError("Checkpoint parent escapes workspace.")
                         if path_entry_is_symlink_or_reparse(ancestor):
                             raise ValueError("Unsafe checkpoint parent.")
                         ancestor = ancestor.parent
