@@ -1350,8 +1350,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     raise ValueError("markdown_sections permits only source_path, target_chars, max_sections.")
                 if type(op.get("target_chars", 30000)) is not int or not 4000 <= op.get("target_chars", 30000) <= 100000:
                     raise ValueError("markdown_sections.target_chars must be between 4000 and 100000.")
-                if type(op.get("max_sections", 32)) is not int or not 1 <= op.get("max_sections", 32) <= 100:
-                    raise ValueError("markdown_sections.max_sections must be between 1 and 100.")
+                if type(op.get("max_sections", 32)) is not int or not 1 <= op.get("max_sections", 32) <= 512:
+                    raise ValueError("markdown_sections.max_sections must be between 1 and 512.")
             if op["kind"] == "checkpoint_status":
                 if (not isinstance(op.get("paths"), list) or not 1 <= len(op["paths"]) <= 16
                         or any(not isinstance(p, str) or not p.strip() for p in op["paths"])):

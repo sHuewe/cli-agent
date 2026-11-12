@@ -293,7 +293,9 @@ def prepare_doctrine_concept_batches(
         _obj(x, "section_analyses.iterations[]").get("output")
         for x in _array(_obj(analyses, "section_analyses").get("iterations"), "section_analyses.iterations")
     ]
-    if len(sections) > 100:
+    # Keep the downstream doctrine planner aligned with the 512-section
+    # ceiling accepted by markdown_sections and the Flow validator.
+    if len(sections) > 512:
         raise ValueError("Zu viele Abschnittsanalysen.")
     verified: list[dict[str, Any]] = []
     for section in sections:
@@ -511,7 +513,8 @@ def assemble_section_outlines(
     source_slug = _slug(source_slug, "source_slug")
     task_list = _array(_obj(tasks, "outline_tasks").get("tasks"), "outline_tasks.tasks")
     iteration_list = _array(_obj(results, "outlines").get("iterations"), "outlines.iterations")
-    if not 1 <= len(task_list) <= 100 or len(iteration_list) != len(task_list):
+    # Match the 512-section cap accepted by markdown_sections and task planning.
+    if not 1 <= len(task_list) <= 512 or len(iteration_list) != len(task_list):
         raise ValueError("Section outlines are missing or too numerous.")
     expected = {}
     for task in task_list:

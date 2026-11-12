@@ -216,7 +216,7 @@ def markdown_sections(
     """
     if type(target_chars) is not int or not 4000 <= target_chars <= 100000:
         raise ValueError("markdown_sections.target_chars is invalid.")
-    if type(max_sections) is not int or not 1 <= max_sections <= 100:
+    if type(max_sections) is not int or not 1 <= max_sections <= 512:
         raise ValueError("markdown_sections.max_sections is invalid.")
     raw = Path(source_path)
     windows = PureWindowsPath(source_path)
@@ -292,12 +292,13 @@ def markdown_sections(
         if limit >= len(lines):
             end = len(lines)
         else:
-            # Prefer the latest Markdown heading after a minimum 1/3 budget.
+            # Prefer a heading only after using at least 2/3 of the budget.
+            # Earlier headings would make sections needlessly small.
             earliest = max(
                 start + 1,
                 bisect_left(
                     char_offsets,
-                    char_offsets[start] + target_chars // 3,
+                    char_offsets[start] + (target_chars * 2) // 3,
                     lo=start + 1,
                     hi=limit + 1,
                 ),
