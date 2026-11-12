@@ -1190,8 +1190,10 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
 
     checkpoint_options = values.get("checkpoint", {})
     if (not isinstance(checkpoint_options, dict)
-            or set(checkpoint_options) - {"max_snapshot_bytes"}):
-        raise ValueError("checkpoint supports only max_snapshot_bytes.")
+            or set(checkpoint_options) - {"max_snapshot_bytes", "max_candidates"}):
+        raise ValueError(
+            "checkpoint supports only max_snapshot_bytes and max_candidates."
+        )
     max_snapshot_bytes = checkpoint_options.get(
         "max_snapshot_bytes", MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES,
     )
@@ -1199,6 +1201,15 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             or not MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES <= max_snapshot_bytes <= 1_000_000_000):
         raise ValueError(
             "checkpoint.max_snapshot_bytes must be between 200000000 and 1000000000."
+        )
+
+    max_candidates = checkpoint_options.get(
+        "max_candidates", MAX_DYNAMIC_CHECKPOINT_CANDIDATES,
+    )
+    if (type(max_candidates) is not int
+            or not MAX_DYNAMIC_CHECKPOINT_CANDIDATES <= max_candidates <= 200_000):
+        raise ValueError(
+            "checkpoint.max_candidates must be between 20000 and 200000."
         )
 
     raw_global_vars = values.get("vars", {})
@@ -1236,7 +1247,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             f"Flow contains more than {MAX_FLOW_STEPS} steps."
         )
 
-    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry, max_snapshot_bytes)
+    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry, max_snapshot_bytes, max_candidates)
 
 
 def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
@@ -1277,6 +1288,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_steps,
         allowed_retry,
         max_snapshot_bytes,
+        max_candidates,
     ) = _parse_flow_root(values)
 
     steps: list[FlowStep] = []
@@ -2255,6 +2267,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         result_fallback=fallback_selector,
         retry_policy=global_retry_policy,
         checkpoint_snapshot_max_bytes=max_snapshot_bytes,
+        checkpoint_max_candidates=max_candidates,
     )
 
 
@@ -3326,6 +3339,7 @@ def _snapshot_dynamic_checkpoint_candidates(
     cache: dict[str, FlowDefinition],
     known_checkpoint_fingerprints: dict[str, bytes] | None = None,
     max_snapshot_bytes: int = MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES,
+    max_candidates: int = MAX_DYNAMIC_CHECKPOINT_CANDIDATES,
 ) -> tuple[dict[tuple[str, str, str], bytes], tuple[Path, ...]]:
     """Snapshot startup JSON outputs, scoped to their declaring flow/step.
 
@@ -3427,10 +3441,14 @@ def _snapshot_dynamic_checkpoint_candidates(
                     key = key.casefold()
                 if key not in examined_paths:
                     examined_paths.add(key)
-                    if len(examined_paths) > MAX_DYNAMIC_CHECKPOINT_CANDIDATES:
+                    if len(examined_paths) > max_candidates:
                         raise ValueError(
                             "Too many distinct dynamic JSON checkpoint "
-                            "candidates at run startup."
+                            "candidates at run startup: "
+                            f"{len(examined_paths)} examined entries "
+                            f"(limit {max_candidates}, last entry {entry}). "
+                            "Set [checkpoint].max_candidates in the root "
+                            "Flow TOML (up to 200000)."
                         )
 
             # Never follow symlinks or Windows reparse points.
@@ -6118,6 +6136,7 @@ async def run_flow(
             cache=cache,
             known_checkpoint_fingerprints=known_fingerprints,
             max_snapshot_bytes=flow.checkpoint_snapshot_max_bytes,
+            max_candidates=flow.checkpoint_max_candidates,
         )
     )
     context = _FlowExecutionContext(

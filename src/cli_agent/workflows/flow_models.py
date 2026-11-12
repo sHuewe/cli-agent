@@ -56,6 +56,7 @@ class FlowDefinition:
     # Root-level [retry], separate from effective per-step defaults.
     retry_policy: ModelRetryPolicy | None = None
     checkpoint_snapshot_max_bytes: int = 200_000_000
+    checkpoint_max_candidates: int = 20_000
 
 
 @dataclass(frozen=True)
