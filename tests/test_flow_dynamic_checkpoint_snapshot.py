@@ -437,7 +437,7 @@ def _static_unknown_child_flow(tmp_path: Path) -> Path:
     child = tmp_path / "child.toml"
     child.write_text(
         child.read_text(encoding="utf-8").replace(
-            'output = "work/\${input.item.id}.json"',
+            'output = "work/${input.item.id}.json"',
             'output = "work/fixed.json"',
         ),
         encoding="utf-8",
