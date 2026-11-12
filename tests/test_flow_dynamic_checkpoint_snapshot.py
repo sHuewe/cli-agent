@@ -224,11 +224,11 @@ def test_dynamic_discovery_distinct_entry_limit_still_enforced(
     _flow(tmp_path)
     for i in range(24):
         (tmp_path / "work" / f"unrelated-{i}.txt").write_text("not JSON", encoding="utf-8")
-    monkeypatch.setattr(flow_module, "MAX_DYNAMIC_CHECKPOINT_CANDIDATES", 10)
     with pytest.raises(ValueError, match="Too many distinct dynamic JSON checkpoint"):
         flow_module._snapshot_dynamic_checkpoint_candidates(
             workspace=tmp_path,
             cache={"child": load_flow(tmp_path / "child.toml", workspace=tmp_path)},
+            max_candidates=10,
         )
 
 
@@ -271,11 +271,11 @@ def test_dynamic_discovery_counts_symlink_entries_not_targets(
     except (OSError, NotImplementedError):
         pytest.skip("Creating file symlinks is not permitted on this platform")
 
-    monkeypatch.setattr(flow_module, "MAX_DYNAMIC_CHECKPOINT_CANDIDATES", 10)
     with pytest.raises(ValueError, match="Too many distinct dynamic JSON checkpoint"):
         flow_module._snapshot_dynamic_checkpoint_candidates(
             workspace=tmp_path,
             cache={"child": load_flow(tmp_path / "child.toml", workspace=tmp_path)},
+            max_candidates=10,
         )
 
 
@@ -322,11 +322,12 @@ def test_root_flow_checkpoint_budget_uses_explicit_limit(tmp_path, monkeypatch):
     original = flow_module._snapshot_dynamic_checkpoint_candidates
 
     def record_budget(*, workspace, cache, known_checkpoint_fingerprints=None,
-                      max_snapshot_bytes=0):
+                      max_snapshot_bytes=0, max_candidates=0):
         observed.append(max_snapshot_bytes)
         return original(workspace=workspace, cache=cache,
                         known_checkpoint_fingerprints=known_checkpoint_fingerprints,
-                        max_snapshot_bytes=max_snapshot_bytes)
+                        max_snapshot_bytes=max_snapshot_bytes,
+                        max_candidates=max_candidates)
 
     async def fake_run_once(options, *, dependencies=None):
         if options.prompt == "discover":
@@ -352,4 +353,78 @@ def test_root_checkpoint_budget_rejects_invalid_values(tmp_path, value):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match=r"checkpoint.max_snapshot_bytes"):
+        load_flow(flow_file, workspace=tmp_path)
+
+
+
+def test_dynamic_checkpoint_candidate_budget_is_configurable(tmp_path):
+    _flow(tmp_path)
+    for i in range(24):
+        (tmp_path / "work" / f"unrelated-{i}.txt").write_text(
+            "not a checkpoint", encoding="utf-8",
+        )
+    child = load_flow(tmp_path / "child.toml", workspace=tmp_path)
+    with pytest.raises(
+        ValueError, match=r"25 examined entries \(limit 24, last entry ",
+    ):
+        flow_module._snapshot_dynamic_checkpoint_candidates(
+            workspace=tmp_path, cache={"child": child}, max_candidates=24,
+        )
+    fingerprints, paths = flow_module._snapshot_dynamic_checkpoint_candidates(
+        workspace=tmp_path, cache={"child": child}, max_candidates=40,
+    )
+    assert fingerprints == {}
+    assert paths == ()
+
+
+def test_root_checkpoint_candidate_budget_is_passed_to_discovery(tmp_path, monkeypatch):
+    _flow(tmp_path)
+    flow_file = tmp_path / "parent.toml"
+    flow_file.write_text(
+        flow_file.read_text(encoding="utf-8").replace(
+            "version = 1\n",
+            "version = 1\n[checkpoint]\n"
+            "max_snapshot_bytes = 600000000\nmax_candidates = 100000\n",
+        ),
+        encoding="utf-8",
+    )
+    flow = load_flow(flow_file, workspace=tmp_path)
+    assert flow.checkpoint_max_candidates == 100_000
+    observed = []
+    original = flow_module._snapshot_dynamic_checkpoint_candidates
+
+    def capture(*, workspace, cache, known_checkpoint_fingerprints=None,
+                max_snapshot_bytes=0, max_candidates=0):
+        observed.append((max_snapshot_bytes, max_candidates))
+        return original(
+            workspace=workspace, cache=cache,
+            known_checkpoint_fingerprints=known_checkpoint_fingerprints,
+            max_snapshot_bytes=max_snapshot_bytes, max_candidates=max_candidates,
+        )
+
+    async def fake_run_once(options, *, dependencies=None):
+        if options.prompt == "discover":
+            return SimpleNamespace(answer='{"items":[]}', web_context_statuses=())
+        raise AssertionError("Unexpected model request")
+
+    monkeypatch.setattr(flow_module, "_snapshot_dynamic_checkpoint_candidates", capture)
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    asyncio.run(run_flow(flow, workspace=tmp_path))
+    assert observed == [(600_000_000, 100_000)]
+
+
+@pytest.mark.parametrize("value", [
+    "19999", "200001", "true", '"50000"',
+])
+def test_root_checkpoint_candidate_budget_rejects_invalid_values(tmp_path, value):
+    _flow(tmp_path)
+    flow_file = tmp_path / "parent.toml"
+    flow_file.write_text(
+        flow_file.read_text(encoding="utf-8").replace(
+            "version = 1\n",
+            f"version = 1\n[checkpoint]\nmax_candidates = {value}\n",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="checkpoint.max_candidates"):
         load_flow(flow_file, workspace=tmp_path)
