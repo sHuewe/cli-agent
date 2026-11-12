@@ -42,6 +42,7 @@ class FlowStep:
     # Explicit [steps.retry] keys, before load-time defaults are applied.
     retry_overrides: dict[str, int | float] | None = None
     when: dict[str, Any] | None = None
+    json_restart_attempts: int = 0
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class FlowDefinition:
     result_fallback: str | None = None
     # Root-level [retry], separate from effective per-step defaults.
     retry_policy: ModelRetryPolicy | None = None
+    checkpoint_snapshot_max_bytes: int = 200_000_000
 
 
 @dataclass(frozen=True)
