@@ -193,3 +193,58 @@ def test_locally_owned_tracer_does_not_modify_global_provider(monkeypatch):
     assert trace.get_tracer_provider() is initial_provider
     provider = telemetry._providers.pop(config)
     provider.shutdown()
+
+
+def test_flow_tracing_does_not_export_dynamic_namespaces_or_item_ids(monkeypatch):
+    """A rendered foreach ID must never reach attributes of any flow span."""
+    recorded = []
+
+    class Recorder:
+        def set_attribute(self, key, value):
+            recorded.append((key, value))
+
+    @contextmanager
+    def capture_span(name, **attributes):
+        recorded.append(("span.name", name))
+        recorded.extend(attributes.items())
+        yield Recorder()
+
+    monkeypatch.setattr(telemetry, "span", capture_span)
+
+    class Step:
+        step_id = "static-step"
+
+    class Flow:
+        source = type("Source", (), {"name": "nested.toml"})()
+
+    @telemetry.trace_flow_step("model")
+    async def model_step(step, **kwargs):
+        return "model"
+
+    @telemetry.trace_flow_step("subflow")
+    async def child_step(step, **kwargs):
+        return "subflow"
+
+    @telemetry.trace_flow_operation("json")
+    def json_step(step, **kwargs):
+        return "json"
+
+    @telemetry.trace_flow_invocation
+    async def invoke(flow, **kwargs):
+        return "invoked"
+
+    async def run():
+        for step_fn in (model_step, child_step):
+            await step_fn(Step(), namespace="private-customer-ABC123/",
+                          iteration_id="customer-ABC123", index=2)
+        json_step(Step(), namespace="private-customer-ABC123/",
+                  iteration_id="customer-ABC123")
+        await invoke(Flow(), namespace="private-customer-ABC123/")
+
+    asyncio.run(run())
+    assert ("iteration_index", 2) in recorded
+    assert all(key != "namespace" and key != "iteration_id"
+               for key, _ in recorded)
+    assert "ABC123" not in repr(recorded)
+    assert ("step_id", "static-step") in recorded
+    assert ("flow_name", "nested.toml") in recorded
