@@ -7,51 +7,67 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import asdict
+from threading import Lock
 from functools import wraps
 from typing import Any, Iterator
 
-from cli_agent.settings.config import TelemetryConfig
+from cli_agent.settings.config import TelemetryConfig, _telemetry_config
 
 logger = logging.getLogger("cli_agent.telemetry")
-_active_config: TelemetryConfig | None = None
+# A tracer selected by the current logical execution context, never by the
+# process-global OpenTelemetry provider. Disabled runs explicitly select None.
+_tracer_context: ContextVar[Any | None] = ContextVar("cli_agent_tracer", default=None)
+_provider_lock = Lock()
+_providers: dict[TelemetryConfig, Any] = {}
 
 
-def configure_telemetry(config: TelemetryConfig) -> None:
-    """Initialize the process-wide OTLP trace provider once, when opted in."""
-    global _active_config
-    if not config.enabled:
-        return
-    if _active_config is not None:
-        if _active_config != config:
-            raise RuntimeError(
-                "OpenTelemetry is already initialized with a different configuration "
-                "in this process."
+def _tracer_for(config: TelemetryConfig) -> Any:
+    """Return an SDK tracer owned by cli-agent; do not mutate OTel globals."""
+    # TelemetryConfig can also originate from SDK programmatic overrides.
+    # Recheck it before creating a network exporter, not only while parsing TOML.
+    validated = _telemetry_config(asdict(config))
+    if validated != config or not validated.enabled:
+        raise ValueError("Telemetry requires a validated, enabled configuration.")
+    with _provider_lock:
+        provider = _providers.get(config)
+        if provider is None:
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+                from opentelemetry.sdk.resources import Resource
+                from opentelemetry.sdk.trace import TracerProvider
+                from opentelemetry.sdk.trace.export import BatchSpanProcessor
+                from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Telemetry is enabled; install cli-agent[telemetry] to use OTLP tracing."
+                ) from exc
+
+            provider = TracerProvider(
+                resource=Resource.create({"service.name": config.service_name}),
+                sampler=ParentBased(TraceIdRatioBased(config.sample_rate)),
             )
-        return
-    try:
-        from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-        from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
-    except ImportError as exc:
-        raise RuntimeError(
-            "Telemetry is enabled; install cli-agent[telemetry] to use OTLP tracing."
-        ) from exc
+            exporter = OTLPSpanExporter(
+                endpoint=config.otlp_endpoint,
+                insecure=config.otlp_endpoint.startswith("http://"),
+                timeout=5,
+                headers={},
+            )
+            provider.add_span_processor(BatchSpanProcessor(exporter))
+            _providers[config] = provider
+        return provider.get_tracer("cli_agent")
 
-    provider = TracerProvider(
-        resource=Resource.create({"service.name": config.service_name}),
-        sampler=ParentBased(TraceIdRatioBased(config.sample_rate)),
-    )
-    exporter = OTLPSpanExporter(
-        endpoint=config.otlp_endpoint,
-        insecure=config.otlp_endpoint.startswith("http://"),
-        timeout=5,
-    )
-    provider.add_span_processor(BatchSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
-    _active_config = config
+
+@contextmanager
+def telemetry_scope(config: TelemetryConfig) -> Iterator[None]:
+    """Select tracing only for this run/task, restoring the previous scope."""
+    tracer = _tracer_for(config) if config.enabled else None
+    token = _tracer_context.set(tracer)
+    try:
+        yield
+    finally:
+        _tracer_context.reset(token)
 
 
 def _safe_attribute(value: Any) -> str | int | float | bool | None:
@@ -67,12 +83,12 @@ def _safe_attribute(value: Any) -> str | int | float | bool | None:
 @contextmanager
 def span(name: str, **attributes: Any) -> Iterator[Any]:
     """Start a span without requiring OpenTelemetry when disabled."""
-    if _active_config is None:
+    tracer = _tracer_context.get()
+    if tracer is None:
         yield None
         return
-    from opentelemetry import trace
 
-    with trace.get_tracer("cli_agent").start_as_current_span(
+    with tracer.start_as_current_span(
         name, record_exception=False, set_status_on_exception=False,
     ) as current:
         for key, raw in attributes.items():
@@ -139,8 +155,18 @@ def traced_agent_question(function):
     """One task trace; do not attach the user question."""
     @wraps(function)
     async def wrapped(self, prompt, *args, **kwargs):
-        with span("agent.ask"):
-            return await function(self, prompt, *args, **kwargs)
+        with telemetry_scope(getattr(self, "telemetry_config", TelemetryConfig())):
+            with span("agent.ask"):
+                return await function(self, prompt, *args, **kwargs)
+    return wrapped
+
+def traced_agent_resume(function):
+    """Resume interrupted frontend tool calls in their original agent scope."""
+    @wraps(function)
+    async def wrapped(self, *args, **kwargs):
+        with telemetry_scope(getattr(self, "telemetry_config", TelemetryConfig())):
+            with span("agent.resume"):
+                return await function(self, *args, **kwargs)
     return wrapped
 
 
