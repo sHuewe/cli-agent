@@ -26,6 +26,7 @@ class CompletionRecord(NamedTuple):
     is_json: bool
     # Paths are returned only after the entire marker was verified.
     preserved_json: tuple[tuple[Path, bytes], ...]
+    preserved_outputs: tuple[tuple[Path, bool], ...]
 
 
 def _read_marker(path: Path) -> str:
@@ -142,6 +143,7 @@ def read_checkpoint(
     ):
         raise ValueError(f"Invalid compact checkpoint: {path}")
     preserved_json: list[tuple[Path, bytes]] = []
+    preserved_outputs: list[tuple[Path, bool]] = []
     for file in payload["preserved"]:
         if (
             not isinstance(file, dict)
@@ -158,9 +160,13 @@ def read_checkpoint(
         )
         if _digest(current) != file["sha256"]:
             raise ValueError(f"Preserved compact checkpoint output changed: {target}")
+        preserved_outputs.append((target, file["is_json"]))
         if file["is_json"]:
             preserved_json.append((target, hashlib.sha256(current.encode("utf-8")).digest()))
-    return CompletionRecord(payload["result"], payload["is_json"], tuple(preserved_json))
+    return CompletionRecord(
+        payload["result"], payload["is_json"],
+        tuple(preserved_json), tuple(preserved_outputs),
+    )
 
 
 def write_checkpoint(
