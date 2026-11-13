@@ -23,7 +23,7 @@ from cli_agent.state.evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAM
 from cli_agent.state.evidence_cleanup import maybe_cleanup_evidences, note_plan_update, note_tool_calls
 from cli_agent.platform.artifact_publication import PUBLISH_TOOL_NAME, register_artifact
 from cli_agent.models.model import log_model_call_diagnostics
-from cli_agent.telemetry import span, set_attribute, traced_model_loop
+from cli_agent.platform.telemetry import span, set_attribute, traced_model_loop
 
 logger = logging.getLogger("cli_agent.runtime.agent_loop")
 
