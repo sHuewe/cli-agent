@@ -6174,6 +6174,9 @@ async def run_flow(
 ) -> None:
     workspace = workspace.expanduser().resolve()
     deps = dependencies or ExecutionDependencies()
+    # Configure before entering the root flow invocation span. Individual
+    # agent steps may load their own model configuration later.
+    configure_telemetry(load_config(workspace=workspace).telemetry)
     cache = {_filesystem_path_key(flow.source): flow}
     validation_budget = _SubflowTraversalBudget()
     validate_flow(
