@@ -132,3 +132,35 @@ def trace_flow_invocation(function):
                   namespace=kwargs.get("namespace", "")):
             return await function(flow, *args, **kwargs)
     return wrapped
+
+
+def traced_agent_question(function):
+    """One task trace; do not attach the user question."""
+    @wraps(function)
+    async def wrapped(self, prompt, *args, **kwargs):
+        with span("agent.ask"):
+            return await function(self, prompt, *args, **kwargs)
+    return wrapped
+
+
+def traced_model_loop(function):
+    """Group all LLM and tool rounds of one model-loop invocation."""
+    @wraps(function)
+    async def wrapped(agent, *args, **kwargs):
+        with span("agent.model_loop", phase=kwargs.get("phase", "unknown")):
+            return await function(agent, *args, **kwargs)
+    return wrapped
+
+
+def traced_sub_run(function):
+    """Sub-run remains a child of the coordinator model-loop trace."""
+    @wraps(function)
+    async def wrapped(agent, args, *other, **kwargs):
+        with span("agent.sub_run") as current:
+            result = await function(agent, args, *other, **kwargs)
+            status = result.get("status") if isinstance(result, dict) else None
+            if status in {"blocked", "failed"}:
+                mark_error(current, "sub_run_" + status)
+            set_attribute(current, "sub_run.status", status)
+            return result
+    return wrapped
