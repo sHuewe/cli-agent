@@ -142,7 +142,7 @@ def test_preserved_overwrite_path_is_never_deleted(tmp_path, monkeypatch):
     _setup(tmp_path)
     child = tmp_path / "child.toml"
     first, second = child.read_text(encoding="utf-8").split(
-        '[[steps]]\\nid = "assemble"', maxsplit=1,
+        '[[steps]]\nid = "assemble"', maxsplit=1,
     )
     second = second.replace(
         'state/$' + '{input.id}-assemble.json',
@@ -151,7 +151,7 @@ def test_preserved_overwrite_path_is_never_deleted(tmp_path, monkeypatch):
         'overwrite_output = false', 'overwrite_output = true',
     )
     child.write_text(
-        first + '[[steps]]\\nid = "assemble"' + second,
+        first + '[[steps]]\nid = "assemble"' + second,
         encoding="utf-8",
     )
     _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
