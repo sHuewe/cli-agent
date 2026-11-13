@@ -30,7 +30,7 @@ def configure_telemetry(config: TelemetryConfig) -> None:
         return
     try:
         from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -45,7 +45,8 @@ def configure_telemetry(config: TelemetryConfig) -> None:
         sampler=ParentBased(TraceIdRatioBased(config.sample_rate)),
     )
     exporter = OTLPSpanExporter(
-        endpoint=config.otlp_endpoint.rstrip("/") + "/v1/traces",
+        endpoint=config.otlp_endpoint,
+        insecure=config.otlp_endpoint.startswith("http://"),
         timeout=5,
     )
     provider.add_span_processor(BatchSpanProcessor(exporter))
