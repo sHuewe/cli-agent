@@ -137,7 +137,7 @@ class UiConfig:
 class TelemetryConfig:
     enabled: bool = False
     service_name: str = "cli-agent"
-    otlp_endpoint: str = "http://127.0.0.1:4318"
+    otlp_endpoint: str = "http://127.0.0.1:4317"
     sample_rate: float = 1.0
 
 
@@ -291,7 +291,7 @@ def _telemetry_config(values: Any) -> TelemetryConfig:
         c.isascii() and (c.isalnum() or c in "._-") for c in service
     ):
         raise ValueError("telemetry.service_name must be 1-64 ASCII letters, digits, '.', '_' or '-'.")
-    endpoint = values.get("otlp_endpoint", "http://127.0.0.1:4318")
+    endpoint = values.get("otlp_endpoint", "http://127.0.0.1:4317")
     if not isinstance(endpoint, str):
         raise ValueError("telemetry.otlp_endpoint must be a URL.")
     try:
