@@ -23,6 +23,7 @@ from cli_agent.state.evidence_tools import PLAN_TOOL_NAME, ADD_EVIDENCE_TOOL_NAM
 from cli_agent.state.evidence_cleanup import maybe_cleanup_evidences, note_plan_update, note_tool_calls
 from cli_agent.platform.artifact_publication import PUBLISH_TOOL_NAME, register_artifact
 from cli_agent.models.model import log_model_call_diagnostics
+from cli_agent.telemetry import span, set_attribute, traced_model_loop
 
 logger = logging.getLogger("cli_agent.runtime.agent_loop")
 
@@ -77,6 +78,7 @@ class ModelLoopRunState:
     tool_calls: int = 0
 
 
+@traced_model_loop
 async def run_model_loop(
     agent,
     *,
@@ -154,23 +156,29 @@ async def run_model_loop(
             await model_event("model_started", {"call_id": model_call_id, "phase": phase})
         model_status = "success"
         try:
-            message = await agent.model_client.chat(
-                messages=(
-                    agent._evidence_state.project(messages)
-                    if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None
-                    else messages_for_model(messages)
-                ),
-                tools=(
-                    []
-                    if phase == "knowledge" and knowledge_selection_only_mode
-                    else (
-                        [tool for tool in tools
-                         if tool["function"]["name"] == ADD_EVIDENCE_TOOL_NAME]
-                        if phase == "sub" and calls >= SUB_RUN_SOFT_TOOL_LIMIT
-                        else tools
-                    )
-                ),
-            )
+            with span("llm.request", phase=phase,
+                      model=getattr(agent.model_client, "model", "unknown")) as llm_span:
+                message = await agent.model_client.chat(
+                    messages=(
+                        agent._evidence_state.project(messages)
+                        if phase in {"main", "sub"} and getattr(agent, "_evidence_state", None) is not None
+                        else messages_for_model(messages)
+                    ),
+                    tools=(
+                        []
+                        if phase == "knowledge" and knowledge_selection_only_mode
+                        else (
+                            [tool for tool in tools
+                             if tool["function"]["name"] == ADD_EVIDENCE_TOOL_NAME]
+                            if phase == "sub" and calls >= SUB_RUN_SOFT_TOOL_LIMIT
+                            else tools
+                        )
+                    ),
+                )
+                usage = getattr(agent.model_client, "last_usage", None)
+                for field in ("input_tokens", "output_tokens", "total_tokens"):
+                    set_attribute(llm_span, "llm." + field,
+                                  getattr(usage, field, None))
             log_model_call_diagnostics(agent.model_client, phase=phase)
             reserved_ids = set(reserved_tool_call_ids or ())
             if phase in {"main", "sub"}:
