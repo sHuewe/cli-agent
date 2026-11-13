@@ -2696,6 +2696,7 @@ def _claim_compact_preserved_outputs(
     *,
     claimed_outputs: dict[str, str],
     namespace: str,
+    reserved_inputs: dict[str, Path] | None = None,
 ) -> None:
     """Reclaim verified completed artifacts, including descendant outputs.
 
@@ -2705,6 +2706,11 @@ def _claim_compact_preserved_outputs(
     real claim map during execution.
     """
     for path, _is_json in record.preserved_outputs:
+        if reserved_inputs is not None and _filesystem_path_key(path) in reserved_inputs:
+            raise ValueError(
+                f"Preserved compact output {path} conflicts with reserved "
+                f"flow input: {reserved_inputs[_filesystem_path_key(path)]}"
+            )
         _claim_output(
             claimed_outputs,
             path=path,
@@ -4708,6 +4714,7 @@ def _preflight_concrete_invocation_outputs(
         if result is not None:
             _claim_compact_preserved_outputs(
                 result, claimed_outputs=claimed_outputs, namespace=namespace,
+                reserved_inputs=reserved_inputs,
             )
             return
     next_stack = (*call_stack, flow_key)
@@ -5771,6 +5778,7 @@ async def _execute_subflow_iteration(
             _claim_compact_preserved_outputs(
                 cached, claimed_outputs=claimed_outputs,
                 namespace=child_namespace,
+                reserved_inputs=child_inherited_inputs,
             )
             assert context.completed_json_outputs is not None
             assert context.completed_invocation_artifacts is not None
