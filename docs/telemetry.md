@@ -50,6 +50,15 @@ cannot redirect telemetry to an external host. Do not publicly expose the
 collector UI or ingestion port. The exporter uses bounded batch queues and
 does not affect tool authorization or model-visible messages.
 
-The SDK initializes one trace provider per process. Configure the same
-telemetry settings for all runs in a long-lived API process. Install the extra
-only on processes that enable tracing.
+cli-agent creates its own local OpenTelemetry tracer providers, keyed by
+validated configuration. It never installs a global provider or uses an
+existing host-wide exporter. Each agent task explicitly selects its own
+telemetry configuration (including disabled); nested and concurrent SDK/API
+runs cannot inherit export permissions from an unrelated agent.
+
+The flow runner derives its initial telemetry selection from the same explicit
+step configuration discovery used for flow logging. Individual agent steps
+apply their own configuration when executing. Keep one telemetry configuration
+per flow where possible to maintain a single coherent trace; runs with multiple
+collectors may produce separate traces. Install the optional extra only on
+processes that enable tracing.
