@@ -334,3 +334,116 @@ def test_nested_compact_parent_propagates_artifact_checks_all_levels(
     (tmp_path / "state/deep-result.json").unlink()
     with pytest.raises(ValueError, match="missing|could not be resolved"):
         run()
+
+
+def test_compact_cached_child_reclaims_output_before_second_child(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("produce", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["path"]\nresult = "steps.emit.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "emit"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\n'
+        'output = "state/$' + '{input.path}.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "first"\nflow = "child.toml"\n'
+        '[steps.input]\npath = "shared"\n'
+        '[[steps]]\nid = "second"\nflow = "child.toml"\n'
+        '[steps.input]\npath = "$' + '{steps.first.output.path}"\n',
+        encoding="utf-8",
+    )
+    prompts = []
+
+    async def fake(options, *, dependencies=None):
+        prompts.append(options.prompt)
+        options.output.write_text('{"path":"shared"}', encoding="utf-8")
+        return SimpleNamespace(answer='{"path":"shared"}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    # First child completes and publishes its marker before the second
+    # invocation's same-path collision is discovered.
+    with pytest.raises(ValueError, match="already claimed"):
+        run()
+    assert prompts == ["produce"]
+    assert len(list((tmp_path / ".cli-agent/flow-checkpoints").glob("*.json"))) == 1
+
+    # A cached first child must still claim the published output; otherwise
+    # the second child could adopt it as an unrelated JSON checkpoint.
+    with pytest.raises(ValueError, match="already claimed"):
+        run()
+    assert prompts == ["produce"]
+
+
+def test_static_text_compact_child_resumes_without_overwrite(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("text-result", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.emit.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "emit"\nprompt_file = "prompt.md"\n'
+        'output = "state/final.txt"\nresponse_format = "text"\n'
+        'overwrite_output = false\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    prompts = []
+
+    async def fake(options, *, dependencies=None):
+        prompts.append(options.prompt)
+        options.output.write_text("good text", encoding="utf-8")
+        return SimpleNamespace(answer="good text", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    run()
+    assert (tmp_path / "state/final.txt").read_text() == "good text"
+    run()
+    assert prompts == ["text-result"]
+
+
+def test_static_text_without_compact_marker_still_rejects_existing_file(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("text-result", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state/final.txt").write_text("orphan", encoding="utf-8")
+    (tmp_path / "root.toml").write_text(
+        'version = 1\nresult = "steps.emit.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "emit"\nprompt_file = "prompt.md"\n'
+        'output = "state/final.txt"\nresponse_format = "text"\n'
+        'overwrite_output = false\n',
+        encoding="utf-8",
+    )
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("orphan file must be rejected before model")
+    monkeypatch.setattr(flow_module, "run_once", unexpected)
+
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
