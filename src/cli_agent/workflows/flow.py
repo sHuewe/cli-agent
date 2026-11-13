@@ -6223,15 +6223,23 @@ async def _run_flow_internal(
                 match = _FOREACH.fullmatch(selector)
                 if match:
                     preserved_ids.add(match.group(1))
+        # Classify by physical output path rather than step identity: a
+        # later overwrite may reuse an earlier intermediate path. Retention
+        # always wins, regardless of which step last wrote the file.
+        owned: dict[str, tuple[Path, bool]] = {}
+        for step_id, path in own_checkpoint_files:
+            key = _filesystem_path_key(path)
+            retain = (
+                step_id in preserved_ids
+                or key in (context.reserved_inputs or {})
+            )
+            previous = owned.get(key)
+            owned[key] = (path, retain or (previous[1] if previous else False))
         preserve: list[dict[str, str]] = []
         intermediate: list[tuple[Path, str]] = []
-        for step_id, path in dict.fromkeys(own_checkpoint_files):
-            # Never remove a file explicitly reserved as input, including
-            # files used by ancestors or sibling subflows.
-            if _filesystem_path_key(path) in (context.reserved_inputs or {}):
-                preserved_ids.add(step_id)
+        for path, retain in owned.values():
             if not path.is_file():
-                if step_id in preserved_ids:
+                if retain:
                     raise ValueError(
                         f"Required compact flow result/output does not exist: {path}"
                     )
@@ -6243,7 +6251,7 @@ async def _run_flow_internal(
                 workspace, checked, max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
             )
             digest = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-            if step_id in preserved_ids:
+            if retain:
                 preserve.append({
                     "path": checked.relative_to(workspace).as_posix(),
                     "sha256": digest,
@@ -6342,6 +6350,17 @@ async def run_flow(
         run_start_dynamic_checkpoints=dynamic_fingerprints,
         run_start_compact_markers=compact_markers,
     )
+    if not flow.retain_intermediate:
+        # The root may itself declare a public result. Honor its completion
+        # record exactly like a child; never execute a compact root twice.
+        completed = compact_checkpoints.read_checkpoint(
+            workspace, flow.source, "", {}, compact_markers,
+            lambda path: _workspace_path(
+                workspace, path, purpose="Preserved compact output", must_exist=True,
+            ),
+        )
+        if completed is not None:
+            return
     _set_flow_diagnostic(phase="execute-flow", flow=flow.source)
     await _run_flow_internal(
         flow,
