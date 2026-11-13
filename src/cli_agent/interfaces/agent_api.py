@@ -281,6 +281,7 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
             model_credential_rules=admin.model_credentials,
             workspace_access=args.os_access,
         )
+        agent.telemetry_config = config.telemetry
         agent.event_callback = session.on_agent_event
         session.broker.set_event_sender(session._send_user_message)
         return agent
