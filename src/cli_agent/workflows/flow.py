@@ -45,6 +45,7 @@ from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 from cli_agent.platform.logging_setup import configure_logging
 from cli_agent.models.model import ModelRetryPolicy
+from cli_agent.telemetry import trace_flow_step, trace_flow_operation, trace_flow_invocation, configure_telemetry
 from cli_agent.models.prompt_template import PromptTemplate
 from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 from cli_agent.state.agent_types import UserMessageCallback
@@ -4943,6 +4944,7 @@ def _reject_markdown_source_output_alias(
         )
 
 
+@trace_flow_operation("filesystem")
 def _execute_filesystem_step(
     step: FlowStep,
     *,
@@ -5058,6 +5060,7 @@ def _execute_filesystem_step(
     return answer
 
 
+@trace_flow_operation("json")
 def _execute_json_step(
     step: FlowStep,
     *,
@@ -5188,6 +5191,7 @@ def _execute_json_step(
     return answer
 
 
+@trace_flow_step("model")
 async def _execute_model_iteration(
     step: FlowStep,
     *,
@@ -5608,6 +5612,7 @@ def _preflight_foreach_output_batch(
     return preflight_outputs, preflight_checkpoint_fingerprints
 
 
+@trace_flow_step("subflow")
 async def _execute_subflow_iteration(
     step: FlowStep,
     *,
@@ -5827,6 +5832,7 @@ def _resolve_iteration_previous_output(
     return previous_output
 
 
+@trace_flow_invocation
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
