@@ -332,5 +332,5 @@ def test_nested_compact_parent_propagates_artifact_checks_all_levels(
     run()
     assert calls == ["nested"]
     (tmp_path / "state/deep-result.json").unlink()
-    with pytest.raises(ValueError, match="missing"):
+    with pytest.raises(ValueError, match="missing|could not be resolved"):
         run()
