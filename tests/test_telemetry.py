@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from cli_agent.settings.config import TelemetryConfig, _parse_config_values
-from cli_agent import telemetry
+from cli_agent.platform import telemetry
 
 
 def test_telemetry_disabled_by_default():
