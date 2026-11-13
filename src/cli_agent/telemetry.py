@@ -71,12 +71,18 @@ def span(name: str, **attributes: Any) -> Iterator[Any]:
         return
     from opentelemetry import trace
 
-    with trace.get_tracer("cli_agent").start_as_current_span(name) as current:
+    with trace.get_tracer("cli_agent").start_as_current_span(
+        name, record_exception=False, set_status_on_exception=False,
+    ) as current:
         for key, raw in attributes.items():
             value = _safe_attribute(raw)
             if value is not None:
                 current.set_attribute(key.replace("_", "."), value)
-        yield current
+        try:
+            yield current
+        except BaseException as exc:
+            mark_error(current, type(exc).__name__)
+            raise
 
 
 def set_attribute(current: Any, name: str, value: Any) -> None:
