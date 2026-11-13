@@ -11,7 +11,7 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 from cli_agent.context.file_context import read_existing_output_text
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
@@ -19,6 +19,13 @@ from cli_agent.security.filesystem_security import path_entry_is_symlink_or_repa
 MARKER_DIRECTORY = ".cli-agent/flow-checkpoints"
 MAX_MARKERS = 100_000
 MAX_MARKER_BYTES = 100_000_000
+
+
+class CompletionRecord(NamedTuple):
+    result: str
+    is_json: bool
+    # Paths are returned only after the entire marker was verified.
+    preserved_json: tuple[tuple[Path, bytes], ...]
 
 
 def _read_marker(path: Path) -> str:
@@ -104,7 +111,7 @@ def read_checkpoint(
     flow_input: dict[str, Any],
     run_start_markers: dict[str, bytes],
     resolve_path: Callable[[Path], Path],
-) -> tuple[str, bool] | None:
+) -> CompletionRecord | None:
     path, key = checkpoint_path(workspace, flow_source, namespace, flow_input)
     fingerprint = run_start_markers.get(path.name)
     if fingerprint is None:
@@ -134,11 +141,13 @@ def read_checkpoint(
         or not isinstance(payload.get("preserved"), list)
     ):
         raise ValueError(f"Invalid compact checkpoint: {path}")
+    preserved_json: list[tuple[Path, bytes]] = []
     for file in payload["preserved"]:
         if (
             not isinstance(file, dict)
             or not isinstance(file.get("path"), str)
             or not isinstance(file.get("sha256"), str)
+            or type(file.get("is_json")) is not bool
         ):
             raise ValueError("Invalid preserved output in compact checkpoint.")
         target = resolve_path(Path(file["path"]))
@@ -149,7 +158,9 @@ def read_checkpoint(
         )
         if _digest(current) != file["sha256"]:
             raise ValueError(f"Preserved compact checkpoint output changed: {target}")
-    return payload["result"], payload["is_json"]
+        if file["is_json"]:
+            preserved_json.append((target, hashlib.sha256(current.encode("utf-8")).digest()))
+    return CompletionRecord(payload["result"], payload["is_json"], tuple(preserved_json))
 
 
 def write_checkpoint(
@@ -159,7 +170,7 @@ def write_checkpoint(
     flow_input: dict[str, Any],
     result: str,
     is_json: bool,
-    preserved: list[dict[str, str]],
+    preserved: list[dict[str, Any]],
     ensure_parent: Callable[[Path], None],
 ) -> None:
     """Atomically publish completion before callers remove intermediates."""
