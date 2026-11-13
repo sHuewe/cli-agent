@@ -45,7 +45,11 @@ from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 from cli_agent.platform.logging_setup import configure_logging
 from cli_agent.models.model import ModelRetryPolicy
-from cli_agent.platform.telemetry import trace_flow_step, trace_flow_operation, trace_flow_invocation, configure_telemetry
+from cli_agent.platform.telemetry import (
+    trace_flow_step, trace_flow_operation, trace_flow_invocation,
+    configure_telemetry, telemetry_scope,
+)
+from cli_agent.settings.config import TelemetryConfig
 from cli_agent.models.prompt_template import PromptTemplate
 from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 from cli_agent.state.agent_types import UserMessageCallback
@@ -6174,9 +6178,17 @@ async def run_flow(
 ) -> None:
     workspace = workspace.expanduser().resolve()
     deps = dependencies or ExecutionDependencies()
-    # Configure before entering the root flow invocation span. Individual
-    # agent steps may load their own model configuration later.
-    configure_telemetry(load_config(workspace=workspace).telemetry)
+    # Use the same explicit-config discovery as flow logging. Flows with
+    # explicit step configs must not access the unrelated default user config.
+    # Each model step's own agent scope still controls whether it is traced.
+    config_source = _initial_flow_logging_config(flow, workspace=workspace)
+    selected_path = config_source[0] if config_source is not None else None
+    if selected_path is None and deps.load_config is load_config:
+        selected_config = load_config(workspace=workspace)
+    else:
+        selected_config = deps.load_config(selected_path)
+    flow_telemetry = getattr(selected_config, "telemetry", TelemetryConfig())
+    configure_telemetry(flow_telemetry)
     cache = {_filesystem_path_key(flow.source): flow}
     validation_budget = _SubflowTraversalBudget()
     validate_flow(
@@ -6242,16 +6254,17 @@ async def run_flow(
         run_start_dynamic_checkpoints=dynamic_fingerprints,
     )
     _set_flow_diagnostic(phase="execute-flow", flow=flow.source)
-    await _run_flow_internal(
-        flow,
-        workspace=workspace,
-        context=context,
-        flow_input={},
-        call_stack=(),
-        namespace="",
-        inherited_excluded_paths=(),
-        inherited_retry_policy=None,
-    )
+    with telemetry_scope(flow_telemetry):
+        await _run_flow_internal(
+            flow,
+            workspace=workspace,
+            context=context,
+            flow_input={},
+            call_stack=(),
+            namespace="",
+            inherited_excluded_paths=(),
+            inherited_retry_policy=None,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
