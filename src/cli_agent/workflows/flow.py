@@ -178,6 +178,8 @@ class _FlowExecutionContext:
     run_start_checkpoint_paths: tuple[Path, ...] = ()
     run_start_dynamic_checkpoints: dict[tuple[str, str, str], bytes] | None = None
     run_start_compact_markers: dict[str, bytes] | None = None
+    # Complete, verified artifact dependencies for each finished invocation.
+    completed_invocation_artifacts: dict[str, dict[str, tuple[Path, bool]]] | None = None
     completed_json_outputs: dict[str, bytes] | None = None
     preflight_budget: "_SubflowTraversalBudget" | None = None
 
@@ -194,6 +196,8 @@ class _FlowExecutionContext:
             self.preflight_budget = _SubflowTraversalBudget()
         if self.completed_json_outputs is None:
             self.completed_json_outputs = {}
+        if self.completed_invocation_artifacts is None:
+            self.completed_invocation_artifacts = {}
 
 
 @dataclass
@@ -5725,6 +5729,7 @@ async def _execute_subflow_iteration(
         )
         if cached is not None:
             assert context.completed_json_outputs is not None
+            assert context.completed_invocation_artifacts is not None
             # The checkpoint reader validates *all* preserved outputs
             # before returning. Restore only validated JSON outputs, using
             # the same fingerprints as normal completed steps.
@@ -5732,6 +5737,10 @@ async def _execute_subflow_iteration(
                 context.completed_json_outputs[
                     _filesystem_path_key(preserved_path)
                 ] = fingerprint
+            context.completed_invocation_artifacts[child_namespace] = {
+                _filesystem_path_key(path): (path, is_json)
+                for path, is_json in cached.preserved_outputs
+            }
             return _FlowResultValue(cached.result, cached.is_json)
 
     child_result = await _run_flow_internal(
@@ -5935,8 +5944,10 @@ async def _run_flow_internal(
     )
     outputs: dict[str, str] = {}
     output_json: dict[str, bool] = {}
-    # Record only this invocation's own output files, never child outputs.
+    # Own JSON intermediates can be removed; descendant outputs are always
+    # dependencies and must be retained and verified by the parent marker.
     own_checkpoint_files: list[tuple[str, Path, bool]] = []
+    child_output_artifacts: dict[str, tuple[Path, bool]] = {}
     claimed_outputs = context.claimed_outputs
     reserved_inputs = context.reserved_inputs
     assert claimed_outputs is not None
@@ -6134,6 +6145,20 @@ async def _run_flow_internal(
                     child_result.text, child_result.is_json, iteration_id,
                 )
                 completed_child_invocations.add((step.step_id, iteration_id))
+                child_namespace = _child_invocation_namespace(
+                    namespace, step, iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
+                )
+                assert context.completed_invocation_artifacts is not None
+                child_artifacts = context.completed_invocation_artifacts.get(
+                    child_namespace
+                )
+                if child_artifacts is None:
+                    raise ValueError(
+                        f"Missing completed artifact inventory for child "
+                        f"invocation {child_namespace!r}."
+                    )
+                child_output_artifacts.update(child_artifacts)
                 continue
 
             output, checkpoint = _prepare_iteration_checkpoint(
@@ -6252,8 +6277,14 @@ async def _run_flow_internal(
                 retain or (previous[1] if previous else False),
                 is_json,
             )
+        # Retain every published descendant artifact, including outputs of
+        # non-compact children. The enclosing marker is invalid if any child
+        # artifact subsequently disappears or changes.
+        for key, (path, is_json) in child_output_artifacts.items():
+            owned[key] = (path, True, is_json)
         preserve: list[dict[str, Any]] = []
         intermediate: list[tuple[Path, str]] = []
+        retained_artifacts: dict[str, tuple[Path, bool]] = {}
         for path, retain, is_json in owned.values():
             if not path.is_file():
                 if retain:
@@ -6274,6 +6305,9 @@ async def _run_flow_internal(
                     "sha256": digest,
                     "is_json": is_json,
                 })
+                retained_artifacts[_filesystem_path_key(checked)] = (
+                    checked, is_json
+                )
             else:
                 intermediate.append((checked, digest))
         compact_checkpoints.write_checkpoint(
@@ -6287,6 +6321,21 @@ async def _run_flow_internal(
                 workspace, path, purpose="Compact cleanup", must_exist=True,
             ),
         )
+        assert context.completed_invocation_artifacts is not None
+        context.completed_invocation_artifacts[namespace] = retained_artifacts
+    else:
+        # A non-compact invocation may still be enclosed by a compact parent.
+        # Its outputs are external dependencies, never subject to parent
+        # cleanup, and must participate in the parent's completion validation.
+        artifacts = dict(child_output_artifacts)
+        for _, path, is_json in own_checkpoint_files:
+            if path.is_file():
+                checked = _workspace_path(
+                    workspace, path, purpose="Child output", must_exist=True,
+                )
+                artifacts[_filesystem_path_key(checked)] = (checked, is_json)
+        assert context.completed_invocation_artifacts is not None
+        context.completed_invocation_artifacts[namespace] = artifacts
     return final_result
 
 
