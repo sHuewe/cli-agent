@@ -6001,6 +6001,10 @@ async def _run_flow_internal(
     # dependencies and must be retained and verified by the parent marker.
     own_checkpoint_files: list[tuple[str, Path, bool, bool]] = []
     child_output_artifacts: dict[str, tuple[Path, bool, bool]] = {}
+    # Track writes in execution order. Child artifacts may be overwritten by
+    # later local steps (or vice versa), while their retention requirement
+    # remains in force. Metadata must always describe the final writer.
+    last_written_artifacts: dict[str, tuple[Path, bool, bool]] = {}
     claimed_outputs = context.claimed_outputs
     reserved_inputs = context.reserved_inputs
     assert claimed_outputs is not None
@@ -6212,6 +6216,7 @@ async def _run_flow_internal(
                         f"invocation {child_namespace!r}."
                     )
                 child_output_artifacts.update(child_artifacts)
+                last_written_artifacts.update(child_artifacts)
                 continue
 
             output, checkpoint = _prepare_iteration_checkpoint(
@@ -6242,6 +6247,9 @@ async def _run_flow_internal(
                 own_checkpoint_files.append((
                     step.step_id, output, True, step.overwrite_output,
                 ))
+                last_written_artifacts[_filesystem_path_key(output)] = (
+                    output, True, step.overwrite_output,
+                )
                 record_iteration_answer(
                     checkpoint,
                     True,
@@ -6256,11 +6264,13 @@ async def _run_flow_internal(
             )
 
             if output is not None:
-                own_checkpoint_files.append(
-                    (
-                        step.step_id, output,
-                        step.response_format == "json", step.overwrite_output,
-                    )
+                is_json_output = step.response_format == "json"
+                own_checkpoint_files.append((
+                    step.step_id, output, is_json_output,
+                    step.overwrite_output,
+                ))
+                last_written_artifacts[_filesystem_path_key(output)] = (
+                    output, is_json_output, step.overwrite_output,
                 )
 
             if step.filesystem_operation is not None:
@@ -6338,7 +6348,12 @@ async def _run_flow_internal(
         # Retain every published descendant artifact, including outputs of
         # non-compact children. The enclosing marker is invalid if any child
         # artifact subsequently disappears or changes.
-        for key, (path, is_json, allow_replace) in child_output_artifacts.items():
+        for key in child_output_artifacts:
+            # Child outputs are mandatory artifacts, but their metadata can
+            # become stale if a subsequent parent step overwrites the path.
+            # Preserve the path while using the actual final writer's format
+            # and overwrite permission.
+            path, is_json, allow_replace = last_written_artifacts[key]
             owned[key] = (path, True, is_json, allow_replace)
         preserve: list[dict[str, Any]] = []
         intermediate: list[tuple[Path, str]] = []
@@ -6386,15 +6401,13 @@ async def _run_flow_internal(
         # A non-compact invocation may still be enclosed by a compact parent.
         # Its outputs are external dependencies, never subject to parent
         # cleanup, and must participate in the parent's completion validation.
-        artifacts = dict(child_output_artifacts)
-        for _, path, is_json, allow_replace in own_checkpoint_files:
+        artifacts: dict[str, tuple[Path, bool, bool]] = {}
+        for key, (path, is_json, allow_replace) in last_written_artifacts.items():
             if path.is_file():
                 checked = _workspace_path(
                     workspace, path, purpose="Child output", must_exist=True,
                 )
-                artifacts[_filesystem_path_key(checked)] = (
-                    checked, is_json, allow_replace,
-                )
+                artifacts[key] = (checked, is_json, allow_replace)
         assert context.completed_invocation_artifacts is not None
         context.completed_invocation_artifacts[namespace] = artifacts
     return final_result
