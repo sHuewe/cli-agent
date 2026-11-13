@@ -13,6 +13,14 @@ dump_llm_context = false
 # system_prompt = "system.md"  # UTF-8 file directly under <workspace>/.cli-agent/
 # Evidence State is always available when the agent has tools.
 
+# Optional local OpenTelemetry/Jaeger tracing. Install cli-agent[telemetry].
+# Only local loopback collector endpoints are permitted.
+# [telemetry]
+# enabled = true
+# service_name = "cli-agent"
+# otlp_endpoint = "http://127.0.0.1:4318"
+# sample_rate = 1.0
+
 [logging]
 enabled = true
 level = "INFO"
