@@ -1495,6 +1495,7 @@ prompt_file = "prompt.md"
     loaded = []
 
     def fake_load_config(path):
+        assert path is not None, "Explicit-config flow must never load the default"
         loaded.append(path)
         return flow_module.load_config(path)
 
