@@ -447,3 +447,64 @@ def test_static_text_without_compact_marker_still_rejects_existing_file(
             load_flow(tmp_path / "root.toml", workspace=tmp_path),
             workspace=tmp_path,
         ))
+
+
+def test_compact_identity_preserves_json_number_types(tmp_path):
+    from cli_agent.workflows.flow_compact_checkpoints import checkpoint_path
+    from cli_agent.workflows.flow_json_operations import _JsonNumber
+
+    source = tmp_path / "flow.toml"
+    source.write_text('version = 1', encoding="utf-8")
+
+    def marker(value):
+        return checkpoint_path(tmp_path, source, "child.once.", {"value": value})[1]
+
+    assert marker(_JsonNumber("1.5")) != marker("1.5")
+    assert marker({"nested": [_JsonNumber("2e0")]}) != marker({"nested": ["2e0"]})
+    assert marker(True) != marker(1)
+    assert marker(_JsonNumber("1.0")) != marker(1)
+    assert marker({"b": 2, "a": "x"}) == marker({"a": "x", "b": 2})
+
+
+def test_compact_child_overwrite_can_reclaim_prior_parent_output(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("same", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.write.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "write"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\n'
+        'output = "state/shared.json"\noverwrite_output = true\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "first"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\n'
+        'output = "state/shared.json"\noverwrite_output = true\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    prompts = []
+
+    async def fake(options, *, dependencies=None):
+        prompts.append(options.prompt)
+        if options.output is not None:
+            options.output.write_text('{"same":true}', encoding="utf-8")
+        return SimpleNamespace(answer='{"same":true}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    run()
+    run()
+    # Parent step is deliberately executed twice; compact child only once.
+    assert prompts == ["same", "same", "same"]
+    assert (tmp_path / "state/shared.json").read_text() == '{"same":true}'
