@@ -239,3 +239,98 @@ def test_preserved_text_output_is_validated_during_compact_resume(
     target.write_text("modified externally", encoding="utf-8")
     with pytest.raises(ValueError, match="changed"):
         _run(tmp_path, monkeypatch, [])
+
+@pytest.mark.parametrize("leaf_compact", [False, True])
+def test_compact_parent_validates_descendant_published_artifact(
+    tmp_path, monkeypatch, leaf_compact,
+):
+    (tmp_path / "prompt.md").write_text("leaf", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "leaf.toml").write_text(
+        'version = 1\nresult = "steps.publish.output"\n'
+        + ('[checkpoint]\nretain_intermediate = false\n'
+           if leaf_compact else '')
+        + '[[steps]]\nid = "publish"\n'
+          'prompt_file = "prompt.md"\n'
+          'response_format = "json"\n'
+          'output = "state/leaf-result.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "outer.toml").write_text(
+        'version = 1\nresult = "steps.delegate.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "delegate"\nflow = "leaf.toml"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "outer"\nflow = "outer.toml"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.output is not None:
+            options.output.write_text('{"source":"leaf"}', encoding="utf-8")
+        return SimpleNamespace(answer='{"source":"leaf"}', web_context_statuses=())
+    monkeypatch.setattr(flow_module, "run_once", fake)
+    def run():
+        asyncio.run(
+            run_flow(
+                load_flow(tmp_path / "root.toml", workspace=tmp_path),
+                workspace=tmp_path,
+            )
+        )
+    run()
+    assert calls == ["leaf"]
+    run()
+    assert calls == ["leaf"]
+    # Both a non-compact child and a compact child's published result must
+    # become dependencies of the enclosing compact completion marker.
+    (tmp_path / "state/leaf-result.json").write_text(
+        '{"source":"tampered"}', encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="changed"):
+        run()
+
+
+def test_nested_compact_parent_propagates_artifact_checks_all_levels(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("nested", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "leaf.toml").write_text(
+        'version = 1\nresult = "steps.publish.output"\n'
+        '[[steps]]\nid = "publish"\n'
+        'prompt_file = "prompt.md"\nresponse_format = "json"\n'
+        'output = "state/deep-result.json"\n',
+        encoding="utf-8",
+    )
+    for name, child in (("middle", "leaf"), ("outer", "middle")):
+        (tmp_path / f"{name}.toml").write_text(
+            f'version = 1\nresult = "steps.delegate.output"\n'
+            '[checkpoint]\nretain_intermediate = false\n'
+            f'[[steps]]\nid = "delegate"\nflow = "{child}.toml"\n',
+            encoding="utf-8",
+        )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n[[steps]]\nid = "run"\nflow = "outer.toml"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        options.output.write_text('{"ok":true}', encoding="utf-8")
+        return SimpleNamespace(answer='{"ok":true}', web_context_statuses=())
+    monkeypatch.setattr(flow_module, "run_once", fake)
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+    run()
+    run()
+    assert calls == ["nested"]
+    (tmp_path / "state/deep-result.json").unlink()
+    with pytest.raises(ValueError, match="missing"):
+        run()
