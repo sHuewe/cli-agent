@@ -739,6 +739,8 @@ async def run(args: argparse.Namespace) -> None:
         return
 
     configure_logging(config.logging)
+    from cli_agent.telemetry import configure_telemetry
+    configure_telemetry(config.telemetry)
     model_client = create_model_client(
         config.model,
         network=admin_config.network,
