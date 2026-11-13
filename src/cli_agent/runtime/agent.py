@@ -29,7 +29,7 @@ from cli_agent.state.agent_permissions import WRITE_TOOLS
 from cli_agent.runtime.agent_prompts import KNOWLEDGE_SYSTEM_PROMPT, HYBRID_OKF_KNOWLEDGE_PROMPT, CHROMA_KNOWLEDGE_PROMPT
 from cli_agent.context.knowledge_vector import VectorKnowledgeSession, source_root, db_path
 from cli_agent.state.agent_types import ApprovalCallback, ServerConfig, ToolRoute, UserMessageCallback
-from cli_agent.settings.config import LoggingConfig, McpServerConfig
+from cli_agent.settings.config import LoggingConfig, TelemetryConfig, McpServerConfig
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse, regular_file_has_multiple_links
 from cli_agent.security.mcp_contracts import tool_contract_fingerprint
 from cli_agent.security.mcp_result_artifacts import McpResultArtifacts
@@ -141,6 +141,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         self.mcp_servers = mcp_servers
         self.max_tool_calls = max_tool_calls
         self.logging_config = logging_config or LoggingConfig()
+        self.telemetry_config = TelemetryConfig()  # Set by configured entry points.
         self.config_file = config_file
         self.base_system_prompt = system_prompt if system_prompt is not None else BASE_SYSTEM_PROMPT
         self._sdk_configless = sdk_configless
