@@ -352,6 +352,8 @@ async def _inspect_mcp_tool(
         mcp_policy=admin_config.mcp,
         workspace_access=inspection_workspace_access,
     )
+    agent.telemetry_config = config.telemetry
+
     async with agent:
         exposed_name = f"{server.name}__{native_tool_name}"
         tool_metadata = next((tool for tool in agent._server_tools.get(server.name, ()) if tool.get("function", {}).get("name") == exposed_name), None)
