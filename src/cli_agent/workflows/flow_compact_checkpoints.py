@@ -109,6 +109,13 @@ def read_checkpoint(
     fingerprint = run_start_markers.get(path.name)
     if fingerprint is None:
         return None
+    # Re-check the protected parent directories at the point of use; a
+    # run-start validation alone must not authorize later path replacement.
+    current = workspace
+    for component in Path(MARKER_DIRECTORY).parts:
+        current = current / component
+        if path_entry_is_symlink_or_reparse(current):
+            raise ValueError("Compact checkpoint directory was replaced by a link.")
     if path.is_symlink() or path_entry_is_symlink_or_reparse(path):
         raise ValueError("Compact checkpoint marker was replaced by a link.")
     text = _read_marker(path)
