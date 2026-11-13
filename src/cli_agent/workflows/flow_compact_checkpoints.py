@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import stat
 import tempfile
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
 from cli_agent.context.file_context import read_existing_output_text
+from cli_agent.workflows.flow_json_operations import _JsonNumber
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 
 MARKER_DIRECTORY = ".cli-agent/flow-checkpoints"
@@ -26,7 +28,7 @@ class CompletionRecord(NamedTuple):
     is_json: bool
     # Paths are returned only after the entire marker was verified.
     preserved_json: tuple[tuple[Path, bytes], ...]
-    preserved_outputs: tuple[tuple[Path, bool], ...]
+    preserved_outputs: tuple[tuple[Path, bool, bool], ...]
 
 
 def _read_marker(path: Path) -> str:
@@ -55,18 +57,51 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _typed_identity_value(value: Any) -> Any:
+    """Canonical and injective encoding of the supported flow-input JSON types.
+
+    _JsonNumber is a *str subclass*. Plain json.dumps would conflate the
+    numeric literal 1.5 with the string "1.5", yielding unsafe cache hits.
+    Every node receives a type discriminator; object keys are sorted.
+    """
+    if isinstance(value, _JsonNumber):
+        return ["number", str(value)]
+    if value is None:
+        return ["null"]
+    if type(value) is bool:
+        return ["bool", value]
+    if type(value) is int:
+        return ["integer", str(value)]
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("Nonfinite flow input cannot be checkpointed.")
+        return ["float", repr(value)]
+    if type(value) is str:
+        return ["string", value]
+    if isinstance(value, list):
+        return ["array", [_typed_identity_value(item) for item in value]]
+    if isinstance(value, dict):
+        if not all(type(key) is str for key in value):
+            raise TypeError("Flow input keys must be strings.")
+        return [
+            "object",
+            [[key, _typed_identity_value(value[key])] for key in sorted(value)],
+        ]
+    raise TypeError(f"Unsupported flow input identity type: {type(value).__name__}")
+
+
 def checkpoint_path(
     workspace: Path, flow_source: Path, namespace: str, flow_input: dict[str, Any],
 ) -> tuple[Path, str]:
-    """Hash a concrete invocation, not just its reusable flow definition."""
+    """Hash a concrete invocation, preserving every input's JSON type."""
     identity = json.dumps(
         {
             "flow": flow_source.relative_to(workspace).as_posix(),
             "definition_sha256": hashlib.sha256(flow_source.read_bytes()).hexdigest(),
             "namespace": namespace,
-            "input": flow_input,
+            "input": _typed_identity_value(flow_input),
         },
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str,
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     )
     key = _digest(identity)
     return workspace / MARKER_DIRECTORY / (key + ".json"), key
@@ -143,13 +178,14 @@ def read_checkpoint(
     ):
         raise ValueError(f"Invalid compact checkpoint: {path}")
     preserved_json: list[tuple[Path, bytes]] = []
-    preserved_outputs: list[tuple[Path, bool]] = []
+    preserved_outputs: list[tuple[Path, bool, bool]] = []
     for file in payload["preserved"]:
         if (
             not isinstance(file, dict)
             or not isinstance(file.get("path"), str)
             or not isinstance(file.get("sha256"), str)
             or type(file.get("is_json")) is not bool
+            or type(file.get("allow_replace", False)) is not bool
         ):
             raise ValueError("Invalid preserved output in compact checkpoint.")
         target = resolve_path(Path(file["path"]))
@@ -160,7 +196,9 @@ def read_checkpoint(
         )
         if _digest(current) != file["sha256"]:
             raise ValueError(f"Preserved compact checkpoint output changed: {target}")
-        preserved_outputs.append((target, file["is_json"]))
+        preserved_outputs.append((
+            target, file["is_json"], file.get("allow_replace", False),
+        ))
         if file["is_json"]:
             preserved_json.append((target, hashlib.sha256(current.encode("utf-8")).digest()))
     return CompletionRecord(
