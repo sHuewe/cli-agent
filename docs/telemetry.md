@@ -1,7 +1,7 @@
 # OpenTelemetry and Jaeger
 
 Tracing is **opt-in** and does not modify the agent's event stream, prompts or
-tool approval behavior. The OTLP exporter sends metadata-only traces to a local
+tool approval behavior. The OTLP gRPC exporter sends metadata-only traces to a local
 collector (Jaeger, Tempo, or an OpenTelemetry Collector).
 
 Install the extra:
@@ -16,20 +16,18 @@ Enable it in the user `config.toml` (or trusted workspace project configuration)
 [telemetry]
 enabled = true
 service_name = "cli-agent"
-otlp_endpoint = "http://127.0.0.1:4318"
+otlp_endpoint = "http://127.0.0.1:4317"
 sample_rate = 1.0
 ```
 
-Run Jaeger locally with its OTLP HTTP receiver (4318) and UI (16686). For
+Run Jaeger locally with its OTLP gRPC receiver (4317) and UI (16686). For
 example, with a local Docker daemon:
 
 ```shell
 docker run --rm --name jaeger -p 127.0.0.1:16686:16686 -p 127.0.0.1:4318:4318 jaegertracing/jaeger:2
 ```
 
-Open http://localhost:16686 and select the `cli-agent` service. The exporter
-uses `POST /v1/traces`; configure **the receiver base URL**, not the full
-traces path. For a collector in a different container, use loopback port
+Open http://localhost:16686 and select the `cli-agent` service. The exporter uses OTLP over gRPC. Configure the collector endpoint without a path. For a collector in a different container, use loopback port
 forwarding or arrange for a local collector; directly sending telemetry to
 arbitrary remote hosts is deliberately unsupported by user configuration.
 
