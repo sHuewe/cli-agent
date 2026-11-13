@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -18,6 +19,28 @@ from cli_agent.security.filesystem_security import path_entry_is_symlink_or_repa
 MARKER_DIRECTORY = ".cli-agent/flow-checkpoints"
 MAX_MARKERS = 100_000
 MAX_MARKER_BYTES = 100_000_000
+
+
+def _read_marker(path: Path) -> str:
+    # Markers live under the deliberately LLM-inaccessible .cli-agent tree.
+    # The ordinary output reader intentionally rejects that directory.
+    if path_entry_is_symlink_or_reparse(path):
+        raise ValueError("Unsafe compact checkpoint marker.")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_MARKER_BYTES:
+            raise ValueError("Invalid compact checkpoint marker type or size.")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            data = handle.read(MAX_MARKER_BYTES + 1)
+        if len(data) > MAX_MARKER_BYTES:
+            raise ValueError("Compact checkpoint marker exceeds size limit.")
+        return data.decode("utf-8").removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    finally:
+        os.close(fd)
 
 
 def _digest(value: str) -> str:
@@ -69,9 +92,7 @@ def snapshot_markers(workspace: Path) -> dict[str, bytes]:
                 raise ValueError("Unsafe compact checkpoint entry.")
             if path.stat().st_size > MAX_MARKER_BYTES:
                 raise ValueError("Compact checkpoint marker exceeds size limit.")
-            text = read_existing_output_text(
-                workspace, path, max_bytes=MAX_MARKER_BYTES,
-            )
+            text = _read_marker(path)
             result[entry.name] = hashlib.sha256(text.encode("utf-8")).digest()
     return result
 
@@ -90,7 +111,7 @@ def read_checkpoint(
         return None
     if path.is_symlink() or path_entry_is_symlink_or_reparse(path):
         raise ValueError("Compact checkpoint marker was replaced by a link.")
-    text = read_existing_output_text(workspace, path, max_bytes=MAX_MARKER_BYTES)
+    text = _read_marker(path)
     if hashlib.sha256(text.encode("utf-8")).digest() != fingerprint:
         raise ValueError(f"Compact checkpoint changed since run startup: {path}")
     try:
