@@ -98,3 +98,77 @@ def test_compact_validation(tmp_path):
     ).replace('inputs = ["id"]', 'inputs = ["id"]\nresult = "steps.assemble.output"'), encoding="utf-8")
     with pytest.raises(ValueError, match="unknown steps"):
         load_flow(child, workspace=tmp_path)
+
+def test_root_compaction_skips_second_run(tmp_path, monkeypatch):
+    _setup(tmp_path)
+    root = tmp_path / "root.toml"
+    root.write_text(
+        'version = 1\nresult = "steps.finish.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "prepare"\n'
+        'prompt_file = "prompts/discover.md"\n'
+        'output = "state/root-intermediate.json"\nresponse_format = "json"\n'
+        '[[steps]]\nid = "finish"\n'
+        'prompt_file = "prompts/assemble.md"\n'
+        'output = "state/root-final.json"\nresponse_format = "json"\n'
+        '[steps.vars]\nid = "root"\n',
+        encoding="utf-8",
+    )
+    # Add the missing variable for the first prompt, too.
+    text = root.read_text(encoding="utf-8")
+    text = text.replace(
+        'output = "state/root-intermediate.json"\nresponse_format = "json"',
+        'output = "state/root-intermediate.json"\nresponse_format = "json"\n'
+        '[steps.vars]\nid = "root"',
+    )
+    root.write_text(text, encoding="utf-8")
+    calls = []
+
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.output is not None:
+            options.output.write_text('{"ok":true}', encoding="utf-8")
+        return SimpleNamespace(answer='{"ok":true}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+    for _ in range(2):
+        asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
+    assert calls == ["discover root", "assemble root"]
+    assert not (tmp_path / "state/root-intermediate.json").exists()
+    assert (tmp_path / "state/root-final.json").is_file()
+
+
+def test_preserved_overwrite_path_is_never_deleted(tmp_path, monkeypatch):
+    _setup(tmp_path)
+    child = tmp_path / "child.toml"
+    original = child.read_text(encoding="utf-8")
+    original = original.replace(
+        'state/$' + '{input.id}-assemble.json',
+        'state/$' + '{input.id}-discover.json',
+    )
+    original = original.replace(
+        '[[steps]]\nid = "assemble"',
+        '[[steps]]\nid = "assemble"\noverwrite_output = true',
+    )
+    # A single overwrite_output key may be specified per step.
+    original = original.replace(
+        '[[steps]]\nid = "assemble"\noverwrite_output = true\n',
+        '[[steps]]\nid = "assemble"\n',
+    ).replace(
+        'output = "state/$' + '{input.id}-discover.json"\n'
+        'response_format = "json"\noverwrite_output = false\n'
+        '[steps.vars]\nid = "$' + '{input.id}"\n',
+        'output = "state/$' + '{input.id}-discover.json"\n'
+        'response_format = "json"\noverwrite_output = true\n'
+        '[steps.vars]\nid = "$' + '{input.id}"\n', 1,
+    )
+    # Only the later assemble step is permitted to overwrite the earlier file.
+    parts = original.split('[[steps]]\nid = "assemble"')
+    assert len(parts) == 2
+    original = parts[0].replace(
+        'overwrite_output = true', 'overwrite_output = false',
+    ) + '[[steps]]\nid = "assemble"' + parts[1]
+    child.write_text(original, encoding="utf-8")
+    _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
+    assert (tmp_path / "state/first-discover.json").exists()
+    _run(tmp_path, monkeypatch, [])
