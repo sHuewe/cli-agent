@@ -497,3 +497,68 @@ def test_batch_arrays_incremental_sizing_matches_exact_utf8_output():
     assert [item for fragment in fragments for item in fragment["nested"]["flags"]] == original["nested"]["flags"]
     for batch in result["batches"]:
         assert len(_json_dumps_preserving_numbers(batch).encode("utf-8")) <= 1024
+
+
+def test_deterministic_only_flow_never_loads_model_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSON-only flows work even with a broken or absent default config."""
+    from cli_agent.workflows import flow as flow_module
+
+    (tmp_path / "source.json").write_text(
+        json.dumps(["alpha", "beta"]), encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "batch"\noutput = "batches.json"\n'
+        '[steps.json_operation]\nkind = "batch"\ninput = "source"\n'
+        'batch_size = 1\n'
+        '[steps.json_inputs.source]\npath = "source.json"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+
+    def unexpected_config(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Deterministic execution must not read model settings")
+
+    def unexpected_telemetry(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Deterministic execution must not initialize exporter")
+
+    monkeypatch.setattr(flow_module, "load_config", unexpected_config)
+    monkeypatch.setattr(flow_module, "configure_telemetry", unexpected_telemetry)
+    dependencies = flow_module.ExecutionDependencies(load_config=unexpected_config)
+    asyncio.run(run_flow(flow, workspace=tmp_path, dependencies=dependencies))
+    result = json.loads((tmp_path / "batches.json").read_text(encoding="utf-8"))
+    assert result["total_items"] == 2
+
+
+def test_deterministic_only_subflow_does_not_load_model_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Model-free child flows do not force the default configuration either."""
+    from cli_agent.workflows import flow as flow_module
+
+    (tmp_path / "source.json").write_text(
+        json.dumps(["alpha"]), encoding="utf-8",
+    )
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.batch.output"\n'
+        '[[steps]]\nid = "batch"\noutput = "batches.json"\n'
+        '[steps.json_operation]\nkind = "batch"\ninput = "source"\n'
+        '[steps.json_inputs.source]\npath = "source.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+
+    def unexpected_config(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Deterministic nested flow must not read model settings")
+
+    monkeypatch.setattr(flow_module, "load_config", unexpected_config)
+    dependencies = flow_module.ExecutionDependencies(load_config=unexpected_config)
+    asyncio.run(run_flow(flow, workspace=tmp_path, dependencies=dependencies))
+    result = json.loads((tmp_path / "batches.json").read_text(encoding="utf-8"))
+    assert result["total_items"] == 1
