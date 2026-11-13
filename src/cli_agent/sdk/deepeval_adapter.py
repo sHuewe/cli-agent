@@ -76,8 +76,11 @@ class DeepEvalTarget:
                 "DeepEval integration requires optional package 'deepeval>=4,<5'."
             ) from exc
 
+        response: dict[str, Any] | None = None
+
         @observe(type="agent")
-        async def invoke(prompt: str) -> dict[str, Any]:
+        async def invoke(prompt: str) -> str:
+            nonlocal response
             if cached_response is None:
                 # The builder is configured by the caller. Each execution gets
                 # an independent agent/history/tools/approvals lifecycle.
@@ -114,6 +117,11 @@ class DeepEvalTarget:
             if selected:
                 attrs["retrieval_context"] = selected
             update_current_trace(**attrs)
-            return response
+            # Expose only the answer as the observed return value; source
+            # telemetry remains separate from DeepEval span output.
+            return response["actual_output"]
 
-        return await invoke(question)
+        await invoke(question)
+        if response is None:
+            raise RuntimeError("DeepEval observation produced no response")
+        return response
