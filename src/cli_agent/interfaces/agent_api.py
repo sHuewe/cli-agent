@@ -245,6 +245,8 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
         workspace_access=args.os_access, workspace=workspace,
     )
     configure_logging(config.logging)
+    from cli_agent.platform.telemetry import configure_telemetry
+    configure_telemetry(config.telemetry)
     approval_workspace = None
     if args.os_access == "write":
         approval_workspace = Workspace.from_directory(
@@ -279,6 +281,7 @@ def build_service(args: argparse.Namespace) -> AgentApiService:
             model_credential_rules=admin.model_credentials,
             workspace_access=args.os_access,
         )
+        agent.telemetry_config = config.telemetry
         agent.event_callback = session.on_agent_event
         session.broker.set_event_sender(session._send_user_message)
         return agent

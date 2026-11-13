@@ -19,6 +19,7 @@ from cli_agent.context.agent_knowledge import (
     tool_result_text,
 )
 from cli_agent.runtime.knowledge_trace import trace_observe
+from cli_agent.platform.telemetry import span, mark_error
 from cli_agent.state.agent_types import ToolRoute
 from cli_agent.state.evidence_tools import annotate_source_result
 from cli_agent.security.mcp_limits import (
@@ -323,11 +324,15 @@ async def process_tool_calls(
                 json.dumps(arguments, ensure_ascii=False),
             )
         try:
-            result = await await_mcp_operation(
-                session.call_tool(original_name, arguments),
-                timeout_seconds=MCP_TOOL_CALL_TIMEOUT_SECONDS,
-                operation=f"MCP-Tool {exposed_name!r}",
-            )
+            with span("mcp.call", phase=phase, server=server_config.name,
+                      tool=str(exposed_name)) as mcp_span:
+                result = await await_mcp_operation(
+                    session.call_tool(original_name, arguments),
+                    timeout_seconds=MCP_TOOL_CALL_TIMEOUT_SECONDS,
+                    operation=f"MCP-Tool {exposed_name!r}",
+                )
+                if getattr(result, "isError", False):
+                    mark_error(mcp_span, "mcp_result_error")
         except BaseException as exc:
             # Always balance TOOL_CALL_START, including timeout and cancellation.
             if event_callback is not None:

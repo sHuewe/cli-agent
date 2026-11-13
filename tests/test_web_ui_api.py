@@ -449,8 +449,9 @@ def test_paused_approval_sessions_are_actionable_in_sessions_dialog():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("os_access", ["read", "write"])
+@pytest.mark.parametrize("telemetry_enabled", [False, True])
 async def test_cli_embedded_ui_startup_configuration_and_cleanup(
-    monkeypatch, tmp_path, os_access,
+    monkeypatch, tmp_path, os_access, telemetry_enabled,
 ):
     """Exercise the real --with-web-ui startup path without a networked LLM."""
     import sys
@@ -465,6 +466,10 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
     from cli_agent.platform import logging_setup
 
     monkeypatch.setattr(logging_setup, "configure_logging", lambda _config: None)
+    telemetry_started = []
+    from cli_agent.platform import telemetry as telemetry_module
+    monkeypatch.setattr(telemetry_module, "configure_telemetry",
+                        lambda cfg: telemetry_started.append(cfg))
 
     created = []
     shutdowns = []
@@ -553,8 +558,10 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
         debug=True, add_web_context=("https://example.org",),
         response_format="json",
     )
+    from cli_agent.settings.config import TelemetryConfig
     cfg = SimpleNamespace(
         logging=object(),
+        telemetry=TelemetryConfig(enabled=telemetry_enabled),
         agent=SimpleNamespace(timezone="Europe/Berlin"),
         model=SimpleNamespace(model="fake-model"),
         mcp_servers=(SimpleNamespace(name="os"),),
@@ -579,6 +586,8 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
     assert created[0].kwargs["workspace_access"] == os_access
     assert created[0].kwargs["response_format"] == "json"
     assert created[0].kwargs["agent_timezone"] == "Europe/Berlin"
+    assert created[0].telemetry_config == cfg.telemetry
+    assert telemetry_started == [cfg.telemetry]
     assert created[0].event_callback == preapprovals[0][1].__self__.on_agent_event
     assert preapprovals[0][0] == ("safe__read",)
     assert model_calls

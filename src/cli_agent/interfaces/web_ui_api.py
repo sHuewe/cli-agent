@@ -34,7 +34,8 @@ async def run_web_ui_via_api(
     from cli_agent.interfaces.agent_api import API_HOST, AgentApiService, create_app
     from cli_agent.interfaces.session_persistence import SessionPersistence
     from cli_agent.interfaces.cli import build_preapproval_callback
-    from cli_agent.settings.config import McpServerConfig, default_config_file
+    from cli_agent.settings.config import McpServerConfig, TelemetryConfig, default_config_file
+    from cli_agent.platform.telemetry import configure_telemetry
     from cli_agent.context.file_context import ContextFileCliAgent
     from cli_agent.models.model_factory import create_model_client
     from cli_agent.platform.logging_setup import configure_logging
@@ -42,6 +43,10 @@ async def run_web_ui_via_api(
     from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 
     configure_logging(config.logging)
+    # Use the same opt-in telemetry configuration as CLI/API sessions.
+    # The worker's agent.ask() establishes its own isolated telemetry scope.
+    telemetry_config = getattr(config, "telemetry", TelemetryConfig())
+    configure_telemetry(telemetry_config)
     from cli_agent.settings.project_config import read_project_ui_template
     from cli_agent.interfaces.web_ui import render_index_html
     project_template = read_project_ui_template(
@@ -98,6 +103,7 @@ async def run_web_ui_via_api(
             response_format=getattr(args, "response_format", "text"),
             workspace_access=args.os_access,
         )
+        agent.telemetry_config = telemetry_config
         agent.event_callback = session.on_agent_event
         session.broker.set_event_sender(session._send_user_message)
         return agent

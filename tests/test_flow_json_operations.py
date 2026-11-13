@@ -497,3 +497,69 @@ def test_batch_arrays_incremental_sizing_matches_exact_utf8_output():
     assert [item for fragment in fragments for item in fragment["nested"]["flags"]] == original["nested"]["flags"]
     for batch in result["batches"]:
         assert len(_json_dumps_preserving_numbers(batch).encode("utf-8")) <= 1024
+
+
+def test_deterministic_only_flow_never_loads_model_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Filesystem-only flows work without loading a default model config."""
+    from cli_agent.workflows import flow as flow_module
+
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "alpha.md").write_text("alpha", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "inventory"\noutput = "inventory.json"\n'
+        '[steps.filesystem_operation]\nkind = "inventory"\n'
+        'directory = "docs"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+
+    def unexpected_config(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Deterministic execution must not read model settings")
+
+    def unexpected_telemetry(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Deterministic execution must not initialize exporter")
+
+    monkeypatch.setattr(flow_module, "load_config", unexpected_config)
+    monkeypatch.setattr(flow_module, "configure_telemetry", unexpected_telemetry)
+    dependencies = flow_module.ExecutionDependencies(load_config=unexpected_config)
+    asyncio.run(run_flow(flow, workspace=tmp_path, dependencies=dependencies))
+    result = json.loads((tmp_path / "inventory.json").read_text(encoding="utf-8"))
+    assert result["file_count"] == 1
+
+
+def test_deterministic_only_subflow_does_not_load_model_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Filesystem-only nested flows cannot require unrelated model settings."""
+    from cli_agent.workflows import flow as flow_module
+
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "alpha.md").write_text("alpha", encoding="utf-8")
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.inventory.output"\n'
+        '[[steps]]\nid = "inventory"\noutput = "inventory.json"\n'
+        '[steps.filesystem_operation]\nkind = "inventory"\n'
+        'directory = "docs"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+
+    def unexpected_config(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Deterministic nested flow must not read model settings")
+
+    def unexpected_telemetry(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Deterministic nested flow must not initialize exporter")
+
+    monkeypatch.setattr(flow_module, "load_config", unexpected_config)
+    monkeypatch.setattr(flow_module, "configure_telemetry", unexpected_telemetry)
+    dependencies = flow_module.ExecutionDependencies(load_config=unexpected_config)
+    asyncio.run(run_flow(flow, workspace=tmp_path, dependencies=dependencies))
+    result = json.loads((tmp_path / "inventory.json").read_text(encoding="utf-8"))
+    assert result["file_count"] == 1

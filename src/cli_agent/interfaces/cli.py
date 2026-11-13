@@ -739,6 +739,8 @@ async def run(args: argparse.Namespace) -> None:
         return
 
     configure_logging(config.logging)
+    from cli_agent.platform.telemetry import configure_telemetry
+    configure_telemetry(config.telemetry)
     model_client = create_model_client(
         config.model,
         network=admin_config.network,
@@ -765,6 +767,7 @@ async def run(args: argparse.Namespace) -> None:
         response_format=getattr(args, "response_format", "text"),
         workspace_access=args.os_access,
     )
+    agent.telemetry_config = config.telemetry
 
     async with agent:
         for url in getattr(args, "add_web_context", ()):

@@ -15,6 +15,7 @@ from cli_agent.context.agent_knowledge import (
     _knowledge_call_key,
     tool_result_text,
 )
+from cli_agent.platform.telemetry import traced_agent_question, traced_agent_resume
 from cli_agent.runtime.agent_loop import ModelLoopRunState, run_model_loop
 from cli_agent.runtime.knowledge_trace import trace_observe
 from cli_agent.state.agent_types import ToolRoute
@@ -147,6 +148,7 @@ class ConversationMixin:
 
         logger.info("conversation_history_reset")
 
+    @traced_agent_question
     async def ask(self, prompt: str) -> str:
         if self._exit_stack is None:
             raise RuntimeError("Der Agent wurde noch nicht gestartet.")
@@ -315,6 +317,7 @@ class ConversationMixin:
         self._agui_pending_json_repairs = 0
         return answer
 
+    @traced_agent_resume
     async def continue_after_frontend_tools(
         self, results: list[dict[str, Any]]
     ) -> str:

@@ -45,6 +45,11 @@ from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 from cli_agent.platform.logging_setup import configure_logging
 from cli_agent.models.model import ModelRetryPolicy
+from cli_agent.platform.telemetry import (
+    trace_flow_step, trace_flow_operation, trace_flow_invocation,
+    configure_telemetry, telemetry_scope,
+)
+from cli_agent.settings.config import TelemetryConfig
 from cli_agent.models.prompt_template import PromptTemplate
 from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 from cli_agent.state.agent_types import UserMessageCallback
@@ -4943,6 +4948,7 @@ def _reject_markdown_source_output_alias(
         )
 
 
+@trace_flow_operation("filesystem")
 def _execute_filesystem_step(
     step: FlowStep,
     *,
@@ -5058,6 +5064,7 @@ def _execute_filesystem_step(
     return answer
 
 
+@trace_flow_operation("json")
 def _execute_json_step(
     step: FlowStep,
     *,
@@ -5188,6 +5195,7 @@ def _execute_json_step(
     return answer
 
 
+@trace_flow_step("model")
 async def _execute_model_iteration(
     step: FlowStep,
     *,
@@ -5608,6 +5616,7 @@ def _preflight_foreach_output_batch(
     return preflight_outputs, preflight_checkpoint_fingerprints
 
 
+@trace_flow_step("subflow")
 async def _execute_subflow_iteration(
     step: FlowStep,
     *,
@@ -5827,6 +5836,7 @@ def _resolve_iteration_previous_output(
     return previous_output
 
 
+@trace_flow_invocation
 async def _run_flow_internal(
     flow: FlowDefinition,
     *,
@@ -6168,6 +6178,27 @@ async def run_flow(
 ) -> None:
     workspace = workspace.expanduser().resolve()
     deps = dependencies or ExecutionDependencies()
+    # Use the same explicit-config discovery as flow logging. Flows with
+    # explicit step configs must not access the unrelated default user config.
+    # Each model step's own agent scope still controls whether it is traced.
+    has_model_step, config_source = _discover_initial_flow_model_config(
+        flow, workspace=workspace,
+    )
+    # Deterministic-only flows do not use agents and must remain independent
+    # of any default model configuration (which may be absent or malformed).
+    flow_telemetry = TelemetryConfig()
+    if has_model_step:
+        selected_path = config_source[0] if config_source is not None else None
+        # Match prepare_agent(): apply workspace overrides to the selected
+        # explicit/default model config, including telemetry.enabled.
+        from cli_agent.settings.project_config import read_project_overrides
+        selected_config = (
+            load_config(selected_path, workspace=workspace)
+            if read_project_overrides(workspace)
+            else deps.load_config(selected_path)
+        )
+        flow_telemetry = getattr(selected_config, "telemetry", TelemetryConfig())
+        configure_telemetry(flow_telemetry)
     cache = {_filesystem_path_key(flow.source): flow}
     validation_budget = _SubflowTraversalBudget()
     validate_flow(
@@ -6233,16 +6264,17 @@ async def run_flow(
         run_start_dynamic_checkpoints=dynamic_fingerprints,
     )
     _set_flow_diagnostic(phase="execute-flow", flow=flow.source)
-    await _run_flow_internal(
-        flow,
-        workspace=workspace,
-        context=context,
-        flow_input={},
-        call_stack=(),
-        namespace="",
-        inherited_excluded_paths=(),
-        inherited_retry_policy=None,
-    )
+    with telemetry_scope(flow_telemetry):
+        await _run_flow_internal(
+            flow,
+            workspace=workspace,
+            context=context,
+            flow_input={},
+            call_stack=(),
+            namespace="",
+            inherited_excluded_paths=(),
+            inherited_retry_policy=None,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -6282,15 +6314,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _initial_flow_logging_config(
+def _discover_initial_flow_model_config(
     flow: FlowDefinition,
     *,
     workspace: Path,
-) -> tuple[Path, Path, str] | None:
-    """Use a step config when no executable step depends on the default.
+) -> tuple[bool, tuple[Path, Path, str] | None]:
+    """Discover whether a model config is needed and which one to preload.
 
-    Inspect the bounded, cached subflow graph so explicit-config-only flows
-    never read or create an unrelated default user configuration.
+    (False, None) means a fully deterministic flow with no model invocations
+    (including nested subflows), and must not load any config.
+    (True, None) means a model step uses the default config.
+    (True, explicit) means all model steps inspected have explicit configs.
+    Traverse the bounded subflow graph with the same protections as logging.
     """
     cache = {_filesystem_path_key(flow.source): flow}
     visited: set[str] = set()
@@ -6329,14 +6364,26 @@ def _initial_flow_logging_config(
             elif step.json_operation is not None or step.filesystem_operation is not None:
                 continue
             elif step.config is None:
-                return None
+                return True, None
             elif first_explicit is None:
                 first_explicit = (
                     _resolve_config(step, flow_dir=current.source.parent),
                     current.source,
                     step.step_id,
                 )
-    return first_explicit
+    return first_explicit is not None, first_explicit
+
+
+def _initial_flow_logging_config(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> tuple[Path, Path, str] | None:
+    """Preserve flow CLI logging's existing config discovery contract."""
+    _, selected_config = _discover_initial_flow_model_config(
+        flow, workspace=workspace,
+    )
+    return selected_config
 
 
 def main() -> None:
