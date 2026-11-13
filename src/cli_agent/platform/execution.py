@@ -21,6 +21,7 @@ from cli_agent.context.file_context import (
     prepare_file_options,
 )
 from cli_agent.platform.logging_setup import configure_logging
+from cli_agent.telemetry import configure_telemetry
 from cli_agent.models.model import ModelRetryPolicy, RetryingModelClient
 from cli_agent.models.model_factory import create_model_client
 from cli_agent.platform.workspace_access import normalize_workspace_access, workspace_access_allows
@@ -600,6 +601,7 @@ def prepare_agent(
         )
 
     deps.configure_logging(config.logging)
+    configure_telemetry(config.telemetry)
     model_client = deps.create_model_client(
         config.model,
         network=policy.network,
