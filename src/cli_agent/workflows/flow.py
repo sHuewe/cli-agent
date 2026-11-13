@@ -179,7 +179,7 @@ class _FlowExecutionContext:
     run_start_dynamic_checkpoints: dict[tuple[str, str, str], bytes] | None = None
     run_start_compact_markers: dict[str, bytes] | None = None
     # Complete, verified artifact dependencies for each finished invocation.
-    completed_invocation_artifacts: dict[str, dict[str, tuple[Path, bool]]] | None = None
+    completed_invocation_artifacts: dict[str, dict[str, tuple[Path, bool, bool]]] | None = None
     completed_json_outputs: dict[str, bytes] | None = None
     preflight_budget: "_SubflowTraversalBudget" | None = None
 
@@ -2705,7 +2705,7 @@ def _claim_compact_preserved_outputs(
     checkpoints. The caller uses a temporary claim map in preflight and the
     real claim map during execution.
     """
-    for path, _is_json in record.preserved_outputs:
+    for path, _is_json, allow_replace in record.preserved_outputs:
         if reserved_inputs is not None and _filesystem_path_key(path) in reserved_inputs:
             raise ValueError(
                 f"Preserved compact output {path} conflicts with reserved "
@@ -2715,6 +2715,7 @@ def _claim_compact_preserved_outputs(
             claimed_outputs,
             path=path,
             owner=f"{namespace}compact-completed-output",
+            allow_replace=allow_replace,
         )
 
 
@@ -5790,8 +5791,8 @@ async def _execute_subflow_iteration(
                     _filesystem_path_key(preserved_path)
                 ] = fingerprint
             context.completed_invocation_artifacts[child_namespace] = {
-                _filesystem_path_key(path): (path, is_json)
-                for path, is_json in cached.preserved_outputs
+                _filesystem_path_key(path): (path, is_json, allow_replace)
+                for path, is_json, allow_replace in cached.preserved_outputs
             }
             return _FlowResultValue(cached.result, cached.is_json)
 
@@ -5998,8 +5999,8 @@ async def _run_flow_internal(
     output_json: dict[str, bool] = {}
     # Own JSON intermediates can be removed; descendant outputs are always
     # dependencies and must be retained and verified by the parent marker.
-    own_checkpoint_files: list[tuple[str, Path, bool]] = []
-    child_output_artifacts: dict[str, tuple[Path, bool]] = {}
+    own_checkpoint_files: list[tuple[str, Path, bool, bool]] = []
+    child_output_artifacts: dict[str, tuple[Path, bool, bool]] = {}
     claimed_outputs = context.claimed_outputs
     reserved_inputs = context.reserved_inputs
     assert claimed_outputs is not None
@@ -6238,7 +6239,9 @@ async def _run_flow_internal(
                         escape_literal_backslashes=True,
                     )
                 )
-                own_checkpoint_files.append((step.step_id, output, True))
+                own_checkpoint_files.append((
+                    step.step_id, output, True, step.overwrite_output,
+                ))
                 record_iteration_answer(
                     checkpoint,
                     True,
@@ -6254,7 +6257,10 @@ async def _run_flow_internal(
 
             if output is not None:
                 own_checkpoint_files.append(
-                    (step.step_id, output, step.response_format == "json")
+                    (
+                        step.step_id, output,
+                        step.response_format == "json", step.overwrite_output,
+                    )
                 )
 
             if step.filesystem_operation is not None:
@@ -6313,8 +6319,8 @@ async def _run_flow_internal(
         # Classify by physical output path rather than step identity: a
         # later overwrite may reuse an earlier intermediate path. Retention
         # always wins, regardless of which step last wrote the file.
-        owned: dict[str, tuple[Path, bool, bool]] = {}
-        for step_id, path, is_json in own_checkpoint_files:
+        owned: dict[str, tuple[Path, bool, bool, bool]] = {}
+        for step_id, path, is_json, allow_replace in own_checkpoint_files:
             key = _filesystem_path_key(path)
             # Non-JSON output files are published artifacts, not disposable
             # JSON resume checkpoints. Never delete them automatically.
@@ -6327,17 +6333,17 @@ async def _run_flow_internal(
             owned[key] = (
                 path,
                 retain or (previous[1] if previous else False),
-                is_json,
+                is_json, allow_replace,
             )
         # Retain every published descendant artifact, including outputs of
         # non-compact children. The enclosing marker is invalid if any child
         # artifact subsequently disappears or changes.
-        for key, (path, is_json) in child_output_artifacts.items():
-            owned[key] = (path, True, is_json)
+        for key, (path, is_json, allow_replace) in child_output_artifacts.items():
+            owned[key] = (path, True, is_json, allow_replace)
         preserve: list[dict[str, Any]] = []
         intermediate: list[tuple[Path, str]] = []
-        retained_artifacts: dict[str, tuple[Path, bool]] = {}
-        for path, retain, is_json in owned.values():
+        retained_artifacts: dict[str, tuple[Path, bool, bool]] = {}
+        for path, retain, is_json, allow_replace in owned.values():
             if not path.is_file():
                 if retain:
                     raise ValueError(
@@ -6356,9 +6362,10 @@ async def _run_flow_internal(
                     "path": checked.relative_to(workspace).as_posix(),
                     "sha256": digest,
                     "is_json": is_json,
+                    "allow_replace": allow_replace,
                 })
                 retained_artifacts[_filesystem_path_key(checked)] = (
-                    checked, is_json
+                    checked, is_json, allow_replace,
                 )
             else:
                 intermediate.append((checked, digest))
@@ -6380,12 +6387,14 @@ async def _run_flow_internal(
         # Its outputs are external dependencies, never subject to parent
         # cleanup, and must participate in the parent's completion validation.
         artifacts = dict(child_output_artifacts)
-        for _, path, is_json in own_checkpoint_files:
+        for _, path, is_json, allow_replace in own_checkpoint_files:
             if path.is_file():
                 checked = _workspace_path(
                     workspace, path, purpose="Child output", must_exist=True,
                 )
-                artifacts[_filesystem_path_key(checked)] = (checked, is_json)
+                artifacts[_filesystem_path_key(checked)] = (
+                    checked, is_json, allow_replace,
+                )
         assert context.completed_invocation_artifacts is not None
         context.completed_invocation_artifacts[namespace] = artifacts
     return final_result
