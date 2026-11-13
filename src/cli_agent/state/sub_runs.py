@@ -13,7 +13,7 @@ from cli_agent.state.evidence_tools import (
     source_artifacts_from_evidences,
 )
 from cli_agent.models.model import RetryingModelClient
-from cli_agent.telemetry import traced_sub_run
+from cli_agent.platform.telemetry import traced_sub_run
 
 def _isolated_sub_run_client(client: Any) -> Any:
     """Copy per-run model state without losing the configured retry adapter."""
