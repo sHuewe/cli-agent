@@ -6183,10 +6183,16 @@ async def run_flow(
     # Each model step's own agent scope still controls whether it is traced.
     config_source = _initial_flow_logging_config(flow, workspace=workspace)
     selected_path = config_source[0] if config_source is not None else None
-    if selected_path is None and deps.load_config is load_config:
-        selected_config = load_config(workspace=workspace)
-    else:
-        selected_config = deps.load_config(selected_path)
+    # Match prepare_agent(): project.toml overrides are applied to the
+    # selected explicit/default model config, including telemetry.enabled.
+    # No overrides means the injected loader remains authoritative and
+    # explicit-only flows never touch the unrelated default config.
+    from cli_agent.settings.project_config import read_project_overrides
+    selected_config = (
+        load_config(selected_path, workspace=workspace)
+        if read_project_overrides(workspace)
+        else deps.load_config(selected_path)
+    )
     flow_telemetry = getattr(selected_config, "telemetry", TelemetryConfig())
     configure_telemetry(flow_telemetry)
     cache = {_filesystem_path_key(flow.source): flow}
