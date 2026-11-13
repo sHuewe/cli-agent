@@ -157,3 +157,85 @@ def test_preserved_overwrite_path_is_never_deleted(tmp_path, monkeypatch):
     _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
     assert (tmp_path / "state/first-discover.json").is_file()
     _run(tmp_path, monkeypatch, [])
+
+def test_resumed_child_restores_preserved_json_for_parent_consumer(
+    tmp_path, monkeypatch,
+):
+    _setup(tmp_path)
+    (tmp_path / "prompts/consume.md").write_text(
+        "consume {{var:profile}}", encoding="utf-8",
+    )
+    parent = tmp_path / "parent.toml"
+    parent.write_text(
+        parent.read_text(encoding="utf-8")
+        + '\n[[steps]]\nid = "consume"\n'
+          'prompt_file = "prompts/consume.md"\n'
+          'response_format = "json"\n'
+          'output = "state/consume.json"\n'
+          '[steps.json_inputs.profile]\n'
+          'path = "state/first-assemble.json"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    should_fail = True
+
+    async def fake(options, *, dependencies=None):
+        nonlocal should_fail
+        calls.append(options.prompt)
+        if options.prompt.startswith("consume") and should_fail:
+            should_fail = False
+            raise RuntimeError("interrupted")
+        if options.output is not None:
+            options.output.write_text(
+                '{"prompt":"result"}', encoding="utf-8",
+            )
+        return SimpleNamespace(
+            answer='{"prompt":"result"}', web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+    def run():
+        asyncio.run(
+            run_flow(load_flow(parent, workspace=tmp_path), workspace=tmp_path),
+        )
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        run()
+    assert len(list((tmp_path / ".cli-agent/flow-checkpoints").glob("*.json"))) == 1
+    calls.clear()
+    run()
+    # The child was fully cached. The parent may still safely use its
+    # preserved file via json_inputs, not just its in-memory result.
+    assert len(calls) == 1
+    assert calls[0].startswith("consume ")
+    assert '"prompt":"result"' in calls[0]
+
+
+def test_preserved_text_output_is_validated_during_compact_resume(
+    tmp_path, monkeypatch,
+):
+    _setup(tmp_path)
+    child = tmp_path / "child.toml"
+    child.write_text(
+        child.read_text(encoding="utf-8").replace(
+            'state/$' + '{input.id}-assemble.json',
+            'state/$' + '{input.id}-assemble.txt',
+        ).replace(
+            '[[steps]]\nid = "assemble"\n'
+            'prompt_file = "prompts/assemble.md"\n'
+            'output = "state/$' + '{input.id}-assemble.txt"\n'
+            'response_format = "json"',
+            '[[steps]]\nid = "assemble"\n'
+            'prompt_file = "prompts/assemble.md"\n'
+            'output = "state/$' + '{input.id}-assemble.txt"\n'
+            'response_format = "text"',
+        ),
+        encoding="utf-8",
+    )
+    _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
+    target = tmp_path / "state/first-assemble.txt"
+    assert target.is_file()
+    _run(tmp_path, monkeypatch, [])
+    target.write_text("modified externally", encoding="utf-8")
+    with pytest.raises(ValueError, match="changed"):
+        _run(tmp_path, monkeypatch, [])
