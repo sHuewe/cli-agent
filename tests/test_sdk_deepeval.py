@@ -105,6 +105,23 @@ def test_replay_uses_deepeval_tracing_without_agent_call(deepeval_trace):
     assert records[0]["retrieval_context"] == ["Observed chunk"]
 
 
+def test_native_sdk_tuple_trace_replays_without_json_roundtrip(deepeval_trace):
+    calls = []
+    target = DeepEvalTarget(lambda: FakeAgent(calls))
+    first = asyncio.run(target.ask("Q", expected_output="R"))
+    assert isinstance(first["knowledge_trace"]["selected"], tuple)
+
+    # This is exactly what callers receive after a live SDK question.
+    replay = DeepEvalTarget(
+        lambda: (_ for _ in ()).throw(AssertionError("no second agent"))
+    )
+    second = asyncio.run(replay.ask(
+        "Q", expected_output="R", cached_response=first
+    ))
+    assert second == first
+    assert calls == ["Q"]
+
+
 def test_absent_or_truncated_context_never_fabricates_sources(deepeval_trace):
     _, records = deepeval_trace
     target = DeepEvalTarget(lambda: None)

@@ -66,8 +66,8 @@ class DeepEvalTarget:
                 raise ValueError("cached_response requires nonempty actual_output")
             if trace is not None and not isinstance(trace, dict):
                 raise ValueError("cached_response knowledge_trace must be a dict")
-            if trace is not None and not isinstance(trace.get("selected"), list):
-                raise ValueError("cached_response knowledge_trace requires selected list")
+            if trace is not None and not isinstance(trace.get("selected"), (list, tuple)):
+                raise ValueError("cached_response knowledge_trace requires selected list or tuple")
 
         try:
             from deepeval.tracing import observe, update_current_trace
