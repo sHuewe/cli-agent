@@ -45,7 +45,7 @@ from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 from cli_agent.platform.logging_setup import configure_logging
 from cli_agent.models.model import ModelRetryPolicy
-from cli_agent.telemetry import trace_flow_step, trace_flow_operation, trace_flow_invocation, configure_telemetry
+from cli_agent.platform.telemetry import trace_flow_step, trace_flow_operation, trace_flow_invocation, configure_telemetry
 from cli_agent.models.prompt_template import PromptTemplate
 from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 from cli_agent.state.agent_types import UserMessageCallback
