@@ -12,7 +12,7 @@ from cli_agent import telemetry
 
 def test_telemetry_disabled_by_default():
     assert _parse_config_values({}).telemetry.enabled is False
-    assert _parse_config_values({}).telemetry.otlp_endpoint == "http://127.0.0.1:4318"
+    assert _parse_config_values({}).telemetry.otlp_endpoint == "http://127.0.0.1:4317"
 
 
 @pytest.mark.parametrize("endpoint", [
