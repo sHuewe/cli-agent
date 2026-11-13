@@ -70,6 +70,16 @@ def telemetry_scope(config: TelemetryConfig) -> Iterator[None]:
         _tracer_context.reset(token)
 
 
+def configure_telemetry(config: TelemetryConfig) -> None:
+    """Eagerly validate an enabled export without activating another run.
+
+    A disabled configuration does nothing. Each agent/flow uses telemetry_scope
+    independently, so a previous enabled run cannot opt in subsequent runs.
+    """
+    if config.enabled:
+        _tracer_for(config)
+
+
 def _safe_attribute(value: Any) -> str | int | float | bool | None:
     if isinstance(value, bool):
         return value
