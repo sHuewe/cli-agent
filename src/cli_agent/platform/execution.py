@@ -634,6 +634,7 @@ def prepare_agent(
         workspace_access=effective_workspace_access,
         **({"sdk_configless": True} if project_config is not None else {}),
     )
+    agent.telemetry_config = config.telemetry
     return PreparedAgent(
         agent=agent,
         config=config,
