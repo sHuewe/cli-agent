@@ -5,6 +5,7 @@ import tomllib
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path, PureWindowsPath
+from urllib.parse import urlsplit
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -133,6 +134,14 @@ class UiConfig:
 
 
 @dataclass(frozen=True)
+class TelemetryConfig:
+    enabled: bool = False
+    service_name: str = "cli-agent"
+    otlp_endpoint: str = "http://127.0.0.1:4318"
+    sample_rate: float = 1.0
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     enabled: bool = True
     level: str = "INFO"
@@ -196,6 +205,7 @@ class AppConfig:
     ui: UiConfig = field(default_factory=UiConfig)
     model: ModelConfig = ModelConfig()
     logging: LoggingConfig = LoggingConfig()
+    telemetry: TelemetryConfig = TelemetryConfig()
     mcp_servers: tuple[McpServerConfig, ...] = ()
     okf: OkfConfig | None = None
     knowledge_vector: VectorKnowledgeConfig | None = None
@@ -266,6 +276,44 @@ def _logging_config(values: dict[str, Any]) -> LoggingConfig:
         log_tool_results=_bool_value(values, "log_tool_results", defaults.log_tool_results, section="[logging]"),
         max_bytes=int(values.get("max_bytes", defaults.max_bytes)),
         backup_count=int(values.get("backup_count", defaults.backup_count)),
+    )
+
+
+def _telemetry_config(values: Any) -> TelemetryConfig:
+    """Only an explicitly enabled, local OTLP receiver may receive traces."""
+    if not isinstance(values, dict):
+        raise ValueError("[telemetry] must be a table.")
+    if set(values) - {"enabled", "service_name", "otlp_endpoint", "sample_rate"}:
+        raise ValueError("[telemetry] contains unknown options.")
+    enabled = _bool_value(values, "enabled", False, section="telemetry")
+    service = values.get("service_name", "cli-agent")
+    if not isinstance(service, str) or not 1 <= len(service) <= 64 or not all(
+        c.isascii() and (c.isalnum() or c in "._-") for c in service
+    ):
+        raise ValueError("telemetry.service_name must be 1-64 ASCII letters, digits, '.', '_' or '-'.")
+    endpoint = values.get("otlp_endpoint", "http://127.0.0.1:4318")
+    if not isinstance(endpoint, str):
+        raise ValueError("telemetry.otlp_endpoint must be a URL.")
+    try:
+        parsed = urlsplit(endpoint)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("telemetry.otlp_endpoint has an invalid port or hostname.") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or port is None or port < 1 or port > 65535
+        or parsed.username is not None or parsed.password is not None
+        or parsed.query or parsed.fragment or parsed.path not in {"", "/"}
+        or "\\" in endpoint or any(c.isspace() for c in endpoint)
+    ):
+        raise ValueError("telemetry.otlp_endpoint must be a loopback URL with an explicit port and no path.")
+    sample = values.get("sample_rate", 1.0)
+    if isinstance(sample, bool) or not isinstance(sample, (int, float)) or not 0 <= sample <= 1:
+        raise ValueError("telemetry.sample_rate must be between 0 and 1.")
+    return TelemetryConfig(
+        enabled=enabled, service_name=service,
+        otlp_endpoint=endpoint.rstrip("/"), sample_rate=float(sample),
     )
 
 
@@ -619,6 +667,7 @@ def _parse_config_values(values: dict[str, Any]) -> AppConfig:
         ui=_ui_config(values.get("ui", {})),
         model=_model_config(model_values),
         logging=_logging_config(logging_values),
+        telemetry=_telemetry_config(values.get("telemetry", {})),
         mcp_servers=mcp_servers,
         okf=okf,
         max_pdf_pages=max_pdf_pages,
