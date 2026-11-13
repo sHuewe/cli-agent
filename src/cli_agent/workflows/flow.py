@@ -6181,20 +6181,24 @@ async def run_flow(
     # Use the same explicit-config discovery as flow logging. Flows with
     # explicit step configs must not access the unrelated default user config.
     # Each model step's own agent scope still controls whether it is traced.
-    config_source = _initial_flow_logging_config(flow, workspace=workspace)
-    selected_path = config_source[0] if config_source is not None else None
-    # Match prepare_agent(): project.toml overrides are applied to the
-    # selected explicit/default model config, including telemetry.enabled.
-    # No overrides means the injected loader remains authoritative and
-    # explicit-only flows never touch the unrelated default config.
-    from cli_agent.settings.project_config import read_project_overrides
-    selected_config = (
-        load_config(selected_path, workspace=workspace)
-        if read_project_overrides(workspace)
-        else deps.load_config(selected_path)
+    has_model_step, config_source = _discover_initial_flow_model_config(
+        flow, workspace=workspace,
     )
-    flow_telemetry = getattr(selected_config, "telemetry", TelemetryConfig())
-    configure_telemetry(flow_telemetry)
+    # Deterministic-only flows do not use agents and must remain independent
+    # of any default model configuration (which may be absent or malformed).
+    flow_telemetry = TelemetryConfig()
+    if has_model_step:
+        selected_path = config_source[0] if config_source is not None else None
+        # Match prepare_agent(): apply workspace overrides to the selected
+        # explicit/default model config, including telemetry.enabled.
+        from cli_agent.settings.project_config import read_project_overrides
+        selected_config = (
+            load_config(selected_path, workspace=workspace)
+            if read_project_overrides(workspace)
+            else deps.load_config(selected_path)
+        )
+        flow_telemetry = getattr(selected_config, "telemetry", TelemetryConfig())
+        configure_telemetry(flow_telemetry)
     cache = {_filesystem_path_key(flow.source): flow}
     validation_budget = _SubflowTraversalBudget()
     validate_flow(
@@ -6310,15 +6314,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _initial_flow_logging_config(
+def _discover_initial_flow_model_config(
     flow: FlowDefinition,
     *,
     workspace: Path,
-) -> tuple[Path, Path, str] | None:
-    """Use a step config when no executable step depends on the default.
+) -> tuple[bool, tuple[Path, Path, str] | None]:
+    """Discover whether a model config is needed and which one to preload.
 
-    Inspect the bounded, cached subflow graph so explicit-config-only flows
-    never read or create an unrelated default user configuration.
+    (False, None) means a fully deterministic flow with no model invocations
+    (including nested subflows), and must not load any config.
+    (True, None) means a model step uses the default config.
+    (True, explicit) means all model steps inspected have explicit configs.
+    Traverse the bounded subflow graph with the same protections as logging.
     """
     cache = {_filesystem_path_key(flow.source): flow}
     visited: set[str] = set()
@@ -6357,14 +6364,26 @@ def _initial_flow_logging_config(
             elif step.json_operation is not None or step.filesystem_operation is not None:
                 continue
             elif step.config is None:
-                return None
+                return True, None
             elif first_explicit is None:
                 first_explicit = (
                     _resolve_config(step, flow_dir=current.source.parent),
                     current.source,
                     step.step_id,
                 )
-    return first_explicit
+    return first_explicit is not None, first_explicit
+
+
+def _initial_flow_logging_config(
+    flow: FlowDefinition,
+    *,
+    workspace: Path,
+) -> tuple[Path, Path, str] | None:
+    """Preserve flow CLI logging's existing config discovery contract."""
+    _, selected_config = _discover_initial_flow_model_config(
+        flow, workspace=workspace,
+    )
+    return selected_config
 
 
 def main() -> None:
