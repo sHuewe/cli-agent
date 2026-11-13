@@ -594,3 +594,79 @@ def test_compact_parent_reexecutes_when_descendant_definition_changes(
     run()
     assert calls == ["leaf-run", "added-run"]
     assert (tmp_path / "state/added.json").is_file()
+
+
+
+def test_parent_compaction_uses_last_writer_json_metadata_for_child_alias(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "child.md").write_text("child-text", encoding="utf-8")
+    (tmp_path / "writer.md").write_text("parent-json", encoding="utf-8")
+    (tmp_path / "consumer.md").write_text(
+        "consumer {{var:shared}}", encoding="utf-8",
+    )
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.publish.output"\n'
+        '[[steps]]\nid = "publish"\nprompt_file = "child.md"\n'
+        'response_format = "text"\noutput = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\nresult = "steps.writer.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        '[[steps]]\nid = "writer"\nprompt_file = "writer.md"\n'
+        'response_format = "json"\noverwrite_output = true\n'
+        'output = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "parent"\nflow = "parent.toml"\n'
+        '[[steps]]\nid = "consumer"\nprompt_file = "consumer.md"\n'
+        'response_format = "json"\noutput = "state/consumer.json"\n'
+        '[steps.json_inputs.shared]\npath = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    fail_consumer = True
+
+    async def fake(options, *, dependencies=None):
+        nonlocal fail_consumer
+        calls.append(options.prompt)
+        if options.prompt.startswith("consumer ") and fail_consumer:
+            fail_consumer = False
+            raise RuntimeError("interrupted")
+        answer = (
+            "child text" if options.prompt == "child-text"
+            else '{"writer":true}'
+        )
+        if options.output is not None:
+            options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        run()
+    assert (tmp_path / "state/shared.json").read_text() == '{"writer":true}'
+    calls.clear()
+    run()
+    assert len(calls) == 1
+    assert calls[0] == 'consumer {"writer":true}'
+    # The final output's metadata must describe the parent JSON writer.
+    import json as json_module
+    markers = list((tmp_path / ".cli-agent/flow-checkpoints").glob("*.json"))
+    assert len(markers) == 1
+    marker = json_module.loads(markers[0].read_text(encoding="utf-8"))
+    shared = [p for p in marker["preserved"] if p["path"] == "state/shared.json"]
+    assert len(shared) == 1
+    assert shared[0]["is_json"] is True
+    assert shared[0]["allow_replace"] is True
