@@ -1519,7 +1519,9 @@ prompt_file = "prompt.md"
         )
     )
 
-    assert loaded == [(tmp_path / "config.toml").resolve()]
+    # The selected explicit configuration is consulted for tracing before
+    # validation and again during the existing preflight.
+    assert loaded == [(tmp_path / "config.toml").resolve()] * 2
 
 
 def test_flow_passes_all_reserved_inputs_as_mutation_protection(
