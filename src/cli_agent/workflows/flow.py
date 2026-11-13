@@ -6306,7 +6306,13 @@ async def run_flow(
         budget=_SubflowTraversalBudget(),
     )
     _set_flow_diagnostic(phase="compact-checkpoint-snapshot", flow=flow.source)
-    compact_markers = compact_checkpoints.snapshot_markers(workspace)
+    # Preserve the zero-overhead/default behavior for workflows that have
+    # not opted into compact child checkpoints.
+    compact_markers = (
+        compact_checkpoints.snapshot_markers(workspace)
+        if any(not child.retain_intermediate for child in cache.values())
+        else {}
+    )
     _set_flow_diagnostic(phase="run-start-snapshot", flow=flow.source)
     run_start_snapshots, run_start_checkpoint_paths = (
         _capture_run_start_snapshots(
