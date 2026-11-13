@@ -15,6 +15,7 @@ from cli_agent.context.agent_knowledge import (
     _knowledge_call_key,
     tool_result_text,
 )
+from cli_agent.telemetry import traced_agent_question
 from cli_agent.runtime.agent_loop import ModelLoopRunState, run_model_loop
 from cli_agent.runtime.knowledge_trace import trace_observe
 from cli_agent.state.agent_types import ToolRoute
@@ -147,6 +148,7 @@ class ConversationMixin:
 
         logger.info("conversation_history_reset")
 
+    @traced_agent_question
     async def ask(self, prompt: str) -> str:
         if self._exit_stack is None:
             raise RuntimeError("Der Agent wurde noch nicht gestartet.")
