@@ -2691,6 +2691,27 @@ def _claim_output(
     claimed_outputs[key] = owner
 
 
+def _claim_compact_preserved_outputs(
+    record: compact_checkpoints.CompletionRecord,
+    *,
+    claimed_outputs: dict[str, str],
+    namespace: str,
+) -> None:
+    """Reclaim verified completed artifacts, including descendant outputs.
+
+    A compact invocation is still a writer of its published files. Omitting
+    these claims would allow later subflows to reuse its outputs as unrelated
+    checkpoints. The caller uses a temporary claim map in preflight and the
+    real claim map during execution.
+    """
+    for path, _is_json in record.preserved_outputs:
+        _claim_output(
+            claimed_outputs,
+            path=path,
+            owner=f"{namespace}compact-completed-output",
+        )
+
+
 def _checkpoint_fingerprint(text: str) -> bytes:
     return hashlib.sha256(text.encode("utf-8")).digest()
 
@@ -2810,6 +2831,7 @@ def _prepare_flow_output(
     *,
     workspace: Path,
     output: Path,
+    defer_existing_text: bool = False,
 ) -> str | None:
     checkpoint = _existing_json_checkpoint(
         step,
@@ -2819,10 +2841,17 @@ def _prepare_flow_output(
     if checkpoint is not None:
         return checkpoint
 
+    # During structural validation, a compact invocation may already have
+    # published static text outputs. Validating the filesystem path remains
+    # mandatory, but only the concrete invocation's verified completion
+    # marker can authorize reusing that existing artifact. If no marker
+    # applies, execution preflight still enforces overwrite_output=False.
     prepare_output_target(
         workspace,
         output,
-        overwrite=step.overwrite_output,
+        overwrite=step.overwrite_output or (
+            defer_existing_text and step.response_format != "json"
+        ),
         allow_missing_parent=True,
     )
     return None
@@ -4331,6 +4360,7 @@ def validate_flow(
     _budget: _SubflowTraversalBudget | None = None,
     _planned_static_outputs: dict[str, str] | None = None,
     _all_reserved_inputs: dict[str, Path] | None = None,
+    _compact_ancestor: bool = False,
 ) -> None:
     _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
     workspace = workspace.expanduser().resolve()
@@ -4392,6 +4422,7 @@ def validate_flow(
                 _budget=traversal_budget,
                 _planned_static_outputs=planned_static_outputs,
                 _all_reserved_inputs=all_reserved_inputs,
+                _compact_ancestor=_compact_ancestor or not flow.retain_intermediate,
             )
             _set_flow_diagnostic(
                 phase="validate-step", flow=flow.source,
@@ -4443,6 +4474,9 @@ def validate_flow(
                 if step.when is None:
                     _prepare_flow_output(
                         step, workspace=workspace, output=static_output,
+                        defer_existing_text=(
+                            _compact_ancestor or not flow.retain_intermediate
+                        ),
                     )
                     previous = planned_static_outputs.get(key)
                     if previous is not None and not step.overwrite_output:
@@ -4598,6 +4632,9 @@ def validate_flow(
                     step,
                     workspace=workspace,
                     output=static_output,
+                    defer_existing_text=(
+                        _compact_ancestor or not flow.retain_intermediate
+                    ),
                 )
                 previous_writer = planned_static_outputs.get(static_output_key)
                 if previous_writer is not None and not step.overwrite_output:
@@ -4669,6 +4706,9 @@ def _preflight_concrete_invocation_outputs(
             ),
         )
         if result is not None:
+            _claim_compact_preserved_outputs(
+                result, claimed_outputs=claimed_outputs, namespace=namespace,
+            )
             return
     next_stack = (*call_stack, flow_key)
     # Resolve all checkpoint inputs for this concrete invocation before
@@ -5728,6 +5768,10 @@ async def _execute_subflow_iteration(
             ),
         )
         if cached is not None:
+            _claim_compact_preserved_outputs(
+                cached, claimed_outputs=claimed_outputs,
+                namespace=child_namespace,
+            )
             assert context.completed_json_outputs is not None
             assert context.completed_invocation_artifacts is not None
             # The checkpoint reader validates *all* preserved outputs
