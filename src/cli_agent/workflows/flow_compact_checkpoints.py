@@ -11,6 +11,7 @@ import math
 import os
 import stat
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
@@ -21,6 +22,8 @@ from cli_agent.security.filesystem_security import path_entry_is_symlink_or_repa
 MARKER_DIRECTORY = ".cli-agent/flow-checkpoints"
 MAX_MARKERS = 100_000
 MAX_MARKER_BYTES = 100_000_000
+MAX_DEFINITION_FILES = 256
+MAX_DEFINITION_BYTES = 1_000_000
 
 
 class CompletionRecord(NamedTuple):
@@ -90,17 +93,81 @@ def _typed_identity_value(value: Any) -> Any:
     raise TypeError(f"Unsupported flow input identity type: {type(value).__name__}")
 
 
+def _checked_flow_definition_path(workspace: Path, candidate: Path) -> Path:
+    """Resolve only static workspace-local flow declarations, never links."""
+    candidate = candidate if candidate.is_absolute() else workspace / candidate
+    # Check each lexical component before opening. Unlike Path.resolve,
+    # this rejects rather than follows symlink and reparse-point ancestors.
+    relative = candidate.relative_to(workspace)
+    current = workspace
+    for part in relative.parts:
+        if part in {"", ".", ".."}:
+            raise ValueError("Unsafe compact flow definition path.")
+        current = current / part
+        if path_entry_is_symlink_or_reparse(current):
+            raise ValueError(f"Unsafe compact flow definition path: {current}")
+    if not candidate.is_file():
+        raise ValueError(f"Compact flow definition is not a file: {candidate}")
+    return candidate
+
+
+def _definition_fingerprints(
+    workspace: Path, flow_source: Path,
+) -> tuple[str, dict[str, str]]:
+    """Read the bounded static descendant DAG so parent markers cannot hide
+    edits to child TOML definitions.
+
+    The Flow Runner already restricts subflow references to static paths and
+    validates cycles and interfaces before execution. This separate identity
+    calculation deliberately applies its own path and resource limits.
+    """
+    seen: dict[str, str] = {}
+    root_key = flow_source.relative_to(workspace).as_posix()
+
+    def visit(source: Path) -> None:
+        path = _checked_flow_definition_path(workspace, source)
+        relative = path.relative_to(workspace).as_posix()
+        if relative in seen:
+            return
+        if len(seen) >= MAX_DEFINITION_FILES:
+            raise ValueError("Too many transitive compact flow definitions.")
+        data = path.read_bytes()
+        if len(data) > MAX_DEFINITION_BYTES:
+            raise ValueError("Compact flow definition exceeds size limit.")
+        seen[relative] = hashlib.sha256(data).hexdigest()
+        try:
+            values = tomllib.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            raise ValueError(f"Invalid compact flow definition: {path}") from exc
+        for step in values.get("steps", []):
+            if isinstance(step, dict) and step.get("flow") is not None:
+                child = step["flow"]
+                if not isinstance(child, str) or not child:
+                    raise ValueError("Invalid static subflow reference.")
+                visit(Path(child))
+
+    visit(flow_source)
+    root_digest = seen.pop(root_key)
+    return root_digest, seen
+
+
 def checkpoint_path(
     workspace: Path, flow_source: Path, namespace: str, flow_input: dict[str, Any],
 ) -> tuple[Path, str]:
-    """Hash a concrete invocation, preserving every input's JSON type."""
+    """Hash a concrete invocation and all transitively referenced flow TOMLs."""
+    definition_hash, descendants = _definition_fingerprints(workspace, flow_source)
+    identity_fields = {
+        "flow": flow_source.relative_to(workspace).as_posix(),
+        "definition_sha256": definition_hash,
+        "namespace": namespace,
+        "input": _typed_identity_value(flow_input),
+    }
+    # Keep existing leaf identities valid; only parents that declare child
+    # flows require the new descendant-dependent identity.
+    if descendants:
+        identity_fields["descendant_definitions"] = descendants
     identity = json.dumps(
-        {
-            "flow": flow_source.relative_to(workspace).as_posix(),
-            "definition_sha256": hashlib.sha256(flow_source.read_bytes()).hexdigest(),
-            "namespace": namespace,
-            "input": _typed_identity_value(flow_input),
-        },
+        identity_fields,
         sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     )
     key = _digest(identity)
