@@ -2938,7 +2938,7 @@ def _capture_run_start_invocation(
             ),
         )
         if compact_result is not None:
-            return _FlowResultValue(*compact_result)
+            return _FlowResultValue(compact_result.result, compact_result.is_json)
 
     next_stack = (*call_stack, flow_key)
     # Concrete nested inputs available from run-start checkpoints must be
@@ -5724,7 +5724,15 @@ async def _execute_subflow_iteration(
             ),
         )
         if cached is not None:
-            return _FlowResultValue(*cached)
+            assert context.completed_json_outputs is not None
+            # The checkpoint reader validates *all* preserved outputs
+            # before returning. Restore only validated JSON outputs, using
+            # the same fingerprints as normal completed steps.
+            for preserved_path, fingerprint in cached.preserved_json:
+                context.completed_json_outputs[
+                    _filesystem_path_key(preserved_path)
+                ] = fingerprint
+            return _FlowResultValue(cached.result, cached.is_json)
 
     child_result = await _run_flow_internal(
         child,
@@ -5928,7 +5936,7 @@ async def _run_flow_internal(
     outputs: dict[str, str] = {}
     output_json: dict[str, bool] = {}
     # Record only this invocation's own output files, never child outputs.
-    own_checkpoint_files: list[tuple[str, Path]] = []
+    own_checkpoint_files: list[tuple[str, Path, bool]] = []
     claimed_outputs = context.claimed_outputs
     reserved_inputs = context.reserved_inputs
     assert claimed_outputs is not None
@@ -6153,7 +6161,7 @@ async def _run_flow_internal(
                         escape_literal_backslashes=True,
                     )
                 )
-                own_checkpoint_files.append((step.step_id, output))
+                own_checkpoint_files.append((step.step_id, output, True))
                 record_iteration_answer(
                     checkpoint,
                     True,
@@ -6167,8 +6175,10 @@ async def _run_flow_internal(
                 initial_previous_output_fingerprints=initial_previous_output_fingerprints,
             )
 
-            if output is not None and step.response_format == "json":
-                own_checkpoint_files.append((step.step_id, output))
+            if output is not None:
+                own_checkpoint_files.append(
+                    (step.step_id, output, step.response_format == "json")
+                )
 
             if step.filesystem_operation is not None:
                 answer = _execute_filesystem_step(
@@ -6226,18 +6236,25 @@ async def _run_flow_internal(
         # Classify by physical output path rather than step identity: a
         # later overwrite may reuse an earlier intermediate path. Retention
         # always wins, regardless of which step last wrote the file.
-        owned: dict[str, tuple[Path, bool]] = {}
-        for step_id, path in own_checkpoint_files:
+        owned: dict[str, tuple[Path, bool, bool]] = {}
+        for step_id, path, is_json in own_checkpoint_files:
             key = _filesystem_path_key(path)
+            # Non-JSON output files are published artifacts, not disposable
+            # JSON resume checkpoints. Never delete them automatically.
             retain = (
                 step_id in preserved_ids
+                or not is_json
                 or key in (context.reserved_inputs or {})
             )
             previous = owned.get(key)
-            owned[key] = (path, retain or (previous[1] if previous else False))
-        preserve: list[dict[str, str]] = []
+            owned[key] = (
+                path,
+                retain or (previous[1] if previous else False),
+                is_json,
+            )
+        preserve: list[dict[str, Any]] = []
         intermediate: list[tuple[Path, str]] = []
-        for path, retain in owned.values():
+        for path, retain, is_json in owned.values():
             if not path.is_file():
                 if retain:
                     raise ValueError(
@@ -6255,6 +6272,7 @@ async def _run_flow_internal(
                 preserve.append({
                     "path": checked.relative_to(workspace).as_posix(),
                     "sha256": digest,
+                    "is_json": is_json,
                 })
             else:
                 intermediate.append((checked, digest))
