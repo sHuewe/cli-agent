@@ -508,3 +508,89 @@ def test_compact_child_overwrite_can_reclaim_prior_parent_output(
     # Parent step is deliberately executed twice; compact child only once.
     assert prompts == ["same", "same", "same"]
     assert (tmp_path / "state/shared.json").read_text() == '{"same":true}'
+
+
+
+def test_compact_identity_invalidated_by_transitive_child_toml_edit(tmp_path):
+    from cli_agent.workflows.flow_compact_checkpoints import checkpoint_path
+
+    (tmp_path / "leaf.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "middle.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nflow = "leaf.toml"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "outer.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nflow = "middle.toml"\n',
+        encoding="utf-8",
+    )
+    def marker(source):
+        return checkpoint_path(tmp_path, tmp_path / source, "outer.once.", {})[1]
+
+    first = marker("outer.toml")
+    assert first == marker("outer.toml")
+    (tmp_path / "leaf.toml").write_text(
+        (tmp_path / "leaf.toml").read_text(encoding="utf-8")
+        + '\n# A changed descendant definition must invalidate its parents.\n',
+        encoding="utf-8",
+    )
+    assert first != marker("outer.toml")
+    assert marker("middle.toml") != first
+
+
+def test_compact_parent_reexecutes_when_descendant_definition_changes(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("leaf-run", encoding="utf-8")
+    (tmp_path / "prompt2.md").write_text("added-run", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "leaf.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\noutput = "state/work.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "child"\nflow = "leaf.toml"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n[[steps]]\nid = "run"\nflow = "parent.toml"\n',
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.output is not None:
+            options.output.write_text('{"ok":true}', encoding="utf-8")
+        return SimpleNamespace(answer='{"ok":true}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    run()
+    run()
+    assert calls == ["leaf-run"]
+    leaf = tmp_path / "leaf.toml"
+    leaf.write_text(
+        leaf.read_text(encoding="utf-8")
+        + '\n[[steps]]\nid = "added"\nprompt_file = "prompt2.md"\n'
+          'response_format = "json"\noutput = "state/added.json"\n',
+        encoding="utf-8",
+    )
+    run()
+    assert calls == ["leaf-run", "added-run"]
+    assert (tmp_path / "state/added.json").is_file()
