@@ -553,8 +553,10 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
         debug=True, add_web_context=("https://example.org",),
         response_format="json",
     )
+    from cli_agent.settings.config import TelemetryConfig
     cfg = SimpleNamespace(
         logging=object(),
+        telemetry=TelemetryConfig(enabled=False),
         agent=SimpleNamespace(timezone="Europe/Berlin"),
         model=SimpleNamespace(model="fake-model"),
         mcp_servers=(SimpleNamespace(name="os"),),
@@ -579,6 +581,7 @@ async def test_cli_embedded_ui_startup_configuration_and_cleanup(
     assert created[0].kwargs["workspace_access"] == os_access
     assert created[0].kwargs["response_format"] == "json"
     assert created[0].kwargs["agent_timezone"] == "Europe/Berlin"
+    assert created[0].telemetry_config == cfg.telemetry
     assert created[0].event_callback == preapprovals[0][1].__self__.on_agent_event
     assert preapprovals[0][0] == ("safe__read",)
     assert model_calls
