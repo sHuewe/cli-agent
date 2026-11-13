@@ -19,7 +19,7 @@ from cli_agent.context.agent_knowledge import (
     tool_result_text,
 )
 from cli_agent.runtime.knowledge_trace import trace_observe
-from cli_agent.telemetry import span, mark_error
+from cli_agent.platform.telemetry import span, mark_error
 from cli_agent.state.agent_types import ToolRoute
 from cli_agent.state.evidence_tools import annotate_source_result
 from cli_agent.security.mcp_limits import (
