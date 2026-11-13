@@ -2838,8 +2838,21 @@ def _prepare_flow_output(
     *,
     workspace: Path,
     output: Path,
-    defer_existing_text: bool = False,
+    defer_existing_output: bool = False,
 ) -> str | None:
+    # A compact invocation may have a preserved artifact whose format is
+    # different from an earlier static writer of the same path (e.g. JSON
+    # overwritten by text). During structural validation, check only path
+    # safety, not checkpoint content or overwrite permissions. The verified
+    # compact completion record is checked before concrete execution; without
+    # one, run-start snapshot/preflight and execution still enforce JSON
+    # validity and overwrite_output=False before executing a model step.
+    if defer_existing_output:
+        prepare_output_target(
+            workspace, output, overwrite=True, allow_missing_parent=True,
+        )
+        return None
+
     checkpoint = _existing_json_checkpoint(
         step,
         workspace=workspace,
@@ -2848,17 +2861,10 @@ def _prepare_flow_output(
     if checkpoint is not None:
         return checkpoint
 
-    # During structural validation, a compact invocation may already have
-    # published static text outputs. Validating the filesystem path remains
-    # mandatory, but only the concrete invocation's verified completion
-    # marker can authorize reusing that existing artifact. If no marker
-    # applies, execution preflight still enforces overwrite_output=False.
     prepare_output_target(
         workspace,
         output,
-        overwrite=step.overwrite_output or (
-            defer_existing_text and step.response_format != "json"
-        ),
+        overwrite=step.overwrite_output,
         allow_missing_parent=True,
     )
     return None
@@ -4481,7 +4487,7 @@ def validate_flow(
                 if step.when is None:
                     _prepare_flow_output(
                         step, workspace=workspace, output=static_output,
-                        defer_existing_text=(
+                        defer_existing_output=(
                             _compact_ancestor or not flow.retain_intermediate
                         ),
                     )
@@ -4639,7 +4645,7 @@ def validate_flow(
                     step,
                     workspace=workspace,
                     output=static_output,
-                    defer_existing_text=(
+                    defer_existing_output=(
                         _compact_ancestor or not flow.retain_intermediate
                     ),
                 )
