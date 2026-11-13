@@ -670,3 +670,70 @@ def test_parent_compaction_uses_last_writer_json_metadata_for_child_alias(
     assert len(shared) == 1
     assert shared[0]["is_json"] is True
     assert shared[0]["allow_replace"] is True
+
+
+def test_compact_static_json_overwritten_by_text_resumes(tmp_path, monkeypatch):
+    (tmp_path / "prepare.md").write_text("prepare-json", encoding="utf-8")
+    (tmp_path / "publish.md").write_text("publish-text", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.publish.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "prepare"\nprompt_file = "prepare.md"\n'
+        'response_format = "json"\n'
+        'output = "state/shared.json"\n'
+        '[[steps]]\nid = "publish"\nprompt_file = "publish.md"\n'
+        'response_format = "text"\noverwrite_output = true\n'
+        'output = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        answer = '{"status":"ready"}' if options.prompt == "prepare-json" else "published text"
+        options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    run()
+    assert (tmp_path / "state/shared.json").read_text() == "published text"
+    run()
+    # Static JSON inspection must not reject the later text artifact before
+    # validating the enclosing compact completion record.
+    assert calls == ["prepare-json", "publish-text"]
+
+
+def test_compact_static_json_with_non_json_orphan_without_marker_rejected(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prepare.md").write_text("prepare-json", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state/shared.json").write_text("not a JSON checkpoint", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\nresult = "steps.prepare.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "prepare"\nprompt_file = "prepare.md"\n'
+        'response_format = "json"\n'
+        'output = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    async def no_calls(*args, **kwargs):
+        raise AssertionError("must reject invalid prior checkpoint before model execution")
+    monkeypatch.setattr(flow_module, "run_once", no_calls)
+    with pytest.raises(ValueError, match="JSON"):
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "flow.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
