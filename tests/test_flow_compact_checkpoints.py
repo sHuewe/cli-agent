@@ -141,34 +141,19 @@ def test_root_compaction_skips_second_run(tmp_path, monkeypatch):
 def test_preserved_overwrite_path_is_never_deleted(tmp_path, monkeypatch):
     _setup(tmp_path)
     child = tmp_path / "child.toml"
-    original = child.read_text(encoding="utf-8")
-    original = original.replace(
+    first, second = child.read_text(encoding="utf-8").split(
+        '[[steps]]\\nid = "assemble"', maxsplit=1,
+    )
+    second = second.replace(
         'state/$' + '{input.id}-assemble.json',
         'state/$' + '{input.id}-discover.json',
-    )
-    original = original.replace(
-        '[[steps]]\nid = "assemble"',
-        '[[steps]]\nid = "assemble"\noverwrite_output = true',
-    )
-    # A single overwrite_output key may be specified per step.
-    original = original.replace(
-        '[[steps]]\nid = "assemble"\noverwrite_output = true\n',
-        '[[steps]]\nid = "assemble"\n',
     ).replace(
-        'output = "state/$' + '{input.id}-discover.json"\n'
-        'response_format = "json"\noverwrite_output = false\n'
-        '[steps.vars]\nid = "$' + '{input.id}"\n',
-        'output = "state/$' + '{input.id}-discover.json"\n'
-        'response_format = "json"\noverwrite_output = true\n'
-        '[steps.vars]\nid = "$' + '{input.id}"\n', 1,
+        'overwrite_output = false', 'overwrite_output = true',
     )
-    # Only the later assemble step is permitted to overwrite the earlier file.
-    parts = original.split('[[steps]]\nid = "assemble"')
-    assert len(parts) == 2
-    original = parts[0].replace(
-        'overwrite_output = true', 'overwrite_output = false',
-    ) + '[[steps]]\nid = "assemble"' + parts[1]
-    child.write_text(original, encoding="utf-8")
+    child.write_text(
+        first + '[[steps]]\\nid = "assemble"' + second,
+        encoding="utf-8",
+    )
     _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
-    assert (tmp_path / "state/first-discover.json").exists()
+    assert (tmp_path / "state/first-discover.json").is_file()
     _run(tmp_path, monkeypatch, [])
