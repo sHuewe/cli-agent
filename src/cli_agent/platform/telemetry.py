@@ -128,12 +128,17 @@ def mark_error(current: Any, reason: str) -> None:
 
 
 def trace_flow_step(kind: str):
-    """Wrap a flow step; its immutable identifiers are the only attributes."""
+    """Trace static step metadata, never data-derived namespace/iteration IDs."""
     def decorate(function):
         @wraps(function)
         async def wrapped(step, *args, **kwargs):
-            with span("flow.step", step_id=step.step_id, step_kind=kind,
-                      namespace=kwargs.get("namespace", "")):
+            # namespace and iteration_id may include literal input data,
+            # for example an item.id/customer identifier. Never export them.
+            index = kwargs.get("index")
+            attributes = {"step_id": step.step_id, "step_kind": kind}
+            if type(index) is int and index >= 1:
+                attributes["iteration_index"] = index
+            with span("flow.step", **attributes):
                 return await function(step, *args, **kwargs)
         return wrapped
     return decorate
@@ -144,8 +149,9 @@ def trace_flow_operation(kind: str):
     def decorate(function):
         @wraps(function)
         def wrapped(step, *args, **kwargs):
-            with span("flow.step", step_id=step.step_id, step_kind=kind,
-                      namespace=kwargs.get("namespace", "")):
+            # Only step IDs from the flow definition are static. In particular,
+            # the namespace can encode user-controlled foreach identifiers.
+            with span("flow.step", step_id=step.step_id, step_kind=kind):
                 return function(step, *args, **kwargs)
         return wrapped
     return decorate
@@ -155,8 +161,9 @@ def trace_flow_invocation(function):
     """Preserve one parent span for a flow or nested subflow."""
     @wraps(function)
     async def wrapped(flow, *args, **kwargs):
-        with span("flow.invocation", flow_name=flow.source.name,
-                  namespace=kwargs.get("namespace", "")):
+        # Namespace contains rendered subflow iteration IDs; flow.source.name
+        # comes from the static flow definition and is safe to export.
+        with span("flow.invocation", flow_name=flow.source.name):
             return await function(flow, *args, **kwargs)
     return wrapped
 
