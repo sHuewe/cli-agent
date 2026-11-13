@@ -1,0 +1,739 @@
+"""Compact subflow checkpoint regression tests."""
+from __future__ import annotations
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+import pytest
+import cli_agent.workflows.flow as flow_module
+from cli_agent.workflows.flow import load_flow, run_flow
+
+def _setup(root: Path, *, preserve: bool = False) -> None:
+    (root / "prompts").mkdir()
+    (root / "prompts/discover.md").write_text("discover {{var:id}}", encoding="utf-8")
+    (root / "prompts/assemble.md").write_text("assemble {{var:id}}", encoding="utf-8")
+    (root / "child.toml").write_text(
+        'version = 1\ninputs = ["id"]\nresult = "steps.assemble.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        + ('preserve_steps = ["discover"]\n' if preserve else '')
+        + '[[steps]]\nid = "discover"\n'
+        'prompt_file = "prompts/discover.md"\n'
+        'output = "state/$' + '{input.id}-discover.json"\n'
+        'response_format = "json"\noverwrite_output = false\n'
+        '[steps.vars]\nid = "$' + '{input.id}"\n'
+        '[[steps]]\nid = "assemble"\n'
+        'prompt_file = "prompts/assemble.md"\n'
+        'output = "state/$' + '{input.id}-assemble.json"\n'
+        'response_format = "json"\noverwrite_output = false\n'
+        '[steps.vars]\nid = "$' + '{input.id}"\n', encoding="utf-8",
+    )
+    (root / "parent.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        '[steps.input]\nid = "first"\n', encoding="utf-8",
+    )
+    (root / "state").mkdir()
+
+def _run(root: Path, monkeypatch, expected: list[str], fail: str | None = None) -> None:
+    calls: list[str] = []
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.prompt == fail:
+            raise RuntimeError("interrupted")
+        if options.output is not None:
+            options.output.write_text(json.dumps({"prompt": options.prompt}), encoding="utf-8")
+        return SimpleNamespace(
+            answer=json.dumps({"prompt": options.prompt}), web_context_statuses=(),
+        )
+    monkeypatch.setattr(flow_module, "run_once", fake)
+    runner = lambda: asyncio.run(
+        run_flow(load_flow(root / "parent.toml", workspace=root), workspace=root),
+    )
+    if fail is None:
+        runner()
+    else:
+        with pytest.raises(RuntimeError, match="interrupted"):
+            runner()
+    assert calls == expected
+
+def test_compact_child_resume_skips_all_internal_steps(tmp_path, monkeypatch):
+    _setup(tmp_path)
+    _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
+    assert not (tmp_path / "state/first-discover.json").exists()
+    assert (tmp_path / "state/first-assemble.json").exists()
+    assert len(list((tmp_path / ".cli-agent/flow-checkpoints").glob("*.json"))) == 1
+    _run(tmp_path, monkeypatch, [])
+
+def test_incomplete_child_keeps_checkpoints_then_compacts(tmp_path, monkeypatch):
+    _setup(tmp_path)
+    _run(tmp_path, monkeypatch, ["discover first", "assemble first"], "assemble first")
+    assert (tmp_path / "state/first-discover.json").exists()
+    assert not list((tmp_path / ".cli-agent").glob("flow-checkpoints/*.json"))
+    _run(tmp_path, monkeypatch, ["assemble first"])
+    assert not (tmp_path / "state/first-discover.json").exists()
+
+def test_explicit_preserved_step_survives_compaction(tmp_path, monkeypatch):
+    _setup(tmp_path, preserve=True)
+    _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
+    assert (tmp_path / "state/first-discover.json").exists()
+    _run(tmp_path, monkeypatch, [])
+
+def test_changed_preserved_output_rejected(tmp_path, monkeypatch):
+    _setup(tmp_path)
+    _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
+    (tmp_path / "state/first-assemble.json").write_text('{"changed":true}', encoding="utf-8")
+    with pytest.raises(ValueError, match="changed"):
+        _run(tmp_path, monkeypatch, [])
+
+def test_compact_validation(tmp_path):
+    _setup(tmp_path)
+    child = tmp_path / "child.toml"
+    child.write_text(child.read_text().replace(
+        'result = "steps.assemble.output"', '',
+    ), encoding="utf-8")
+    with pytest.raises(ValueError, match="requires a flow result"):
+        load_flow(child, workspace=tmp_path)
+    child.write_text(child.read_text().replace(
+        'retain_intermediate = false',
+        'retain_intermediate = false\npreserve_steps = ["missing"]',
+    ).replace('inputs = ["id"]', 'inputs = ["id"]\nresult = "steps.assemble.output"'), encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown steps"):
+        load_flow(child, workspace=tmp_path)
+
+def test_root_compaction_skips_second_run(tmp_path, monkeypatch):
+    _setup(tmp_path)
+    root = tmp_path / "root.toml"
+    root.write_text(
+        'version = 1\nresult = "steps.finish.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "prepare"\n'
+        'prompt_file = "prompts/discover.md"\n'
+        'output = "state/root-intermediate.json"\nresponse_format = "json"\n'
+        '[[steps]]\nid = "finish"\n'
+        'prompt_file = "prompts/assemble.md"\n'
+        'output = "state/root-final.json"\nresponse_format = "json"\n'
+        '[steps.vars]\nid = "root"\n',
+        encoding="utf-8",
+    )
+    # Add the missing variable for the first prompt, too.
+    text = root.read_text(encoding="utf-8")
+    text = text.replace(
+        'output = "state/root-intermediate.json"\nresponse_format = "json"',
+        'output = "state/root-intermediate.json"\nresponse_format = "json"\n'
+        '[steps.vars]\nid = "root"',
+    )
+    root.write_text(text, encoding="utf-8")
+    calls = []
+
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.output is not None:
+            options.output.write_text('{"ok":true}', encoding="utf-8")
+        return SimpleNamespace(answer='{"ok":true}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+    for _ in range(2):
+        asyncio.run(run_flow(load_flow(root, workspace=tmp_path), workspace=tmp_path))
+    assert calls == ["discover root", "assemble root"]
+    assert not (tmp_path / "state/root-intermediate.json").exists()
+    assert (tmp_path / "state/root-final.json").is_file()
+
+
+def test_preserved_overwrite_path_is_never_deleted(tmp_path, monkeypatch):
+    _setup(tmp_path)
+    child = tmp_path / "child.toml"
+    first, second = child.read_text(encoding="utf-8").split(
+        '[[steps]]\nid = "assemble"', maxsplit=1,
+    )
+    second = second.replace(
+        'state/$' + '{input.id}-assemble.json',
+        'state/$' + '{input.id}-discover.json',
+    ).replace(
+        'overwrite_output = false', 'overwrite_output = true',
+    )
+    child.write_text(
+        first + '[[steps]]\nid = "assemble"' + second,
+        encoding="utf-8",
+    )
+    _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
+    assert (tmp_path / "state/first-discover.json").is_file()
+    _run(tmp_path, monkeypatch, [])
+
+def test_resumed_child_restores_preserved_json_for_parent_consumer(
+    tmp_path, monkeypatch,
+):
+    _setup(tmp_path)
+    (tmp_path / "prompts/consume.md").write_text(
+        "consume {{var:profile}}", encoding="utf-8",
+    )
+    parent = tmp_path / "parent.toml"
+    parent.write_text(
+        parent.read_text(encoding="utf-8")
+        + '\n[[steps]]\nid = "consume"\n'
+          'prompt_file = "prompts/consume.md"\n'
+          'response_format = "json"\n'
+          'output = "state/consume.json"\n'
+          '[steps.json_inputs.profile]\n'
+          'path = "state/first-assemble.json"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    should_fail = True
+
+    async def fake(options, *, dependencies=None):
+        nonlocal should_fail
+        calls.append(options.prompt)
+        if options.prompt.startswith("consume") and should_fail:
+            should_fail = False
+            raise RuntimeError("interrupted")
+        if options.output is not None:
+            options.output.write_text(
+                '{"prompt":"result"}', encoding="utf-8",
+            )
+        return SimpleNamespace(
+            answer='{"prompt":"result"}', web_context_statuses=(),
+        )
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+    def run():
+        asyncio.run(
+            run_flow(load_flow(parent, workspace=tmp_path), workspace=tmp_path),
+        )
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        run()
+    assert len(list((tmp_path / ".cli-agent/flow-checkpoints").glob("*.json"))) == 1
+    calls.clear()
+    run()
+    # The child was fully cached. The parent may still safely use its
+    # preserved file via json_inputs, not just its in-memory result.
+    assert len(calls) == 1
+    assert calls[0].startswith("consume ")
+    assert '"prompt":"result"' in calls[0]
+
+
+def test_preserved_text_output_is_validated_during_compact_resume(
+    tmp_path, monkeypatch,
+):
+    _setup(tmp_path)
+    child = tmp_path / "child.toml"
+    child.write_text(
+        child.read_text(encoding="utf-8").replace(
+            'state/$' + '{input.id}-assemble.json',
+            'state/$' + '{input.id}-assemble.txt',
+        ).replace(
+            '[[steps]]\nid = "assemble"\n'
+            'prompt_file = "prompts/assemble.md"\n'
+            'output = "state/$' + '{input.id}-assemble.txt"\n'
+            'response_format = "json"',
+            '[[steps]]\nid = "assemble"\n'
+            'prompt_file = "prompts/assemble.md"\n'
+            'output = "state/$' + '{input.id}-assemble.txt"\n'
+            'response_format = "text"',
+        ),
+        encoding="utf-8",
+    )
+    _run(tmp_path, monkeypatch, ["discover first", "assemble first"])
+    target = tmp_path / "state/first-assemble.txt"
+    assert target.is_file()
+    _run(tmp_path, monkeypatch, [])
+    target.write_text("modified externally", encoding="utf-8")
+    with pytest.raises(ValueError, match="changed"):
+        _run(tmp_path, monkeypatch, [])
+
+@pytest.mark.parametrize("leaf_compact", [False, True])
+def test_compact_parent_validates_descendant_published_artifact(
+    tmp_path, monkeypatch, leaf_compact,
+):
+    (tmp_path / "prompt.md").write_text("leaf", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "leaf.toml").write_text(
+        'version = 1\nresult = "steps.publish.output"\n'
+        + ('[checkpoint]\nretain_intermediate = false\n'
+           if leaf_compact else '')
+        + '[[steps]]\nid = "publish"\n'
+          'prompt_file = "prompt.md"\n'
+          'response_format = "json"\n'
+          'output = "state/leaf-result.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "outer.toml").write_text(
+        'version = 1\nresult = "steps.delegate.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "delegate"\nflow = "leaf.toml"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "outer"\nflow = "outer.toml"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.output is not None:
+            options.output.write_text('{"source":"leaf"}', encoding="utf-8")
+        return SimpleNamespace(answer='{"source":"leaf"}', web_context_statuses=())
+    monkeypatch.setattr(flow_module, "run_once", fake)
+    def run():
+        asyncio.run(
+            run_flow(
+                load_flow(tmp_path / "root.toml", workspace=tmp_path),
+                workspace=tmp_path,
+            )
+        )
+    run()
+    assert calls == ["leaf"]
+    run()
+    assert calls == ["leaf"]
+    # Both a non-compact child and a compact child's published result must
+    # become dependencies of the enclosing compact completion marker.
+    (tmp_path / "state/leaf-result.json").write_text(
+        '{"source":"tampered"}', encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="changed"):
+        run()
+
+
+def test_nested_compact_parent_propagates_artifact_checks_all_levels(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("nested", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "leaf.toml").write_text(
+        'version = 1\nresult = "steps.publish.output"\n'
+        '[[steps]]\nid = "publish"\n'
+        'prompt_file = "prompt.md"\nresponse_format = "json"\n'
+        'output = "state/deep-result.json"\n',
+        encoding="utf-8",
+    )
+    for name, child in (("middle", "leaf"), ("outer", "middle")):
+        (tmp_path / f"{name}.toml").write_text(
+            f'version = 1\nresult = "steps.delegate.output"\n'
+            '[checkpoint]\nretain_intermediate = false\n'
+            f'[[steps]]\nid = "delegate"\nflow = "{child}.toml"\n',
+            encoding="utf-8",
+        )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n[[steps]]\nid = "run"\nflow = "outer.toml"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        options.output.write_text('{"ok":true}', encoding="utf-8")
+        return SimpleNamespace(answer='{"ok":true}', web_context_statuses=())
+    monkeypatch.setattr(flow_module, "run_once", fake)
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+    run()
+    run()
+    assert calls == ["nested"]
+    (tmp_path / "state/deep-result.json").unlink()
+    with pytest.raises(ValueError, match="missing|could not be resolved"):
+        run()
+
+
+def test_compact_cached_child_reclaims_output_before_second_child(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("produce", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\ninputs = ["path"]\nresult = "steps.emit.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "emit"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\n'
+        'output = "state/$' + '{input.path}.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "first"\nflow = "child.toml"\n'
+        '[steps.input]\npath = "shared"\n'
+        '[[steps]]\nid = "second"\nflow = "child.toml"\n'
+        '[steps.input]\npath = "$' + '{steps.first.output.path}"\n',
+        encoding="utf-8",
+    )
+    prompts = []
+
+    async def fake(options, *, dependencies=None):
+        prompts.append(options.prompt)
+        options.output.write_text('{"path":"shared"}', encoding="utf-8")
+        return SimpleNamespace(answer='{"path":"shared"}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    # First child completes and publishes its marker before the second
+    # invocation's same-path collision is discovered.
+    with pytest.raises(ValueError, match="already claimed"):
+        run()
+    assert prompts == ["produce"]
+    assert len(list((tmp_path / ".cli-agent/flow-checkpoints").glob("*.json"))) == 1
+
+    # A cached first child must still claim the published output; otherwise
+    # the second child could adopt it as an unrelated JSON checkpoint.
+    with pytest.raises(ValueError, match="already claimed"):
+        run()
+    assert prompts == ["produce"]
+
+
+def test_static_text_compact_child_resumes_without_overwrite(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("text-result", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.emit.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "emit"\nprompt_file = "prompt.md"\n'
+        'output = "state/final.txt"\nresponse_format = "text"\n'
+        'overwrite_output = false\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    prompts = []
+
+    async def fake(options, *, dependencies=None):
+        prompts.append(options.prompt)
+        options.output.write_text("good text", encoding="utf-8")
+        return SimpleNamespace(answer="good text", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    run()
+    assert (tmp_path / "state/final.txt").read_text() == "good text"
+    run()
+    assert prompts == ["text-result"]
+
+
+def test_static_text_without_compact_marker_still_rejects_existing_file(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("text-result", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state/final.txt").write_text("orphan", encoding="utf-8")
+    (tmp_path / "root.toml").write_text(
+        'version = 1\nresult = "steps.emit.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "emit"\nprompt_file = "prompt.md"\n'
+        'output = "state/final.txt"\nresponse_format = "text"\n'
+        'overwrite_output = false\n',
+        encoding="utf-8",
+    )
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("orphan file must be rejected before model")
+    monkeypatch.setattr(flow_module, "run_once", unexpected)
+
+    with pytest.raises(ValueError, match="existiert bereits"):
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+
+def test_compact_identity_preserves_json_number_types(tmp_path):
+    from cli_agent.workflows.flow_compact_checkpoints import checkpoint_path
+    from cli_agent.workflows.flow_json_operations import _JsonNumber
+
+    source = tmp_path / "flow.toml"
+    source.write_text('version = 1', encoding="utf-8")
+
+    def marker(value):
+        return checkpoint_path(tmp_path, source, "child.once.", {"value": value})[1]
+
+    assert marker(_JsonNumber("1.5")) != marker("1.5")
+    assert marker({"nested": [_JsonNumber("2e0")]}) != marker({"nested": ["2e0"]})
+    assert marker(True) != marker(1)
+    assert marker(_JsonNumber("1.0")) != marker(1)
+    assert marker({"b": 2, "a": "x"}) == marker({"a": "x", "b": 2})
+
+
+def test_compact_child_overwrite_can_reclaim_prior_parent_output(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("same", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.write.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "write"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\n'
+        'output = "state/shared.json"\noverwrite_output = true\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "first"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\n'
+        'output = "state/shared.json"\noverwrite_output = true\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    prompts = []
+
+    async def fake(options, *, dependencies=None):
+        prompts.append(options.prompt)
+        if options.output is not None:
+            options.output.write_text('{"same":true}', encoding="utf-8")
+        return SimpleNamespace(answer='{"same":true}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    run()
+    run()
+    # Parent step is deliberately executed twice; compact child only once.
+    assert prompts == ["same", "same", "same"]
+    assert (tmp_path / "state/shared.json").read_text() == '{"same":true}'
+
+
+
+def test_compact_identity_invalidated_by_transitive_child_toml_edit(tmp_path):
+    from cli_agent.workflows.flow_compact_checkpoints import checkpoint_path
+
+    (tmp_path / "leaf.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "middle.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nflow = "leaf.toml"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "outer.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[[steps]]\nid = "child"\nflow = "middle.toml"\n',
+        encoding="utf-8",
+    )
+    def marker(source):
+        return checkpoint_path(tmp_path, tmp_path / source, "outer.once.", {})[1]
+
+    first = marker("outer.toml")
+    assert first == marker("outer.toml")
+    (tmp_path / "leaf.toml").write_text(
+        (tmp_path / "leaf.toml").read_text(encoding="utf-8")
+        + '\n# A changed descendant definition must invalidate its parents.\n',
+        encoding="utf-8",
+    )
+    assert first != marker("outer.toml")
+    assert marker("middle.toml") != first
+
+
+def test_compact_parent_reexecutes_when_descendant_definition_changes(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prompt.md").write_text("leaf-run", encoding="utf-8")
+    (tmp_path / "prompt2.md").write_text("added-run", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "leaf.toml").write_text(
+        'version = 1\nresult = "steps.work.output"\n'
+        '[[steps]]\nid = "work"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\noutput = "state/work.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\nresult = "steps.child.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "child"\nflow = "leaf.toml"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n[[steps]]\nid = "run"\nflow = "parent.toml"\n',
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        if options.output is not None:
+            options.output.write_text('{"ok":true}', encoding="utf-8")
+        return SimpleNamespace(answer='{"ok":true}', web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    run()
+    run()
+    assert calls == ["leaf-run"]
+    leaf = tmp_path / "leaf.toml"
+    leaf.write_text(
+        leaf.read_text(encoding="utf-8")
+        + '\n[[steps]]\nid = "added"\nprompt_file = "prompt2.md"\n'
+          'response_format = "json"\noutput = "state/added.json"\n',
+        encoding="utf-8",
+    )
+    run()
+    assert calls == ["leaf-run", "added-run"]
+    assert (tmp_path / "state/added.json").is_file()
+
+
+
+def test_parent_compaction_uses_last_writer_json_metadata_for_child_alias(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "child.md").write_text("child-text", encoding="utf-8")
+    (tmp_path / "writer.md").write_text("parent-json", encoding="utf-8")
+    (tmp_path / "consumer.md").write_text(
+        "consumer {{var:shared}}", encoding="utf-8",
+    )
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.publish.output"\n'
+        '[[steps]]\nid = "publish"\nprompt_file = "child.md"\n'
+        'response_format = "text"\noutput = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "parent.toml").write_text(
+        'version = 1\nresult = "steps.writer.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "child"\nflow = "child.toml"\n'
+        '[[steps]]\nid = "writer"\nprompt_file = "writer.md"\n'
+        'response_format = "json"\noverwrite_output = true\n'
+        'output = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n'
+        '[[steps]]\nid = "parent"\nflow = "parent.toml"\n'
+        '[[steps]]\nid = "consumer"\nprompt_file = "consumer.md"\n'
+        'response_format = "json"\noutput = "state/consumer.json"\n'
+        '[steps.json_inputs.shared]\npath = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    fail_consumer = True
+
+    async def fake(options, *, dependencies=None):
+        nonlocal fail_consumer
+        calls.append(options.prompt)
+        if options.prompt.startswith("consumer ") and fail_consumer:
+            fail_consumer = False
+            raise RuntimeError("interrupted")
+        answer = (
+            "child text" if options.prompt == "child-text"
+            else '{"writer":true}'
+        )
+        if options.output is not None:
+            options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        run()
+    assert (tmp_path / "state/shared.json").read_text() == '{"writer":true}'
+    calls.clear()
+    run()
+    assert len(calls) == 1
+    assert calls[0] == 'consumer {"writer":true}'
+    # The final output's metadata must describe the parent JSON writer.
+    import json as json_module
+    markers = list((tmp_path / ".cli-agent/flow-checkpoints").glob("*.json"))
+    assert len(markers) == 1
+    marker = json_module.loads(markers[0].read_text(encoding="utf-8"))
+    shared = [p for p in marker["preserved"] if p["path"] == "state/shared.json"]
+    assert len(shared) == 1
+    assert shared[0]["is_json"] is True
+    assert shared[0]["allow_replace"] is True
+
+
+def test_compact_static_json_overwritten_by_text_resumes(tmp_path, monkeypatch):
+    (tmp_path / "prepare.md").write_text("prepare-json", encoding="utf-8")
+    (tmp_path / "publish.md").write_text("publish-text", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "child.toml").write_text(
+        'version = 1\nresult = "steps.publish.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "prepare"\nprompt_file = "prepare.md"\n'
+        'response_format = "json"\n'
+        'output = "state/shared.json"\n'
+        '[[steps]]\nid = "publish"\nprompt_file = "publish.md"\n'
+        'response_format = "text"\noverwrite_output = true\n'
+        'output = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "root.toml").write_text(
+        'version = 1\n[[steps]]\nid = "child"\nflow = "child.toml"\n',
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake(options, *, dependencies=None):
+        calls.append(options.prompt)
+        answer = '{"status":"ready"}' if options.prompt == "prepare-json" else "published text"
+        options.output.write_text(answer, encoding="utf-8")
+        return SimpleNamespace(answer=answer, web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake)
+
+    def run():
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "root.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))
+
+    run()
+    assert (tmp_path / "state/shared.json").read_text() == "published text"
+    run()
+    # Static JSON inspection must not reject the later text artifact before
+    # validating the enclosing compact completion record.
+    assert calls == ["prepare-json", "publish-text"]
+
+
+def test_compact_static_json_with_non_json_orphan_without_marker_rejected(
+    tmp_path, monkeypatch,
+):
+    (tmp_path / "prepare.md").write_text("prepare-json", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state/shared.json").write_text("not a JSON checkpoint", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\nresult = "steps.prepare.output"\n'
+        '[checkpoint]\nretain_intermediate = false\n'
+        '[[steps]]\nid = "prepare"\nprompt_file = "prepare.md"\n'
+        'response_format = "json"\n'
+        'output = "state/shared.json"\n',
+        encoding="utf-8",
+    )
+    async def no_calls(*args, **kwargs):
+        raise AssertionError("must reject invalid prior checkpoint before model execution")
+    monkeypatch.setattr(flow_module, "run_once", no_calls)
+    with pytest.raises(ValueError, match="JSON"):
+        asyncio.run(run_flow(
+            load_flow(tmp_path / "flow.toml", workspace=tmp_path),
+            workspace=tmp_path,
+        ))

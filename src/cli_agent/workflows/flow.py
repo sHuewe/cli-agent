@@ -12,6 +12,7 @@ import re
 import sys
 import tomllib
 import traceback
+from cli_agent.workflows import flow_compact_checkpoints as compact_checkpoints
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Callable
@@ -181,6 +182,9 @@ class _FlowExecutionContext:
     run_start_snapshots: dict[str, "_RunStartSnapshot"] | None = None
     run_start_checkpoint_paths: tuple[Path, ...] = ()
     run_start_dynamic_checkpoints: dict[tuple[str, str, str], bytes] | None = None
+    run_start_compact_markers: dict[str, bytes] | None = None
+    # Complete, verified artifact dependencies for each finished invocation.
+    completed_invocation_artifacts: dict[str, dict[str, tuple[Path, bool, bool]]] | None = None
     completed_json_outputs: dict[str, bytes] | None = None
     preflight_budget: "_SubflowTraversalBudget" | None = None
 
@@ -197,6 +201,8 @@ class _FlowExecutionContext:
             self.preflight_budget = _SubflowTraversalBudget()
         if self.completed_json_outputs is None:
             self.completed_json_outputs = {}
+        if self.completed_invocation_artifacts is None:
+            self.completed_invocation_artifacts = {}
 
 
 @dataclass
@@ -1195,9 +1201,9 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
 
     checkpoint_options = values.get("checkpoint", {})
     if (not isinstance(checkpoint_options, dict)
-            or set(checkpoint_options) - {"max_snapshot_bytes", "max_candidates"}):
+            or set(checkpoint_options) - {"max_snapshot_bytes", "max_candidates", "retain_intermediate", "preserve_steps"}):
         raise ValueError(
-            "checkpoint supports only max_snapshot_bytes and max_candidates."
+            "checkpoint supports only max_snapshot_bytes, max_candidates, retain_intermediate and preserve_steps."
         )
     max_snapshot_bytes = checkpoint_options.get(
         "max_snapshot_bytes", MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES,
@@ -1216,6 +1222,18 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
         raise ValueError(
             "checkpoint.max_candidates must be between 20000 and 200000."
         )
+
+    retain_intermediate = checkpoint_options.get("retain_intermediate", True)
+    if type(retain_intermediate) is not bool:
+        raise ValueError("checkpoint.retain_intermediate must be boolean.")
+    preserve_steps = checkpoint_options.get("preserve_steps", [])
+    if (not isinstance(preserve_steps, list)
+            or any(not isinstance(v, str) or _STEP_ID.fullmatch(v) is None
+                   for v in preserve_steps)
+            or len(set(preserve_steps)) != len(preserve_steps)):
+        raise ValueError("checkpoint.preserve_steps must be unique step IDs.")
+    if not retain_intermediate and result_selector is None:
+        raise ValueError("checkpoint.retain_intermediate=false requires a flow result.")
 
     raw_global_vars = values.get("vars", {})
     if not isinstance(raw_global_vars, dict):
@@ -1252,7 +1270,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             f"Flow contains more than {MAX_FLOW_STEPS} steps."
         )
 
-    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry, max_snapshot_bytes, max_candidates)
+    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry, max_snapshot_bytes, max_candidates, retain_intermediate, tuple(preserve_steps))
 
 
 def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
@@ -1294,6 +1312,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         allowed_retry,
         max_snapshot_bytes,
         max_candidates,
+        retain_intermediate,
+        checkpoint_preserve_steps,
     ) = _parse_flow_root(values)
 
     steps: list[FlowStep] = []
@@ -2263,6 +2283,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 f"{label} must refer to the output of a known step."
             )
 
+    if not set(checkpoint_preserve_steps).issubset(known_ids):
+        raise ValueError("checkpoint.preserve_steps refers to unknown steps.")
+
     return FlowDefinition(
         source=source,
         steps=tuple(steps),
@@ -2273,6 +2296,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         retry_policy=global_retry_policy,
         checkpoint_snapshot_max_bytes=max_snapshot_bytes,
         checkpoint_max_candidates=max_candidates,
+        retain_intermediate=retain_intermediate,
+        checkpoint_preserve_steps=checkpoint_preserve_steps,
     )
 
 
@@ -2671,6 +2696,34 @@ def _claim_output(
     claimed_outputs[key] = owner
 
 
+def _claim_compact_preserved_outputs(
+    record: compact_checkpoints.CompletionRecord,
+    *,
+    claimed_outputs: dict[str, str],
+    namespace: str,
+    reserved_inputs: dict[str, Path] | None = None,
+) -> None:
+    """Reclaim verified completed artifacts, including descendant outputs.
+
+    A compact invocation is still a writer of its published files. Omitting
+    these claims would allow later subflows to reuse its outputs as unrelated
+    checkpoints. The caller uses a temporary claim map in preflight and the
+    real claim map during execution.
+    """
+    for path, _is_json, allow_replace in record.preserved_outputs:
+        if reserved_inputs is not None and _filesystem_path_key(path) in reserved_inputs:
+            raise ValueError(
+                f"Preserved compact output {path} conflicts with reserved "
+                f"flow input: {reserved_inputs[_filesystem_path_key(path)]}"
+            )
+        _claim_output(
+            claimed_outputs,
+            path=path,
+            owner=f"{namespace}compact-completed-output",
+            allow_replace=allow_replace,
+        )
+
+
 def _checkpoint_fingerprint(text: str) -> bytes:
     return hashlib.sha256(text.encode("utf-8")).digest()
 
@@ -2790,7 +2843,21 @@ def _prepare_flow_output(
     *,
     workspace: Path,
     output: Path,
+    defer_existing_output: bool = False,
 ) -> str | None:
+    # A compact invocation may have a preserved artifact whose format is
+    # different from an earlier static writer of the same path (e.g. JSON
+    # overwritten by text). During structural validation, check only path
+    # safety, not checkpoint content or overwrite permissions. The verified
+    # compact completion record is checked before concrete execution; without
+    # one, run-start snapshot/preflight and execution still enforce JSON
+    # validity and overwrite_output=False before executing a model step.
+    if defer_existing_output:
+        prepare_output_target(
+            workspace, output, overwrite=True, allow_missing_parent=True,
+        )
+        return None
+
     checkpoint = _existing_json_checkpoint(
         step,
         workspace=workspace,
@@ -2899,6 +2966,7 @@ def _capture_run_start_invocation(
     budget: _SubflowTraversalBudget,
     call_stack: tuple[str, ...] = (),
     reserved_inputs: dict[str, Path] | None = None,
+    compact_markers: dict[str, bytes] | None = None,
 ) -> _FlowResultValue | None:
     _set_flow_diagnostic(
         phase="run-start-snapshot", flow=flow.source,
@@ -2912,6 +2980,16 @@ def _capture_run_start_invocation(
         raise ValueError(
             f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
         )
+
+    if (not flow.retain_intermediate and compact_markers is not None):
+        compact_result = compact_checkpoints.read_checkpoint(
+            workspace, flow.source, namespace, flow_input, compact_markers,
+            lambda path: _workspace_path(
+                workspace, path, purpose="Preserved compact output", must_exist=True,
+            ),
+        )
+        if compact_result is not None:
+            return _FlowResultValue(compact_result.result, compact_result.is_json)
 
     next_stack = (*call_stack, flow_key)
     # Concrete nested inputs available from run-start checkpoints must be
@@ -3098,6 +3176,7 @@ def _capture_run_start_invocation(
                         reserved_inputs if item_condition is True else None
                     ),
                     call_stack=next_stack,
+                    compact_markers=compact_markers,
                 )
                 if item_condition is not True:
                     complete = False
@@ -3632,6 +3711,7 @@ def _capture_run_start_snapshots(
     root_flow: FlowDefinition,
     cache: dict[str, FlowDefinition],
     reserved_inputs: dict[str, Path] | None = None,
+    compact_markers: dict[str, bytes] | None = None,
 ) -> tuple[
     dict[str, _RunStartSnapshot],
     tuple[Path, ...],
@@ -3648,6 +3728,7 @@ def _capture_run_start_snapshots(
         protected_paths=protected_paths,
         budget=_SubflowTraversalBudget(),
         reserved_inputs=reserved_inputs,
+        compact_markers=compact_markers,
     )
     return snapshots, tuple(protected_paths.values())
 
@@ -4297,6 +4378,7 @@ def validate_flow(
     _budget: _SubflowTraversalBudget | None = None,
     _planned_static_outputs: dict[str, str] | None = None,
     _all_reserved_inputs: dict[str, Path] | None = None,
+    _compact_ancestor: bool = False,
 ) -> None:
     _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
     workspace = workspace.expanduser().resolve()
@@ -4358,6 +4440,7 @@ def validate_flow(
                 _budget=traversal_budget,
                 _planned_static_outputs=planned_static_outputs,
                 _all_reserved_inputs=all_reserved_inputs,
+                _compact_ancestor=_compact_ancestor or not flow.retain_intermediate,
             )
             _set_flow_diagnostic(
                 phase="validate-step", flow=flow.source,
@@ -4409,6 +4492,9 @@ def validate_flow(
                 if step.when is None:
                     _prepare_flow_output(
                         step, workspace=workspace, output=static_output,
+                        defer_existing_output=(
+                            _compact_ancestor or not flow.retain_intermediate
+                        ),
                     )
                     previous = planned_static_outputs.get(key)
                     if previous is not None and not step.overwrite_output:
@@ -4564,6 +4650,9 @@ def validate_flow(
                     step,
                     workspace=workspace,
                     output=static_output,
+                    defer_existing_output=(
+                        _compact_ancestor or not flow.retain_intermediate
+                    ),
                 )
                 previous_writer = planned_static_outputs.get(static_output_key)
                 if previous_writer is not None and not step.overwrite_output:
@@ -4608,6 +4697,7 @@ def _preflight_concrete_invocation_outputs(
     run_start_snapshots: dict[str, _RunStartSnapshot],
     budget: _SubflowTraversalBudget,
     call_stack: tuple[str, ...] = (),
+    compact_markers: dict[str, bytes] | None = None,
 ) -> None:
     """Preflight outputs that are concrete before an invocation starts.
 
@@ -4626,6 +4716,19 @@ def _preflight_concrete_invocation_outputs(
         raise ValueError(
             f"Maximum subflow depth of {MAX_SUBFLOW_DEPTH} exceeded."
         )
+    if not flow.retain_intermediate and compact_markers is not None:
+        result = compact_checkpoints.read_checkpoint(
+            workspace, flow.source, namespace, flow_input, compact_markers,
+            lambda path: _workspace_path(
+                workspace, path, purpose="Preserved compact output", must_exist=True,
+            ),
+        )
+        if result is not None:
+            _claim_compact_preserved_outputs(
+                result, claimed_outputs=claimed_outputs, namespace=namespace,
+                reserved_inputs=reserved_inputs,
+            )
+            return
     next_stack = (*call_stack, flow_key)
     # Resolve all checkpoint inputs for this concrete invocation before
     # claiming outputs from any of its steps.
@@ -4763,6 +4866,7 @@ def _preflight_concrete_invocation_outputs(
                     run_start_snapshots=run_start_snapshots,
                     budget=budget,
                     call_stack=next_stack,
+                    compact_markers=compact_markers,
                 )
             continue
 
@@ -5474,6 +5578,7 @@ def _preflight_subflow_batch(
             run_start_snapshots=context.run_start_snapshots,
             budget=context.preflight_budget,
             call_stack=next_stack,
+            compact_markers=context.run_start_compact_markers,
         )
 
 
@@ -5677,6 +5782,35 @@ async def _execute_subflow_iteration(
         exclude_invocation=(step.step_id, iteration_id),
         completed_invocations=completed_child_invocations,
     )
+    if not child.retain_intermediate:
+        cached = compact_checkpoints.read_checkpoint(
+            workspace, child.source, child_namespace, child_input,
+            context.run_start_compact_markers or {},
+            lambda path: _workspace_path(
+                workspace, path, purpose="Preserved compact output", must_exist=True,
+            ),
+        )
+        if cached is not None:
+            _claim_compact_preserved_outputs(
+                cached, claimed_outputs=claimed_outputs,
+                namespace=child_namespace,
+                reserved_inputs=child_inherited_inputs,
+            )
+            assert context.completed_json_outputs is not None
+            assert context.completed_invocation_artifacts is not None
+            # The checkpoint reader validates *all* preserved outputs
+            # before returning. Restore only validated JSON outputs, using
+            # the same fingerprints as normal completed steps.
+            for preserved_path, fingerprint in cached.preserved_json:
+                context.completed_json_outputs[
+                    _filesystem_path_key(preserved_path)
+                ] = fingerprint
+            context.completed_invocation_artifacts[child_namespace] = {
+                _filesystem_path_key(path): (path, is_json, allow_replace)
+                for path, is_json, allow_replace in cached.preserved_outputs
+            }
+            return _FlowResultValue(cached.result, cached.is_json)
+
     child_result = await _run_flow_internal(
         child,
         workspace=workspace,
@@ -5879,6 +6013,14 @@ async def _run_flow_internal(
     )
     outputs: dict[str, str] = {}
     output_json: dict[str, bool] = {}
+    # Own JSON intermediates can be removed; descendant outputs are always
+    # dependencies and must be retained and verified by the parent marker.
+    own_checkpoint_files: list[tuple[str, Path, bool, bool]] = []
+    child_output_artifacts: dict[str, tuple[Path, bool, bool]] = {}
+    # Track writes in execution order. Child artifacts may be overwritten by
+    # later local steps (or vice versa), while their retention requirement
+    # remains in force. Metadata must always describe the final writer.
+    last_written_artifacts: dict[str, tuple[Path, bool, bool]] = {}
     claimed_outputs = context.claimed_outputs
     reserved_inputs = context.reserved_inputs
     assert claimed_outputs is not None
@@ -6076,6 +6218,21 @@ async def _run_flow_internal(
                     child_result.text, child_result.is_json, iteration_id,
                 )
                 completed_child_invocations.add((step.step_id, iteration_id))
+                child_namespace = _child_invocation_namespace(
+                    namespace, step, iteration_id=iteration_id,
+                    case_colliding_step_ids=case_colliding_step_ids,
+                )
+                assert context.completed_invocation_artifacts is not None
+                child_artifacts = context.completed_invocation_artifacts.get(
+                    child_namespace
+                )
+                if child_artifacts is None:
+                    raise ValueError(
+                        f"Missing completed artifact inventory for child "
+                        f"invocation {child_namespace!r}."
+                    )
+                child_output_artifacts.update(child_artifacts)
+                last_written_artifacts.update(child_artifacts)
                 continue
 
             output, checkpoint = _prepare_iteration_checkpoint(
@@ -6103,6 +6260,12 @@ async def _run_flow_internal(
                         escape_literal_backslashes=True,
                     )
                 )
+                own_checkpoint_files.append((
+                    step.step_id, output, True, step.overwrite_output,
+                ))
+                last_written_artifacts[_filesystem_path_key(output)] = (
+                    output, True, step.overwrite_output,
+                )
                 record_iteration_answer(
                     checkpoint,
                     True,
@@ -6115,6 +6278,16 @@ async def _run_flow_internal(
                 invocation_known_at_run_start=invocation_known_at_run_start,
                 initial_previous_output_fingerprints=initial_previous_output_fingerprints,
             )
+
+            if output is not None:
+                is_json_output = step.response_format == "json"
+                own_checkpoint_files.append((
+                    step.step_id, output, is_json_output,
+                    step.overwrite_output,
+                ))
+                last_written_artifacts[_filesystem_path_key(output)] = (
+                    output, is_json_output, step.overwrite_output,
+                )
 
             if step.filesystem_operation is not None:
                 answer = _execute_filesystem_step(
@@ -6161,11 +6334,99 @@ async def _run_flow_internal(
             output_json[step.step_id] = True
         statuses[step.step_id] = "completed"
 
-    return _flow_result_value(
-        flow,
-        outputs,
-        output_json,
-    )
+    final_result = _flow_result_value(flow, outputs, output_json)
+    if not flow.retain_intermediate and final_result is not None:
+        preserved_ids = set(flow.checkpoint_preserve_steps)
+        for selector in (flow.result, flow.result_fallback):
+            if selector:
+                match = _FOREACH.fullmatch(selector)
+                if match:
+                    preserved_ids.add(match.group(1))
+        # Classify by physical output path rather than step identity: a
+        # later overwrite may reuse an earlier intermediate path. Retention
+        # always wins, regardless of which step last wrote the file.
+        owned: dict[str, tuple[Path, bool, bool, bool]] = {}
+        for step_id, path, is_json, allow_replace in own_checkpoint_files:
+            key = _filesystem_path_key(path)
+            # Non-JSON output files are published artifacts, not disposable
+            # JSON resume checkpoints. Never delete them automatically.
+            retain = (
+                step_id in preserved_ids
+                or not is_json
+                or key in (context.reserved_inputs or {})
+            )
+            previous = owned.get(key)
+            owned[key] = (
+                path,
+                retain or (previous[1] if previous else False),
+                is_json, allow_replace,
+            )
+        # Retain every published descendant artifact, including outputs of
+        # non-compact children. The enclosing marker is invalid if any child
+        # artifact subsequently disappears or changes.
+        for key in child_output_artifacts:
+            # Child outputs are mandatory artifacts, but their metadata can
+            # become stale if a subsequent parent step overwrites the path.
+            # Preserve the path while using the actual final writer's format
+            # and overwrite permission.
+            path, is_json, allow_replace = last_written_artifacts[key]
+            owned[key] = (path, True, is_json, allow_replace)
+        preserve: list[dict[str, Any]] = []
+        intermediate: list[tuple[Path, str]] = []
+        retained_artifacts: dict[str, tuple[Path, bool, bool]] = {}
+        for path, retain, is_json, allow_replace in owned.values():
+            if not path.is_file():
+                if retain:
+                    raise ValueError(
+                        f"Required compact flow result/output does not exist: {path}"
+                    )
+                continue
+            checked = _workspace_path(
+                workspace, path, purpose="Compact checkpoint output", must_exist=True,
+            )
+            source_text = read_existing_output_text(
+                workspace, checked, max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+            )
+            digest = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+            if retain:
+                preserve.append({
+                    "path": checked.relative_to(workspace).as_posix(),
+                    "sha256": digest,
+                    "is_json": is_json,
+                    "allow_replace": allow_replace,
+                })
+                retained_artifacts[_filesystem_path_key(checked)] = (
+                    checked, is_json, allow_replace,
+                )
+            else:
+                intermediate.append((checked, digest))
+        compact_checkpoints.write_checkpoint(
+            workspace, flow.source, namespace, flow_input,
+            final_result.text, final_result.is_json, preserve,
+            lambda path: _ensure_output_parent_directory(workspace, path),
+        )
+        compact_checkpoints.cleanup_files(
+            workspace, intermediate,
+            lambda path: _workspace_path(
+                workspace, path, purpose="Compact cleanup", must_exist=True,
+            ),
+        )
+        assert context.completed_invocation_artifacts is not None
+        context.completed_invocation_artifacts[namespace] = retained_artifacts
+    else:
+        # A non-compact invocation may still be enclosed by a compact parent.
+        # Its outputs are external dependencies, never subject to parent
+        # cleanup, and must participate in the parent's completion validation.
+        artifacts: dict[str, tuple[Path, bool, bool]] = {}
+        for key, (path, is_json, allow_replace) in last_written_artifacts.items():
+            if path.is_file():
+                checked = _workspace_path(
+                    workspace, path, purpose="Child output", must_exist=True,
+                )
+                artifacts[key] = (checked, is_json, allow_replace)
+        assert context.completed_invocation_artifacts is not None
+        context.completed_invocation_artifacts[namespace] = artifacts
+    return final_result
 
 
 async def run_flow(
@@ -6222,6 +6483,14 @@ async def run_flow(
         cache=cache,
         budget=_SubflowTraversalBudget(),
     )
+    _set_flow_diagnostic(phase="compact-checkpoint-snapshot", flow=flow.source)
+    # Preserve the zero-overhead/default behavior for workflows that have
+    # not opted into compact child checkpoints.
+    compact_markers = (
+        compact_checkpoints.snapshot_markers(workspace)
+        if any(not child.retain_intermediate for child in cache.values())
+        else {}
+    )
     _set_flow_diagnostic(phase="run-start-snapshot", flow=flow.source)
     run_start_snapshots, run_start_checkpoint_paths = (
         _capture_run_start_snapshots(
@@ -6231,6 +6500,7 @@ async def run_flow(
             # Capture guaranteed-active concrete descendant checkpoint inputs
             # before earlier writers can overwrite them.
             reserved_inputs=reserved_inputs,
+            compact_markers=compact_markers,
         )
     )
     known_fingerprints: dict[str, bytes] = {}
@@ -6262,7 +6532,19 @@ async def run_flow(
             dict.fromkeys((*run_start_checkpoint_paths, *dynamic_paths))
         ),
         run_start_dynamic_checkpoints=dynamic_fingerprints,
+        run_start_compact_markers=compact_markers,
     )
+    if not flow.retain_intermediate:
+        # The root may itself declare a public result. Honor its completion
+        # record exactly like a child; never execute a compact root twice.
+        completed = compact_checkpoints.read_checkpoint(
+            workspace, flow.source, "", {}, compact_markers,
+            lambda path: _workspace_path(
+                workspace, path, purpose="Preserved compact output", must_exist=True,
+            ),
+        )
+        if completed is not None:
+            return
     _set_flow_diagnostic(phase="execute-flow", flow=flow.source)
     with telemetry_scope(flow_telemetry):
         await _run_flow_internal(

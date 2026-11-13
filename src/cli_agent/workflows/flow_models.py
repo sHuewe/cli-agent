@@ -57,6 +57,8 @@ class FlowDefinition:
     retry_policy: ModelRetryPolicy | None = None
     checkpoint_snapshot_max_bytes: int = 200_000_000
     checkpoint_max_candidates: int = 20_000
+    retain_intermediate: bool = True
+    checkpoint_preserve_steps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
