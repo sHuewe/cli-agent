@@ -213,6 +213,43 @@ neu angelegte Dateien sind keine Checkpoints und führen weiterhin zu einem
 Output-Konflikt. Die Aufnahme ist hinsichtlich Dateianzahl und Gesamtgröße
 begrenzt und bleibt auf Output-Pfade innerhalb des Workspace beschränkt.
 
+### Kompakte Subflow-Checkpoints
+
+Ein Child-Flow kann seine internen JSON-Checkpoints nach vollständiger
+Ausführung automatisch konsolidieren:
+
+```toml
+version = 1
+inputs = ["item"]
+result = "steps.assemble.output"
+
+[checkpoint]
+retain_intermediate = false
+preserve_steps = ["assemble"]
+```
+
+Standard ist `retain_intermediate = true`, also das bisherige Verhalten.
+Bei `false` werden Discovery-/Zwischen-Outputs erst **nach vollständiger
+Ausführung aller Steps** und atomarem Schreiben eines Abschluss-Checkpoints
+bereinigt. Der `result`-Step (und bei Bedarf `result_fallback`) wird
+automatisch erhalten. Weitere Outputs, die andere Flows, JSON-Operationen
+oder externe Programme unmittelbar als Dateien lesen, müssen ausdrücklich
+über `preserve_steps` angegeben werden. Bereits vorhandene Subflow-Outputs
+werden beim ersten erfolgreichen Lauf mit dieser Einstellung konsolidiert.
+Abgebrochene Subflows behalten ihre regulären JSON-Checkpoints.
+
+Die Abschlussmarker liegen unter `.cli-agent/flow-checkpoints/`. Die
+Wiederaufnahme prüft ihre Identität sowie die erhaltenen Output-Dateien.
+Ein gültiger Marker erlaubt es dem Runner, den gesamten Child-Flow ohne
+rekursive interne Checkpoint-Rekonstruktion zu übernehmen. Marker werden
+nur verwendet, wenn sie bereits **vor dem gesamten Run** existiert haben.
+
+Wichtig: Der Abschlussmarker ersetzt keine Invalidierung bei Änderungen
+an Quelltexten, Prompt-Dateien oder Modellen. Nach solchen Änderungen
+müssen die zugehörigen Checkpoints einschließlich Abschlussmarker
+invalidiert werden. Der Flow-Definitionstext ist dagegen Teil der
+Markeridentität; Änderungen an ihm erzeugen eine neue Identität.
+
 Child-interne JSON-Checkpoints behalten ihre normale Semantik. Der Subflow-Step
 selbst erzeugt in dieser ersten Version keinen zusätzlichen Parent-Checkpoint;
 für Resume sollten die relevanten Child-Steps daher wie gewohnt
