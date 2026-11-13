@@ -18,7 +18,7 @@ dump_llm_context = false
 # [telemetry]
 # enabled = true
 # service_name = "cli-agent"
-# otlp_endpoint = "http://127.0.0.1:4318"
+# otlp_endpoint = "http://127.0.0.1:4317"
 # sample_rate = 1.0
 
 [logging]
