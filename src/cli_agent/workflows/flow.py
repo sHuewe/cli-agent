@@ -6231,6 +6231,10 @@ async def _run_flow_internal(
             if _filesystem_path_key(path) in (context.reserved_inputs or {}):
                 preserved_ids.add(step_id)
             if not path.is_file():
+                if step_id in preserved_ids:
+                    raise ValueError(
+                        f"Required compact flow result/output does not exist: {path}"
+                    )
                 continue
             checked = _workspace_path(
                 workspace, path, purpose="Compact checkpoint output", must_exist=True,
