@@ -24,7 +24,7 @@ Run Jaeger locally with its OTLP gRPC receiver (4317) and UI (16686). For
 example, with a local Docker daemon:
 
 ```shell
-docker run --rm --name jaeger -p 127.0.0.1:16686:16686 -p 127.0.0.1:4318:4318 jaegertracing/jaeger:2
+docker run --rm --name jaeger -p 127.0.0.1:16686:16686 -p 127.0.0.1:4317:4317 jaegertracing/jaeger:2
 ```
 
 Open http://localhost:16686 and select the `cli-agent` service. The exporter uses OTLP over gRPC. Configure the collector endpoint without a path. For a collector in a different container, use loopback port
@@ -32,7 +32,7 @@ forwarding or arrange for a local collector; directly sending telemetry to
 arbitrary remote hosts is deliberately unsupported by user configuration.
 
 Trace hierarchy includes `agent.ask`, `agent.model_loop`, `llm.request`,
-`mcp.call`, `agent.sub_run`, `flow.run`, `flow.invocation`, and
+`mcp.call`, `agent.sub_run`, `flow.invocation`, and
 `flow.step`. LLM request spans include token counts when supplied by the
 provider. Nested sub-run spans inherit their parent context. Async flow
 iterations have their own spans, and exceptions are marked as failures.
