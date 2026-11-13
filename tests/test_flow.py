@@ -7659,3 +7659,52 @@ def test_json_restart_attempts_validate_opt_in(tmp_path, value, format):
     )
     with pytest.raises(ValueError, match="json_restart_attempts"):
         load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_flow_telemetry_respects_workspace_override_for_explicit_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A project-level opt-out must prevent even the parent flow span."""
+    from cli_agent.platform import telemetry as otel
+
+    (tmp_path / ".cli-agent").mkdir()
+    (tmp_path / ".cli-agent" / "project.toml").write_text(
+        "[telemetry]\nenabled = false\n", encoding="utf-8",
+    )
+    (tmp_path / "config.toml").write_text(
+        '[telemetry]\nenabled = true\n'
+        'otlp_endpoint = "http://127.0.0.1:4317"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "one"\n'
+        'config = "config.toml"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+
+    traced = []
+    def fake_configure(cfg):
+        traced.append(("configure", cfg.enabled))
+        if cfg.enabled:
+            raise AssertionError("Project telemetry opt-out must apply")
+
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_scope(cfg):
+        traced.append(("scope", cfg.enabled))
+        if cfg.enabled:
+            raise AssertionError("Project telemetry opt-out must apply")
+        yield
+
+    async def fake_run_once(options, *, dependencies=None):
+        return SimpleNamespace(answer="ok", web_context_statuses=())
+
+    monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+    monkeypatch.setattr(flow_module, "configure_telemetry", fake_configure)
+    monkeypatch.setattr(flow_module, "telemetry_scope", fake_scope)
+    definition = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+
+    assert traced == [("configure", False), ("scope", False)]
