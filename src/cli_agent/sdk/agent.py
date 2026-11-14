@@ -44,6 +44,7 @@ class Agent:
         project_path: Path | None, run_options: dict[str, Any],
         event_callback: Any = None, python_tools: tuple = (),
         knowledge_trace_include_content: bool | None = None,
+        system_prompt_override: str | None = None,
     ) -> None:
         self._config = project_config
         self._policy = admin_config
@@ -52,6 +53,7 @@ class Agent:
         self._event_callback = event_callback
         self._python_tools = python_tools
         self._knowledge_trace_include_content = knowledge_trace_include_content
+        self._system_prompt_override = system_prompt_override
         self.mcp = McpInterface(self)
         self._event_queue: asyncio.Queue[AgentEvent | None] | None = None
         self._event_worker: asyncio.Task[None] | None = None
@@ -242,6 +244,7 @@ class Agent:
             )
             prepared = prepare_agent(
                 opts, project_config=self._config, admin_config=self._policy,
+                system_prompt_override=self._system_prompt_override,
             )
             async with prepared.agent as runtime:
                 register_python_tools(runtime, self._python_tools)

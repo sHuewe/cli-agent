@@ -95,7 +95,7 @@ def _admin_overrides(policy: AdminConfig, overrides: dict[str, Any]) -> AdminCon
 
 _PROJECT_OPTIONS = {
     "model", "provider", "base_url", "api_key_env", "timeout", "headers",
-    "context_length", "timezone", "mcp_servers", "okf", "knowledge_vector",
+    "context_length", "timezone", "system_prompt", "mcp_servers", "okf", "knowledge_vector",
     "logging", "dump_llm_context", "max_pdf_pages",
 }
 _RUN_OPTIONS = {
@@ -123,6 +123,7 @@ class AgentBuilder:
         self._event_callback = None
         self._python_tools = []
         self._knowledge_trace_include_content: bool | None = None
+        self._system_prompt_override: str | None = None
 
     def with_admin_config(self, *, path: str | Path | None = None, **overrides: Any) -> AgentBuilder:
         if path is not None:
@@ -153,8 +154,10 @@ class AgentBuilder:
         model_opts = {k: overrides[k] for k in model_fields if k in overrides}
         if model_opts:
             config = replace(config, model=replace(config.model, **model_opts))
-        if "timezone" in overrides:
-            config = replace(config, agent=replace(config.agent, timezone=overrides["timezone"]))
+        agent_opts = {key: overrides[key] for key in ("timezone", "system_prompt")
+                      if key in overrides}
+        if agent_opts:
+            config = replace(config, agent=replace(config.agent, **agent_opts))
         for key in ("mcp_servers", "okf", "knowledge_vector", "logging",
                     "dump_llm_context", "max_pdf_pages"):
             if key in overrides:
@@ -169,8 +172,9 @@ class AgentBuilder:
         if model_opts:
             if _model_config(asdict(config.model)) != config.model:
                 raise ValueError("Invalid model configuration.")
-        if "timezone" in overrides:
-            _agent_config({"timezone": config.agent.timezone})
+        if agent_opts:
+            _agent_config({"timezone": config.agent.timezone,
+                           "system_prompt": config.agent.system_prompt})
         if "mcp_servers" in overrides:
             for server in config.mcp_servers:
                 if server.built_in:
@@ -191,6 +195,11 @@ class AgentBuilder:
                 if _mcp_server_config(definition) != server:
                     raise ValueError("Invalid MCP project configuration.")
         self._project = config
+        # Explicit file-backed prompts take precedence over an earlier inline
+        # SDK prompt. A config without one leaves the inline prompt untouched.
+        # Passing system_prompt=None explicitly clears the inline override.
+        if "system_prompt" in overrides or config.agent.system_prompt is not None:
+            self._system_prompt_override = None
         run_options = {k: v for k, v in overrides.items() if k in _RUN_OPTIONS}
         # Callback configuration is independent of project configuration.
         # Keep the existing approval callback across project updates, unless
@@ -228,6 +237,22 @@ class AgentBuilder:
         if any(existing.name == tool.name for existing in self._python_tools):
             raise ValueError("Duplicate Python tool")
         self._python_tools.append(tool)
+        return self
+
+    def with_system_prompt(self, text: str) -> AgentBuilder:
+        """Override the base system prompt inline, without reading a file.
+
+        Last explicit prompt setting wins: subsequent with_project_config()
+        calls replace this override only if they specify a file-backed prompt.
+        This does not change the tool, network or admin safety instructions.
+        """
+        from cli_agent.settings.project_config import MAX_SYSTEM_PROMPT_BYTES
+
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("system prompt must be a nonempty string")
+        if "\x00" in text or len(text.encode("utf-8")) > MAX_SYSTEM_PROMPT_BYTES:
+            raise ValueError("system prompt contains NUL or exceeds the size limit")
+        self._system_prompt_override = text
         return self
 
     def with_knowledge_trace(self, *, include_content: bool = False) -> AgentBuilder:
@@ -273,4 +298,5 @@ class AgentBuilder:
             event_callback=self._event_callback,
             python_tools=tuple(self._python_tools),
             knowledge_trace_include_content=self._knowledge_trace_include_content,
+            system_prompt_override=self._system_prompt_override,
         )

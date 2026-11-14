@@ -161,3 +161,16 @@ def test_sdk_builder_target_is_optional_and_does_not_mutate_builder():
     assert target._create_agent()._knowledge_trace_include_content is True
     with pytest.raises(TypeError, match="bool"):
         builder.build_deepeval_target(include_knowledge_content=1)
+
+
+
+def test_deepeval_target_captures_latest_inline_prompt():
+    builder = AgentBuilder().with_project_config(model="example")
+    first = builder.with_system_prompt("Prompt A").build_deepeval_target()
+    second = builder.with_system_prompt("Prompt B").build_deepeval_target()
+    assert first._create_agent()._system_prompt_override == "Prompt A"
+    assert second._create_agent()._system_prompt_override == "Prompt B"
+    builder.with_project_config(system_prompt="prompt-file.md")
+    assert first._create_agent()._system_prompt_override == "Prompt A"
+    assert second._create_agent()._system_prompt_override == "Prompt B"
+    assert builder.build_deepeval_target()._create_agent()._system_prompt_override is None
