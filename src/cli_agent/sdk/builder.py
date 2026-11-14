@@ -241,6 +241,27 @@ class AgentBuilder:
         self._knowledge_trace_include_content = include_content
         return self
 
+    def build_deepeval_target(
+        self, *, include_knowledge_content: bool = True,
+    ) -> "DeepEvalTarget":
+        """Optional DeepEval adapter; fresh SDK Agent for each golden.
+
+        Intended for use within EvaluationDataset.evals_iterator(). It does not
+        import DeepEval until the returned target's async ask() is called.
+        The builder is snapshotted: subsequent mutations won't affect the
+        target's SDK configuration.
+        """
+        if not isinstance(include_knowledge_content, bool):
+            raise TypeError("include_knowledge_content must be a bool")
+        from copy import copy
+        from .deepeval_adapter import DeepEvalTarget
+
+        snapshot = copy(self)
+        snapshot._run_options = dict(self._run_options)
+        snapshot._python_tools = list(self._python_tools)
+        snapshot.with_knowledge_trace(include_content=include_knowledge_content)
+        return DeepEvalTarget(snapshot.build)
+
     def build(self) -> "Agent":
         from .agent import Agent
         # An instance is a snapshot; subsequent builder updates do not affect it.
