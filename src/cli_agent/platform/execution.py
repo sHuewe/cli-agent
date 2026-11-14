@@ -491,6 +491,7 @@ def prepare_agent(
     dependencies: ExecutionDependencies | None = None,
     project_config: AppConfig | None = None,
     admin_config: AdminConfig | None = None,
+    system_prompt_override: str | None = None,
 ) -> PreparedAgent:
     """Shared runtime factory for CLI, flow and the Python SDK.
 
@@ -610,7 +611,10 @@ def prepare_agent(
     if options.retry_policy is not None:
         model_client = RetryingModelClient(model_client, options.retry_policy)
     from cli_agent.settings.project_config import read_project_system_prompt
-    project_system_prompt = read_project_system_prompt(workspace, config.agent.system_prompt)
+    project_system_prompt = (
+        system_prompt_override if system_prompt_override is not None
+        else read_project_system_prompt(workspace, config.agent.system_prompt)
+    )
     agent = deps.agent_type(
         workspace,
         model_client,

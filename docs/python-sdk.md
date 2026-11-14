@@ -77,6 +77,49 @@ Administrative policy selection in the SDK does **not** change the mandatory
 system policy used by `cli-agent`, `cli-agent-api` and `cli-agent-flow`.
 Host-list overrides **replace** the existing list rather than appending.
 
+### System prompt selection and prompt experiments
+
+The SDK never automatically merges `workspace/.cli-agent/project.toml`
+when an explicit `AgentBuilder.with_project_config()` is supplied.
+However, the `[agent].system_prompt` field of an **explicitly loaded**
+config file refers to a named UTF-8 prompt file directly inside the
+workspace's `.cli-agent/` directory.
+
+For controlled experiments, use the new **inline** SDK method:
+
+```python
+builder = (
+    AgentBuilder()
+    .with_project_config(path="config.toml", workspace=".")
+    .with_system_prompt("Be precise, avoid unsupported claims.")
+)
+agent = builder.build()
+target = builder.build_deepeval_target()
+```
+
+`with_project_config(system_prompt="research.md")` is also supported,
+but its value is a **filename**, not literal instructions. The runtime
+reads `workspace/.cli-agent/research.md` when the agent starts.
+
+System prompt precedence is based on explicit Builder calls:
+
+- `with_system_prompt(text)` replaces the current base system prompt
+  with literal text; blank strings and oversized input are rejected.
+- A later `with_project_config(path=...)` containing a file-backed
+  system prompt, or `with_project_config(system_prompt="file.md")`,
+  supersedes the inline override.
+- Calling `with_project_config()` **without** defining a system prompt
+  preserves any prior inline system prompt, even though the rest of that
+  project configuration is reloaded.
+- Explicit `with_project_config(system_prompt=None)` clears the previous
+  inline override as well as the file-backed prompt selection.
+- `build()` and `build_deepeval_target()` snapshot these settings;
+  later Builder mutations do not change already built agents.
+
+These calls customize the base system instructions only. Internal
+security, network, MCP tool permissions and host constraints are not
+weakened by overriding the base prompt.
+
 ### `with_admin_config(**overrides)`
 
 Exactly these six keys are accepted:
