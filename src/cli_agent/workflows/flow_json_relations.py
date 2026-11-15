@@ -159,6 +159,7 @@ def validate_partition(
     *, source: Any, result: Any,
     source_path: str, reference_template: str,
     distinct_path: str, min_distinct: int,
+    source_records_path: str | None = None,
     selected_path: str, references_path: str, excluded_path: str,
     source_members_path: str, result_members_path: str,
     source_status_path: str | None = "/status",
@@ -177,6 +178,11 @@ def validate_partition(
 
     Eligibility is expressed as a generic minimum number of distinct selected
     JSON values. Wildcard indices can be referenced as {0}, {1}, ...
+
+    Source status/warnings are inspected on source_records_path. By default
+    this is the parent record collection containing the selected source
+    groups, derived from source_path (e.g. /records/*/groups/* ->
+    /records/*). Override it for differently nested JSON schemas.
     """
     if type(min_distinct) is not int or min_distinct < 1:
         raise ValueError("min_distinct must be positive.")
@@ -229,13 +235,26 @@ def validate_partition(
         src[ref] = (len(set(values)) >= min_distinct, members(raw, source_members_path))
     if not src:
         raise ValueError("No source groups to validate.")
-    for item in (source.get("items", []) if isinstance(source, dict) else []):
-        if source_status_path is not None:
-            status = _value(item, source_status_path)
-            if status != "ok":
+    if source_status_path is not None or source_warnings_path is not None:
+        if source_records_path is None:
+            if not source_path.endswith("/*"):
+                raise ValueError(
+                    "source_records_path is required when source_path does not "
+                    "select a complete array of groups."
+                )
+            # Remove the final /<group-array-name>/* pair. This works for
+            # arbitrary outer field names and nested record collections.
+            source_records_path = source_path.rsplit("/", 2)[0]
+        records = _values(source, source_records_path)
+        if not records:
+            raise ValueError("No source status records selected.")
+        for item, _ in records:
+            record = _object(item, "source status record")
+            if source_status_path is not None:
+                if _value(record, source_status_path) != "ok":
+                    incomplete = True
+            if source_warnings_path is not None and _value(record, source_warnings_path):
                 incomplete = True
-        if source_warnings_path is not None and _value(item, source_warnings_path):
-            incomplete = True
 
     output = _object(result, "result")
     status = _value(output, result_status_path)
@@ -278,9 +297,10 @@ def validate_partition(
     if not isinstance(warnings, list):
         raise ValueError("Result warnings must be a JSON array.")
     validated = deepcopy(output)
-    if not result_status_path.startswith("/") or result_status_path.count("/") != 1:
+    status_tokens = _tokens(result_status_path)
+    if len(status_tokens) != 1 or status_tokens[0] == "*":
         raise ValueError("Result status path must name a top-level field.")
-    validated[result_status_path[1:]] = (
+    validated[status_tokens[0]] = (
         "needs_attention" if incomplete or status != "ok" or warnings else "ok"
     )
     validated["validated_group_count"] = len(src)
