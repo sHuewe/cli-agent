@@ -1200,6 +1200,11 @@ def test_sdk_tool_trace_validations_and_limits():
         collector.record(f"call-{index}", {})
         collector.pop(f"call-{index}")
     assert collector.total_records <= 256
+    assert collector.pop("never-recorded-after-cap") == (None, True)
+
+    oversized_nested = ToolArgumentCollector()
+    oversized_nested.record("large", {"nested": ["x" * 9000]})
+    assert oversized_nested.pop("large") == (None, True)
 
 
 def test_sdk_tool_trace_redaction_never_changes_runtime_payload():

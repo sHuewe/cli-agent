@@ -33,12 +33,16 @@ def validate_redact_keys(keys: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(keys)
 
 
+class _CaptureLimitExceeded(ValueError):
+    """Signal that a complete argument snapshot cannot be retained."""
+
+
 def _safe_value(value: Any, secrets: frozenset[str], depth: int = 0) -> Any:
     if depth > 16:
-        return "[DEPTH LIMIT]"
+        raise _CaptureLimitExceeded("tool arguments exceed nesting limit")
     if isinstance(value, dict):
         if len(value) > 2048:
-            return "[TOO MANY FIELDS]"
+            raise _CaptureLimitExceeded("tool arguments have too many fields")
         return {
             str(k): REDACTED if _normalize_key(str(k)) in secrets
             else _safe_value(v, secrets, depth + 1)
@@ -46,13 +50,17 @@ def _safe_value(value: Any, secrets: frozenset[str], depth: int = 0) -> Any:
         }
     if isinstance(value, (list, tuple)):
         if len(value) > 2048:
-            return "[TOO MANY ITEMS]"
+            raise _CaptureLimitExceeded("tool arguments have too many items")
         return [_safe_value(v, secrets, depth + 1) for v in value]
-    if value is None or isinstance(value, (str, int, bool)):
+    if isinstance(value, str):
+        if len(value) > MAX_ARGUMENT_BYTES:
+            raise _CaptureLimitExceeded("tool arguments contain oversized string")
+        return value
+    if value is None or isinstance(value, (int, bool)):
         return value
     if isinstance(value, float):
         return value if value == value and abs(value) < float("inf") else "[NONFINITE]"
-    return "[UNSERIALIZABLE]"
+    raise _CaptureLimitExceeded("tool arguments contain unsupported value")
 
 
 class ToolArgumentCollector:
@@ -72,6 +80,9 @@ class ToolArgumentCollector:
             return
         self.total_records += 1
         if isinstance(arguments, str):
+            if len(arguments) > MAX_ARGUMENT_BYTES * 4:
+                self._records[call_id] = (None, True)
+                return
             try:
                 arguments = json.loads(arguments)
             except (ValueError, TypeError):
@@ -80,8 +91,9 @@ class ToolArgumentCollector:
         if not isinstance(arguments, dict):
             self._records[call_id] = (None, True)
             return
-        redacted = _safe_value(arguments, self._secrets)
-        if not isinstance(redacted, dict):
+        try:
+            redacted = _safe_value(arguments, self._secrets)
+        except (_CaptureLimitExceeded, RecursionError, UnicodeError):
             self._records[call_id] = (None, True)
             return
         try:
@@ -97,4 +109,4 @@ class ToolArgumentCollector:
         self._records[call_id] = (redacted, False)
 
     def pop(self, call_id: str) -> tuple[dict | None, bool]:
-        return self._records.pop(call_id, (None, False))
+        return self._records.pop(call_id, (None, self.total_records >= MAX_TOOL_CALLS))
