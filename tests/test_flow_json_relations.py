@@ -270,3 +270,76 @@ def test_documented_toml_examples_parse_and_configure_partition_validation():
     assert not re.fullmatch(operation["result_id_pattern"], "../unsafe")
     assert operation["result_path_field"] == "/file"
     assert operation["result_path_template"] == "output/{id}.json"
+
+
+@pytest.mark.parametrize(("values", "expected_eligible"), [
+    ([2024, 2025], True),
+    ([2024, 2024], False),
+    ([True, 1], True),
+    ([False, 0], True),
+    ([None, "null"], True),
+    ([[1, 2], [1, 2]], False),
+    ([[1, 2], [2, 1]], True),
+    ([{"x": 1, "y": [True]}, {"y": [True], "x": 1}], False),
+    ([{"x": 1}, {"x": 2}], True),
+])
+def test_partition_eligibility_accepts_all_json_value_types(values, expected_eligible):
+    batch, result = _batch(), _result()
+    for member, value in zip(batch["items"][0]["groups"][0]["members"], values):
+        member["attribute"] = value
+    batch["items"][0]["groups"][1]["members"][0]["attribute"] = None
+
+    if expected_eligible:
+        checked = validate_partition(
+            source=batch, result=result, source_path="/items/*/groups/*",
+            reference_template="i{0:04d}-g{1:04d}",
+            distinct_path="/members/*/attribute", min_distinct=2,
+            selected_path="/groups/*", references_path="/source_refs/*",
+            excluded_path="/excluded/*", source_members_path="/members/*",
+            result_members_path="/members/*", member_fields=["/category", "/reference"],
+        )
+        assert checked["validated_eligible_count"] == 1
+    else:
+        with pytest.raises(ValueError, match="ineligible source reference"):
+            validate_partition(
+                source=batch, result=result, source_path="/items/*/groups/*",
+                reference_template="i{0:04d}-g{1:04d}",
+                distinct_path="/members/*/attribute", min_distinct=2,
+                selected_path="/groups/*", references_path="/source_refs/*",
+                excluded_path="/excluded/*", source_members_path="/members/*",
+                result_members_path="/members/*", member_fields=["/category", "/reference"],
+            )
+
+
+def test_partition_distinct_numeric_literal_values_are_lossless():
+    from cli_agent.workflows.flow_json_operations import _JsonNumber
+    batch, result = _batch(), _result()
+    first, second = batch["items"][0]["groups"][0]["members"]
+    first["value"] = _JsonNumber("1e100")
+    second["value"] = _JsonNumber("1.00e100")
+    batch["items"][0]["groups"][1]["members"][0]["value"] = 2
+    with pytest.raises(ValueError, match="ineligible source reference"):
+        validate_partition(
+            source=batch, result=result, source_path="/items/*/groups/*",
+            reference_template="i{0:04d}-g{1:04d}",
+            distinct_path="/members/*/value", min_distinct=2,
+            selected_path="/groups/*", references_path="/source_refs/*",
+            excluded_path="/excluded/*", source_members_path="/members/*",
+            result_members_path="/members/*", member_fields=["/category", "/reference"],
+        )
+
+
+def test_partition_distinct_values_reject_nonfinite_numbers():
+    batch, result = _batch(), _result()
+    batch["items"][0]["groups"][0]["members"][0]["attribute"] = float("nan")
+    batch["items"][0]["groups"][0]["members"][1]["attribute"] = 2025
+    batch["items"][0]["groups"][1]["members"][0]["attribute"] = None
+    with pytest.raises(ValueError, match="Nonfinite JSON number"):
+        validate_partition(
+            source=batch, result=result, source_path="/items/*/groups/*",
+            reference_template="i{0:04d}-g{1:04d}",
+            distinct_path="/members/*/attribute", min_distinct=2,
+            selected_path="/groups/*", references_path="/source_refs/*",
+            excluded_path="/excluded/*", source_members_path="/members/*",
+            result_members_path="/members/*", member_fields=["/category", "/reference"],
+        )
