@@ -6,8 +6,11 @@ Every record and reference is validated as untrusted JSON.
 from __future__ import annotations
 
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
+
+from cli_agent.workflows.flow_json_operations import _JsonNumber
 
 _MAX_SELECTED = 1_000_000
 _MAX_PATH_COMPONENTS = 32
@@ -90,6 +93,44 @@ def _unique(items: list[str], name: str) -> set[str]:
     if len(result) != len(items):
         raise ValueError(f"{name} contains duplicate IDs.")
     return result
+
+
+def _json_distinct_key(value: Any) -> tuple[Any, ...]:
+    """Hashable, type-preserving representation of a JSON value.
+
+    Strings and booleans are never confused with JSON numbers. Integer and
+    non-integer number literals compare by numeric value (1 == 1.0), just
+    as JSON has a single number type. Nested arrays retain order; object
+    property order is irrelevant. The runner's lossless _JsonNumber must
+    be handled BEFORE str, which it subclasses.
+    """
+    if value is None:
+        return ("null",)
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if isinstance(value, (int, float, _JsonNumber)):
+        try:
+            number = Decimal(str(value))
+        except InvalidOperation as exc:
+            raise ValueError("Invalid JSON number in distinct-value selector.") from exc
+        if not number.is_finite():
+            raise ValueError("Nonfinite JSON number in distinct-value selector.")
+        return ("number", number)
+    if isinstance(value, str):
+        return ("string", value)
+    if isinstance(value, list):
+        return ("array", tuple(_json_distinct_key(entry) for entry in value))
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError("JSON object keys must be strings.")
+        return (
+            "object",
+            tuple(sorted(
+                (key, _json_distinct_key(entry))
+                for key, entry in value.items()
+            )),
+        )
+    raise ValueError(f"Unsupported JSON distinct-value type: {type(value).__name__}")
 
 
 def project_fields(record: Any, *, fields: dict[str, str]) -> dict[str, Any]:
@@ -233,8 +274,10 @@ def validate_partition(
             raise ValueError("Invalid source reference template.") from exc
         if not ref or len(ref) > 128 or ref in src:
             raise ValueError("Duplicate/invalid source group reference.")
-        # Distinct-value predicate is structural, independent of domain.
-        values = _id_list(raw, distinct_path, "distinct values")
+        # Eligibility accepts any JSON value, not merely string reference IDs.
+        # Canonical typed keys distinguish booleans/strings from numbers and
+        # support unhashable arrays and objects without relying on repr().
+        values = [_json_distinct_key(value) for value, _ in _values(raw, distinct_path)]
         src[ref] = (len(set(values)) >= min_distinct, members(raw, source_members_path))
     if not src:
         raise ValueError("No source groups to validate.")
