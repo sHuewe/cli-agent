@@ -1540,7 +1540,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items", "fields", "items_path", "item_id_path", "item_key_path", "mapping_path", "mapping_id_path", "mapping_alias_path", "id_prefix", "require_all_aliases", "source_field", "target_field", "output_field", "wrap_batches", "source_input", "source_path", "reference_template", "distinct_path", "min_distinct", "selected_path", "references_path", "excluded_path", "source_members_path", "result_members_path", "source_status_path", "source_warnings_path", "result_status_path", "result_warnings_path", "result_id_path", "result_id_prefix", "member_fields", "result_path_field", "result_path_template"
+                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items", "fields", "items_path", "item_id_path", "item_key_path", "mapping_path", "mapping_id_path", "mapping_alias_path", "id_prefix", "require_all_aliases", "source_field", "target_field", "output_field", "wrap_batches", "source_input", "source_path", "reference_template", "distinct_path", "min_distinct", "selected_path", "references_path", "excluded_path", "source_members_path", "result_members_path", "source_status_path", "source_warnings_path", "result_status_path", "result_warnings_path", "result_id_path", "result_id_prefix", "result_id_pattern", "member_fields", "member_patterns", "result_path_field", "result_path_template"
                 }
                 or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "json_project", "json_join_aliases", "json_validate_partition"}
                 or not isinstance(raw_json_operation.get("input"), str)
@@ -1662,6 +1662,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                             or not isinstance(raw_json_operation["member_fields"], list)
                             or not raw_json_operation["member_fields"]
                             or any(not isinstance(v, str) for v in raw_json_operation["member_fields"])
+                            or (raw_json_operation.get("member_patterns") is not None and
+                                (not isinstance(raw_json_operation["member_patterns"], dict) or
+                                 any(not isinstance(k, str) or not isinstance(v, str) for k, v in raw_json_operation["member_patterns"].items())))
+                            or (raw_json_operation.get("result_id_pattern") is not None and
+                                not isinstance(raw_json_operation["result_id_pattern"], str))
                             or any(not isinstance(raw_json_operation[k], str) for k in required - {"min_distinct", "member_fields"})):
                         raise ValueError("json_validate_partition requires generic ID selectors and source_input.")
             if child_flow is not None or prompt_value is not None:
@@ -5285,6 +5290,8 @@ def _execute_json_step(
             result_id_path=operation.get("result_id_path"),
             result_id_prefix=operation.get("result_id_prefix", ""),
             member_fields=operation["member_fields"],
+            result_id_pattern=operation.get("result_id_pattern"),
+            member_patterns=operation.get("member_patterns"),
             result_path_field=operation.get("result_path_field"),
             result_path_template=operation.get("result_path_template"),
         )
