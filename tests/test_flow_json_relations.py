@@ -343,3 +343,51 @@ def test_partition_distinct_values_reject_nonfinite_numbers():
             excluded_path="/excluded/*", source_members_path="/members/*",
             result_members_path="/members/*", member_fields=["/category", "/reference"],
         )
+
+
+@pytest.mark.parametrize("value", [
+    1.5,
+    1,
+    True,
+    None,
+])
+def test_reference_ids_require_real_json_strings(value):
+    from cli_agent.workflows.flow_json_operations import _JsonNumber
+    for raw in (value, _JsonNumber("1.5")):
+        items = [{"entries": [{"id": "item", "join_key": raw}]}]
+        mapping = {"groups": [{"id": "destination", "aliases": ["1.5"]}]}
+        with pytest.raises(ValueError, match="nonempty JSON string"):
+            join_by_alias(
+                items=items, mapping=mapping,
+                items_path="/*/entries/*", item_id_path="/id",
+                item_key_path="/join_key", mapping_path="/groups/*",
+                mapping_id_path="/id", mapping_alias_path="/aliases/*",
+            )
+
+
+def test_partition_rejects_numeric_member_masquerading_as_string():
+    from cli_agent.workflows.flow_json_operations import _JsonNumber
+    batch, result = _batch(), _result()
+    # The parser keeps the number 1.5 in _JsonNumber (a str subclass).
+    # It must NOT compare equal to a genuine JSON string "1.5".
+    batch["items"][0]["groups"][0]["members"][0]["reference"] = "1.5"
+    result["groups"][0]["members"][0]["reference"] = _JsonNumber("1.5")
+    with pytest.raises(ValueError, match="nonempty JSON string"):
+        _validate(batch, result)
+
+
+def test_partition_rejects_numeric_reference_ids_and_aliases():
+    from cli_agent.workflows.flow_json_operations import _JsonNumber
+    batch, result = _batch(), _result()
+    result["groups"][0]["source_refs"] = [_JsonNumber("1.5")]
+    with pytest.raises(ValueError, match="invalid ID"):
+        _validate(batch, result)
+    items = [{"entries": [{"id": "item", "join_key": "tag"}]}]
+    mapping = {"groups": [{"id": "destination", "aliases": [_JsonNumber("1.5")]}]}
+    with pytest.raises(ValueError, match="invalid ID"):
+        join_by_alias(
+            items=items, mapping=mapping,
+            items_path="/*/entries/*", item_id_path="/id",
+            item_key_path="/join_key", mapping_path="/groups/*",
+            mapping_id_path="/id", mapping_alias_path="/aliases/*",
+        )
