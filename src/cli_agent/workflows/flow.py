@@ -1540,7 +1540,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items", "fields", "items_path", "item_id_path", "item_key_path", "mapping_path", "mapping_id_path", "mapping_alias_path", "id_prefix", "require_all_aliases", "source_field", "target_field", "output_field", "wrap_batches", "source_input", "source_path", "reference_template", "distinct_path", "min_distinct", "selected_path", "references_path", "excluded_path", "source_members_path", "result_members_path", "source_status_path", "source_warnings_path", "result_status_path", "result_warnings_path", "result_id_path", "result_id_prefix", "result_id_pattern", "member_fields", "member_patterns", "result_path_field", "result_path_template"
+                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items", "fields", "items_path", "item_id_path", "item_key_path", "mapping_path", "mapping_id_path", "mapping_alias_path", "id_prefix", "require_all_aliases", "source_field", "target_field", "output_field", "wrap_batches", "source_input", "source_path", "source_records_path", "reference_template", "distinct_path", "min_distinct", "selected_path", "references_path", "excluded_path", "source_members_path", "result_members_path", "source_status_path", "source_warnings_path", "result_status_path", "result_warnings_path", "result_id_path", "result_id_prefix", "result_id_pattern", "member_fields", "member_patterns", "result_path_field", "result_path_template"
                 }
                 or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "json_project", "json_join_aliases", "json_validate_partition"}
                 or not isinstance(raw_json_operation.get("input"), str)
@@ -1651,6 +1651,10 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                         raise ValueError("json_join_aliases.id_prefix supports only flow inputs.")
                     _validate_input_references([prefix], declared_inputs=inputs, field="id_prefix")
                 if kind == "json_validate_partition":
+                    if ("source_records_path" in raw_json_operation
+                            and (not isinstance(raw_json_operation["source_records_path"], str)
+                                 or not raw_json_operation["source_records_path"].startswith("/"))):
+                        raise ValueError("json_validate_partition.source_records_path must be a JSON pointer.")
                     required = {"source_input", "source_path", "reference_template",
                                 "distinct_path", "min_distinct", "selected_path",
                                 "references_path", "excluded_path", "source_members_path",
@@ -5275,6 +5279,7 @@ def _execute_json_step(
         transformed = validate_partition(
             source=flow_input[operation["source_input"]], result=source,
             source_path=operation["source_path"],
+            source_records_path=operation.get("source_records_path"),
             reference_template=operation["reference_template"],
             distinct_path=operation["distinct_path"],
             min_distinct=operation["min_distinct"],
