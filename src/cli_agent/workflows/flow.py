@@ -43,9 +43,8 @@ from cli_agent.workflows.flow_json_operations import transform_json
 from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest, prepare_doctrine_concept_batches, assemble_doctrine_concept_plan, prepare_section_outline_tasks, assemble_section_outlines, build_doctrine_taxonomy_profile, prepare_doctrine_consolidation_batches, assemble_doctrine_consolidation
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
-from cli_agent.workflows.flow_json_okf_joins import (
-    group_consolidated_knowledge, validate_theme_registry,
-    prepare_okf_scan_tasks, assemble_okf_section_outline,
+from cli_agent.workflows.flow_json_relations import (
+    project_fields, join_by_alias, validate_partition,
 )
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 from cli_agent.platform.logging_setup import configure_logging
@@ -1398,17 +1397,19 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
-            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "target_chars", "max_sections"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "target_chars", "max_sections", "always_sections"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
                 raise ValueError("filesystem_operation requires kind=inventory and directory.")
             if op["kind"] == "markdown_sections":
                 if not isinstance(op.get("source_path"), str) or not op["source_path"]:
                     raise ValueError("markdown_sections.source_path is missing.")
-                if set(op) - {"kind", "source_path", "target_chars", "max_sections"}:
+                if set(op) - {"kind", "source_path", "target_chars", "max_sections", "always_sections"}:
                     raise ValueError("markdown_sections permits only source_path, target_chars, max_sections.")
                 if type(op.get("target_chars", 30000)) is not int or not 4000 <= op.get("target_chars", 30000) <= 100000:
                     raise ValueError("markdown_sections.target_chars must be between 4000 and 100000.")
                 if type(op.get("max_sections", 32)) is not int or not 1 <= op.get("max_sections", 32) <= 512:
                     raise ValueError("markdown_sections.max_sections must be between 1 and 512.")
+                if type(op.get("always_sections", False)) is not bool:
+                    raise ValueError("markdown_sections.always_sections must be boolean.")
             if op["kind"] == "checkpoint_status":
                 if (not isinstance(op.get("paths"), list) or not 1 <= len(op["paths"]) <= 16
                         or any(not isinstance(p, str) or not p.strip() for p in op["paths"])):
@@ -1539,9 +1540,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items"
+                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items", "fields", "items_path", "item_id_path", "item_key_path", "mapping_path", "mapping_id_path", "mapping_alias_path", "id_prefix", "require_all_aliases", "source_field", "target_field", "output_field", "wrap_batches", "source_input", "source_path", "reference_template", "distinct_path", "min_distinct", "selected_path", "references_path", "excluded_path", "source_members_path", "result_members_path", "source_status_path", "source_warnings_path", "result_status_path", "result_warnings_path", "result_id_path", "result_id_prefix", "member_fields", "result_path_field", "result_path_template"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "group_consolidated_items", "validate_theme_registry", "prepare_okf_scan_tasks", "assemble_okf_outline"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "json_project", "json_join_aliases", "json_validate_partition"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
@@ -1559,7 +1560,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
                         or ref not in {step.step_id for step in steps}):
                     raise ValueError("batches_step must be a prior flow step.")
-            if raw_json_operation["kind"] in {"assemble_section_outlines", "assemble_okf_outline"}:
+            if raw_json_operation["kind"] == "assemble_section_outlines":
                 for key in ("expected_source_path", "expected_source_slug"):
                     value = raw_json_operation.get(key)
                     if not isinstance(value, str) or "${" in _INPUT_EXPR.sub("", value):
@@ -1623,20 +1624,46 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             required_sources = (
                 {"routes", "assignments", "topics"}
                 if raw_json_operation["kind"] == "group_items" else
-                {"scans", "sections"}
-                if raw_json_operation["kind"] == "assemble_okf_outline" else
-                {"scans", "sections", "consolidated"}
-                if raw_json_operation["kind"] == "group_consolidated_items" else
-                {"registry"}
-                if raw_json_operation["kind"] == "validate_theme_registry" else
                 {"plan", "results"}
                 if raw_json_operation["kind"] == "verify_coverage" else
                 {"plan", "navigation"}
                 if raw_json_operation["kind"] == "build_okf_manifest" else set()
             )
-            if required_sources and (raw_json_operation["input"] != ("plan" if raw_json_operation["kind"] == "build_okf_manifest" else "scans" if raw_json_operation["kind"] in {"group_consolidated_items", "assemble_okf_outline"} else "registry" if raw_json_operation["kind"] == "validate_theme_registry" else sorted(required_sources)[0])
+            if required_sources and (raw_json_operation["input"] != ("plan" if raw_json_operation["kind"] == "build_okf_manifest" else sorted(required_sources)[0])
                                      or not required_sources <= set(raw.get("json_inputs", {}))):
                 raise ValueError("JSON grouping operation requires the specified json_inputs.")
+            kind = raw_json_operation["kind"]
+            if kind in {"json_project", "json_join_aliases", "json_validate_partition"}:
+                fieldmap = raw_json_operation.get("fields")
+                if kind == "json_project":
+                    if (not isinstance(fieldmap, dict) or not fieldmap
+                            or any(not isinstance(k, str) or not k or not isinstance(v, str) for k, v in fieldmap.items())):
+                        raise ValueError("json_project requires fields mapping.")
+                if kind == "json_join_aliases":
+                    required = {"items_path", "item_id_path", "item_key_path",
+                                "mapping_path", "mapping_id_path", "mapping_alias_path"}
+                    if (not required <= set(raw_json_operation)
+                            or not all(isinstance(raw_json_operation[k], str) for k in required)
+                            or "mapping" not in raw.get("json_inputs", {})):
+                        raise ValueError("json_join_aliases requires mapping JSON and ID selectors.")
+                    prefix = raw_json_operation.get("id_prefix", "")
+                    if not isinstance(prefix, str) or "${" in _INPUT_EXPR.sub("", prefix):
+                        raise ValueError("json_join_aliases.id_prefix supports only flow inputs.")
+                    _validate_input_references([prefix], declared_inputs=inputs, field="id_prefix")
+                if kind == "json_validate_partition":
+                    required = {"source_input", "source_path", "reference_template",
+                                "distinct_path", "min_distinct", "selected_path",
+                                "references_path", "excluded_path", "source_members_path",
+                                "result_members_path", "member_fields"}
+                    if (not required <= set(raw_json_operation)
+                            or raw_json_operation["source_input"] not in inputs
+                            or type(raw_json_operation["min_distinct"]) is not int
+                            or not 1 <= raw_json_operation["min_distinct"] <= 100
+                            or not isinstance(raw_json_operation["member_fields"], list)
+                            or not raw_json_operation["member_fields"]
+                            or any(not isinstance(v, str) for v in raw_json_operation["member_fields"])
+                            or any(not isinstance(raw_json_operation[k], str) for k in required - {"min_distinct", "member_fields"})):
+                        raise ValueError("json_validate_partition requires generic ID selectors and source_input.")
             if child_flow is not None or prompt_value is not None:
                 raise ValueError(
                     "json_operation must not be combined with prompt_file or flow."
@@ -5156,6 +5183,7 @@ def _execute_filesystem_step(
             workspace, source_path,
             target_chars=op.get("target_chars", 30000),
             max_sections=op.get("max_sections", 32),
+            always_sections=op.get("always_sections", False),
         )
         answer = _json_dumps_preserving_numbers(transformed)
         target = prepare_output_target(workspace, output, overwrite=step.overwrite_output)
@@ -5219,14 +5247,46 @@ def _execute_json_step(
     source = _parse_structured_output(
         json_values[operation["input"]], step_id=step.step_id,
     )
-    if operation["kind"] == "prepare_okf_scan_tasks":
-        transformed = prepare_okf_scan_tasks(source)
-    elif operation["kind"] == "assemble_okf_outline":
-        transformed = assemble_okf_section_outline(
-            scans=source,
-            sections=_parse_structured_output(json_values["sections"], step_id=step.step_id),
-            source_path=_render_input_text(operation["expected_source_path"], flow_input),
-            source_slug=_render_input_text(operation["expected_source_slug"], flow_input),
+    if operation["kind"] == "json_project":
+        transformed = project_fields(source, fields=operation["fields"])
+    elif operation["kind"] == "json_join_aliases":
+        transformed = join_by_alias(
+            items=source,
+            mapping=_parse_structured_output(json_values["mapping"], step_id=step.step_id),
+            items_path=operation["items_path"],
+            item_id_path=operation["item_id_path"],
+            item_key_path=operation["item_key_path"],
+            mapping_path=operation["mapping_path"],
+            mapping_id_path=operation["mapping_id_path"],
+            mapping_alias_path=operation["mapping_alias_path"],
+            id_prefix=_render_input_text(operation.get("id_prefix", ""), flow_input),
+            require_all_aliases=operation.get("require_all_aliases", True),
+            source_field=operation.get("source_field", "item_id"),
+            target_field=operation.get("target_field", "topic_id"),
+            output_field=operation.get("output_field", "assignments"),
+            wrap_batches=operation.get("wrap_batches", True),
+        )
+    elif operation["kind"] == "json_validate_partition":
+        transformed = validate_partition(
+            source=flow_input[operation["source_input"]], result=source,
+            source_path=operation["source_path"],
+            reference_template=operation["reference_template"],
+            distinct_path=operation["distinct_path"],
+            min_distinct=operation["min_distinct"],
+            selected_path=operation["selected_path"],
+            references_path=operation["references_path"],
+            excluded_path=operation["excluded_path"],
+            source_members_path=operation["source_members_path"],
+            result_members_path=operation["result_members_path"],
+            source_status_path=operation.get("source_status_path", "/status"),
+            source_warnings_path=operation.get("source_warnings_path", "/warnings"),
+            result_status_path=operation.get("result_status_path", "/status"),
+            result_warnings_path=operation.get("result_warnings_path", "/warnings"),
+            result_id_path=operation.get("result_id_path"),
+            result_id_prefix=operation.get("result_id_prefix", ""),
+            member_fields=operation["member_fields"],
+            result_path_field=operation.get("result_path_field"),
+            result_path_template=operation.get("result_path_template"),
         )
     elif operation["kind"] == "doctrine_taxonomy_profile":
         transformed = build_doctrine_taxonomy_profile(source)
@@ -5266,18 +5326,6 @@ def _execute_json_step(
             structure=source,
             results=_parse_structured_output(outputs[operation["results_step"]], step_id=step.step_id),
             batches=_parse_structured_output(outputs[operation["batches_step"]], step_id=step.step_id),
-        )
-    elif operation["kind"] == "group_consolidated_items":
-        transformed = group_consolidated_knowledge(
-            scans=source,
-            sections=_parse_structured_output(json_values["sections"], step_id=step.step_id),
-            consolidated=_parse_structured_output(json_values["consolidated"], step_id=step.step_id),
-            max_concept_bytes=operation.get("max_concept_bytes", 80000),
-            serializer=_json_dumps_preserving_numbers,
-        )
-    elif operation["kind"] == "validate_theme_registry":
-        transformed = validate_theme_registry(
-            batch=flow_input.get("batch"), registry=source,
         )
     elif operation["kind"] == "group_items":
         transformed = group_assigned_items(
