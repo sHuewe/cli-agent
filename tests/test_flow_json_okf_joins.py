@@ -16,6 +16,7 @@ def _scan(sid: str, start: int, end: int, key: str, item_id: str) -> dict:
         "folder_id": "doc-a", "source_path": "doctrines/a.md",
         "section_id": sid, "chunk_id": sid,
         "start_line": start, "end_line": end,
+        "scan_checks": {"normative_sweep": "completed", "descriptive_sweep": "completed"},
         "candidate_concepts": [{"topic_key": key}],
         "knowledge_items": [{
             "id": f"{sid}:{item_id}", "topic_key": key, "kind": "rule",
@@ -217,3 +218,24 @@ def test_batch_arrays_caps_number_of_complete_entries_without_dropping_anything(
         len(fragment["groups"]) <= 5
         for batch in result["batches"] for fragment in batch["items"]
     )
+
+def test_unsupported_candidate_topic_fails_before_consolidation():
+    from cli_agent.workflows.flow_json_okf_joins import assemble_okf_section_outline
+    sections = {"source_path": "doctrines/a.md", "mode": "direct", "total_lines": 10}
+    scan = _scan("direct", 1, 10, "direct-t001", "rule001")
+    scan["candidate_concepts"] = [
+        {"topic_key": "direct-t001", "name": "Grounded", "description": "Claim"},
+        {"topic_key": "direct-t002", "name": "Unsubstantiated", "description": "None"},
+    ]
+    with pytest.raises(ValueError, match="no supported knowledge item"):
+        assemble_okf_section_outline(
+            sections=sections, scans=[scan],
+            source_path="doctrines/a.md", source_slug="doc-a",
+        )
+
+
+def test_registry_rejects_path_traversal_from_upstream_group():
+    batch, result = _registry_batch(), _registry_result()
+    batch["items"][0]["groups"][0]["members"][0]["path"] = "doctrines/a/../foo.md"
+    with pytest.raises(ValueError, match="Invalid or inconsistent theme member path"):
+        validate_theme_registry(batch=batch, registry=result)
