@@ -88,7 +88,9 @@ excluded_path = "/excluded_refs/*"
 source_members_path = "/members/*"
 result_members_path = "/members/*"
 result_id_path = "/id"
-result_id_pattern = '^[a-z][a-z0-9-]*
+result_id_pattern = '[a-z][a-z0-9-]*'
+result_path_field = "/file"
+result_path_template = "output/{id}.json"
 member_fields = ["/owner", "/path"]
 [steps.json_operation.member_patterns]
 "/owner" = '^[a-z0-9-]+$'
