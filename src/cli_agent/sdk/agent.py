@@ -17,6 +17,7 @@ from cli_agent.settings.config import AppConfig
 from cli_agent.settings.admin_config import AdminConfig
 from cli_agent.runtime.knowledge_trace import KnowledgeTrace, KnowledgeTraceCollector
 from .events import AgentEvent, ToolCallRecord
+from .tool_trace import ToolArgumentCollector
 from .usage import UsageSummary, summarize_usage, usage_history
 from .tools import ToolInfo, available_tools
 from .mcp import McpInterface, execute_direct_tool
@@ -45,6 +46,8 @@ class Agent:
         event_callback: Any = None, python_tools: tuple = (),
         knowledge_trace_include_content: bool | None = None,
         system_prompt_override: str | None = None,
+        tool_trace_include_arguments: bool = False,
+        tool_trace_redact_keys: tuple[str, ...] = (),
     ) -> None:
         self._config = project_config
         self._policy = admin_config
@@ -54,6 +57,8 @@ class Agent:
         self._python_tools = python_tools
         self._knowledge_trace_include_content = knowledge_trace_include_content
         self._system_prompt_override = system_prompt_override
+        self._tool_trace_include_arguments = tool_trace_include_arguments
+        self._tool_trace_redact_keys = tool_trace_redact_keys
         self.mcp = McpInterface(self)
         self._event_queue: asyncio.Queue[AgentEvent | None] | None = None
         self._event_worker: asyncio.Task[None] | None = None
@@ -94,6 +99,10 @@ class Agent:
         starts: dict[str, float] = {}
         open_tools: dict[str, str] = {}
         calls: list[ToolCallRecord] = []
+        argument_collector = (
+            ToolArgumentCollector(extra_redact_keys=self._tool_trace_redact_keys)
+            if self._tool_trace_include_arguments else None
+        )
         published: list[AgentArtifact] = []
         published_bytes = 0
 
@@ -133,9 +142,14 @@ class Agent:
             if kind == "tool_started" and call_id:
                 open_tools[call_id] = event.tool or ""
             elif kind == "tool_finished" and call_id:
+                args, truncated = (
+                    argument_collector.pop(call_id)
+                    if argument_collector is not None else (None, False)
+                )
                 calls.append(ToolCallRecord(
                     name=open_tools.pop(call_id, event.tool or ""), call_id=call_id,
                     status=event.status or "finished", duration_ms=duration_ms,
+                    input_parameters=args, arguments_truncated=truncated,
                 ))
             if self._event_queue is not None and self._event_callback is not None:
                 try:
@@ -162,8 +176,13 @@ class Agent:
         client = getattr(runtime, "model_client", None)
         before = len(usage_history(client))
         old_callback = getattr(runtime, "event_callback", None)
+        prior_recorder = getattr(runtime, "_sdk_tool_argument_recorder", None)
         runtime.event_callback = emit
         runtime._sdk_event_reporting = True
+        if argument_collector is not None:
+            # Separate callback restricted to SDK-invoked runtime. Never emit
+            # raw parameters via AgentEvent or frontend notifications.
+            runtime._sdk_tool_argument_recorder = argument_collector.record
         collector = (
             KnowledgeTraceCollector(include_content=self._knowledge_trace_include_content)
             if self._knowledge_trace_include_content is not None else None
@@ -181,10 +200,18 @@ class Agent:
             await emit("run_finished", {"status": status})
             runtime.event_callback = old_callback
             runtime._sdk_event_reporting = False
+            runtime._sdk_tool_argument_recorder = prior_recorder
             if collector is not None:
                 runtime._sdk_knowledge_trace_collector = None
         for call_id, name in open_tools.items():
-            calls.append(ToolCallRecord(name=name, call_id=call_id, status="interrupted"))
+            args, truncated = (
+                argument_collector.pop(call_id)
+                if argument_collector is not None else (None, False)
+            )
+            calls.append(ToolCallRecord(
+                name=name, call_id=call_id, status="interrupted",
+                input_parameters=args, arguments_truncated=truncated,
+            ))
         history = usage_history(client)
         parsed = None
         # The runtime handles commands locally and returns human-readable

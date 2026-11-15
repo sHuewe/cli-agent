@@ -535,6 +535,9 @@ async def run_model_loop(
                 )
             status = "success"
             debug_args = (internal_call.get("function") or {}).get("arguments")
+            recorder = getattr(agent, "_sdk_tool_argument_recorder", None)
+            if recorder is not None:
+                recorder(event_id, debug_args)
             debug_error = None
             previous_count = len(evidence.evidences)
             previous_compacted = len(evidence.compacted)
@@ -606,6 +609,9 @@ async def run_model_loop(
             callback = getattr(agent, "event_callback", None)
             if callback is not None:
                 await callback("tool_started", {"call_id": event_id, "tool": START_SUB_RUN})
+            recorder = getattr(agent, "_sdk_tool_argument_recorder", None)
+            if recorder is not None:
+                recorder(event_id, sub_call["function"].get("arguments"))
             status = "success"
             try:
                 args = sub_call["function"].get("arguments") or {}
@@ -625,6 +631,9 @@ async def run_model_loop(
             event_callback = getattr(agent, "event_callback", None)
             if event_callback is not None:
                 await event_callback("tool_started", {"call_id": event_id, "tool": PUBLISH_TOOL_NAME})
+            recorder = getattr(agent, "_sdk_tool_argument_recorder", None)
+            if recorder is not None:
+                recorder(event_id, (publish_call.get("function") or {}).get("arguments"))
             status = "success"
             try:
                 raw_args = (publish_call.get("function") or {}).get("arguments") or {}
