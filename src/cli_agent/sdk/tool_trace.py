@@ -63,12 +63,14 @@ class ToolArgumentCollector:
         self._secrets = frozenset(_normalize_key(k) for k in keys)
         self._records: dict[str, tuple[dict | None, bool]] = {}
         self._bytes = 0
+        self.total_records = 0
 
     def record(self, call_id: str, arguments: Any) -> None:
         if call_id in self._records:
             return
-        if len(self._records) >= MAX_TOOL_CALLS:
+        if self.total_records >= MAX_TOOL_CALLS:
             return
+        self.total_records += 1
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
