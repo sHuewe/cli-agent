@@ -308,3 +308,78 @@ path = "state/first.json"
     asyncio.run(run_flow(definition, workspace=tmp_path))
     assert len(prompts) == 2
     assert json.loads(prompts[1].removeprefix("Read: ")) == {"id": "crlf"}
+
+
+def test_partition_loader_allows_root_source_records_pointer(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    definition = _flow(tmp_path, """
+version = 1
+inputs = ["batch"]
+[[steps]]
+id = "source"
+prompt_file = "prompt.md"
+output = "source.json"
+response_format = "json"
+[[steps]]
+id = "validate"
+output = "validated.json"
+[steps.json_operation]
+kind = "json_validate_partition"
+input = "registry"
+source_input = "batch"
+source_path = "/payload/groups/*"
+source_records_path = ""
+reference_template = "i{0:04d}-g{1:04d}"
+distinct_path = "/members/*/category"
+min_distinct = 2
+selected_path = "/groups/*"
+references_path = "/refs/*"
+excluded_path = "/excluded/*"
+source_members_path = "/members/*"
+result_members_path = "/members/*"
+member_fields = ["/category", "/reference"]
+[steps.json_inputs.registry]
+path = "source.json"
+""")
+    assert definition.steps[1].json_operation["source_records_path"] == ""
+
+
+@pytest.mark.parametrize("dependent_lines", [
+    'result_id_pattern = "^[a-z]+$"',
+    'result_path_field = "/file"\nresult_path_template = "out/{id}.json"',
+    'result_id_prefix = "prefix-"',
+])
+def test_partition_loader_requires_id_selector_for_id_checks(
+    tmp_path: Path, dependent_lines: str,
+) -> None:
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    body = """
+version = 1
+inputs = ["batch"]
+[[steps]]
+id = "source"
+prompt_file = "prompt.md"
+output = "source.json"
+[[steps]]
+id = "validate"
+output = "validated.json"
+[steps.json_operation]
+kind = "json_validate_partition"
+input = "registry"
+source_input = "batch"
+source_path = "/items/*/groups/*"
+reference_template = "i{0:04d}-g{1:04d}"
+distinct_path = "/members/*/category"
+min_distinct = 2
+selected_path = "/groups/*"
+references_path = "/refs/*"
+excluded_path = "/excluded/*"
+source_members_path = "/members/*"
+result_members_path = "/members/*"
+member_fields = ["/category", "/reference"]
+""" + dependent_lines + """
+[steps.json_inputs.registry]
+path = "source.json"
+"""
+    with pytest.raises(ValueError, match="result_id_path is required"):
+        _flow(tmp_path, body)
