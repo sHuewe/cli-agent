@@ -231,6 +231,17 @@ def validate_partition(
         raise ValueError("reference_template must be nonempty.")
     if (result_path_field is None) != (result_path_template is None):
         raise ValueError("Both result path options are required together.")
+    if result_id_path is None and (
+        result_id_pattern is not None
+        or result_path_field is not None
+        or result_id_prefix
+    ):
+        raise ValueError(
+            "result_id_path is required for ID patterns, ID prefixes and output path checks."
+        )
+    if source_records_path is not None:
+        # RFC 6901 includes the empty pointer, which selects the JSON root.
+        _tokens(source_records_path)
     status_tokens = _tokens(result_status_path)
     if len(status_tokens) != 1 or status_tokens[0] == "*":
         raise ValueError("Result status path must name a top-level field.")
