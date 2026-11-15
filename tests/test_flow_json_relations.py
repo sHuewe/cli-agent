@@ -163,3 +163,91 @@ def test_generic_regex_constraints_reject_unsafe_output_ids_and_members():
             member_fields=["/category", "/reference"],
             member_patterns={"/reference": r"^[a-z]+/[a-z]+$"},
         )
+
+
+def test_partition_checks_status_with_renamed_source_records():
+    batch, out = _batch(), _result()
+    batch["records"] = batch.pop("items")
+    batch["records"][0]["status"] = "needs_attention"
+    with pytest.raises(ValueError, match="preserve incomplete"):
+        validate_partition(
+            source=batch, result=out,
+            source_path="/records/*/groups/*",
+            reference_template="i{0:04d}-g{1:04d}",
+            distinct_path="/members/*/category", min_distinct=2,
+            selected_path="/groups/*", references_path="/source_refs/*",
+            excluded_path="/excluded/*", source_members_path="/members/*",
+            result_members_path="/members/*", result_id_path="/id",
+            member_fields=["/category", "/reference"],
+        )
+
+
+def test_partition_checks_nested_and_explicit_source_status_records():
+    batch, out = _batch(), _result()
+    batch = {"payload": {"blocks": batch["items"]}}
+    batch["payload"]["blocks"][0]["warnings"] = ["source incomplete"]
+    kwargs = dict(
+        source=batch, result=out, source_path="/payload/blocks/*/groups/*",
+        reference_template="i{0:04d}-g{1:04d}",
+        distinct_path="/members/*/category", min_distinct=2,
+        selected_path="/groups/*", references_path="/source_refs/*",
+        excluded_path="/excluded/*", source_members_path="/members/*",
+        result_members_path="/members/*", result_id_path="/id",
+        member_fields=["/category", "/reference"],
+    )
+    with pytest.raises(ValueError, match="preserve incomplete"):
+        validate_partition(**kwargs)
+    # Explicit record location is an alternative to the inferred parent.
+    with pytest.raises(ValueError, match="preserve incomplete"):
+        validate_partition(
+            **{**kwargs, "source_records_path": "/payload/blocks/*"}
+        )
+
+
+@pytest.mark.parametrize("status_field,status_pointer", [
+    ("state/status", "/state~1status"),
+    ("state~status", "/state~0status"),
+])
+def test_partition_writes_decoded_json_pointer_status_field(status_field, status_pointer):
+    batch, out = _batch(), _result()
+    out[status_field] = "ok"
+    out["warnings"] = ["Review needed"]
+    verified = validate_partition(
+        source=batch, result=out, source_path="/items/*/groups/*",
+        reference_template="i{0:04d}-g{1:04d}",
+        distinct_path="/members/*/category", min_distinct=2,
+        selected_path="/groups/*", references_path="/source_refs/*",
+        excluded_path="/excluded/*", source_members_path="/members/*",
+        result_members_path="/members/*", result_id_path="/id",
+        result_status_path=status_pointer,
+        member_fields=["/category", "/reference"],
+    )
+    assert verified[status_field] == "needs_attention"
+    assert out[status_field] == "ok"
+    assert status_pointer[1:] not in verified or status_pointer[1:] == status_field
+
+
+def test_partition_rejects_invalid_status_pointer_and_missing_source_records():
+    batch, out = _batch(), _result()
+    with pytest.raises(ValueError, match="top-level field"):
+        validate_partition(
+            source=batch, result=out, source_path="/items/*/groups/*",
+            reference_template="i{0:04d}-g{1:04d}",
+            distinct_path="/members/*/category", min_distinct=2,
+            selected_path="/groups/*", references_path="/source_refs/*",
+            excluded_path="/excluded/*", source_members_path="/members/*",
+            result_members_path="/members/*", result_id_path="/id",
+            result_status_path="/status/extra",
+            member_fields=["/category", "/reference"],
+        )
+    with pytest.raises(ValueError, match="does not resolve"):
+        validate_partition(
+            source=batch, result=out, source_path="/items/*/groups/*",
+            source_records_path="/unavailable/*",
+            reference_template="i{0:04d}-g{1:04d}",
+            distinct_path="/members/*/category", min_distinct=2,
+            selected_path="/groups/*", references_path="/source_refs/*",
+            excluded_path="/excluded/*", source_members_path="/members/*",
+            result_members_path="/members/*", result_id_path="/id",
+            member_fields=["/category", "/reference"],
+        )
