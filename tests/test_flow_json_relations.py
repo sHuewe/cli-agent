@@ -251,3 +251,22 @@ def test_partition_rejects_invalid_status_pointer_and_missing_source_records():
             result_members_path="/members/*", result_id_path="/id",
             member_fields=["/category", "/reference"],
         )
+
+
+def test_documented_toml_examples_parse_and_configure_partition_validation():
+    import tomllib
+    from pathlib import Path
+    import re
+
+    docs = Path(__file__).resolve().parents[1] / "docs" / "flow-json-relations.md"
+    source = docs.read_text(encoding="utf-8")
+    examples = re.findall(r"```toml\n(.*?)\n```", source, flags=re.DOTALL)
+    assert len(examples) == 3
+    parsed = [tomllib.loads(example) for example in examples]
+    partition_step = parsed[2]["steps"][0]
+    operation = partition_step["json_operation"]
+    assert operation["kind"] == "json_validate_partition"
+    assert re.fullmatch(operation["result_id_pattern"], "example-safe-id")
+    assert not re.fullmatch(operation["result_id_pattern"], "../unsafe")
+    assert operation["result_path_field"] == "/file"
+    assert operation["result_path_template"] == "output/{id}.json"
