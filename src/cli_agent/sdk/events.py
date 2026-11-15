@@ -28,6 +28,8 @@ class ToolCallRecord:
     call_id: str
     status: str
     duration_ms: float | None = None
+    input_parameters: dict | None = None
+    arguments_truncated: bool = False
 
 
 def default_event_callback(

@@ -311,6 +311,9 @@ async def process_tool_calls(
 
         event_callback = getattr(agent, "event_callback", None)
         event_id = str(tool_call.get("id") or uuid.uuid4().hex)
+        recorder = getattr(agent, "_sdk_tool_argument_recorder", None)
+        if recorder is not None:
+            recorder(event_id, arguments)
         if event_callback is not None:
             await event_callback(
                 "tool_started",

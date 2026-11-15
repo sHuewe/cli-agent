@@ -1101,3 +1101,125 @@ def test_sdk_inline_prompt_reaches_runtime_without_loading_file(monkeypatch, tmp
     assert "system_prompt_override if system_prompt_override is not None" in source
     assert "else read_project_system_prompt(workspace, config.agent.system_prompt)" in source
     assert not calls
+
+
+
+def test_sdk_tool_trace_opt_in_captures_bounded_redacted_arguments(monkeypatch, tmp_path):
+    class Runtime:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            pass
+        async def ask(self, prompt):
+            recorder = getattr(self, "_sdk_tool_argument_recorder", None)
+            if recorder is not None:
+                recorder("tool-1", {
+                "query": "authentication", "password": "SECRET",
+                "nested": [{"api_key": "SECRET2", "safe": 123}],
+                "internal_reference": "HIDDEN",
+                })
+            await self.event_callback("tool_started", {
+                "tool": "knowledge__search", "call_id": "tool-1",
+            })
+            await self.event_callback("tool_finished", {
+                "tool": "knowledge__search", "call_id": "tool-1",
+                "status": "success",
+            })
+            return prompt
+
+    monkeypatch.setattr(
+        "cli_agent.sdk.agent.prepare_agent",
+        lambda *_a, **_k: SimpleNamespace(agent=Runtime()),
+    )
+    received = []
+
+    async def on_event(event):
+        received.append(event)
+
+    async def scenario():
+        builder = (AgentBuilder().with_project_config(workspace=tmp_path)
+                   .with_event_callback(on_event))
+        # No arguments by default, even when runtime tries to report them.
+        default = builder.build()
+        async with default:
+            result = await default.ask("default")
+            assert result.tool_calls[0].input_parameters is None
+            assert not result.tool_calls[0].arguments_truncated
+
+        traced_builder = builder.with_tool_trace(
+            include_arguments=True, redact_keys=("internal_reference",)
+        )
+        first = traced_builder.build()
+        assert first._tool_trace_include_arguments
+        assert not default._tool_trace_include_arguments
+        async with first:
+            result = await first.ask("traced")
+            call = result.tool_calls[0]
+            assert call.input_parameters == {
+                "query": "authentication",
+                "password": "[REDACTED]",
+                "nested": [{"api_key": "[REDACTED]", "safe": 123}],
+                "internal_reference": "[REDACTED]",
+            }
+            assert call.arguments_truncated is False
+            assert "SECRET" not in repr(result.events)
+        assert "SECRET" not in repr(received)
+        assert "authentication" not in repr(received)
+
+        # A later builder mutation must not affect built agents.
+        traced_builder.with_tool_trace(include_arguments=False)
+        assert first._tool_trace_include_arguments is True
+
+    asyncio.run(scenario())
+
+
+def test_sdk_tool_trace_validations_and_limits():
+    from cli_agent.sdk.tool_trace import ToolArgumentCollector
+
+    with pytest.raises(TypeError):
+        AgentBuilder().with_tool_trace(include_arguments="yes")
+    with pytest.raises(TypeError):
+        AgentBuilder().with_tool_trace(include_arguments=True, redact_keys="key")
+    with pytest.raises(ValueError):
+        AgentBuilder().with_tool_trace(include_arguments=True, redact_keys=("",))
+
+    collector = ToolArgumentCollector()
+    collector.record("oversize", {"text": "x" * 9000})
+    assert collector.pop("oversize") == (None, True)
+
+    collector.record("non-json", "not valid json")
+    assert collector.pop("non-json") == (None, True)
+
+    collector.record("normal", {"query": "a", "authorization": "Bearer secret"})
+    arguments, truncated = collector.pop("normal")
+    assert arguments == {"query": "a", "authorization": "[REDACTED]"}
+    assert truncated is False
+
+    # The cap is lifetime-per-run, not just the current number of pending calls.
+    for index in range(257):
+        collector.record(f"call-{index}", {})
+        collector.pop(f"call-{index}")
+    assert collector.total_records <= 256
+    assert collector.pop("never-recorded-after-cap") == (None, True)
+
+    oversized_nested = ToolArgumentCollector()
+    oversized_nested.record("large", {"nested": ["x" * 9000]})
+    assert oversized_nested.pop("large") == (None, True)
+
+
+def test_sdk_tool_trace_redaction_never_changes_runtime_payload():
+    from cli_agent.sdk.tool_trace import ToolArgumentCollector
+    collector = ToolArgumentCollector(extra_redact_keys=("document_body",))
+    original = {
+        "document_body": ["secret", "nested"],
+        "nested": {"client_secret": "S3", "foo": "bar"},
+    }
+    collector.record("1", original)
+    sanitized, truncated = collector.pop("1")
+    assert sanitized == {
+        "document_body": "[REDACTED]",
+        "nested": {"client_secret": "[REDACTED]", "foo": "bar"},
+    }
+    assert original["document_body"] == ["secret", "nested"]
+    assert original["nested"]["client_secret"] == "S3"
+    assert not truncated

@@ -336,6 +336,43 @@ approval-requiring actions are denied. The `approval_requested` and
 `approval_decided` event metadata are observable but never grant access.
 
 
+## Optional structured tool argument trace (Python SDK only)
+
+The SDK exposes `AgentResult.tool_calls` with tool name, call ID, status
+and duration by default. Sensitive tool arguments are **disabled by default**
+and never appear in `AgentEvent`, console progress, or outgoing LLM context.
+Use explicit opt-in for controlled diagnostics or benchmark runs:
+
+```python
+agent = (
+    AgentBuilder()
+    .with_project_config(path="config.toml", workspace=".")
+    .with_tool_trace(
+        include_arguments=True,
+        redact_keys=("document_body", "internal_reference"),
+    )
+    .build()
+)
+async with agent:
+    result = await agent.ask("Find authentication requirements")
+    for call in result.tool_calls:
+        print(call.name, call.input_parameters, call.arguments_truncated)
+```
+
+- The built-in redaction covers fields such as `password`, `secret`,
+  `token`, `api_key`, `authorization`, and `cookie`, including
+  nested dictionaries and lists. `redact_keys` adds custom field names.
+  Redaction is **best effort**, not guaranteed secret detection.
+- Each call is limited to 8 KiB of JSON, each run to 64 KiB and
+  at most 256 recorded calls. Oversized or unserializable parameters are
+  **omitted entirely** (`input_parameters=None`) and
+  `arguments_truncated=True` distinguishes omission from unavailable
+  arguments. The actual executed tool inputs are never changed.
+- Tool outputs are not captured; general SDK events remain metadata-only.
+- Treat `AgentResult.tool_calls` as sensitive data when capture is
+  enabled; avoid writing unredacted arguments to logs or external systems.
+  The opt-in is per SDK builder/agent; it never modifies global configuration.
+
 ## Optional Knowledge retrieval trace (Python SDK only)
 
 By default SDK answers expose only metadata-only ToolCallRecord / AgentEvent

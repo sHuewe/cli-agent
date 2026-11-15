@@ -124,6 +124,8 @@ class AgentBuilder:
         self._python_tools = []
         self._knowledge_trace_include_content: bool | None = None
         self._system_prompt_override: str | None = None
+        self._tool_trace_include_arguments = False
+        self._tool_trace_redact_keys: tuple[str, ...] = ()
 
     def with_admin_config(self, *, path: str | Path | None = None, **overrides: Any) -> AgentBuilder:
         if path is not None:
@@ -255,6 +257,22 @@ class AgentBuilder:
         self._system_prompt_override = text
         return self
 
+    def with_tool_trace(
+        self, *, include_arguments: bool = False,
+        redact_keys: tuple[str, ...] = (),
+    ) -> AgentBuilder:
+        """Opt into bounded, redacted tool arguments on AgentResult.tool_calls.
+
+        General AgentEvent notifications never contain tool arguments.
+        redact_keys adds user-defined sensitive keys to the built-in list.
+        """
+        from .tool_trace import validate_redact_keys
+        if not isinstance(include_arguments, bool):
+            raise TypeError("include_arguments must be a bool")
+        self._tool_trace_redact_keys = validate_redact_keys(redact_keys)
+        self._tool_trace_include_arguments = include_arguments
+        return self
+
     def with_knowledge_trace(self, *, include_content: bool = False) -> AgentBuilder:
         """Record host-verified Knowledge search and selection in SDK results.
 
@@ -299,4 +317,6 @@ class AgentBuilder:
             python_tools=tuple(self._python_tools),
             knowledge_trace_include_content=self._knowledge_trace_include_content,
             system_prompt_override=self._system_prompt_override,
+            tool_trace_include_arguments=self._tool_trace_include_arguments,
+            tool_trace_redact_keys=self._tool_trace_redact_keys,
         )
