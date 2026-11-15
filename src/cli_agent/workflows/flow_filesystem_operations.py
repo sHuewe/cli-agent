@@ -208,6 +208,7 @@ def markdown_sections(
     *,
     target_chars: int = 30000,
     max_sections: int = 32,
+    always_sections: bool = False,
 ) -> dict[str, Any]:
     """Build exact line ranges from natural Markdown headings without an LLM.
 
@@ -218,6 +219,8 @@ def markdown_sections(
         raise ValueError("markdown_sections.target_chars is invalid.")
     if type(max_sections) is not int or not 1 <= max_sections <= 512:
         raise ValueError("markdown_sections.max_sections is invalid.")
+    if type(always_sections) is not bool:
+        raise ValueError("markdown_sections.always_sections must be boolean.")
     raw = Path(source_path)
     windows = PureWindowsPath(source_path)
     if (not source_path.strip() or raw.is_absolute() or windows.is_absolute()
@@ -255,6 +258,13 @@ def markdown_sections(
         char_offsets.append(char_offsets[-1] + len(line))
     total_chars = char_offsets[-1]
     if total_chars <= target_chars:
+        if always_sections and lines:
+            return {
+                "source_path": raw.as_posix(), "mode": "sections",
+                "total_lines": len(lines), "total_chars": total_chars,
+                "sections": [{"id": "s001", "start_line": 1,
+                              "end_line": len(lines), "title": "Abschnitt 1"}],
+            }
         return {
             "source_path": raw.as_posix(), "mode": "direct",
             "total_lines": len(lines), "total_chars": total_chars,
