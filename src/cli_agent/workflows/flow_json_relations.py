@@ -167,7 +167,9 @@ def validate_partition(
     result_warnings_path: str = "/warnings",
     result_id_path: str | None = None,
     result_id_prefix: str = "",
+    result_id_pattern: str | None = None,
     member_fields: list[str] | tuple[str, ...] = ("/path",),
+    member_patterns: dict[str, str] | None = None,
     result_path_field: str | None = None,
     result_path_template: str | None = None,
 ) -> dict[str, Any]:
@@ -182,6 +184,18 @@ def validate_partition(
         raise ValueError("reference_template must be nonempty.")
     if (result_path_field is None) != (result_path_template is None):
         raise ValueError("Both result path options are required together.")
+    if result_id_pattern is not None and (not isinstance(result_id_pattern, str) or len(result_id_pattern) > 256):
+        raise ValueError("Invalid result ID pattern.")
+    if not isinstance(member_patterns, dict) and member_patterns is not None:
+        raise ValueError("member_patterns must be a mapping.")
+    validated_patterns: dict[str, re.Pattern[str]] = {}
+    for pointer, pattern in (member_patterns or {}).items():
+        if pointer not in member_fields or not isinstance(pattern, str) or len(pattern) > 256:
+            raise ValueError("Invalid member pattern configuration.")
+        try:
+            validated_patterns[pointer] = re.compile(pattern)
+        except re.error as exc:
+            raise ValueError("Invalid member pattern.") from exc
     src: dict[str, tuple[bool, set[tuple[str, ...]]]] = {}
     incomplete = False
 
@@ -190,6 +204,10 @@ def validate_partition(
         result_set: set[tuple[str, ...]] = set()
         for value, _ in items:
             entry = tuple(_field(value, ptr, name="member field") for ptr in member_fields)
+            for ptr, field_value in zip(member_fields, entry):
+                pattern = validated_patterns.get(ptr)
+                if pattern is not None and pattern.fullmatch(field_value) is None:
+                    raise ValueError("Member field does not match configured pattern.")
             if entry in result_set:
                 raise ValueError("Duplicate member in a group.")
             result_set.add(entry)
@@ -231,7 +249,8 @@ def validate_partition(
     for target, _ in selections:
         if result_id_path is not None:
             target_id = _field(target, result_id_path, name="target ID")
-            if not target_id.startswith(result_id_prefix) or target_id in target_ids:
+            if (not target_id.startswith(result_id_prefix) or target_id in target_ids
+                    or (result_id_pattern is not None and re.fullmatch(result_id_pattern, target_id) is None)):
                 raise ValueError("Invalid or duplicate output ID.")
             target_ids.add(target_id)
             if result_path_field is not None:
