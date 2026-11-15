@@ -133,3 +133,33 @@ def test_array_batching_caps_complete_items_generically():
     fragments = [f for batch in batches for f in batch["items"]]
     assert all(len(f["entries"]) <= 4 for f in fragments)
     assert [x for f in fragments for x in f["entries"]] == items
+
+def test_generic_regex_constraints_reject_unsafe_output_ids_and_members():
+    batch, out = _batch(), _result()
+    out["groups"][0]["id"] = "b0001-../../outside"
+    with pytest.raises(ValueError, match="Invalid or duplicate output ID"):
+        validate_partition(
+            source=batch, result=out,
+            source_path="/items/*/groups/*",
+            reference_template="i{0:04d}-g{1:04d}",
+            distinct_path="/members/*/category", min_distinct=2,
+            selected_path="/groups/*", references_path="/source_refs/*",
+            excluded_path="/excluded/*", source_members_path="/members/*",
+            result_members_path="/members/*", result_id_path="/id",
+            result_id_pattern=r"^[a-z][a-z0-9-]*$",
+            member_fields=["/category", "/reference"],
+        )
+    batch, out = _batch(), _result()
+    out["groups"][0]["members"][0]["reference"] = "../escape"
+    with pytest.raises(ValueError, match="Member field does not match"):
+        validate_partition(
+            source=batch, result=out,
+            source_path="/items/*/groups/*",
+            reference_template="i{0:04d}-g{1:04d}",
+            distinct_path="/members/*/category", min_distinct=2,
+            selected_path="/groups/*", references_path="/source_refs/*",
+            excluded_path="/excluded/*", source_members_path="/members/*",
+            result_members_path="/members/*",
+            member_fields=["/category", "/reference"],
+            member_patterns={"/reference": r"^[a-z]+/[a-z]+$"},
+        )
