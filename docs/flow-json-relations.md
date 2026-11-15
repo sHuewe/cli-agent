@@ -66,7 +66,11 @@ escaping (`~0`, `~1`) is supported.
 
 Check an exhaustive, disjoint partition of input groups into selected output
 groups and explicitly excluded groups. Eligibility is the configured minimum
-number of distinct values under a JSON selector. Each selected output must
+number of distinct values under a JSON selector. Values may be strings,
+JSON numbers, booleans, null, arrays or objects; numeric representations
+(e.g. `1` and `1.0`) compare by value, whereas `true` is distinct from `1`.
+Arrays preserve element order and object key order is ignored.
+Each selected output must
 contain the exact union of members from its referenced input groups. Input
 `needs_attention` and warnings cannot be silently converted to success.
 
