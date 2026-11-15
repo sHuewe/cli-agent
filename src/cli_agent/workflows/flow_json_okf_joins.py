@@ -121,6 +121,10 @@ def group_consolidated_knowledge(
             local_keys.add(key)
             if key not in aliases:
                 raise ValueError(f"Unrepresented source topic_key {key}.")
+        checks = _obj(scan.get("scan_checks"), "scan_checks")
+        if (checks.get("normative_sweep") != "completed"
+                or checks.get("descriptive_sweep") != "completed"):
+            raise ValueError(f"Section {sid} is not fully scanned.")
         route_items = []
         for raw_item in _arr(scan.get("knowledge_items"), "knowledge_items"):
             item = _obj(raw_item, "knowledge_item")
@@ -128,7 +132,10 @@ def group_consolidated_knowledge(
             if key not in local_keys:
                 raise ValueError(f"Knowledge item with unknown local topic_key {key}.")
             referenced_keys.add(key)
-            for raw_evidence in _arr(item.get("evidence_ranges"), "evidence_ranges"):
+            evidence_ranges = _arr(item.get("evidence_ranges"), "evidence_ranges")
+            if not evidence_ranges:
+                raise ValueError(f"Knowledge item in {sid} has no supporting source evidence.")
+            for raw_evidence in evidence_ranges:
                 evidence = _obj(raw_evidence, "evidence")
                 lo, hi = evidence.get("start_line"), evidence.get("end_line")
                 if (evidence.get("doctrine") != source
@@ -174,6 +181,21 @@ def validate_theme_registry(*, batch: Any, registry: Any) -> dict[str, Any]:
     batch_id = _str(source.get("id"), "batch.id")
     groups: dict[str, tuple[bool, set[tuple[str, str]]]] = {}
     incomplete = False
+
+    def member_ref(raw: Any) -> tuple[str, str]:
+        member = _obj(raw, "group member")
+        slug = _str(member.get("source_slug"), "member.source_slug")
+        path = _str(member.get("path"), "member.path")
+        if (not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug)
+                or not re.fullmatch(
+                    rf"doctrines/{re.escape(slug)}/"
+                    r"(?:[a-z0-9]+(?:-[a-z0-9]+)*/)?"
+                    r"[a-z0-9]+(?:-[a-z0-9]+)*[.]md", path,
+                )
+                or path.rsplit("/", 1)[-1] in {"index.md", "log.md"}):
+            raise ValueError("Invalid or inconsistent theme member path.")
+        return slug, path
+
     for item_index, raw_item in enumerate(_arr(source.get("items"), "batch.items"), 1):
         item = _obj(raw_item, "batch.items[]")
         if item.get("status") != "ok" or item.get("warnings"):
@@ -183,9 +205,10 @@ def validate_theme_registry(*, batch: Any, registry: Any) -> dict[str, Any]:
             ref = f"i{item_index:04d}-g{group_index:04d}"
             members: set[tuple[str, str]] = set()
             for entry in _arr(group.get("members"), "group.members"):
-                m = _obj(entry, "group.member")
-                members.add((_str(m.get("source_slug"), "source_slug"),
-                             _str(m.get("path"), "member.path")))
+                pair = member_ref(entry)
+                if pair in members:
+                    raise ValueError(f"Duplicate member in registry group {ref}.")
+                members.add(pair)
             if not members:
                 raise ValueError(f"Empty registry group {ref}.")
             groups[ref] = (len({slug for slug, _ in members}) >= 2, members)
@@ -203,11 +226,10 @@ def validate_theme_registry(*, batch: Any, registry: Any) -> dict[str, Any]:
         refs = _arr(obj.get("group_refs"), "theme.group_refs")
         if not refs:
             raise ValueError("Theme does not reference original groups.")
-        theme_members = {
-            (_str(_obj(m, "member").get("source_slug"), "source_slug"),
-             _str(m.get("path"), "member.path"))
-            for m in _arr(obj.get("members"), "theme.members")
-        }
+        theme_list = _arr(obj.get("members"), "theme.members")
+        theme_members = {member_ref(member) for member in theme_list}
+        if len(theme_members) != len(theme_list):
+            raise ValueError("Duplicate theme concept membership.")
         required: set[tuple[str, str]] = set()
         for ref in refs:
             if ref in found or ref not in groups or not groups[ref][0]:
@@ -324,10 +346,14 @@ def assemble_okf_section_outline(
                 "section_ids": [] if sid == "direct" else [sid],
             })
         items = _arr(scan.get("knowledge_items"), "knowledge_items")
+        referenced: set[str] = set()
         for item in items:
             key = _str(_obj(item, "knowledge item").get("topic_key"), "topic_key")
             if key not in local_keys:
                 raise ValueError("Knowledge item is not assigned to an outline topic.")
+            referenced.add(key)
+        if local_keys - referenced:
+            raise ValueError("Candidate topic has no supported knowledge item.")
         if items and not local_keys:
             raise ValueError("Missing topics for source knowledge items.")
     if seen != set(expected) or not concepts:
