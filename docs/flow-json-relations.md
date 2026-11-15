@@ -88,7 +88,52 @@ excluded_path = "/excluded_refs/*"
 source_members_path = "/members/*"
 result_members_path = "/members/*"
 result_id_path = "/id"
-result_id_pattern = '^[a-z][a-z0-9-]*$'
+result_id_pattern = '^[a-z][a-z0-9-]* = "/file"
+result_path_template = "output/{id}.json"
+member_fields = ["/owner", "/path"]
+[steps.json_operation.member_patterns]
+"/owner" = '^[a-z0-9-]+$'
+"/path" = '^[a-z0-9-]+/[a-z0-9-]+[.]json$'
+[steps.json_inputs.proposal]
+path = "state/proposal.json"
+```
+
+The selected input `source_input` is a declared subflow input object; the
+result JSON is a completed Flow checkpoint.
+
+The source status/warning records are **schema-independent**. By default,
+`json_validate_partition` derives their location from the parent array of
+`source_path`: `/records/*/groups/*` means status records at
+`/records/*`, and `/payload/blocks/*/groups/*` means
+`/payload/blocks/*`. For schemas whose status records live elsewhere,
+set `source_records_path` explicitly (RFC 6901 JSON pointer with
+`*` array selectors). Missing or malformed status records raise an error;
+they must not be treated as successful.
+
+`result_status_path` supports RFC 6901 escaping, such as
+`/state~1status` for a top-level key named `state/status`, and
+`/state~0status` for `state~status`. The validated status is written
+back to that exact decoded field.
+
+## Count-bounded array fragmentation
+
+The existing `batch_arrays` operation now accepts
+`max_fragment_items = N`. It limits the total number of complete entries
+across the selected array paths per fragment, independently of byte limits.
+There is **no truncation**: exceeding this limit splits a fragment, and an
+indivisible oversized entry still fails.
+
+## Uniform Markdown section enumeration
+
+`markdown_sections` accepts the opt-in `always_sections=true`. For a
+nonempty Markdown file shorter than the target character limit, it emits one
+`sections` entry with `id="s001"` and complete 1-based line ranges.
+The default remains unchanged (short files use `mode="direct"`), preserving
+existing Golden and other Flow checkpoints.
+
+# Optional: select the status records explicitly. Without this option,
+# they are inferred as the parent collection of source_path.
+source_records_path = "/items/*"
 result_path_field = "/file"
 result_path_template = "output/{id}.json"
 member_fields = ["/owner", "/path"]
