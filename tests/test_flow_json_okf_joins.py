@@ -154,3 +154,65 @@ def test_registry_never_overrides_incomplete_upstream_status():
         validate_theme_registry(batch=batch, registry=result)
     result["status"] = "needs_attention"
     assert validate_theme_registry(batch=batch, registry=result)["status"] == "needs_attention"
+
+def test_direct_tasks_and_outline_are_deterministic():
+    from cli_agent.workflows.flow_json_okf_joins import (
+        prepare_okf_scan_tasks, assemble_okf_section_outline,
+    )
+    metadata = {"source_path": "doctrines/a.md", "mode": "direct", "total_lines": 12}
+    assert prepare_okf_scan_tasks(metadata)["tasks"] == [
+        {"id": "direct", "start_line": 1, "end_line": 12}
+    ]
+    scan = _scan("direct", 1, 12, "direct-t001", "rule001")
+    scan["candidate_concepts"] = [{
+        "topic_key": "direct-t001", "name": "Approval", "description": "Approval policies"
+    }]
+    scan["scan_checks"] = {"normative_sweep": "completed", "descriptive_sweep": "completed"}
+    outline = assemble_okf_section_outline(
+        sections=metadata, scans=[scan],
+        source_path="doctrines/a.md", source_slug="doc-a",
+    )
+    assert outline["concepts"][0]["id"] == "direct-t001"
+    assert outline["concepts"][0]["section_ids"] == []
+
+
+def test_outline_rejects_incomplete_normative_sweep_and_missing_sections():
+    from cli_agent.workflows.flow_json_okf_joins import assemble_okf_section_outline
+    sections, scans, _ = _inputs()
+    for scan in scans:
+        scan["candidate_concepts"] = [{
+            "topic_key": scan["candidate_concepts"][0]["topic_key"],
+            "name": "Rules", "description": "Source rules",
+        }]
+        scan["scan_checks"] = {"normative_sweep": "completed", "descriptive_sweep": "completed"}
+    with pytest.raises(ValueError, match="Incomplete scans"):
+        assemble_okf_section_outline(
+            sections=sections, scans=scans[:1],
+            source_path="doctrines/a.md", source_slug="doc-a",
+        )
+    scans[0]["scan_checks"]["normative_sweep"] = "failed"
+    with pytest.raises(ValueError, match="lacks a complete knowledge sweep"):
+        assemble_okf_section_outline(
+            sections=sections, scans=scans,
+            source_path="doctrines/a.md", source_slug="doc-a",
+        )
+
+
+def test_batch_arrays_caps_number_of_complete_entries_without_dropping_anything():
+    from cli_agent.workflows.flow_json_operations import transform_json
+    groups = [{"topic": f"g{i}", "members": ["a","b"]} for i in range(23)]
+    result = transform_json(
+        kind="batch_arrays", value=[{"status":"ok","groups":groups,"warnings":[]}],
+        array_paths=["/groups", "/warnings"], batch_size=1,
+        target_fragment_bytes=3000, max_batch_bytes=8000, max_fragment_items=5,
+    )
+    entries = [
+        group for batch in result["batches"]
+        for fragment in batch["items"]
+        for group in fragment["groups"]
+    ]
+    assert entries == groups
+    assert all(
+        len(fragment["groups"]) <= 5
+        for batch in result["batches"] for fragment in batch["items"]
+    )

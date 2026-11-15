@@ -120,6 +120,7 @@ def transform_json(
     serializer: Callable[[Any], str] | None = None,
     target_fragment_bytes: int | None = None,
     array_paths: list[str] | tuple[str, ...] | None = None,
+    max_fragment_items: int | None = None,
 ) -> dict[str, Any]:
     def size(item: Any) -> int:
         return _serialized_size(item, serializer=serializer)
@@ -157,6 +158,7 @@ def transform_json(
             array_paths=array_paths if array_paths is not None else [],
             max_batch_bytes=max_batch_bytes,
             target_fragment_bytes=target,
+            max_fragment_items=max_fragment_items,
             serializer=serializer,
         )
         return transform_json(

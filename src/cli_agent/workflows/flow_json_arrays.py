@@ -76,6 +76,7 @@ def split_json_arrays(
     array_paths: tuple[str, ...] | list[str],
     max_batch_bytes: int,
     target_fragment_bytes: int,
+    max_fragment_items: int | None = None,
     serializer: Callable[[Any], str] | None = None,
 ) -> list[dict[str, Any]]:
     """Fragment selected arrays at complete element boundaries.
@@ -85,6 +86,8 @@ def split_json_arrays(
     non-selected metadata causes a clear error; nothing is discarded.
     """
     paths = parse_array_paths(array_paths)
+    if max_fragment_items is not None and (type(max_fragment_items) is not int or not 1 <= max_fragment_items <= 1000):
+        raise ValueError("batch_arrays.max_fragment_items must be between 1 and 1000.")
 
     def size(value: Any) -> int:
         return _serialized_size(value, serializer=serializer)
@@ -140,6 +143,7 @@ def split_json_arrays(
         current = deepcopy(skeleton)
         current_bytes = skeleton_bytes
         has_values = False
+        current_entries = 0
         for path, entries in zip(paths, sources):
             for item_index, entry in enumerate(entries):
                 destination = _find_array(current, path, record_index)
@@ -154,11 +158,13 @@ def split_json_arrays(
                 if has_values and (
                     candidate_bytes > target_fragment_bytes
                     or candidate_bytes > hard_limit
+                    or (max_fragment_items is not None and current_entries >= max_fragment_items)
                 ):
                     emit(current, record_index)
                     current = deepcopy(skeleton)
                     current_bytes = skeleton_bytes
                     has_values = False
+                    current_entries = 0
                     destination = _find_array(current, path, record_index)
                     candidate_bytes = current_bytes + entry_bytes
                 if candidate_bytes > hard_limit:
@@ -170,6 +176,7 @@ def split_json_arrays(
                 destination.append(entry)
                 current_bytes = candidate_bytes
                 has_values = True
+                current_entries += 1
         # Keep metadata-only records (all selected arrays empty).
         emit(current, record_index)
 

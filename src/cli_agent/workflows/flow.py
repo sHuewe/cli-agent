@@ -43,7 +43,10 @@ from cli_agent.workflows.flow_json_operations import transform_json
 from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest, prepare_doctrine_concept_batches, assemble_doctrine_concept_plan, prepare_section_outline_tasks, assemble_section_outlines, build_doctrine_taxonomy_profile, prepare_doctrine_consolidation_batches, assemble_doctrine_consolidation
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
-from cli_agent.workflows.flow_json_okf_joins import group_consolidated_knowledge, validate_theme_registry
+from cli_agent.workflows.flow_json_okf_joins import (
+    group_consolidated_knowledge, validate_theme_registry,
+    prepare_okf_scan_tasks, assemble_okf_section_outline,
+)
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 from cli_agent.platform.logging_setup import configure_logging
 from cli_agent.models.model import ModelRetryPolicy
@@ -1536,9 +1539,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step"
+                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "group_consolidated_items", "validate_theme_registry"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "group_consolidated_items", "validate_theme_registry", "prepare_okf_scan_tasks", "assemble_okf_outline"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
@@ -1556,7 +1559,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if (not isinstance(ref, str) or not _STEP_ID.fullmatch(ref)
                         or ref not in {step.step_id for step in steps}):
                     raise ValueError("batches_step must be a prior flow step.")
-            if raw_json_operation["kind"] == "assemble_section_outlines":
+            if raw_json_operation["kind"] in {"assemble_section_outlines", "assemble_okf_outline"}:
                 for key in ("expected_source_path", "expected_source_slug"):
                     value = raw_json_operation.get(key)
                     if not isinstance(value, str) or "${" in _INPUT_EXPR.sub("", value):
@@ -1602,6 +1605,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     "target_fragment_bytes requires batch_arrays "
                     "and must fit within max_batch_bytes."
                 )
+            max_fragment_items = raw_json_operation.get("max_fragment_items")
+            if max_fragment_items is not None and (
+                raw_json_operation["kind"] != "batch_arrays"
+                or type(max_fragment_items) is not int
+                or not 1 <= max_fragment_items <= 1000
+            ):
+                raise ValueError("max_fragment_items requires batch_arrays and 1..1000 entries.")
             if raw_json_operation["kind"] == "batch_arrays":
                 from cli_agent.workflows.flow_json_arrays import parse_array_paths
                 parse_array_paths(raw_json_operation.get("array_paths"))
@@ -1613,6 +1623,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             required_sources = (
                 {"routes", "assignments", "topics"}
                 if raw_json_operation["kind"] == "group_items" else
+                {"scans", "sections"}
+                if raw_json_operation["kind"] == "assemble_okf_outline" else
                 {"scans", "sections", "consolidated"}
                 if raw_json_operation["kind"] == "group_consolidated_items" else
                 {"registry"}
@@ -1622,7 +1634,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 {"plan", "navigation"}
                 if raw_json_operation["kind"] == "build_okf_manifest" else set()
             )
-            if required_sources and (raw_json_operation["input"] != ("plan" if raw_json_operation["kind"] == "build_okf_manifest" else "scans" if raw_json_operation["kind"] == "group_consolidated_items" else "registry" if raw_json_operation["kind"] == "validate_theme_registry" else sorted(required_sources)[0])
+            if required_sources and (raw_json_operation["input"] != ("plan" if raw_json_operation["kind"] == "build_okf_manifest" else "scans" if raw_json_operation["kind"] in {"group_consolidated_items", "assemble_okf_outline"} else "registry" if raw_json_operation["kind"] == "validate_theme_registry" else sorted(required_sources)[0])
                                      or not required_sources <= set(raw.get("json_inputs", {}))):
                 raise ValueError("JSON grouping operation requires the specified json_inputs.")
             if child_flow is not None or prompt_value is not None:
@@ -5207,7 +5219,16 @@ def _execute_json_step(
     source = _parse_structured_output(
         json_values[operation["input"]], step_id=step.step_id,
     )
-    if operation["kind"] == "doctrine_taxonomy_profile":
+    if operation["kind"] == "prepare_okf_scan_tasks":
+        transformed = prepare_okf_scan_tasks(source)
+    elif operation["kind"] == "assemble_okf_outline":
+        transformed = assemble_okf_section_outline(
+            scans=source,
+            sections=_parse_structured_output(json_values["sections"], step_id=step.step_id),
+            source_path=_render_input_text(operation["expected_source_path"], flow_input),
+            source_slug=_render_input_text(operation["expected_source_slug"], flow_input),
+        )
+    elif operation["kind"] == "doctrine_taxonomy_profile":
         transformed = build_doctrine_taxonomy_profile(source)
     elif operation["kind"] == "prepare_doctrine_consolidation":
         transformed = prepare_doctrine_consolidation_batches(
@@ -5301,6 +5322,7 @@ def _execute_json_step(
             max_batch_bytes=operation.get("max_batch_bytes", 80000),
             target_fragment_bytes=operation.get("target_fragment_bytes"),
             array_paths=operation.get("array_paths"),
+            max_fragment_items=operation.get("max_fragment_items"),
             serializer=_json_dumps_preserving_numbers,
         )
     answer = _json_dumps_preserving_numbers(transformed)

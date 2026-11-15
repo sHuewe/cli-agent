@@ -6,6 +6,7 @@ never silently converted into success statuses.
 from __future__ import annotations
 
 from typing import Any, Callable
+import re
 
 from cli_agent.workflows.flow_json_grouping import group_assigned_items
 
@@ -234,3 +235,110 @@ def validate_theme_registry(*, batch: Any, registry: Any) -> dict[str, Any]:
         "input_group_count": len(groups), "eligible_group_count": sum(v[0] for v in groups.values()),
         "excluded_group_refs": excluded, "warnings": warnings,
     }
+
+def prepare_okf_scan_tasks(sections: Any) -> dict[str, Any]:
+    """Convert exact Markdown section boundaries to one uniform scan task list."""
+    record = _obj(sections, "sections")
+    source = _str(record.get("source_path"), "sections.source_path")
+    mode = record.get("mode")
+    if mode == "direct":
+        total_lines = record.get("total_lines")
+        if type(total_lines) is not int or total_lines < 1:
+            raise ValueError("Empty/invalid direct doctrine cannot be scanned.")
+        return {"source_path": source, "tasks": [
+            {"id": "direct", "start_line": 1, "end_line": total_lines},
+        ]}
+    if mode != "sections":
+        raise ValueError("Unknown Markdown sections mode.")
+    ranges = _arr(record.get("sections"), "sections.sections")
+    if not 1 <= len(ranges) <= 512:
+        raise ValueError("Section count exceeds 1..512.")
+    tasks = []
+    next_start = 1
+    seen = set()
+    for raw in ranges:
+        entry = _obj(raw, "section")
+        sid = _str(entry.get("id"), "section.id")
+        start, end = entry.get("start_line"), entry.get("end_line")
+        if (sid in seen or type(start) is not int or type(end) is not int
+                or start != next_start or end < start):
+            raise ValueError("Missing/overlapping section ranges.")
+        tasks.append({"id": sid, "start_line": start, "end_line": end})
+        seen.add(sid)
+        next_start = end + 1
+    if next_start - 1 != record.get("total_lines"):
+        raise ValueError("Section boundaries do not cover whole document.")
+    return {"source_path": source, "tasks": tasks}
+
+
+def assemble_okf_section_outline(
+    *, sections: Any, scans: Any, source_path: str, source_slug: str,
+) -> dict[str, Any]:
+    """Create a compact document topic outline from ALL checked section scans."""
+    from cli_agent.workflows.flow_json_validation import _validate_doctrine
+    source = _str(source_path, "source_path")
+    slug = _str(source_slug, "source_slug")
+    descriptor = _obj(sections, "sections")
+    if descriptor.get("source_path") != source:
+        raise ValueError("Outline sections belong to another document.")
+    tasks = prepare_okf_scan_tasks(descriptor)["tasks"]
+    expected = {t["id"]: t for t in tasks}
+    seen: set[str] = set()
+    concepts = []
+    used: set[str] = set()
+    for raw in _arr(scans, "scans"):
+        scan = _obj(raw, "scan")
+        sid = _str(scan.get("section_id"), "scan.section_id")
+        if sid not in expected or sid in seen:
+            raise ValueError("Missing, duplicate or unexpected section scan.")
+        seen.add(sid)
+        task = expected[sid]
+        if (scan.get("status") != "ok" or scan.get("warnings")
+                or scan.get("source_path") != source
+                or scan.get("document_id") != slug
+                or scan.get("chunk_id") != sid
+                or scan.get("folder_id") != slug
+                or scan.get("start_line") != task["start_line"]
+                or scan.get("end_line") != task["end_line"]):
+            raise ValueError(f"Section scan {sid} is incomplete/inconsistent.")
+        checks = _obj(scan.get("scan_checks"), "scan_checks")
+        if (checks.get("normative_sweep") != "completed"
+                or checks.get("descriptive_sweep") != "completed"):
+            raise ValueError(f"Section scan {sid} lacks a complete knowledge sweep.")
+        local_keys: set[str] = set()
+        for item in _arr(scan.get("candidate_concepts"), "candidate_concepts"):
+            candidate = _obj(item, "candidate")
+            key = _str(candidate.get("topic_key"), "topic_key")
+            title = _str(candidate.get("name"), "candidate.name")
+            desc = _str(candidate.get("description"), "candidate.description")
+            if key in used or key in local_keys:
+                raise ValueError("Duplicate source topic_key.")
+            if not re.fullmatch(r"[a-z][a-z0-9-]*", key):
+                raise ValueError("Unsafe source topic_key.")
+            local_keys.add(key)
+            used.add(key)
+            concepts.append({
+                "id": key, "path": f"doctrines/{slug}/{key}.md",
+                "title": title, "description": desc,
+                "type": "concept", "tags": [],
+                "section_ids": [] if sid == "direct" else [sid],
+            })
+        items = _arr(scan.get("knowledge_items"), "knowledge_items")
+        for item in items:
+            key = _str(_obj(item, "knowledge item").get("topic_key"), "topic_key")
+            if key not in local_keys:
+                raise ValueError("Knowledge item is not assigned to an outline topic.")
+        if items and not local_keys:
+            raise ValueError("Missing topics for source knowledge items.")
+    if seen != set(expected) or not concepts:
+        raise ValueError("Incomplete scans or no meaningful document topics.")
+    result = {
+        "status": "ok", "source_path": source,
+        "folder": {"id": slug, "path": f"doctrines/{slug}",
+                   "title": source.rsplit("/", 1)[-1],
+                   "description": "Knowledge derived from a source document"},
+        "folders": [], "summary": "Complete per-section topic inventory",
+        "concepts": concepts, "warnings": [],
+    }
+    _validate_doctrine(result)
+    return result
