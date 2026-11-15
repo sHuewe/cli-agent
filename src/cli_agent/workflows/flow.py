@@ -1653,8 +1653,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 if kind == "json_validate_partition":
                     if ("source_records_path" in raw_json_operation
                             and (not isinstance(raw_json_operation["source_records_path"], str)
-                                 or not raw_json_operation["source_records_path"].startswith("/"))):
+                                 or (raw_json_operation["source_records_path"] != ""
+                                     and not raw_json_operation["source_records_path"].startswith("/")))):
                         raise ValueError("json_validate_partition.source_records_path must be a JSON pointer.")
+                    if ("result_id_path" not in raw_json_operation
+                            and (raw_json_operation.get("result_id_pattern") is not None
+                                 or raw_json_operation.get("result_path_field") is not None
+                                 or raw_json_operation.get("result_path_template") is not None
+                                 or bool(raw_json_operation.get("result_id_prefix")))):
+                        raise ValueError("json_validate_partition.result_id_path is required for ID-dependent checks.")
                     required = {"source_input", "source_path", "reference_template",
                                 "distinct_path", "min_distinct", "selected_path",
                                 "references_path", "excluded_path", "source_members_path",
