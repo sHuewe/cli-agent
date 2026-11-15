@@ -402,7 +402,7 @@ def test_partition_supports_root_source_status_pointer():
     kwargs = dict(
         source=source, result=result, source_path="/payload/groups/*",
         source_records_path="",
-        reference_template="i{0:04d}-g{1:04d}",
+        reference_template="i0001-g{0:04d}",
         distinct_path="/members/*/category", min_distinct=2,
         selected_path="/groups/*", references_path="/source_refs/*",
         excluded_path="/excluded/*", source_members_path="/members/*",
