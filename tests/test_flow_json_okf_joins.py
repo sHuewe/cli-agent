@@ -2,6 +2,7 @@
 import json
 
 import pytest
+from cli_agent.workflows.flow_json_operations import _json_dumps_preserving_numbers
 
 from cli_agent.workflows.flow_json_okf_joins import (
     group_consolidated_knowledge,
@@ -31,7 +32,7 @@ def _scan(sid: str, start: int, end: int, key: str, item_id: str) -> dict:
 
 
 def _inputs():
-    sections = {"source_path": "doctrines/a.md", "mode": "sections",
+    sections = {"source_path": "doctrines/a.md", "mode": "sections", "total_lines": 20,
                 "sections": [
                     {"id": "s001", "start_line": 1, "end_line": 10},
                     {"id": "s002", "start_line": 11, "end_line": 20},
@@ -57,7 +58,7 @@ def _inputs():
 def _group(sections, scans, consolidated):
     return group_consolidated_knowledge(
         sections=sections, scans=scans, consolidated=consolidated,
-        max_concept_bytes=12000, serializer=lambda o: json.dumps(o, ensure_ascii=False),
+        max_concept_bytes=12000, serializer=_json_dumps_preserving_numbers,
     )
 
 
