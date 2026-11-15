@@ -92,47 +92,6 @@ def _unique(items: list[str], name: str) -> set[str]:
     return result
 
 
-def collect_arrays(
-    records: Any, *, array_path: str,
-    shared_paths: list[str] | tuple[str, ...] = (),
-    unique_path: str | None = None,
-    required_status: str | None = None,
-    status_path: str = "/status",
-    warnings_path: str | None = "/warnings",
-) -> dict[str, Any]:
-    """Append complete entries from same-shape JSON objects, retaining metadata."""
-    rows = _record_list(records, "records")
-    if not rows:
-        raise ValueError("Cannot collect an empty record list.")
-    first = _object(rows[0], "records[0]")
-    _record_list(_value(first, array_path), "selected field")
-    for p in shared_paths:
-        _value(first, p)
-    combined = deepcopy(first)
-    target = _value(combined, array_path)
-    target.clear()
-    seen: set[str] = set()
-    for index, raw in enumerate(rows):
-        row = _object(raw, f"records[{index}]")
-        if required_status is not None and _value(row, status_path) != required_status:
-            raise ValueError(f"Record {index} has unsuccessful status.")
-        if warnings_path is not None and _value(row, warnings_path):
-            raise ValueError(f"Record {index} contains unresolved warnings.")
-        for p in shared_paths:
-            if _value(row, p) != _value(first, p):
-                raise ValueError(f"Record {index} has conflicting metadata at {p}.")
-        for entry in _record_list(_value(row, array_path), "selected field"):
-            if unique_path is not None:
-                key = _field(entry, unique_path, name="unique key")
-                if key in seen:
-                    raise ValueError(f"Duplicate record ID: {key}")
-                seen.add(key)
-            target.append(deepcopy(entry))
-            if len(target) > _MAX_SELECTED:
-                raise ValueError("Collected array exceeds maximum size.")
-    return combined
-
-
 def project_fields(record: Any, *, fields: dict[str, str]) -> dict[str, Any]:
     """Select and rename top-level output fields by exact JSON pointers."""
     if not isinstance(fields, dict) or not fields:
@@ -143,33 +102,6 @@ def project_fields(record: Any, *, fields: dict[str, str]) -> dict[str, Any]:
             raise ValueError("Invalid output field name.")
         result[key] = deepcopy(_value(record, pointer))
     return result
-
-
-def validate_ids(
-    *, expected: Any, actual: Any,
-    expected_path: str, actual_path: str,
-    expected_status_path: str | None = None,
-    required_status: str = "ok",
-    expected_warnings_path: str | None = None,
-) -> dict[str, Any]:
-    """Require identical multisets of IDs, with no duplicates on either side."""
-    if expected_status_path is not None:
-        # Validate every object in a list, or a single object.
-        records = expected if isinstance(expected, list) else [expected]
-        for i, record in enumerate(records):
-            if _value(record, expected_status_path) != required_status:
-                raise ValueError(f"Expected record {i} has incomplete status.")
-            if expected_warnings_path is not None and _value(record, expected_warnings_path):
-                raise ValueError(f"Expected record {i} has unresolved warnings.")
-    left = _id_list(expected, expected_path, "expected")
-    right = _id_list(actual, actual_path, "actual")
-    lset = _unique(left, "Expected IDs")
-    rset = _unique(right, "Actual IDs")
-    if lset != rset:
-        missing = sorted(lset - rset)[:10]
-        extra = sorted(rset - lset)[:10]
-        raise ValueError(f"ID coverage mismatch, missing={missing}, unexpected={extra}.")
-    return {"status": "ok", "count": len(left)}
 
 
 def join_by_alias(
@@ -277,11 +209,6 @@ def validate_partition(
         # Distinct-value predicate is structural, independent of domain.
         values = _id_list(raw, distinct_path, "distinct values")
         src[ref] = (len(set(values)) >= min_distinct, members(raw, source_members_path))
-        if source_status_path is not None:
-            # Optionally check status on the source group's parent fragments.
-            # For nested input lists this is handled by checking all objects
-            # which contain a status field, without presuming its property name.
-            pass
     if not src:
         raise ValueError("No source groups to validate.")
     for item in (source.get("items", []) if isinstance(source, dict) else []):
@@ -332,7 +259,9 @@ def validate_partition(
     if not isinstance(warnings, list):
         raise ValueError("Result warnings must be a JSON array.")
     validated = deepcopy(output)
-    validated[result_status_path.strip("/")] = (
+    if not result_status_path.startswith("/") or result_status_path.count("/") != 1:
+        raise ValueError("Result status path must name a top-level field.")
+    validated[result_status_path[1:]] = (
         "needs_attention" if incomplete or status != "ok" or warnings else "ok"
     )
     validated["validated_group_count"] = len(src)
