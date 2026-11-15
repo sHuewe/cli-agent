@@ -190,6 +190,9 @@ def validate_partition(
         raise ValueError("reference_template must be nonempty.")
     if (result_path_field is None) != (result_path_template is None):
         raise ValueError("Both result path options are required together.")
+    status_tokens = _tokens(result_status_path)
+    if len(status_tokens) != 1 or status_tokens[0] == "*":
+        raise ValueError("Result status path must name a top-level field.")
     if result_id_pattern is not None and (not isinstance(result_id_pattern, str) or len(result_id_pattern) > 256):
         raise ValueError("Invalid result ID pattern.")
     if not isinstance(member_patterns, dict) and member_patterns is not None:
@@ -297,9 +300,6 @@ def validate_partition(
     if not isinstance(warnings, list):
         raise ValueError("Result warnings must be a JSON array.")
     validated = deepcopy(output)
-    status_tokens = _tokens(result_status_path)
-    if len(status_tokens) != 1 or status_tokens[0] == "*":
-        raise ValueError("Result status path must name a top-level field.")
     validated[status_tokens[0]] = (
         "needs_attention" if incomplete or status != "ok" or warnings else "ok"
     )
