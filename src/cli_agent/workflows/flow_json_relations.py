@@ -62,7 +62,7 @@ def _value(value: Any, path: str) -> Any:
 
 def _field(record: Any, path: str, *, name: str) -> str:
     v = _value(record, path)
-    if not isinstance(v, str) or not v.strip():
+    if type(v) is not str or not v.strip():
         raise ValueError(f"{name} must be a nonempty JSON string.")
     return v
 
@@ -82,7 +82,7 @@ def _object(value: Any, name: str) -> dict[str, Any]:
 def _id_list(value: Any, path: str, name: str) -> list[str]:
     found: list[str] = []
     for item, _ in _values(value, path):
-        if not isinstance(item, str) or not item.strip():
+        if type(item) is not str or not item.strip():
             raise ValueError(f"{name} has an invalid ID.")
         found.append(item)
     return found
