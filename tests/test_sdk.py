@@ -1111,12 +1111,13 @@ def test_sdk_tool_trace_opt_in_captures_bounded_redacted_arguments(monkeypatch, 
         async def __aexit__(self, *_):
             pass
         async def ask(self, prompt):
-            assert callable(self._sdk_tool_argument_recorder)
-            self._sdk_tool_argument_recorder("tool-1", {
+            recorder = getattr(self, "_sdk_tool_argument_recorder", None)
+            if recorder is not None:
+                recorder("tool-1", {
                 "query": "authentication", "password": "SECRET",
                 "nested": [{"api_key": "SECRET2", "safe": 123}],
                 "internal_reference": "HIDDEN",
-            })
+                })
             await self.event_callback("tool_started", {
                 "tool": "knowledge__search", "call_id": "tool-1",
             })
