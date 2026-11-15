@@ -43,6 +43,7 @@ from cli_agent.workflows.flow_json_operations import transform_json
 from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest, prepare_doctrine_concept_batches, assemble_doctrine_concept_plan, prepare_section_outline_tasks, assemble_section_outlines, build_doctrine_taxonomy_profile, prepare_doctrine_consolidation_batches, assemble_doctrine_consolidation
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
+from cli_agent.workflows.flow_json_okf_joins import group_consolidated_knowledge, validate_theme_registry
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 from cli_agent.platform.logging_setup import configure_logging
 from cli_agent.models.model import ModelRetryPolicy
@@ -1537,7 +1538,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 or set(raw_json_operation) - {
                     "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "group_consolidated_items", "validate_theme_registry"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
@@ -1612,12 +1613,16 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             required_sources = (
                 {"routes", "assignments", "topics"}
                 if raw_json_operation["kind"] == "group_items" else
+                {"scans", "sections", "consolidated"}
+                if raw_json_operation["kind"] == "group_consolidated_items" else
+                {"registry"}
+                if raw_json_operation["kind"] == "validate_theme_registry" else
                 {"plan", "results"}
                 if raw_json_operation["kind"] == "verify_coverage" else
                 {"plan", "navigation"}
                 if raw_json_operation["kind"] == "build_okf_manifest" else set()
             )
-            if required_sources and (raw_json_operation["input"] != ("plan" if raw_json_operation["kind"] == "build_okf_manifest" else sorted(required_sources)[0])
+            if required_sources and (raw_json_operation["input"] != ("plan" if raw_json_operation["kind"] == "build_okf_manifest" else "scans" if raw_json_operation["kind"] == "group_consolidated_items" else "registry" if raw_json_operation["kind"] == "validate_theme_registry" else sorted(required_sources)[0])
                                      or not required_sources <= set(raw.get("json_inputs", {}))):
                 raise ValueError("JSON grouping operation requires the specified json_inputs.")
             if child_flow is not None or prompt_value is not None:
@@ -5240,6 +5245,18 @@ def _execute_json_step(
             structure=source,
             results=_parse_structured_output(outputs[operation["results_step"]], step_id=step.step_id),
             batches=_parse_structured_output(outputs[operation["batches_step"]], step_id=step.step_id),
+        )
+    elif operation["kind"] == "group_consolidated_items":
+        transformed = group_consolidated_knowledge(
+            scans=source,
+            sections=_parse_structured_output(json_values["sections"], step_id=step.step_id),
+            consolidated=_parse_structured_output(json_values["consolidated"], step_id=step.step_id),
+            max_concept_bytes=operation.get("max_concept_bytes", 80000),
+            serializer=_json_dumps_preserving_numbers,
+        )
+    elif operation["kind"] == "validate_theme_registry":
+        transformed = validate_theme_registry(
+            batch=flow_input.get("batch"), registry=source,
         )
     elif operation["kind"] == "group_items":
         transformed = group_assigned_items(
