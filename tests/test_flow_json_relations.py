@@ -391,3 +391,62 @@ def test_partition_rejects_numeric_reference_ids_and_aliases():
             item_key_path="/join_key", mapping_path="/groups/*",
             mapping_id_path="/id", mapping_alias_path="/aliases/*",
         )
+
+
+def test_partition_supports_root_source_status_pointer():
+    batch, result = _batch(), _result()
+    source = {
+        "status": "ok", "warnings": [],
+        "payload": {"groups": batch["items"][0]["groups"]},
+    }
+    kwargs = dict(
+        source=source, result=result, source_path="/payload/groups/*",
+        source_records_path="",
+        reference_template="i{0:04d}-g{1:04d}",
+        distinct_path="/members/*/category", min_distinct=2,
+        selected_path="/groups/*", references_path="/source_refs/*",
+        excluded_path="/excluded/*", source_members_path="/members/*",
+        result_members_path="/members/*", result_id_path="/id",
+        member_fields=["/category", "/reference"],
+    )
+    assert validate_partition(**kwargs)["status"] == "ok"
+    source["status"] = "needs_attention"
+    with pytest.raises(ValueError, match="preserve incomplete"):
+        validate_partition(**kwargs)
+    source["status"] = "ok"
+    source["warnings"] = ["upstream incomplete"]
+    with pytest.raises(ValueError, match="preserve incomplete"):
+        validate_partition(**kwargs)
+
+
+@pytest.mark.parametrize("extra", [
+    {"result_id_pattern": r"^[a-z]+$"},
+    {"result_path_field": "/location", "result_path_template": "out/{id}.json"},
+    {"result_id_prefix": "required-"},
+])
+def test_partition_rejects_id_dependent_options_without_id_selector(extra):
+    batch, result = _batch(), _result()
+    with pytest.raises(ValueError, match="result_id_path is required"):
+        validate_partition(
+            source=batch, result=result,
+            source_path="/items/*/groups/*",
+            reference_template="i{0:04d}-g{1:04d}",
+            distinct_path="/members/*/category", min_distinct=2,
+            selected_path="/groups/*", references_path="/source_refs/*",
+            excluded_path="/excluded/*", source_members_path="/members/*",
+            result_members_path="/members/*", member_fields=["/category", "/reference"],
+            **extra,
+        )
+
+
+def test_partition_without_id_selector_still_validates_memberships():
+    batch, result = _batch(), _result()
+    checked = validate_partition(
+        source=batch, result=result, source_path="/items/*/groups/*",
+        reference_template="i{0:04d}-g{1:04d}",
+        distinct_path="/members/*/category", min_distinct=2,
+        selected_path="/groups/*", references_path="/source_refs/*",
+        excluded_path="/excluded/*", source_members_path="/members/*",
+        result_members_path="/members/*", member_fields=["/category", "/reference"],
+    )
+    assert checked["validated_group_count"] == 2
