@@ -55,30 +55,43 @@ def check_json_contract(schema: Any) -> dict[str, Any]:
                     check_refs(child)
 
     check_refs(schema)
-    # Follow local pointers into nonstandard schema locations as well.
+    # All schema-valued positions, including local-reference targets, are
+    # inspected; const/enum values and property names are ordinary data.
     seen_pointers: set[str] = set()
+    visited: set[int] = set()
 
-    def follow_local_refs(value: Any) -> None:
-        if isinstance(value, dict):
-            ref = value.get("$ref")
-            if isinstance(ref, str) and ref not in seen_pointers:
-                seen_pointers.add(ref)
-                target: Any = schema
-                for token in (ref[2:].split("/") if ref != "#" else []):
-                    token = token.replace("~1", "/").replace("~0", "~")
-                    try:
-                        target = target[int(token)] if isinstance(target, list) else target[token]
-                    except (KeyError, IndexError, ValueError, TypeError) as exc:
-                        raise ValueError(f"Unresolvable local JSON Schema reference: {ref}") from exc
-                check_refs(target)
-                follow_local_refs(target)
-            for child in value.values():
-                follow_local_refs(child)
-        elif isinstance(value, list):
-            for child in value:
-                follow_local_refs(child)
+    def walk(value: Any) -> None:
+        if not isinstance(value, dict) or id(value) in visited:
+            return
+        visited.add(id(value))
+        check_refs(value)
+        ref = value.get("$ref")
+        if isinstance(ref, str) and ref not in seen_pointers:
+            seen_pointers.add(ref)
+            target: Any = schema
+            for token in (ref[2:].split("/") if ref != "#" else []):
+                token = token.replace("~1", "/").replace("~0", "~")
+                try:
+                    target = target[int(token)] if isinstance(target, list) else target[token]
+                except (KeyError, IndexError, ValueError, TypeError) as exc:
+                    raise ValueError(f"Unresolvable local JSON Schema reference: {ref}") from exc
+            walk(target)
+        for keyword in ("$defs", "definitions", "properties", "patternProperties", "dependentSchemas"):
+            children = value.get(keyword)
+            if isinstance(children, dict):
+                for child in children.values():
+                    walk(child)
+        for keyword in ("additionalProperties", "unevaluatedProperties", "propertyNames",
+                        "items", "additionalItems", "unevaluatedItems", "contains",
+                        "not", "if", "then", "else", "contentSchema"):
+            walk(value.get(keyword))
+        for keyword in ("allOf", "anyOf", "oneOf", "prefixItems"):
+            children = value.get(keyword)
+            if isinstance(children, list):
+                for child in children:
+                    walk(child)
 
-    follow_local_refs(schema)
+    walk(schema)
     try:
         Draft202012Validator.check_schema(schema)
     except Exception as exc:
