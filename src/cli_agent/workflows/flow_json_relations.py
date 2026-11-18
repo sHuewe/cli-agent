@@ -445,7 +445,7 @@ def validate_allowed_values(
     if not entries and not findings:
         findings.append({"path": values_path, "reason": "no_values"})
 
-    for pointer, value in entries:
+    for value, pointer in entries:
         key = _json_distinct_key(value)
         if key in allowed_keys or (value is None and permitted_null):
             continue
