@@ -262,3 +262,20 @@ def test_decimal_integer_type_accepts_integral_json_numbers():
         assert json_contract_error(value, schema) is None
     for value in ("1.01", "true", "false", '"1"'):
         assert json_contract_error(value, schema) is not None
+
+
+def test_local_json_pointer_decodes_percent_encoded_fragment():
+    schema = check_json_contract({
+        "$defs": {"a b": {"type": "string"}},
+        "$ref": "#/$defs/a%20b",
+    })
+    assert json_contract_error('"hello"', schema) is None
+    assert json_contract_error("12", schema) is not None
+
+
+def test_local_json_pointer_decodes_encoded_slash_before_pointer_tokens():
+    schema = check_json_contract({
+        "$defs": {"a/b": {"type": "integer"}},
+        "$ref": "#/$defs/a~1b",
+    })
+    assert json_contract_error("12", schema) is None
