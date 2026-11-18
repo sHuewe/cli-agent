@@ -557,3 +557,42 @@ def test_previous_output_keeps_json_syntax_and_fingerprint_checks(tmp_path: Path
             flow.steps[0], workspace=tmp_path, output=state,
             fingerprints=snapshots[""].previous_output_fingerprints,
         )
+
+
+def test_run_start_defers_dynamic_enum_for_unresolved_conditional_step(tmp_path: Path):
+    from cli_agent.workflows.flow import (
+        _capture_run_start_invocation, _SubflowTraversalBudget,
+    )
+
+    (tmp_path / "prompt.md").write_text("Return JSON", encoding="utf-8")
+    (tmp_path / "schema.json").write_text(
+        '{"type":"object","properties":{"choice":{"type":"string"}}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\ninputs = ["allowed"]\n'
+        '[[steps]]\nid = "gate"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\noutput = "gate.json"\n'
+        '[[steps]]\nid = "choose"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\noutput = "choose.json"\n'
+        'output_schema = "schema.json"\n'
+        'when = { ref = "steps.gate.output.enabled", eq = true }\n'
+        '[steps.output_schema_enums]\n'
+        '"/properties/choice" = "input.allowed"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+    (tmp_path / "choose.json").write_text(
+        '{"choice":"a"}', encoding="utf-8",
+    )
+    snapshots = {}
+    _capture_run_start_invocation(
+        flow, workspace=tmp_path, cache={},
+        flow_input={"allowed": []}, namespace="", snapshots=snapshots,
+        protected_paths={}, budget=_SubflowTraversalBudget(),
+    )
+    assert "choose" not in snapshots[""].available_outputs
+    assert any(
+        key[0] == "choose"
+        for key in snapshots[""].checkpoint_fingerprints
+    )
