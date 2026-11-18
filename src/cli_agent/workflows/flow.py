@@ -745,6 +745,8 @@ def _reserved_flow_input_paths(
 
         if step.json_operation is not None or step.filesystem_operation is not None:
             continue
+        if step.output_schema_path is not None:
+            reserved[_filesystem_path_key(step.output_schema_path)] = step.output_schema_path
         assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
@@ -1945,6 +1947,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
         response_format = str(response_format_value)
         output_schema = None
+        schema_path = None
         schema_name = raw.get("output_schema")
         if schema_name is not None:
             if response_format != "json" or prompt_value is None or raw_json_operation is not None or raw_filesystem_operation is not None or child_flow is not None:
@@ -2354,6 +2357,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 retry_overrides=dict(raw_retry) if raw_retry is not None else None,
                 response_format=response_format,
                 output_schema=output_schema,
+                output_schema_path=schema_path,
                 json_restart_attempts=json_restart_attempts,
                 approve_tools=approve_tools,
                 variables=variables,
