@@ -39,6 +39,7 @@ class FlowStep:
     iteration_id: str | None = None
     excluded_paths: tuple[Path, ...] = ()
     response_format: str = "text"
+    output_schema: dict[str, Any] | None = None
     # Explicit [steps.retry] keys, before load-time defaults are applied.
     retry_overrides: dict[str, int | float] | None = None
     when: dict[str, Any] | None = None
