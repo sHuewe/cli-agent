@@ -4,6 +4,7 @@ import argparse
 from decimal import Decimal, InvalidOperation
 import asyncio
 import contextvars
+import copy
 import logging
 import hashlib
 import json
@@ -2692,6 +2693,67 @@ def _render_flow_input_value(
     return value
 
 
+def _resolve_step_schema_enums(
+    step: FlowStep,
+    *,
+    outputs: dict[str, str],
+    flow_input: dict[str, Any],
+    item: Any = None,
+    allow_unavailable: bool = False,
+) -> FlowStep | None:
+    """Materialize enum values without mutating the cached FlowDefinition.
+
+    Only existing, typed flow values are accepted. In the run-start planner,
+    an unavailable earlier step prevents publication of an unvalidated
+    checkpoint; the fingerprint can still be captured for runtime verification.
+    """
+    if not step.output_schema_enums:
+        return step
+    assert step.output_schema is not None
+    from cli_agent.models.json_contract import (
+        check_json_contract, schema_pointer_target,
+    )
+
+    concrete = copy.deepcopy(step.output_schema)
+    for pointer, reference in step.output_schema_enums.items():
+        match = _DYNAMIC_VALUE_EXPR.fullmatch("${" + reference + "}")
+        assert match is not None  # Checked while loading the flow
+        prior_id = match.group("step_output_id")
+        if prior_id is not None and prior_id not in outputs:
+            if allow_unavailable:
+                return None
+            raise ValueError(
+                f"Enum source step {prior_id!r} is not available for "
+                f"step {step.step_id!r}."
+            )
+        value = _dynamic_value(
+            match,
+            item=item,
+            iteration_id=None,
+            conversation_item=None,
+            previous_output=None,
+            outputs=outputs,
+            flow_input=flow_input,
+        )
+        if not isinstance(value, list) or not 1 <= len(value) <= MAX_FOREACH_ITEMS:
+            raise ValueError(
+                f"output_schema_enums {pointer!r} requires a nonempty JSON array "
+                f"of at most {MAX_FOREACH_ITEMS} allowed values."
+            )
+        if any(
+            entry is not None and type(entry) not in (str, bool, int, float)
+            for entry in value
+        ):
+            raise ValueError(
+                f"output_schema_enums {pointer!r} accepts only scalar JSON values."
+            )
+        target = schema_pointer_target(concrete, pointer)
+        assert isinstance(target, dict)
+        target["enum"] = value
+    check_json_contract(concrete)
+    return replace(step, output_schema=concrete, output_schema_enums=None)
+
+
 def _conversation_items_for_iteration(
     step: FlowStep,
     *,
@@ -3017,7 +3079,7 @@ def _prepare_flow_output(
         return None
 
     checkpoint = _existing_json_checkpoint(
-        step,
+        replace(step, output_schema=None) if step.output_schema_enums else step,
         workspace=workspace,
         output=output,
     )
