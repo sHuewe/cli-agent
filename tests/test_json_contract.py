@@ -462,7 +462,7 @@ def test_dynamic_schema_enums_from_declared_flow_input(tmp_path: Path):
     source = tmp_path / "flow.toml"
     content = source.read_text(encoding="utf-8")
     content = content.replace(
-        "version = 1\\n", 'version = 1\\ninputs = ["choices"]\\n', 1,
+        "version = 1\n", 'version = 1\ninputs = ["choices"]\n', 1,
     )
     content = content.replace(
         "steps.discover.output.allowed", "input.choices",
