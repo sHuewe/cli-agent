@@ -13,7 +13,7 @@ import sys
 import tomllib
 import traceback
 from cli_agent.workflows import flow_compact_checkpoints as compact_checkpoints
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Callable
 
@@ -1340,6 +1340,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "retry",
         "response_format",
         "output_schema",
+        "output_schema_enums",
         "json_restart_attempts",
         "approve_tools",
         "vars",
@@ -1754,7 +1755,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "config", "model", "prompt_file", "context_file",
                 "add_file_context", "add_web_context", "output",
                 "overwrite_output", "workspace_access", "with_data",
-                "with_mcp", "exclude_paths", "retry", "response_format", "output_schema",
+                "with_mcp", "exclude_paths", "retry", "response_format", "output_schema", "output_schema_enums",
                 "approve_tools", "vars", "conversation_items",
                 "conversation_final_prompt_file", "json_inputs", "json_operation",
             }
@@ -1967,6 +1968,51 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 output_schema = check_json_contract(json.loads(schema_bytes))
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 raise ValueError(f"Invalid JSON Schema file for step {step_id!r}: {exc}") from exc
+        # Bind the enum keyword of selected schema objects to earlier
+        # structured step outputs, declared flow inputs, or foreach items.
+        raw_schema_enums = raw.get("output_schema_enums", {})
+        if not isinstance(raw_schema_enums, dict):
+            raise ValueError(f"steps[{index}].output_schema_enums must be a table.")
+        if raw_schema_enums and output_schema is None:
+            raise ValueError(
+                f"steps[{index}].output_schema_enums requires output_schema."
+            )
+        schema_enums: dict[str, str] = {}
+        for pointer, reference in raw_schema_enums.items():
+            if not isinstance(pointer, str) or not pointer.startswith("/"):
+                raise ValueError("output_schema_enums keys must be JSON Pointers starting with '/'.")
+            if not isinstance(reference, str):
+                raise ValueError("output_schema_enums values must be reference strings.")
+            from cli_agent.models.json_contract import schema_pointer_target
+            target = schema_pointer_target(output_schema, pointer)
+            if not isinstance(target, dict):
+                raise ValueError(f"output_schema_enums target {pointer!r} must be a schema object.")
+            if "enum" in target:
+                raise ValueError(f"output_schema_enums target {pointer!r} already declares enum.")
+            full = _DYNAMIC_VALUE_EXPR.fullmatch("${" + reference + "}")
+            if full is None or full.group("step_output_path") is None and full.group("step_output_id") is not None:
+                raise ValueError(f"Invalid output_schema_enums reference: {reference!r}.")
+            if (full.group("step_output_id") is None
+                    and full.group("input_path") is None
+                    and full.group("item_path") is None):
+                raise ValueError(
+                    "output_schema_enums supports steps.<id>.output.<field>, "
+                    "input.<field> or item.<field> references."
+                )
+            source_id = full.group("step_output_id")
+            if source_id is not None and (source_id == step_id or source_id not in known_ids):
+                raise ValueError(
+                    f"output_schema_enums references non-prior step {source_id!r}."
+                )
+            if full.group("item_path") is not None and raw.get("foreach") is None:
+                raise ValueError("output_schema_enums item reference requires foreach.")
+            if full.group("input_path") is not None:
+                root_input = full.group("input_path").split(".", 1)[0]
+                if root_input not in inputs:
+                    raise ValueError(f"Unknown output_schema_enums input {root_input!r}.")
+            if len(schema_enums) >= 32:
+                raise ValueError("output_schema_enums is limited to 32 bindings.")
+            schema_enums[pointer] = reference
         json_restart_attempts = raw.get("json_restart_attempts", 0)
         if (type(json_restart_attempts) is not int
                 or not 0 <= json_restart_attempts <= 2):
@@ -2358,6 +2404,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 response_format=response_format,
                 output_schema=output_schema,
                 output_schema_path=schema_path,
+                output_schema_enums=schema_enums or None,
                 json_restart_attempts=json_restart_attempts,
                 approve_tools=approve_tools,
                 variables=variables,
