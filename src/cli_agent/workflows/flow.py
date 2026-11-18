@@ -2756,6 +2756,10 @@ def _resolve_step_schema_enums(
         target = schema_pointer_target(concrete, pointer)
         assert isinstance(target, dict)
         target["enum"] = value
+    if len(json.dumps(concrete, ensure_ascii=False).encode("utf-8")) > 65536:
+        raise ValueError(
+            f"Effective output_schema for step {step.step_id!r} exceeds 64 KiB."
+        )
     check_json_contract(concrete)
     return replace(step, output_schema=concrete, output_schema_enums=None)
 
