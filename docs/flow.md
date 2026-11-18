@@ -333,3 +333,49 @@ cli-agent-flow run flow/okf/flow_okf_from_doctrine/flow.toml --workspace . --deb
 ```
 
 Debug tracebacks may contain internal paths and diagnostics; inspect before sharing. Diagnostics do not modify outputs or checkpoint resume semantics.
+
+
+## JSON Schema contracts for model steps
+
+A model step with `response_format = "json"` may optionally declare a
+workspace-local JSON Schema file. The schema is loaded and checked when the
+flow is loaded. It must be a Draft 2020-12 JSON Schema with a JSON object at
+the root. Only local `$ref` pointers are allowed; external references and
+dynamic references are rejected. Schema files are limited to 64 KiB.
+
+```toml
+[[steps]]
+id = "extract"
+prompt_file = "extract.md"
+response_format = "json"
+output_schema = "schemas/extract.schema.json"
+output = "results/extract.json"
+json_restart_attempts = 1
+```
+
+Example `schemas/extract.schema.json`:
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "score"],
+  "properties": {
+    "title": {"type": "string", "minLength": 1},
+    "score": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}
+```
+
+The schema is provided as a formatting requirement in the model system
+prompt and checked against the final JSON. Invalid answers use the existing
+in-context format correction budget; optional `json_restart_attempts` then
+starts a fresh attempt if correction is exhausted. Schema validation takes
+place before writing the output file, preventing invalid model responses
+from becoming checkpoints. The same rule applies to each iteration of a
+`foreach` or conversation step.
+
+A schema validates the structure, not the factual correctness of an answer.
+Schema files are trusted local configuration, not permission grants. Workspace
+and MCP security policies remain unchanged.
+
