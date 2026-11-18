@@ -197,3 +197,33 @@ path = "allowed.json"
         report = json.loads(saved.read_text(encoding="utf-8"))
         assert report["status"] == "ok"
         assert report["value"]["groups"][0]["folder_id"] == "approved"
+
+
+@pytest.mark.parametrize(("records", "expected_reason"), [
+    ([{}] * 1001, "missing_field"),
+    ([None] * 1001, "invalid_container"),
+    ([{"folder_id": "not-allowed"}] * 1001, "not_allowed"),
+])
+def test_finding_limit_applies_to_all_validation_failures(records, expected_reason):
+    allowed = {"folders": [{"id": "approved"}]}
+    candidate = {"groups": records}
+    with pytest.raises(ValueError, match="exceeds 1000 findings"):
+        check(allowed, candidate)
+    with pytest.raises(ValueError, match="exceeds 1000 findings"):
+        check(allowed, candidate, on_invalid="raise")
+
+    report = check(allowed, {"groups": records[:1000]})
+    assert report["status"] == "needs_attention"
+    assert len(report["errors"]) == 1000
+    assert all(err["reason"] == expected_reason for err in report["errors"])
+
+
+def test_finding_limit_covers_combined_structural_and_membership_failures():
+    allowed = {"folders": [{"id": "approved"}]}
+    # 600 structural defects and 401 values outside the allowed set.
+    candidate = {
+        "groups": ([{}] * 600)
+        + ([{"folder_id": "invalid"}] * 401)
+    }
+    with pytest.raises(ValueError, match="exceeds 1000 findings"):
+        check(allowed, candidate)
