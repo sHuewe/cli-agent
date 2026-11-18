@@ -433,3 +433,43 @@ def test_dynamic_schema_enums_use_foreach_item(tmp_path: Path):
         item={"allowed": ["a", "b"]},
     )
     assert resolved.output_schema["properties"]["choice"]["enum"] == ["a", "b"]
+
+
+def test_run_start_snapshot_checks_dynamic_enum_against_prior_checkpoint(tmp_path: Path):
+    from cli_agent.workflows.flow import (
+        _capture_run_start_invocation, _SubflowTraversalBudget,
+    )
+    flow = _dynamic_enum_flow(
+        tmp_path, reference="steps.discover.output.allowed",
+    )
+    (tmp_path / "choices.json").write_text(
+        '{"allowed":["red"]}', encoding="utf-8",
+    )
+    (tmp_path / "selection.json").write_text(
+        '{"choice":"blue"}', encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="does not match output_schema"):
+        _capture_run_start_invocation(
+            flow, workspace=tmp_path, cache={},
+            flow_input={}, namespace="", snapshots={},
+            protected_paths={}, budget=_SubflowTraversalBudget(),
+        )
+
+
+def test_dynamic_schema_enums_from_declared_flow_input(tmp_path: Path):
+    from cli_agent.workflows.flow import _resolve_step_schema_enums
+    _dynamic_enum_flow(tmp_path, reference="steps.discover.output.allowed")
+    source = tmp_path / "flow.toml"
+    content = source.read_text(encoding="utf-8")
+    content = content.replace(
+        "version = 1\\n", 'version = 1\\ninputs = ["choices"]\\n', 1,
+    )
+    content = content.replace(
+        "steps.discover.output.allowed", "input.choices",
+    )
+    source.write_text(content, encoding="utf-8")
+    step = load_flow(Path("flow.toml"), workspace=tmp_path).steps[1]
+    resolved = _resolve_step_schema_enums(
+        step, outputs={}, flow_input={"choices": ["red", "blue"]},
+    )
+    assert resolved.output_schema["properties"]["choice"]["enum"] == ["red", "blue"]
