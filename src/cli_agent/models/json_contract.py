@@ -9,6 +9,8 @@ import json
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from referencing import Registry
+from referencing.exceptions import NoSuchResource
 
 
 def check_json_contract(schema: Any) -> dict[str, Any]:
@@ -53,6 +55,30 @@ def check_json_contract(schema: Any) -> dict[str, Any]:
                     check_refs(child)
 
     check_refs(schema)
+    # Follow local pointers into nonstandard schema locations as well.
+    seen_pointers: set[str] = set()
+
+    def follow_local_refs(value: Any) -> None:
+        if isinstance(value, dict):
+            ref = value.get("$ref")
+            if isinstance(ref, str) and ref not in seen_pointers:
+                seen_pointers.add(ref)
+                target: Any = schema
+                for token in (ref[2:].split("/") if ref != "#" else []):
+                    token = token.replace("~1", "/").replace("~0", "~")
+                    try:
+                        target = target[int(token)] if isinstance(target, list) else target[token]
+                    except (KeyError, IndexError, ValueError, TypeError) as exc:
+                        raise ValueError(f"Unresolvable local JSON Schema reference: {ref}") from exc
+                check_refs(target)
+                follow_local_refs(target)
+            for child in value.values():
+                follow_local_refs(child)
+        elif isinstance(value, list):
+            for child in value:
+                follow_local_refs(child)
+
+    follow_local_refs(schema)
     try:
         Draft202012Validator.check_schema(schema)
     except Exception as exc:
@@ -63,8 +89,13 @@ def check_json_contract(schema: Any) -> dict[str, Any]:
 def json_contract_error(answer: str, schema: dict[str, Any]) -> str | None:
     """Return the first actionable schema error, or None if the JSON matches."""
     value = json.loads(answer)
+    def deny_remote_retrieval(uri: str) -> Any:
+        raise NoSuchResource(ref=uri)
+
     validator = Draft202012Validator(
-        schema, format_checker=Draft202012Validator.FORMAT_CHECKER
+        schema,
+        registry=Registry(retrieve=deny_remote_retrieval),
+        format_checker=Draft202012Validator.FORMAT_CHECKER,
     )
     issue = next(validator.iter_errors(value), None)
     if issue is None:
