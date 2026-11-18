@@ -6,6 +6,7 @@ cause a network request or access unrelated files during validation.
 from __future__ import annotations
 
 import json
+from urllib.parse import unquote
 from decimal import Decimal
 from typing import Any
 
@@ -70,7 +71,7 @@ def check_json_contract(schema: Any) -> dict[str, Any]:
         if isinstance(ref, str) and ref not in seen_pointers:
             seen_pointers.add(ref)
             target: Any = schema
-            for token in (ref[2:].split("/") if ref != "#" else []):
+            for token in (unquote(ref[1:]).lstrip("/").split("/") if ref != "#" else []):
                 token = token.replace("~1", "/").replace("~0", "~")
                 try:
                     target = target[int(token)] if isinstance(target, list) else target[token]
