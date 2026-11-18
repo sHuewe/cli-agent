@@ -254,3 +254,11 @@ def test_compact_checkpoint_identity_changes_when_schema_changes(tmp_path: Path)
     schema.write_text('{"type":"object","properties":{"ok":{"type":"string"}}}', encoding="utf-8")
     changed = checkpoint_path(tmp_path, flow, "", {})
     assert original != changed
+
+
+def test_decimal_integer_type_accepts_integral_json_numbers():
+    schema = check_json_contract({"type": "integer"})
+    for value in ("1", "1.0", "1e2", "-2.000"):
+        assert json_contract_error(value, schema) is None
+    for value in ("1.01", "true", "false", '"1"'):
+        assert json_contract_error(value, schema) is not None
