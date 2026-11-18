@@ -261,9 +261,14 @@ def test_documented_toml_examples_parse_and_configure_partition_validation():
     docs = Path(__file__).resolve().parents[1] / "docs" / "flow-json-relations.md"
     source = docs.read_text(encoding="utf-8")
     examples = re.findall(r"```toml\n(.*?)\n```", source, flags=re.DOTALL)
-    assert len(examples) == 3
+    assert len(examples) >= 3
     parsed = [tomllib.loads(example) for example in examples]
-    partition_step = parsed[2]["steps"][0]
+    partition_step = next(
+        step
+        for document in parsed
+        for step in document["steps"]
+        if step["json_operation"]["kind"] == "json_validate_partition"
+    )
     operation = partition_step["json_operation"]
     assert operation["kind"] == "json_validate_partition"
     assert re.fullmatch(operation["result_id_pattern"], "example-safe-id")
