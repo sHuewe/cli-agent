@@ -44,7 +44,7 @@ from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_ok
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from cli_agent.workflows.flow_json_relations import (
-    project_fields, join_by_alias, validate_partition,
+    project_fields, join_by_alias, validate_partition, validate_allowed_values,
 )
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
 from cli_agent.platform.logging_setup import configure_logging
@@ -1540,9 +1540,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items", "fields", "items_path", "item_id_path", "item_key_path", "mapping_path", "mapping_id_path", "mapping_alias_path", "id_prefix", "require_all_aliases", "source_field", "target_field", "output_field", "wrap_batches", "source_input", "source_path", "source_records_path", "reference_template", "distinct_path", "min_distinct", "selected_path", "references_path", "excluded_path", "source_members_path", "result_members_path", "source_status_path", "source_warnings_path", "result_status_path", "result_warnings_path", "result_id_path", "result_id_prefix", "result_id_pattern", "member_fields", "member_patterns", "result_path_field", "result_path_template"
+                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items", "fields", "items_path", "item_id_path", "item_key_path", "mapping_path", "mapping_id_path", "mapping_alias_path", "id_prefix", "require_all_aliases", "source_field", "target_field", "output_field", "wrap_batches", "source_input", "source_path", "source_records_path", "reference_template", "distinct_path", "min_distinct", "selected_path", "references_path", "excluded_path", "source_members_path", "result_members_path", "source_status_path", "source_warnings_path", "result_status_path", "result_warnings_path", "result_id_path", "result_id_prefix", "result_id_pattern", "member_fields", "member_patterns", "result_path_field", "result_path_template", "allowed_path", "values_path", "null_policy", "on_invalid"
                 }
-                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "json_project", "json_join_aliases", "json_validate_partition"}
+                or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "json_project", "json_join_aliases", "json_validate_partition", "json_validate_allowed_values"}
                 or not isinstance(raw_json_operation.get("input"), str)
                 or not _STEP_ID.fullmatch(raw_json_operation["input"])
             ):
@@ -1633,12 +1633,29 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                                      or not required_sources <= set(raw.get("json_inputs", {}))):
                 raise ValueError("JSON grouping operation requires the specified json_inputs.")
             kind = raw_json_operation["kind"]
-            if kind in {"json_project", "json_join_aliases", "json_validate_partition"}:
+            if kind in {"json_project", "json_join_aliases", "json_validate_partition", "json_validate_allowed_values"}:
                 fieldmap = raw_json_operation.get("fields")
                 if kind == "json_project":
                     if (not isinstance(fieldmap, dict) or not fieldmap
                             or any(not isinstance(k, str) or not k or not isinstance(v, str) for k, v in fieldmap.items())):
                         raise ValueError("json_project requires fields mapping.")
+                if kind == "json_validate_allowed_values":
+                    if (not {"allowed_path", "values_path"} <= set(raw_json_operation)
+                            or any(not isinstance(raw_json_operation.get(name), str)
+                                   for name in ("allowed_path", "values_path"))
+                            or "allowed" not in raw.get("json_inputs", {})
+                            or raw_json_operation.get("null_policy", "forbid")
+                                   not in {"forbid", "allow", "when_allowed_empty"}
+                            or raw_json_operation.get("on_invalid", "report")
+                                   not in {"report", "raise"}):
+                        raise ValueError(
+                            "json_validate_allowed_values requires allowed JSON,"
+                            " allowed_path, values_path and valid policies."
+                        )
+                    from cli_agent.workflows.flow_json_relations import _tokens
+                    if ("*" not in _tokens(raw_json_operation["allowed_path"])
+                            or "*" not in _tokens(raw_json_operation["values_path"])):
+                        raise ValueError("json_validate_allowed_values selectors must use array wildcards.")
                 if kind == "json_join_aliases":
                     required = {"items_path", "item_id_path", "item_key_path",
                                 "mapping_path", "mapping_id_path", "mapping_alias_path"}
@@ -5265,6 +5282,15 @@ def _execute_json_step(
     )
     if operation["kind"] == "json_project":
         transformed = project_fields(source, fields=operation["fields"])
+    elif operation["kind"] == "json_validate_allowed_values":
+        transformed = validate_allowed_values(
+            allowed=_parse_structured_output(json_values["allowed"], step_id=step.step_id),
+            candidate=source,
+            allowed_path=operation["allowed_path"],
+            values_path=operation["values_path"],
+            null_policy=operation.get("null_policy", "forbid"),
+            on_invalid=operation.get("on_invalid", "report"),
+        )
     elif operation["kind"] == "json_join_aliases":
         transformed = join_by_alias(
             items=source,
