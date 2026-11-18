@@ -5883,6 +5883,7 @@ def _preflight_foreach_output_batch(
     workspace: Path,
     context: _FlowExecutionContext,
     flow_input: dict[str, Any],
+    prior_outputs: dict[str, str],
     items: list[Any],
     iteration_ids: list[str | None],
     namespace: str,
@@ -5983,7 +5984,7 @@ def _preflight_foreach_output_batch(
         )
 
     preflight_checkpoint_fingerprints = []
-    for output, iteration_id in zip(preflight_outputs, iteration_ids):
+    for item, output, iteration_id in zip(items, preflight_outputs, iteration_ids):
         assert output is not None
         _set_flow_diagnostic(
             phase="preflight-checkpoint-or-output", flow=flow.source,
@@ -5996,8 +5997,12 @@ def _preflight_foreach_output_batch(
             flow_source=flow.source,
         )
         if expected_fingerprint is not None:
+            bound_step = _resolve_step_schema_enums(
+                step, outputs=prior_outputs, flow_input=flow_input, item=item,
+            )
+            assert bound_step is not None
             _verified_preflight_checkpoint(
-                step,
+                bound_step,
                 workspace=workspace,
                 output=output,
                 expected_fingerprint=expected_fingerprint,
@@ -6433,7 +6438,7 @@ async def _run_flow_internal(
                 _preflight_foreach_output_batch(
                     step, flow=flow, workspace=workspace,
                     context=context, flow_input=flow_input,
-                    items=items, iteration_ids=iteration_ids,
+                    prior_outputs=outputs, items=items, iteration_ids=iteration_ids,
                     namespace=namespace, claimed_outputs=claimed_outputs,
                     reserved_inputs=reserved_inputs,
                     initial_checkpoint_fingerprints=initial_checkpoint_fingerprints,
