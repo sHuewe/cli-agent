@@ -195,3 +195,21 @@ def test_existing_json_checkpoint_rejects_schema_mismatch(tmp_path: Path):
     assert json.loads(_existing_json_checkpoint(
         step, workspace=tmp_path, output=output,
     )) == {"ok": True}
+
+
+def test_local_ref_cannot_hide_external_ref():
+    with pytest.raises(ValueError, match="local"):
+        check_json_contract({
+            "$ref": "#/hidden",
+            "hidden": {"$ref": "https://example.invalid/remote.json"},
+        })
+
+
+def test_local_ref_to_literal_const_with_keyword_names():
+    schema = check_json_contract({
+        "$ref": "#/$defs/entry",
+        "$defs": {"entry": {"const": {"$id": "ordinary-data", "$ref": "not-a-schema"}}},
+    })
+    assert json_contract_error(
+        '{"$id":"ordinary-data","$ref":"not-a-schema"}', schema,
+    ) is None
