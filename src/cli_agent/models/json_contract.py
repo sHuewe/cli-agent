@@ -9,7 +9,7 @@ import json
 from decimal import Decimal
 from typing import Any
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, validators
 from referencing import Registry
 from referencing.exceptions import NoSuchResource
 
@@ -118,7 +118,20 @@ def json_contract_error(answer: str, schema: dict[str, Any]) -> str | None:
     def deny_remote_retrieval(uri: str) -> Any:
         raise NoSuchResource(ref=uri)
 
-    validator = Draft202012Validator(
+    def is_integer(checker: Any, value: Any) -> bool:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, Decimal):
+            return value.is_finite() and value == value.to_integral_value()
+        return Draft202012Validator.TYPE_CHECKER.is_type(value, "integer")
+
+    decimal_validator = validators.extend(
+        Draft202012Validator,
+        type_checker=Draft202012Validator.TYPE_CHECKER.redefine(
+            "integer", is_integer
+        ),
+    )
+    validator = decimal_validator(
         decimal_numbers(schema),
         registry=Registry(retrieve=deny_remote_retrieval),
         format_checker=Draft202012Validator.FORMAT_CHECKER,
