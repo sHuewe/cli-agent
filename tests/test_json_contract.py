@@ -302,3 +302,30 @@ def test_valid_local_reference_target_under_unknown_keyword():
     })
     assert json_contract_error("5", schema) is None
     assert json_contract_error('"wrong"', schema) is not None
+
+
+@pytest.mark.parametrize(("multiple_of", "valid", "invalid"), [
+    (1e-30, "1", "1.5e-30"),
+    (0.1, "0.3", "0.31"),
+    (1e-40, "1e-10", "1.5e-40"),
+])
+def test_multiple_of_is_independent_of_decimal_context_precision(
+    multiple_of, valid, invalid,
+):
+    from decimal import getcontext, localcontext
+
+    schema = check_json_contract({"type": "number", "multipleOf": multiple_of})
+    with localcontext() as ctx:
+        ctx.prec = 6
+        assert json_contract_error(valid, schema) is None
+        assert json_contract_error(invalid, schema) is not None
+
+
+def test_multiple_of_in_nested_schema_and_local_reference():
+    schema = check_json_contract({
+        "type": "object",
+        "$defs": {"tiny": {"type": "number", "multipleOf": 1e-30}},
+        "properties": {"value": {"$ref": "#/$defs/tiny"}},
+    })
+    assert json_contract_error('{"value": 1}', schema) is None
+    assert json_contract_error('{"value": 1.5e-30}', schema) is not None
