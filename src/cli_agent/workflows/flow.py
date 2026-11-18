@@ -2878,6 +2878,14 @@ def _existing_json_output(
         max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
     )
     _parse_structured_output(text, step_id=step.step_id)
+    if step.output_schema is not None:
+        from cli_agent.models.json_contract import json_contract_error
+        error = json_contract_error(text, step.output_schema)
+        if error is not None:
+            raise ValueError(
+                f"JSON checkpoint for step {step.step_id!r} does not match "
+                f"output_schema ({output}): {error}"
+            )
     return text
 
 
