@@ -329,3 +329,107 @@ def test_multiple_of_in_nested_schema_and_local_reference():
     })
     assert json_contract_error('{"value": 1}', schema) is None
     assert json_contract_error('{"value": 1.5e-30}', schema) is not None
+
+
+def _dynamic_enum_flow(tmp_path: Path, *, reference: str, foreach: str | None = None):
+    (tmp_path / "prompt.md").write_text("Return JSON", encoding="utf-8")
+    (tmp_path / "schema.json").write_text(json.dumps({
+        "type": "object",
+        "required": ["choice"],
+        "properties": {"choice": {"type": "string"}},
+    }), encoding="utf-8")
+    source = '[[steps]]\nid = "discover"\nprompt_file = "prompt.md"\nresponse_format = "json"\noutput = "choices.json"\n'
+    target = (
+        '\n[[steps]]\nid = "select"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\noutput_schema = "schema.json"\n'
+        'output = "selection.json"\n'
+    )
+    if foreach is not None:
+        target += f'foreach = "{foreach}"\n'
+        target = target.replace('output = "selection.json"', 'output = "selection-${iteration.id}.json"')
+    target += f'\n[steps.output_schema_enums]\n"/properties/choice" = "{reference}"\n'
+    (tmp_path / "flow.toml").write_text(source + target, encoding="utf-8")
+    return load_flow(Path("flow.toml"), workspace=tmp_path)
+
+
+def test_dynamic_schema_enums_from_prior_step_output(tmp_path: Path):
+    from cli_agent.workflows.flow import _resolve_step_schema_enums
+    flow = _dynamic_enum_flow(
+        tmp_path, reference="steps.discover.output.allowed",
+    )
+    step = flow.steps[1]
+    concrete = _resolve_step_schema_enums(
+        step, outputs={"discover": '{"allowed":["red","blue"]}'}, flow_input={},
+    )
+    assert concrete.output_schema["properties"]["choice"]["enum"] == ["red", "blue"]
+    assert json_contract_error('{"choice":"blue"}', concrete.output_schema) is None
+    assert json_contract_error('{"choice":"green"}', concrete.output_schema) is not None
+    assert "enum" not in step.output_schema["properties"]["choice"]
+
+
+def test_dynamic_schema_enum_rejects_unavailable_sources_and_bad_lists(tmp_path: Path):
+    from cli_agent.workflows.flow import _resolve_step_schema_enums
+    step = _dynamic_enum_flow(
+        tmp_path, reference="steps.discover.output.allowed",
+    ).steps[1]
+    assert _resolve_step_schema_enums(
+        step, outputs={}, flow_input={}, allow_unavailable=True,
+    ) is None
+    with pytest.raises(ValueError, match="not available"):
+        _resolve_step_schema_enums(step, outputs={}, flow_input={})
+    for value in ("[]", '"wrong"', '[{"nested":true}]'):
+        with pytest.raises(ValueError, match="output_schema_enums"):
+            _resolve_step_schema_enums(
+                step, outputs={"discover": '{"allowed":' + value + "}"}, flow_input={},
+            )
+
+
+def test_dynamic_schema_enum_rejects_future_reference(tmp_path: Path):
+    with pytest.raises(ValueError, match="non-prior step"):
+        _dynamic_enum_flow(
+            tmp_path, reference="steps.select.output.allowed",
+        )
+
+
+def test_dynamic_schema_enum_requires_matching_schema_property(tmp_path: Path):
+    (tmp_path / "prompt.md").write_text("Return JSON", encoding="utf-8")
+    (tmp_path / "schema.json").write_text('{"type":"object"}', encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        '[[steps]]\nid = "select"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\noutput_schema = "schema.json"\n'
+        '[steps.output_schema_enums]\n"/properties/missing" = "input.allowed"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="schema pointer"):
+        load_flow(Path("flow.toml"), workspace=tmp_path)
+
+
+def test_dynamic_schema_enums_validate_reused_checkpoint(tmp_path: Path):
+    from cli_agent.workflows.flow import (
+        _resolve_step_schema_enums, _existing_json_checkpoint,
+    )
+    step = _dynamic_enum_flow(
+        tmp_path, reference="steps.discover.output.allowed",
+    ).steps[1]
+    concrete = _resolve_step_schema_enums(
+        step, outputs={"discover": '{"allowed":["red"]}'}, flow_input={},
+    )
+    output = tmp_path / "selection.json"
+    output.write_text('{"choice":"blue"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="does not match output_schema"):
+        _existing_json_checkpoint(concrete, workspace=tmp_path, output=output)
+    output.write_text('{"choice":"red"}', encoding="utf-8")
+    assert _existing_json_checkpoint(concrete, workspace=tmp_path, output=output)
+
+
+def test_dynamic_schema_enums_use_foreach_item(tmp_path: Path):
+    from cli_agent.workflows.flow import _resolve_step_schema_enums
+    step = _dynamic_enum_flow(
+        tmp_path, reference="item.allowed",
+        foreach="steps.discover.output.groups",
+    ).steps[1]
+    resolved = _resolve_step_schema_enums(
+        step, outputs={}, flow_input={},
+        item={"allowed": ["a", "b"]},
+    )
+    assert resolved.output_schema["properties"]["choice"]["enum"] == ["a", "b"]
