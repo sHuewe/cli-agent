@@ -41,6 +41,7 @@ class FlowStep:
     response_format: str = "text"
     output_schema: dict[str, Any] | None = None
     output_schema_path: Path | None = None
+    output_schema_enums: dict[str, str] | None = None
     # Explicit [steps.retry] keys, before load-time defaults are applied.
     retry_overrides: dict[str, int | float] | None = None
     when: dict[str, Any] | None = None
