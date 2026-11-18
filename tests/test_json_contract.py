@@ -91,3 +91,59 @@ def test_flow_rejects_schema_for_text_step(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="requires a JSON model step"):
         load_flow(Path("flow.toml"), workspace=tmp_path)
+
+@pytest.mark.asyncio
+async def test_schema_mismatch_is_corrected_within_same_model_run():
+    from types import SimpleNamespace
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+
+    calls = []
+
+    async def fake_loop(**kwargs):
+        calls.append(kwargs)
+        return '{"ok": true}'
+
+    agent = SimpleNamespace(
+        response_format="json",
+        output_schema={
+            "type": "object", "required": ["ok"],
+            "properties": {"ok": {"type": "boolean"}},
+        },
+        _agui_pending_json_repairs=0,
+        _run_model_loop=fake_loop,
+        max_tool_calls=10,
+    )
+    messages = []
+    result = await ConversationMixin._ensure_json_response(
+        agent, '{"ok": "yes"}', messages=messages, tools=[], routes={},
+        enabled_server_names=set(), run_state=SimpleNamespace(),
+    )
+    assert json.loads(result) == {"ok": True}
+    assert len(calls) == 1
+    assert "schema" in messages[-1]["content"].lower()
+    assert agent._agui_pending_json_repairs == 0
+
+
+@pytest.mark.asyncio
+async def test_unfixable_schema_mismatch_raises():
+    from types import SimpleNamespace
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+
+    async def fake_loop(**kwargs):
+        return '{"ok": "still invalid"}'
+
+    agent = SimpleNamespace(
+        response_format="json",
+        output_schema={
+            "type": "object", "required": ["ok"],
+            "properties": {"ok": {"type": "boolean"}},
+        },
+        _agui_pending_json_repairs=0,
+        _run_model_loop=fake_loop,
+        max_tool_calls=10,
+    )
+    with pytest.raises(ValueError, match="kein valid JSON"):
+        await ConversationMixin._ensure_json_response(
+            agent, '{"ok": "invalid"}', messages=[], tools=[], routes={},
+            enabled_server_names=set(), run_state=SimpleNamespace(),
+        )
