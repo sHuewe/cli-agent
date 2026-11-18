@@ -81,4 +81,7 @@ def test_json_type_distinctness_and_pointer_escaping():
 @pytest.mark.parametrize("invalid", ["/folders/id", "folders/*/id"])
 def test_rejects_selectors_without_valid_wildcard(invalid):
     with pytest.raises(ValueError):
-        check({"folders": []}, {"groups": []}, allowed_path=invalid)
+        validate_allowed_values(
+            allowed={"folders": []}, candidate={"groups": []},
+            allowed_path=invalid, values_path="/groups/*/folder_id",
+        )
