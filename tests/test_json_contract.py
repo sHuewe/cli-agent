@@ -279,3 +279,12 @@ def test_local_json_pointer_decodes_encoded_slash_before_pointer_tokens():
         "$ref": "#/$defs/a~1b",
     })
     assert json_contract_error("12", schema) is None
+
+
+def test_local_json_pointer_preserves_empty_property_name():
+    schema = check_json_contract({
+        "$ref": "#//x",
+        "": {"x": {"type": "integer"}},
+    })
+    assert json_contract_error("42", schema) is None
+    assert json_contract_error('"wrong"', schema) is not None
