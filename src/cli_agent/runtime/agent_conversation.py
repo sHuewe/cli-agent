@@ -27,7 +27,7 @@ from cli_agent.models.model import log_model_call_diagnostics
 from cli_agent.security.mcp_limits import MCP_TOOL_CALL_TIMEOUT_SECONDS, await_mcp_operation
 
 logger = logging.getLogger("cli_agent.runtime.agent_conversation")
-MAX_RESPONSE_FORMAT_REPAIRS = 2
+MAX_RESPONSE_FORMAT_REPAIRS = 5
 _JSON_CODE_FENCE = re.compile(
     r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*)\r?\n```[ \t]*\Z",
     re.IGNORECASE | re.DOTALL,
