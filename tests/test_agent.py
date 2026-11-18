@@ -965,12 +965,15 @@ def test_json_response_repair_keeps_tools_and_tool_history(tmp_path: Path) -> No
     assert "use available tools" in repair_messages[-1]["content"]
 
 
-def test_json_response_format_fails_after_two_repairs(tmp_path: Path) -> None:
+def test_json_response_format_fails_after_five_repairs(tmp_path: Path) -> None:
     model = RecordingModel(
         [
             {"role": "assistant", "content": "not json 1"},
             {"role": "assistant", "content": "not json 2"},
             {"role": "assistant", "content": "not json 3"},
+            {"role": "assistant", "content": "not json 4"},
+            {"role": "assistant", "content": "not json 5"},
+            {"role": "assistant", "content": "not json 6"},
         ]
     )
     agent = CliAgent(
@@ -981,10 +984,10 @@ def test_json_response_format_fails_after_two_repairs(tmp_path: Path) -> None:
     )
     agent._exit_stack = SimpleNamespace()
 
-    with pytest.raises(ValueError, match="nach 2 Korrekturversuchen"):
+    with pytest.raises(ValueError, match="nach 5 Korrekturversuchen"):
         asyncio.run(agent.ask("Antworte als JSON."))
 
-    assert len(model.calls) == 3
+    assert len(model.calls) == 6
 
 
 @pytest.mark.parametrize("invalid_json", ["NaN", "Infinity", "-Infinity"])
