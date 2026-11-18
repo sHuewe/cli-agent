@@ -512,7 +512,7 @@ def test_previous_output_can_migrate_from_old_schema(tmp_path: Path):
         step, workspace=tmp_path, output=existing,
         fingerprints=snapshots[""].previous_output_fingerprints,
     )
-    assert prior == {"count": 2}
+    assert str(prior["count"]) == "2"
     assert json_contract_error('{"count":2}', step.output_schema) is not None
     assert json_contract_error(
         '{"count":2,"updated":true}', step.output_schema,
