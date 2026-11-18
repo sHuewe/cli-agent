@@ -77,6 +77,15 @@ def check_json_contract(schema: Any) -> dict[str, Any]:
                     target = target[int(token)] if isinstance(target, list) else target[token]
                 except (KeyError, IndexError, ValueError, TypeError) as exc:
                     raise ValueError(f"Unresolvable local JSON Schema reference: {ref}") from exc
+            # A local pointer may refer to an otherwise unknown keyword.
+            # The root metaschema validation will not inspect that target,
+            # so validate it explicitly before allowing model execution.
+            try:
+                Draft202012Validator.check_schema(target)
+            except Exception as exc:
+                raise ValueError(
+                    f"Invalid JSON Schema reference target {ref!r}: {exc}"
+                ) from exc
             walk(target)
         for keyword in ("$defs", "definitions", "properties", "patternProperties", "dependentSchemas"):
             children = value.get(keyword)
