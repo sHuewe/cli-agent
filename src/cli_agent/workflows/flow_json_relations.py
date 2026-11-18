@@ -360,3 +360,133 @@ def validate_partition(
     validated["validated_group_count"] = len(src)
     validated["validated_eligible_count"] = sum(eligible for eligible, _ in src.values())
     return validated
+
+
+def validate_allowed_values(
+    *,
+    allowed: Any,
+    candidate: Any,
+    allowed_path: str,
+    values_path: str,
+    null_policy: str = "forbid",
+    on_invalid: str = "report",
+) -> dict[str, Any]:
+    """Compare JSON-selected values against an explicitly selected allowed set.
+
+    All paths are RFC 6901 selectors with optional "*" array elements.
+    A missing candidate field is reported as a correction finding rather than
+    accidentally accepted. All other JSON primitive/structured types compare
+    by canonical typed value. The complete original candidate is retained for
+    downstream conditional repair or use via a Flow result_fallback.
+    """
+    if null_policy not in {"forbid", "allow", "when_allowed_empty"}:
+        raise ValueError("null_policy must be forbid, allow or when_allowed_empty.")
+    if on_invalid not in {"report", "raise"}:
+        raise ValueError("on_invalid must be report or raise.")
+    for pointer in (allowed_path, values_path):
+        if "*" not in _tokens(pointer):
+            raise ValueError("Both JSON selectors must include an array wildcard.")
+
+    # The allowed side is authoritative. Invalid/missing allowed selectors
+    # must fail closed; an explicitly empty array, however, is valid.
+    allowed_entries = [value for value, _ in _values(allowed, allowed_path)]
+    allowed_keys = {_json_distinct_key(value) for value in allowed_entries}
+    permitted_null = (
+        null_policy == "allow"
+        or (null_policy == "when_allowed_empty" and not allowed_entries)
+    )
+    entries: list[tuple[str, Any]] = []
+    findings: list[dict[str, Any]] = []
+    max_findings = 1000
+
+    def add_finding(finding: dict[str, Any]) -> None:
+        # Apply one bound to ALL failure types, including structural errors
+        # discovered while walking the candidate JSON selection.
+        if len(findings) >= max_findings:
+            raise ValueError(
+                f"JSON membership validation exceeds {max_findings} findings."
+            )
+        findings.append(finding)
+
+    def esc(part: str) -> str:
+        return part.replace("~", "~0").replace("/", "~1")
+
+    # Walk candidate selectors without assuming every LLM-generated object
+    # contains the final field. Record its exact location for the repair LLM.
+    nodes = [(candidate, "")]
+    for token in _tokens(values_path):
+        next_nodes: list[tuple[Any, str]] = []
+        for node, pointer in nodes:
+            if token == "*":
+                if not isinstance(node, list):
+                    add_finding({
+                        "path": pointer or "", "reason": "expected_array",
+                        "value": deepcopy(node),
+                    })
+                    continue
+                next_nodes.extend(
+                    (entry, f"{pointer}/{index}")
+                    for index, entry in enumerate(node)
+                )
+            elif isinstance(node, dict):
+                path = f"{pointer}/{esc(token)}"
+                if token not in node:
+                    add_finding({
+                        "path": path, "reason": "missing_field",
+                    })
+                else:
+                    next_nodes.append((node[token], path))
+            elif isinstance(node, list) and token.isdecimal():
+                i = int(token)
+                path = f"{pointer}/{i}"
+                if i >= len(node):
+                    add_finding({"path": path, "reason": "missing_index"})
+                else:
+                    next_nodes.append((node[i], path))
+            else:
+                add_finding({
+                    "path": pointer or "", "reason": "invalid_container",
+                    "value": deepcopy(node),
+                })
+            if len(next_nodes) + len(findings) > _MAX_SELECTED:
+                raise ValueError("JSON validation selection exceeds maximum items.")
+        nodes = next_nodes
+    entries = nodes
+    if not entries and not findings:
+        add_finding({"path": values_path, "reason": "no_values"})
+
+    for value, pointer in entries:
+        key = _json_distinct_key(value)
+        if key in allowed_keys or (value is None and permitted_null):
+            continue
+        add_finding({
+            "path": pointer,
+            "reason": "null_not_allowed" if value is None else "not_allowed",
+            "value": deepcopy(value),
+        })
+
+    # Present findings in original document order (including missing fields),
+    # rather than discovering all missing fields before invalid values.
+    def location(finding: dict[str, Any]) -> tuple[tuple[int, Any], ...]:
+        return tuple(
+            (1, int(token)) if token.isdecimal() else (0, token)
+            for token in finding["path"].split("/")[1:]
+        )
+    findings.sort(key=location)
+
+    if on_invalid == "raise" and findings:
+        details = ", ".join(
+            f"{finding['path'] or '/'} ({finding['reason']})"
+            for finding in findings[:10]
+        )
+        raise ValueError(
+            f"{len(findings)} JSON value(s) outside allowed set: {details}"
+        )
+
+    return {
+        "status": "needs_attention" if findings else "ok",
+        "errors": findings,
+        "checked_count": len(entries),
+        "allowed_values": deepcopy(allowed_entries),
+        "value": deepcopy(candidate),
+    }

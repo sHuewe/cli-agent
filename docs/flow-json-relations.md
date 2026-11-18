@@ -120,6 +120,59 @@ they must not be treated as successful.
 `/state~0status` for `state~status`. The validated status is written
 back to that exact decoded field.
 
+
+## `json_validate_allowed_values`
+
+Compare the complete values selected from one JSON document with values
+selected from another. Both JSON pointers support array wildcards (`*`).
+This operation is **schema-neutral** and does not know what a folder, topic,
+category or workflow is.
+
+```toml
+[[steps]]
+id = "validate_membership"
+output = "state/membership-report.json"
+[steps.json_operation]
+kind = "json_validate_allowed_values"
+input = "candidate"
+allowed_path = "/categories/*/id"
+values_path = "/entries/*/category_id"
+null_policy = "when_allowed_empty"
+on_invalid = "report"
+[steps.json_inputs.allowed]
+path = "state/allowed-categories.json"
+[steps.json_inputs.candidate]
+path = "state/candidate.json"
+```
+
+The output is a JSON object with
+`status = "ok" | "needs_attention"`, `errors` (JSON-pointer paths and
+individual `reason` values), `checked_count`, `allowed_values`, and
+`value` (the **complete unmodified input candidate**). Valid candidates
+are passed through unmodified via `report.value`. The `report` mode does
+not throw for invalid or missing selected fields; it returns actionable
+findings. The `raise` mode throws when any value is missing or invalid.
+
+`null_policy` supports:
+- `forbid` (default): null is invalid unless null is literally in the
+  allowed values;
+- `allow`: null is always valid;
+- `when_allowed_empty`: null is valid when the allowed array has no values.
+
+An absent or malformed allowed-values JSON path is a hard error, never an
+empty allow-list. An empty candidate collection yields `needs_attention`
+rather than a false success. The operation enforces a limit on reported
+errors. Only valid JSON types are compared, preserving the distinction
+between booleans, numbers and strings.
+
+For a conditional LLM repair, follow the validator with a model step
+guarded by `when = { ref = "steps.validate_membership.output.status",
+eq = "needs_attention" }`. Run the same JSON operation again on the model's
+corrected JSON with `on_invalid = "raise"`. In a nested flow use
+`result = "steps.recheck.output.value"` and
+`result_fallback = "steps.validate_membership.output.value"` so the
+unmodified valid candidate is returned when repair is skipped.
+
 ## Count-bounded array fragmentation
 
 The existing `batch_arrays` operation now accepts
