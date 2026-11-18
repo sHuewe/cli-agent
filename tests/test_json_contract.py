@@ -213,3 +213,20 @@ def test_local_ref_to_literal_const_with_keyword_names():
     assert json_contract_error(
         '{"$id":"ordinary-data","$ref":"not-a-schema"}', schema,
     ) is None
+
+
+def test_flow_reserves_schema_as_protected_input(tmp_path: Path):
+    from cli_agent.workflows.flow import _reserved_flow_input_paths, _filesystem_path_key
+    (tmp_path / "prompt.md").write_text("Return JSON", encoding="utf-8")
+    schema_path = tmp_path / "contract.json"
+    schema_path.write_text('{"type":"object"}', encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "check"\n'
+        'prompt_file = "prompt.md"\nresponse_format = "json"\n'
+        'output_schema = "contract.json"\noutput = "contract.json"\n'
+        'overwrite_output = true\n', encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+    assert flow.steps[0].output_schema_path == schema_path
+    reserved = _reserved_flow_input_paths(flow, workspace=tmp_path)
+    assert _filesystem_path_key(schema_path) in reserved
