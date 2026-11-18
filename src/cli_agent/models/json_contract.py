@@ -6,6 +6,7 @@ cause a network request or access unrelated files during validation.
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import unquote
 from decimal import Decimal
 from fractions import Fraction
@@ -15,6 +16,30 @@ from jsonschema import Draft202012Validator, validators
 from jsonschema.exceptions import ValidationError
 from referencing import Registry
 from referencing.exceptions import NoSuchResource
+
+
+
+def schema_pointer_target(schema: Any, pointer: str) -> Any:
+    """Resolve a local JSON Pointer without interpreting keys as keywords."""
+    if not isinstance(pointer, str) or not pointer.startswith("/"):
+        raise ValueError("Schema pointer must start with '/'.")
+    target = schema
+    for raw_token in pointer[1:].split("/"):
+        if "~" in raw_token and not __import__("re").fullmatch(r"(?:[^~]|~[01])*", raw_token):
+            raise ValueError(f"Invalid JSON Pointer escape in {pointer!r}.")
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        try:
+            if isinstance(target, dict):
+                target = target[token]
+            elif isinstance(target, list) and token.isascii() and token.isdecimal() and (
+                token == "0" or not token.startswith("0")
+            ):
+                target = target[int(token)]
+            else:
+                raise KeyError(token)
+        except (KeyError, IndexError) as exc:
+            raise ValueError(f"Unknown schema pointer: {pointer!r}.") from exc
+    return target
 
 
 def check_json_contract(schema: Any) -> dict[str, Any]:
