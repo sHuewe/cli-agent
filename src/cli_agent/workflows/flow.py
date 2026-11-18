@@ -4,6 +4,7 @@ import argparse
 from decimal import Decimal, InvalidOperation
 import asyncio
 import contextvars
+import copy
 import logging
 import hashlib
 import json
@@ -13,7 +14,7 @@ import sys
 import tomllib
 import traceback
 from cli_agent.workflows import flow_compact_checkpoints as compact_checkpoints
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Callable
 
@@ -745,6 +746,8 @@ def _reserved_flow_input_paths(
 
         if step.json_operation is not None or step.filesystem_operation is not None:
             continue
+        if step.output_schema_path is not None:
+            reserved[_filesystem_path_key(step.output_schema_path)] = step.output_schema_path
         assert step.prompt_file is not None
         prompt_path = _workspace_path(
             workspace,
@@ -1337,6 +1340,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "exclude_paths",
         "retry",
         "response_format",
+        "output_schema",
+        "output_schema_enums",
         "json_restart_attempts",
         "approve_tools",
         "vars",
@@ -1751,7 +1756,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "config", "model", "prompt_file", "context_file",
                 "add_file_context", "add_web_context", "output",
                 "overwrite_output", "workspace_access", "with_data",
-                "with_mcp", "exclude_paths", "retry", "response_format",
+                "with_mcp", "exclude_paths", "retry", "response_format", "output_schema", "output_schema_enums",
                 "approve_tools", "vars", "conversation_items",
                 "conversation_final_prompt_file", "json_inputs", "json_operation",
             }
@@ -1943,6 +1948,72 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 f"steps[{index}].response_format must be 'text' or 'json'."
             )
         response_format = str(response_format_value)
+        output_schema = None
+        schema_path = None
+        schema_name = raw.get("output_schema")
+        if schema_name is not None:
+            if response_format != "json" or prompt_value is None or raw_json_operation is not None or raw_filesystem_operation is not None or child_flow is not None:
+                raise ValueError(f"steps[{index}].output_schema requires a JSON model step.")
+            if not isinstance(schema_name, str) or not schema_name.strip() or "${" in schema_name:
+                raise ValueError(f"steps[{index}].output_schema must be a static file path.")
+            from cli_agent.models.json_contract import check_json_contract
+            schema_path = _workspace_path(
+                workspace, schema_name,
+                purpose=f"Schema for step {step_id!r}", must_exist=True,
+            )
+            try:
+                with schema_path.open("rb") as schema_file:
+                    schema_bytes = schema_file.read(65537)
+                if len(schema_bytes) > 65536:
+                    raise ValueError("JSON Schema exceeds the 64 KiB limit.")
+                output_schema = check_json_contract(json.loads(schema_bytes))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Invalid JSON Schema file for step {step_id!r}: {exc}") from exc
+        # Bind the enum keyword of selected schema objects to earlier
+        # structured step outputs, declared flow inputs, or foreach items.
+        raw_schema_enums = raw.get("output_schema_enums", {})
+        if not isinstance(raw_schema_enums, dict):
+            raise ValueError(f"steps[{index}].output_schema_enums must be a table.")
+        if raw_schema_enums and output_schema is None:
+            raise ValueError(
+                f"steps[{index}].output_schema_enums requires output_schema."
+            )
+        schema_enums: dict[str, str] = {}
+        for pointer, reference in raw_schema_enums.items():
+            if not isinstance(pointer, str) or not pointer.startswith("/"):
+                raise ValueError("output_schema_enums keys must be JSON Pointers starting with '/'.")
+            if not isinstance(reference, str):
+                raise ValueError("output_schema_enums values must be reference strings.")
+            from cli_agent.models.json_contract import schema_pointer_target
+            target = schema_pointer_target(output_schema, pointer)
+            if not isinstance(target, dict):
+                raise ValueError(f"output_schema_enums target {pointer!r} must be a schema object.")
+            if "enum" in target:
+                raise ValueError(f"output_schema_enums target {pointer!r} already declares enum.")
+            full = _DYNAMIC_VALUE_EXPR.fullmatch("${" + reference + "}")
+            if full is None or full.group("step_output_path") is None and full.group("step_output_id") is not None:
+                raise ValueError(f"Invalid output_schema_enums reference: {reference!r}.")
+            if (full.group("step_output_id") is None
+                    and full.group("input_path") is None
+                    and full.group("item_path") is None):
+                raise ValueError(
+                    "output_schema_enums supports steps.<id>.output.<field>, "
+                    "input.<field> or item.<field> references."
+                )
+            source_id = full.group("step_output_id")
+            if source_id is not None and (source_id == step_id or source_id not in known_ids):
+                raise ValueError(
+                    f"output_schema_enums references non-prior step {source_id!r}."
+                )
+            if full.group("item_path") is not None and raw.get("foreach") is None:
+                raise ValueError("output_schema_enums item reference requires foreach.")
+            if full.group("input_path") is not None:
+                root_input = full.group("input_path").split(".", 1)[0]
+                if root_input not in inputs:
+                    raise ValueError(f"Unknown output_schema_enums input {root_input!r}.")
+            if len(schema_enums) >= 32:
+                raise ValueError("output_schema_enums is limited to 32 bindings.")
+            schema_enums[pointer] = reference
         json_restart_attempts = raw.get("json_restart_attempts", 0)
         if (type(json_restart_attempts) is not int
                 or not 0 <= json_restart_attempts <= 2):
@@ -2332,6 +2403,9 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 retry_policy=retry_policy,
                 retry_overrides=dict(raw_retry) if raw_retry is not None else None,
                 response_format=response_format,
+                output_schema=output_schema,
+                output_schema_path=schema_path,
+                output_schema_enums=schema_enums or None,
                 json_restart_attempts=json_restart_attempts,
                 approve_tools=approve_tools,
                 variables=variables,
@@ -2619,6 +2693,77 @@ def _render_flow_input_value(
     return value
 
 
+def _resolve_step_schema_enums(
+    step: FlowStep,
+    *,
+    outputs: dict[str, str],
+    flow_input: dict[str, Any],
+    item: Any = None,
+    allow_unavailable: bool = False,
+) -> FlowStep | None:
+    """Materialize enum values without mutating the cached FlowDefinition.
+
+    Only existing, typed flow values are accepted. In the run-start planner,
+    an unavailable earlier step prevents publication of an unvalidated
+    checkpoint; the fingerprint can still be captured for runtime verification.
+    """
+    if not step.output_schema_enums:
+        return step
+    assert step.output_schema is not None
+    from cli_agent.models.json_contract import (
+        check_json_contract, schema_pointer_target,
+    )
+
+    concrete = copy.deepcopy(step.output_schema)
+    for pointer, reference in step.output_schema_enums.items():
+        match = _DYNAMIC_VALUE_EXPR.fullmatch("${" + reference + "}")
+        assert match is not None  # Checked while loading the flow
+        prior_id = match.group("step_output_id")
+        if prior_id is not None and prior_id not in outputs:
+            if allow_unavailable:
+                return None
+            raise ValueError(
+                f"Enum source step {prior_id!r} is not available for "
+                f"step {step.step_id!r}."
+            )
+        value = _dynamic_value(
+            match,
+            item=item,
+            iteration_id=None,
+            conversation_item=None,
+            previous_output=None,
+            outputs=outputs,
+            flow_input=flow_input,
+        )
+        if not isinstance(value, list) or not 1 <= len(value) <= MAX_FOREACH_ITEMS:
+            raise ValueError(
+                f"output_schema_enums {pointer!r} requires a nonempty JSON array "
+                f"of at most {MAX_FOREACH_ITEMS} allowed values."
+            )
+        # _parse_structured_output preserves numeric JSON literals as
+        # _JsonNumber instances; decode them back to ordinary JSON numbers.
+        encoded = _json_dumps_preserving_numbers(value)
+        if len(encoded.encode("utf-8")) > 65536:
+            raise ValueError("output_schema_enums exceeds 64 KiB.")
+        value = json.loads(encoded)
+        if any(
+            entry is not None and type(entry) not in (str, bool, int, float)
+            for entry in value
+        ):
+            raise ValueError(
+                f"output_schema_enums {pointer!r} accepts only scalar JSON values."
+            )
+        target = schema_pointer_target(concrete, pointer)
+        assert isinstance(target, dict)
+        target["enum"] = value
+    if len(json.dumps(concrete, ensure_ascii=False).encode("utf-8")) > 65536:
+        raise ValueError(
+            f"Effective output_schema for step {step.step_id!r} exceeds 64 KiB."
+        )
+    check_json_contract(concrete)
+    return replace(step, output_schema=concrete, output_schema_enums=None)
+
+
 def _conversation_items_for_iteration(
     step: FlowStep,
     *,
@@ -2842,6 +2987,7 @@ def _existing_json_output(
     *,
     workspace: Path,
     output: Path | None,
+    validate_output_schema: bool = True,
 ) -> str | None:
     if (
         output is None
@@ -2856,6 +3002,14 @@ def _existing_json_output(
         max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
     )
     _parse_structured_output(text, step_id=step.step_id)
+    if validate_output_schema and step.output_schema is not None:
+        from cli_agent.models.json_contract import json_contract_error
+        error = json_contract_error(text, step.output_schema)
+        if error is not None:
+            raise ValueError(
+                f"JSON checkpoint for step {step.step_id!r} does not match "
+                f"output_schema ({output}): {error}"
+            )
     return text
 
 
@@ -2898,6 +3052,7 @@ def _previous_output_from_snapshot(
         step,
         workspace=workspace,
         output=output,
+        validate_output_schema=False,
     )
     if text is None:
         raise ValueError(
@@ -2936,7 +3091,7 @@ def _prepare_flow_output(
         return None
 
     checkpoint = _existing_json_checkpoint(
-        step,
+        replace(step, output_schema=None) if step.output_schema_enums else step,
         workspace=workspace,
         output=output,
     )
@@ -3110,6 +3265,7 @@ def _capture_run_start_invocation(
             step,
             workspace=workspace,
             output=output,
+            validate_output_schema=False,
         )
         if text is None:
             previous_output_fingerprints[key] = None
@@ -3320,14 +3476,24 @@ def _capture_run_start_invocation(
             if _uses_previous_output(step):
                 remember_previous_output(step, output)
 
+            # An unresolved when-gate makes this a speculative checkpoint.
+            # Record its bytes, but never evaluate runtime enum sources until
+            # the step is known to execute. Inactive branches may legitimately
+            # have missing or invalid enum inputs.
+            resolved_step = (
+                None if unknown_gate else _resolve_step_schema_enums(
+                    step, outputs=available_outputs, flow_input=flow_input,
+                    allow_unavailable=True,
+                )
+            )
             checkpoint = _existing_json_checkpoint(
-                step,
+                resolved_step if resolved_step is not None else replace(step, output_schema=None),
                 workspace=workspace,
                 output=output,
             )
             if checkpoint is not None:
                 remember_checkpoint(step, output, checkpoint)
-                if not unknown_gate:
+                if not unknown_gate and resolved_step is not None:
                     available_outputs[step.step_id] = checkpoint
                     output_json[step.step_id] = True
             continue
@@ -3435,7 +3601,7 @@ def _capture_run_start_invocation(
         parts: list[str] = []
         payload_bytes = 0
         complete = True
-        for iteration_id, output in zip(iteration_ids, outputs):
+        for item, iteration_id, output in zip(items, iteration_ids, outputs):
             assert iteration_id is not None
             assert output is not None
             _set_flow_diagnostic(
@@ -3443,8 +3609,17 @@ def _capture_run_start_invocation(
                 namespace=namespace, step=step.step_id,
                 iteration_id=iteration_id, output=output,
             )
+            # A foreach gate may still depend on unavailable model data.
+            # Only validate bindings when the selected branch is established;
+            # speculative checkpoints remain fingerprinted, not published.
+            resolved_step = (
+                None if unknown_gate else _resolve_step_schema_enums(
+                    step, outputs=available_outputs, flow_input=flow_input,
+                    item=item, allow_unavailable=True,
+                )
+            )
             checkpoint = _existing_json_checkpoint(
-                step,
+                resolved_step if resolved_step is not None else replace(step, output_schema=None),
                 workspace=workspace,
                 output=output,
             )
@@ -3452,6 +3627,8 @@ def _capture_run_start_invocation(
                 complete = False
                 continue
             remember_checkpoint(step, output, checkpoint)
+            if resolved_step is None:
+                complete = False
             if complete:
                 payload_bytes = _append_foreach_iteration(
                     step,
@@ -5560,6 +5737,7 @@ async def _execute_model_iteration(
                         with_mcp=step.with_mcp,
                         retry_policy=effective_retry_policy,
                         response_format=step.response_format,
+                        output_schema=step.output_schema,
                         context_files=contexts,
                         add_web_context=step.add_web_context,
                         output=output,
@@ -5584,6 +5762,7 @@ async def _execute_model_iteration(
                         with_mcp=step.with_mcp,
                         retry_policy=effective_retry_policy,
                         response_format=step.response_format,
+                        output_schema=step.output_schema,
                         context_files=contexts,
                         add_web_context=step.add_web_context,
                         output=output,
@@ -5721,6 +5900,7 @@ def _preflight_foreach_output_batch(
     workspace: Path,
     context: _FlowExecutionContext,
     flow_input: dict[str, Any],
+    prior_outputs: dict[str, str],
     items: list[Any],
     iteration_ids: list[str | None],
     namespace: str,
@@ -5821,7 +6001,7 @@ def _preflight_foreach_output_batch(
         )
 
     preflight_checkpoint_fingerprints = []
-    for output, iteration_id in zip(preflight_outputs, iteration_ids):
+    for item, output, iteration_id in zip(items, preflight_outputs, iteration_ids):
         assert output is not None
         _set_flow_diagnostic(
             phase="preflight-checkpoint-or-output", flow=flow.source,
@@ -5834,8 +6014,12 @@ def _preflight_foreach_output_batch(
             flow_source=flow.source,
         )
         if expected_fingerprint is not None:
+            bound_step = _resolve_step_schema_enums(
+                step, outputs=prior_outputs, flow_input=flow_input, item=item,
+            )
+            assert bound_step is not None
             _verified_preflight_checkpoint(
-                step,
+                bound_step,
                 workspace=workspace,
                 output=output,
                 expected_fingerprint=expected_fingerprint,
@@ -6271,7 +6455,7 @@ async def _run_flow_internal(
                 _preflight_foreach_output_batch(
                     step, flow=flow, workspace=workspace,
                     context=context, flow_input=flow_input,
-                    items=items, iteration_ids=iteration_ids,
+                    prior_outputs=outputs, items=items, iteration_ids=iteration_ids,
                     namespace=namespace, claimed_outputs=claimed_outputs,
                     reserved_inputs=reserved_inputs,
                     initial_checkpoint_fingerprints=initial_checkpoint_fingerprints,
@@ -6367,8 +6551,12 @@ async def _run_flow_internal(
                 last_written_artifacts.update(child_artifacts)
                 continue
 
+            effective_step = _resolve_step_schema_enums(
+                step, outputs=outputs, flow_input=flow_input, item=item,
+            )
+            assert effective_step is not None
             output, checkpoint = _prepare_iteration_checkpoint(
-                step, flow=flow, workspace=workspace, context=context,
+                effective_step, flow=flow, workspace=workspace, context=context,
                 flow_input=flow_input, item=item, iteration_id=iteration_id,
                 index=index, namespace=namespace, reserved_inputs=reserved_inputs,
                 claimed_outputs=claimed_outputs,
@@ -6440,7 +6628,7 @@ async def _run_flow_internal(
                 continue
 
             answer = await _execute_model_iteration(
-                step, flow=flow, workspace=workspace, context=context,
+                effective_step, flow=flow, workspace=workspace, context=context,
                 namespace=namespace, index=index, item=item,
                 iteration_id=iteration_id, output=output,
                 previous_output=previous_output, outputs=outputs,

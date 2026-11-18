@@ -333,3 +333,94 @@ cli-agent-flow run flow/okf/flow_okf_from_doctrine/flow.toml --workspace . --deb
 ```
 
 Debug tracebacks may contain internal paths and diagnostics; inspect before sharing. Diagnostics do not modify outputs or checkpoint resume semantics.
+
+
+## JSON Schema contracts for model steps
+
+A model step with `response_format = "json"` may optionally declare a
+workspace-local JSON Schema file. The schema is loaded and checked when the
+flow is loaded. It must be a Draft 2020-12 JSON Schema with a JSON object at
+the root. Only local `$ref` pointers are allowed; external references and
+dynamic references are rejected. Schema files are limited to 64 KiB.
+
+```toml
+[[steps]]
+id = "extract"
+prompt_file = "extract.md"
+response_format = "json"
+output_schema = "schemas/extract.schema.json"
+output = "results/extract.json"
+json_restart_attempts = 1
+```
+
+Example `schemas/extract.schema.json`:
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "score"],
+  "properties": {
+    "title": {"type": "string", "minLength": 1},
+    "score": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}
+```
+
+The schema is provided as a formatting requirement in the model system
+prompt and checked against the final JSON. Invalid answers use the existing
+in-context format correction budget; optional `json_restart_attempts` then
+starts a fresh attempt if correction is exhausted. Schema validation takes
+place before writing the output file, preventing invalid model responses
+from becoming checkpoints. The same rule applies to each iteration of a
+`foreach` or conversation step.
+
+### Dynamic enum values from earlier steps
+
+Use `[steps.output_schema_enums]` on a JSON model step to bind the
+`enum` of a **schema object** to a list produced earlier in the flow.
+Keys are JSON Pointers **within the loaded JSON Schema**, not output
+property names. Sources are `steps.<id>.output.<field>`,
+`input.<field>` (declared child-flow inputs) or
+`item.<field>` (inside `foreach`). A source must resolve to a
+nonempty JSON array of scalar values; it cannot refer to the current
+step or any later step.
+
+```toml
+[[steps]]
+id = "discover"
+prompt_file = "prompts/discover.md"
+response_format = "json"
+output = "state/discover.json"
+
+[[steps]]
+id = "classify"
+prompt_file = "prompts/classify.md"
+response_format = "json"
+output_schema = "schemas/classify.json"
+output = "state/classify.json"
+
+[steps.output_schema_enums]
+"/properties/category" = "steps.discover.output.categories"
+```
+
+Here, `discover` returns for example
+`{"categories":["risk","opportunity"]}`; the `classify` schema
+defines `properties.category` as a string without a fixed `enum`.
+Immediately before that iteration runs, the allowed values are
+inserted as `enum: ["risk", "opportunity"]`. The effective schema
+is provided to the LLM and used to validate its answer. Reusable
+JSON checkpoints are also checked against that iteration's effective
+allowed values, not merely the static schema file.
+
+The schema file is protected from modification. Bindings are
+restricted to 32 enum fields, 1,000 scalar values each and 64 KiB
+per bound list. Missing/invalid sources fail the step rather than
+silently weakening the contract. Dynamic bindings never grant
+filesystem, network or MCP permissions. They work independently
+for each `foreach` item.
+
+A schema validates the structure, not the factual correctness of an answer.
+Schema files are trusted local configuration, not permission grants. Workspace
+and MCP security policies remain unchanged.
+

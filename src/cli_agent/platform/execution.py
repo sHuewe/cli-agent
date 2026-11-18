@@ -78,6 +78,7 @@ class OneShotRunOptions:
     with_data: bool = False
     retry_policy: ModelRetryPolicy | None = None
     response_format: str = "text"
+    output_schema: dict[str, Any] | None = None
     context_files: tuple[Path, ...] = ()
     output: Path | None = None
     overwrite_output: bool = False
@@ -102,6 +103,7 @@ class ConversationRunOptions:
     with_data: bool = False
     retry_policy: ModelRetryPolicy | None = None
     response_format: str = "text"
+    output_schema: dict[str, Any] | None = None
     context_files: tuple[Path, ...] = ()
     output: Path | None = None
     overwrite_output: bool = False
@@ -635,6 +637,7 @@ def prepare_agent(
         model_credential_rules=policy.model_credentials,
         file_contexts=file_contexts,
         response_format=response_format,
+        output_schema=options.output_schema,
         workspace_access=effective_workspace_access,
         **({"sdk_configless": True} if project_config is not None else {}),
     )

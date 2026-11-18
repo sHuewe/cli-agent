@@ -144,8 +144,8 @@ def test_invalid_llm_output_is_ignored_and_not_retried(monkeypatch):
     asyncio.run(maybe_cleanup_evidences(agent))
     assert agent._evidence_state.evidences == before
     asyncio.run(maybe_cleanup_evidences(agent))
-    assert len(calls) == 3
-    assert agent._cleanup_runs[0]["processing_result"]["repair_attempts"] == 2
+    assert len(calls) == 6
+    assert agent._cleanup_runs[0]["processing_result"]["repair_attempts"] == 5
 
 def test_cleanup_diagnostics_preserve_exact_model_messages_and_processing(monkeypatch):
     import cli_agent.state.evidence_cleanup as cleanup

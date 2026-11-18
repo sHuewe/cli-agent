@@ -893,9 +893,9 @@ async def test_json_repair_budget_not_reset_by_frontend_handoff():
         await agent.continue_after_frontend_tools([
             {"role": "tool", "tool_call_id": "first", "content": "done"}
         ])
-    # One repair was consumed before this run. Only the second is permitted.
-    assert agent.calls == 2
-    assert agent._agui_pending_json_repairs == 2
+    # One repair was consumed before this run; four remain.
+    assert agent.calls == 5
+    assert agent._agui_pending_json_repairs == 5
     assert agent.history == []
 
 
@@ -999,7 +999,7 @@ async def test_repair_budget_is_not_reset_by_repeated_frontend_handoffs():
         await agent.continue_after_frontend_tools([
             {"role": "tool", "tool_call_id": "frontend-4", "content": "ok"},
         ])
-    assert agent.calls == 5
+    assert agent.calls == 8
     assert agent.history == []
 
 

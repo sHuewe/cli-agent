@@ -140,7 +140,22 @@ def _definition_fingerprints(
         except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
             raise ValueError(f"Invalid compact flow definition: {path}") from exc
         for step in values.get("steps", []):
-            if isinstance(step, dict) and step.get("flow") is not None:
+            if not isinstance(step, dict):
+                continue
+            schema_name = step.get("output_schema")
+            if schema_name is not None:
+                if not isinstance(schema_name, str) or not schema_name or "${" in schema_name:
+                    raise ValueError("Invalid static JSON Schema reference.")
+                schema_path = _checked_flow_definition_path(workspace, Path(schema_name))
+                schema_key = schema_path.relative_to(workspace).as_posix()
+                if schema_key not in seen:
+                    if len(seen) >= MAX_DEFINITION_FILES:
+                        raise ValueError("Too many transitive compact flow inputs.")
+                    schema_data = schema_path.read_bytes()
+                    if len(schema_data) > 65536:
+                        raise ValueError("Compact JSON Schema exceeds 64 KiB.")
+                    seen[schema_key] = hashlib.sha256(schema_data).hexdigest()
+            if step.get("flow") is not None:
                 child = step["flow"]
                 if not isinstance(child, str) or not child:
                     raise ValueError("Invalid static subflow reference.")
@@ -154,7 +169,7 @@ def _definition_fingerprints(
 def checkpoint_path(
     workspace: Path, flow_source: Path, namespace: str, flow_input: dict[str, Any],
 ) -> tuple[Path, str]:
-    """Hash a concrete invocation and all transitively referenced flow TOMLs."""
+    """Hash an invocation, its flow definitions, and referenced JSON Schemas."""
     definition_hash, descendants = _definition_fingerprints(workspace, flow_source)
     identity_fields = {
         "flow": flow_source.relative_to(workspace).as_posix(),

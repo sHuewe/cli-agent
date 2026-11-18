@@ -358,7 +358,7 @@ def test_sub_run_stops_after_bounded_invalid_json_retries(monkeypatch) -> None:
         _format_current_time=lambda now: "Current local time: " + now.isoformat(),
         model_client=SimpleNamespace(),
     )
-    with pytest.raises(ValueError, match="after 2 correction attempts"):
+    with pytest.raises(ValueError, match=f"after {MAX_RESPONSE_FORMAT_REPAIRS} correction attempts"):
         asyncio.run(execute_sub_run(agent, {
             "task": "Investigate the selected intervals and return findings.",
         }))
