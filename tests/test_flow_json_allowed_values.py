@@ -85,3 +85,112 @@ def test_rejects_selectors_without_valid_wildcard(invalid):
             allowed={"folders": []}, candidate={"groups": []},
             allowed_path=invalid, values_path="/groups/*/folder_id",
         )
+
+
+def test_runner_skips_repair_for_valid_and_rechecks_invalid(tmp_path, monkeypatch):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+    import cli_agent.workflows.flow as flow_module
+    from cli_agent.workflows.flow import load_flow, run_flow
+
+    (tmp_path / "initial.md").write_text("{{var:payload}}", encoding="utf-8")
+    (tmp_path / "repair.md").write_text("{{var:validation}}", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text("""
+version = 1
+result = "steps.recheck.output.value"
+result_fallback = "steps.validate.output.value"
+
+[[steps]]
+id = "allowed"
+prompt_file = "initial.md"
+output = "allowed.json"
+response_format = "json"
+[steps.vars]
+payload = "allowed"
+
+[[steps]]
+id = "candidate"
+prompt_file = "initial.md"
+output = "candidate.json"
+response_format = "json"
+[steps.vars]
+payload = "candidate"
+
+[[steps]]
+id = "validate"
+output = "validate.json"
+[steps.json_operation]
+kind = "json_validate_allowed_values"
+input = "candidate"
+allowed_path = "/folders/*/id"
+values_path = "/groups/*/folder_id"
+null_policy = "when_allowed_empty"
+[steps.json_inputs.candidate]
+path = "candidate.json"
+[steps.json_inputs.allowed]
+path = "allowed.json"
+
+[[steps]]
+id = "repair"
+when = { ref = "steps.validate.output.status", eq = "needs_attention" }
+prompt_file = "repair.md"
+output = "repair.json"
+response_format = "json"
+workspace_access = "none"
+[steps.vars]
+validation = "\${steps.validate.output}"
+
+[[steps]]
+id = "recheck"
+when = { ref = "steps.validate.output.status", eq = "needs_attention" }
+output = "recheck.json"
+[steps.json_operation]
+kind = "json_validate_allowed_values"
+input = "candidate"
+allowed_path = "/folders/*/id"
+values_path = "/groups/*/folder_id"
+null_policy = "when_allowed_empty"
+on_invalid = "raise"
+[steps.json_inputs.candidate]
+path = "repair.json"
+[steps.json_inputs.allowed]
+path = "allowed.json"
+""", encoding="utf-8")
+
+    for name, candidate_value, expect_repair in (
+        ("valid", "approved", False), ("invalid", "invented", True),
+    ):
+        workspace = tmp_path / name
+        workspace.mkdir()
+        for template in ("initial.md", "repair.md", "flow.toml"):
+            (workspace / template).write_text(
+                (tmp_path / template).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        invocations = []
+
+        async def fake_run_once(options, *, dependencies=None):
+            invocations.append(options.prompt)
+            if options.prompt == "allowed":
+                answer = '{"folders":[{"id":"approved"}]}'
+            elif options.prompt == "candidate":
+                answer = json.dumps({"groups":[{"folder_id":candidate_value,"member_ids":["a"]}]})
+            else:
+                report = json.loads(options.prompt)
+                assert report["status"] == "needs_attention"
+                assert report["errors"][0]["path"] == "/groups/0/folder_id"
+                answer = '{"groups":[{"folder_id":"approved","member_ids":["a"]}]}'
+            return SimpleNamespace(answer=answer, web_context_statuses=())
+
+        monkeypatch.setattr(flow_module, "run_once", fake_run_once)
+        asyncio.run(run_flow(
+            load_flow(workspace / "flow.toml", workspace=workspace),
+            workspace=workspace,
+        ))
+        assert len(invocations) == (3 if expect_repair else 2)
+        assert (workspace / "repair.json").exists() == expect_repair
+        assert (workspace / "recheck.json").exists() == expect_repair
+        saved = workspace / ("recheck.json" if expect_repair else "validate.json")
+        report = json.loads(saved.read_text(encoding="utf-8"))
+        assert report["status"] == "ok"
+        assert report["value"]["groups"][0]["folder_id"] == "approved"
