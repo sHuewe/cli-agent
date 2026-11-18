@@ -288,3 +288,17 @@ def test_local_json_pointer_preserves_empty_property_name():
     })
     assert json_contract_error("42", schema) is None
     assert json_contract_error('"wrong"', schema) is not None
+
+
+@pytest.mark.parametrize("target", [{"type": "typo"}, 1, [], {"minimum": "not-a-number"}])
+def test_local_reference_target_is_checked_against_metaschema(target):
+    with pytest.raises(ValueError, match="Invalid JSON Schema reference target"):
+        check_json_contract({"$ref": "#/hidden", "hidden": target})
+
+
+def test_valid_local_reference_target_under_unknown_keyword():
+    schema = check_json_contract({
+        "$ref": "#/hidden", "hidden": {"type": "integer"},
+    })
+    assert json_contract_error("5", schema) is None
+    assert json_contract_error('"wrong"', schema) is not None
