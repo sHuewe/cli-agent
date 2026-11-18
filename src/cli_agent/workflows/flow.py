@@ -2987,6 +2987,7 @@ def _existing_json_output(
     *,
     workspace: Path,
     output: Path | None,
+    validate_output_schema: bool = True,
 ) -> str | None:
     if (
         output is None
@@ -3001,7 +3002,7 @@ def _existing_json_output(
         max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
     )
     _parse_structured_output(text, step_id=step.step_id)
-    if step.output_schema is not None:
+    if validate_output_schema and step.output_schema is not None:
         from cli_agent.models.json_contract import json_contract_error
         error = json_contract_error(text, step.output_schema)
         if error is not None:
@@ -3051,6 +3052,7 @@ def _previous_output_from_snapshot(
         step,
         workspace=workspace,
         output=output,
+        validate_output_schema=False,
     )
     if text is None:
         raise ValueError(
@@ -3263,6 +3265,7 @@ def _capture_run_start_invocation(
             step,
             workspace=workspace,
             output=output,
+            validate_output_schema=False,
         )
         if text is None:
             previous_output_fingerprints[key] = None
