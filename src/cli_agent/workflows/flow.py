@@ -1943,6 +1943,26 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 f"steps[{index}].response_format must be 'text' or 'json'."
             )
         response_format = str(response_format_value)
+        output_schema = None
+        schema_name = raw.get("output_schema")
+        if schema_name is not None:
+            if response_format != "json" or prompt_value is None or raw_json_operation is not None or raw_filesystem_operation is not None or child_flow is not None:
+                raise ValueError(f"steps[{index}].output_schema requires a JSON model step.")
+            if not isinstance(schema_name, str) or not schema_name.strip() or "${" in schema_name:
+                raise ValueError(f"steps[{index}].output_schema must be a static file path.")
+            from cli_agent.models.json_contract import check_json_contract
+            schema_path = _workspace_path(
+                workspace, schema_name,
+                purpose=f"Schema for step {step_id!r}", must_exist=True,
+            )
+            try:
+                with schema_path.open("rb") as schema_file:
+                    schema_bytes = schema_file.read(65537)
+                if len(schema_bytes) > 65536:
+                    raise ValueError("JSON Schema exceeds the 64 KiB limit.")
+                output_schema = check_json_contract(json.loads(schema_bytes))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Invalid JSON Schema file for step {step_id!r}: {exc}") from exc
         json_restart_attempts = raw.get("json_restart_attempts", 0)
         if (type(json_restart_attempts) is not int
                 or not 0 <= json_restart_attempts <= 2):
@@ -2332,6 +2352,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 retry_policy=retry_policy,
                 retry_overrides=dict(raw_retry) if raw_retry is not None else None,
                 response_format=response_format,
+                output_schema=output_schema,
                 json_restart_attempts=json_restart_attempts,
                 approve_tools=approve_tools,
                 variables=variables,
