@@ -139,7 +139,7 @@ output = "repair.json"
 response_format = "json"
 workspace_access = "none"
 [steps.vars]
-validation = "\${steps.validate.output}"
+validation = "${steps.validate.output}"
 
 [[steps]]
 id = "recheck"
