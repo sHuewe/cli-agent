@@ -3476,9 +3476,15 @@ def _capture_run_start_invocation(
             if _uses_previous_output(step):
                 remember_previous_output(step, output)
 
-            resolved_step = _resolve_step_schema_enums(
-                step, outputs=available_outputs, flow_input=flow_input,
-                allow_unavailable=True,
+            # An unresolved when-gate makes this a speculative checkpoint.
+            # Record its bytes, but never evaluate runtime enum sources until
+            # the step is known to execute. Inactive branches may legitimately
+            # have missing or invalid enum inputs.
+            resolved_step = (
+                None if unknown_gate else _resolve_step_schema_enums(
+                    step, outputs=available_outputs, flow_input=flow_input,
+                    allow_unavailable=True,
+                )
             )
             checkpoint = _existing_json_checkpoint(
                 resolved_step if resolved_step is not None else replace(step, output_schema=None),
@@ -3603,10 +3609,14 @@ def _capture_run_start_invocation(
                 namespace=namespace, step=step.step_id,
                 iteration_id=iteration_id, output=output,
             )
-            resolved_step = _resolve_step_schema_enums(
-                step, outputs=available_outputs, flow_input=flow_input,
-                item=item,
-                allow_unavailable=True,
+            # A foreach gate may still depend on unavailable model data.
+            # Only validate bindings when the selected branch is established;
+            # speculative checkpoints remain fingerprinted, not published.
+            resolved_step = (
+                None if unknown_gate else _resolve_step_schema_enums(
+                    step, outputs=available_outputs, flow_input=flow_input,
+                    item=item, allow_unavailable=True,
+                )
             )
             checkpoint = _existing_json_checkpoint(
                 resolved_step if resolved_step is not None else replace(step, output_schema=None),
