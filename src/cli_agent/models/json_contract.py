@@ -17,19 +17,40 @@ def check_json_contract(schema: Any) -> dict[str, Any]:
         raise ValueError("JSON Schema root must be an object.")
 
     def check_refs(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                if key in {"$id", "$dynamicRef", "$recursiveRef"}:
-                    raise ValueError(f"JSON Schema keyword {key!r} is unsupported.")
-                if key == "$ref" and (
-                    not isinstance(child, str)
-                    or (child != "#" and not child.startswith("#/"))
-                ):
-                    raise ValueError("JSON Schema permits only local $ref pointers.")
-                check_refs(child)
-        elif isinstance(value, list):
-            for child in value:
-                check_refs(child)
+        """Walk schema positions, not arbitrary instance values or property names."""
+        if not isinstance(value, dict):
+            return
+        for key in ("$id", "$dynamicRef", "$recursiveRef"):
+            if key in value:
+                raise ValueError(f"JSON Schema keyword {key!r} is unsupported.")
+        if "$ref" in value:
+            ref = value["$ref"]
+            if not isinstance(ref, str) or (
+                ref != "#" and not ref.startswith("#/")
+            ):
+                raise ValueError("JSON Schema permits only local $ref pointers.")
+
+        # A mapping under these keywords contains subschemas as its values.
+        for keyword in ("$defs", "definitions", "properties", "patternProperties",
+                        "dependentSchemas"):
+            children = value.get(keyword)
+            if isinstance(children, dict):
+                for child in children.values():
+                    check_refs(child)
+
+        # These keywords hold one nested schema.
+        for keyword in ("additionalProperties", "unevaluatedProperties",
+                        "propertyNames", "items", "additionalItems",
+                        "unevaluatedItems", "contains", "not", "if", "then", "else",
+                        "contentSchema"):
+            check_refs(value.get(keyword))
+
+        # These keywords hold lists of subschemas.
+        for keyword in ("allOf", "anyOf", "oneOf", "prefixItems"):
+            children = value.get(keyword)
+            if isinstance(children, list):
+                for child in children:
+                    check_refs(child)
 
     check_refs(schema)
     try:
