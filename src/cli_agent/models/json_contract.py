@@ -8,9 +8,11 @@ from __future__ import annotations
 import json
 from urllib.parse import unquote
 from decimal import Decimal
+from fractions import Fraction
 from typing import Any
 
 from jsonschema import Draft202012Validator, validators
+from jsonschema.exceptions import ValidationError
 from referencing import Registry
 from referencing.exceptions import NoSuchResource
 
@@ -135,8 +137,22 @@ def json_contract_error(answer: str, schema: dict[str, Any]) -> str | None:
             return value.is_finite() and value == value.to_integral_value()
         return Draft202012Validator.TYPE_CHECKER.is_type(value, "integer")
 
+    def exact_multiple_of(
+        validator: Any, multiple_of: Any, instance: Any, schema: Any
+    ) -> Any:
+        if not validator.is_type(instance, "number"):
+            return
+        # Fractions of decimal JSON numbers represent their exact values.
+        # In contrast, Decimal remainder depends on the active context
+        # precision and may raise DivisionImpossible for small divisors.
+        if (Fraction(instance) / Fraction(multiple_of)).denominator != 1:
+            yield ValidationError(
+                f"{instance!r} is not a multiple of {multiple_of!r}"
+            )
+
     decimal_validator = validators.extend(
         Draft202012Validator,
+        validators={"multipleOf": exact_multiple_of},
         type_checker=Draft202012Validator.TYPE_CHECKER.redefine(
             "integer", is_integer
         ),
