@@ -2740,6 +2740,12 @@ def _resolve_step_schema_enums(
                 f"output_schema_enums {pointer!r} requires a nonempty JSON array "
                 f"of at most {MAX_FOREACH_ITEMS} allowed values."
             )
+        # _parse_structured_output preserves numeric JSON literals as
+        # _JsonNumber instances; decode them back to ordinary JSON numbers.
+        encoded = _json_dumps_preserving_numbers(value)
+        if len(encoded.encode("utf-8")) > 65536:
+            raise ValueError("output_schema_enums exceeds 64 KiB.")
+        value = json.loads(encoded)
         if any(
             entry is not None and type(entry) not in (str, bool, int, float)
             for entry in value
@@ -3582,7 +3588,7 @@ def _capture_run_start_invocation(
         parts: list[str] = []
         payload_bytes = 0
         complete = True
-        for iteration_id, output in zip(iteration_ids, outputs):
+        for item, iteration_id, output in zip(items, iteration_ids, outputs):
             assert iteration_id is not None
             assert output is not None
             _set_flow_diagnostic(
@@ -3592,7 +3598,7 @@ def _capture_run_start_invocation(
             )
             resolved_step = _resolve_step_schema_enums(
                 step, outputs=available_outputs, flow_input=flow_input,
-                item=items[iteration_ids.index(iteration_id)],
+                item=item,
                 allow_unavailable=True,
             )
             checkpoint = _existing_json_checkpoint(
