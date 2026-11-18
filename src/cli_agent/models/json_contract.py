@@ -6,6 +6,7 @@ cause a network request or access unrelated files during validation.
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -101,12 +102,24 @@ def check_json_contract(schema: Any) -> dict[str, Any]:
 
 def json_contract_error(answer: str, schema: dict[str, Any]) -> str | None:
     """Return the first actionable schema error, or None if the JSON matches."""
-    value = json.loads(answer)
+    value = json.loads(answer, parse_float=Decimal)
+
+    def decimal_numbers(node: Any) -> Any:
+        # Decimal preserves exact decimal multipleOf arithmetic. Keep the
+        # original JSON-compatible schema unchanged for model prompts.
+        if isinstance(node, dict):
+            return {key: decimal_numbers(child) for key, child in node.items()}
+        if isinstance(node, list):
+            return [decimal_numbers(child) for child in node]
+        if type(node) is float:
+            return Decimal(str(node))
+        return node
+
     def deny_remote_retrieval(uri: str) -> Any:
         raise NoSuchResource(ref=uri)
 
     validator = Draft202012Validator(
-        schema,
+        decimal_numbers(schema),
         registry=Registry(retrieve=deny_remote_retrieval),
         format_checker=Draft202012Validator.FORMAT_CHECKER,
     )
