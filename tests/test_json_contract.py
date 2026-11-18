@@ -230,3 +230,27 @@ def test_flow_reserves_schema_as_protected_input(tmp_path: Path):
     assert flow.steps[0].output_schema_path == schema_path
     reserved = _reserved_flow_input_paths(flow, workspace=tmp_path)
     assert _filesystem_path_key(schema_path) in reserved
+
+
+def test_decimal_multiple_of_uses_exact_arithmetic():
+    schema = check_json_contract({"type": "number", "multipleOf": 0.1})
+    assert json_contract_error("0.3", schema) is None
+    assert json_contract_error("0.31", schema) is not None
+
+
+def test_compact_checkpoint_identity_changes_when_schema_changes(tmp_path: Path):
+    from cli_agent.workflows.flow_compact_checkpoints import checkpoint_path
+    (tmp_path / "prompt.md").write_text("JSON", encoding="utf-8")
+    schema = tmp_path / "contract.json"
+    schema.write_text('{"type":"object","properties":{"ok":{"type":"boolean"}}}', encoding="utf-8")
+    flow = tmp_path / "flow.toml"
+    flow.write_text(
+        'version = 1\nretain_intermediate = false\n[[steps]]\n'
+        'id = "check"\nprompt_file = "prompt.md"\nresponse_format = "json"\n'
+        'output_schema = "contract.json"\noutput = "result.json"\n',
+        encoding="utf-8",
+    )
+    original = checkpoint_path(tmp_path, flow, "", {})
+    schema.write_text('{"type":"object","properties":{"ok":{"type":"string"}}}', encoding="utf-8")
+    changed = checkpoint_path(tmp_path, flow, "", {})
+    assert original != changed
