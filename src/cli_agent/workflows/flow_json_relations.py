@@ -457,6 +457,15 @@ def validate_allowed_values(
         if len(findings) > 1000:
             raise ValueError("JSON membership validation exceeds 1000 findings.")
 
+    # Present findings in original document order (including missing fields),
+    # rather than discovering all missing fields before invalid values.
+    def location(finding: dict[str, Any]) -> tuple[tuple[int, Any], ...]:
+        return tuple(
+            (1, int(token)) if token.isdecimal() else (0, token)
+            for token in finding["path"].split("/")[1:]
+        )
+    findings.sort(key=location)
+
     if on_invalid == "raise" and findings:
         details = ", ".join(
             f"{finding['path'] or '/'} ({finding['reason']})"
