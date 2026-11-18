@@ -3463,14 +3463,18 @@ def _capture_run_start_invocation(
             if _uses_previous_output(step):
                 remember_previous_output(step, output)
 
+            resolved_step = _resolve_step_schema_enums(
+                step, outputs=available_outputs, flow_input=flow_input,
+                allow_unavailable=True,
+            )
             checkpoint = _existing_json_checkpoint(
-                step,
+                resolved_step if resolved_step is not None else replace(step, output_schema=None),
                 workspace=workspace,
                 output=output,
             )
             if checkpoint is not None:
                 remember_checkpoint(step, output, checkpoint)
-                if not unknown_gate:
+                if not unknown_gate and resolved_step is not None:
                     available_outputs[step.step_id] = checkpoint
                     output_json[step.step_id] = True
             continue
@@ -3586,8 +3590,13 @@ def _capture_run_start_invocation(
                 namespace=namespace, step=step.step_id,
                 iteration_id=iteration_id, output=output,
             )
+            resolved_step = _resolve_step_schema_enums(
+                step, outputs=available_outputs, flow_input=flow_input,
+                item=items[iteration_ids.index(iteration_id)],
+                allow_unavailable=True,
+            )
             checkpoint = _existing_json_checkpoint(
-                step,
+                resolved_step if resolved_step is not None else replace(step, output_schema=None),
                 workspace=workspace,
                 output=output,
             )
@@ -3595,6 +3604,8 @@ def _capture_run_start_invocation(
                 complete = False
                 continue
             remember_checkpoint(step, output, checkpoint)
+            if resolved_step is None:
+                complete = False
             if complete:
                 payload_bytes = _append_foreach_iteration(
                     step,
@@ -6512,8 +6523,12 @@ async def _run_flow_internal(
                 last_written_artifacts.update(child_artifacts)
                 continue
 
+            effective_step = _resolve_step_schema_enums(
+                step, outputs=outputs, flow_input=flow_input, item=item,
+            )
+            assert effective_step is not None
             output, checkpoint = _prepare_iteration_checkpoint(
-                step, flow=flow, workspace=workspace, context=context,
+                effective_step, flow=flow, workspace=workspace, context=context,
                 flow_input=flow_input, item=item, iteration_id=iteration_id,
                 index=index, namespace=namespace, reserved_inputs=reserved_inputs,
                 claimed_outputs=claimed_outputs,
@@ -6585,7 +6600,7 @@ async def _run_flow_internal(
                 continue
 
             answer = await _execute_model_iteration(
-                step, flow=flow, workspace=workspace, context=context,
+                effective_step, flow=flow, workspace=workspace, context=context,
                 namespace=namespace, index=index, item=item,
                 iteration_id=iteration_id, output=output,
                 previous_output=previous_output, outputs=outputs,
