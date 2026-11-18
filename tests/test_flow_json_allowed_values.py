@@ -180,6 +180,9 @@ path = "allowed.json"
                 assert report["status"] == "needs_attention"
                 assert report["errors"][0]["path"] == "/groups/0/folder_id"
                 answer = '{"groups":[{"folder_id":"approved","member_ids":["a"]}]}'
+            if options.output is not None:
+                options.output.parent.mkdir(parents=True, exist_ok=True)
+                options.output.write_text(answer, encoding="utf-8")
             return SimpleNamespace(answer=answer, web_context_statuses=())
 
         monkeypatch.setattr(flow_module, "run_once", fake_run_once)
