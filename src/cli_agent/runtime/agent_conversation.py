@@ -282,6 +282,9 @@ class ConversationMixin:
         if getattr(self, "response_format", "text") != "json":
             return answer
         answer, last_error = _normalize_json_response(answer)
+        from cli_agent.models.json_contract import json_contract_error
+        if last_error is None and getattr(self, "output_schema", None) is not None:
+            last_error = json_contract_error(answer, self.output_schema)
         repairs = getattr(self, "_agui_pending_json_repairs", 0)
         while last_error is not None and repairs < MAX_RESPONSE_FORMAT_REPAIRS:
             repairs += 1
@@ -291,7 +294,7 @@ class ConversationMixin:
                 "content": (
                     "Your last final answer does not meet the required JSON format. "
                     "Correct it now so it consists exclusively of syntactically "
-                    "valid JSON. Preserve the substantive task and required "
+                    "valid JSON matching the required schema. Preserve the substantive task and required "
                     "structure. You may use available tools if needed for a "
                     "correct response. No Markdown code fences or text outside "
                     "the JSON value. "
@@ -308,6 +311,8 @@ class ConversationMixin:
                 run_state=run_state,
             )
             answer, last_error = _normalize_json_response(answer)
+            if last_error is None and getattr(self, "output_schema", None) is not None:
+                last_error = json_contract_error(answer, self.output_schema)
         if last_error is not None:
             raise ValueError(
                 "Das Modell hat auch nach "
