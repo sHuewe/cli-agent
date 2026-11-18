@@ -481,7 +481,7 @@ def test_previous_output_can_migrate_from_old_schema(tmp_path: Path):
         _capture_run_start_invocation, _previous_output_from_snapshot,
         _SubflowTraversalBudget,
     )
-    (tmp_path / "prompt.md").write_text("Update JSON", encoding="utf-8")
+    (tmp_path / "prompt.md").write_text("Update JSON: {{var:state}}", encoding="utf-8")
     (tmp_path / "schema.json").write_text(json.dumps({
         "type": "object",
         "required": ["count", "updated"],
@@ -524,7 +524,7 @@ def test_previous_output_keeps_json_syntax_and_fingerprint_checks(tmp_path: Path
         _capture_run_start_invocation, _previous_output_from_snapshot,
         _SubflowTraversalBudget,
     )
-    (tmp_path / "prompt.md").write_text("Update JSON", encoding="utf-8")
+    (tmp_path / "prompt.md").write_text("Update JSON: {{var:state}}", encoding="utf-8")
     (tmp_path / "schema.json").write_text(
         '{"type":"object","required":["updated"]}', encoding="utf-8",
     )
