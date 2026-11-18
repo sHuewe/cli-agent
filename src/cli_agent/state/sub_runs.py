@@ -126,6 +126,25 @@ def _delegated_evidence_context(parent: EvidenceState, ids: list[str]) -> dict[s
     return {"existing_evidences": findings, "source_artifacts": artifacts}
 
 
+SUB_RUN_RESULT_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "summary", "evidence_ids", "confidence", "uncertainties"],
+    "properties": {
+        "status": {"enum": ["completed", "partial", "blocked", "failed"]},
+        "summary": {"type": "string", "maxLength": 4000},
+        "evidence_ids": {
+            "type": "array", "maxItems": 16, "uniqueItems": True,
+            "items": {"type": "string"},
+        },
+        "confidence": {"enum": ["high", "medium", "low"]},
+        "uncertainties": {
+            "type": "array", "maxItems": 16,
+            "items": {"type": "string", "maxLength": 500},
+        },
+    },
+}
 SUB_RUN_RULES = """
 You are a delegated step agent, not the coordinator. Solve only the assigned task.
 Do not create or modify the coordinator plan or delegate further sub-runs.
@@ -164,19 +183,12 @@ def validate_sub_result(answer: str, available: set[str]) -> dict[str, Any]:
     if error is not None:
         raise ValueError("Sub-run did not return valid JSON: " + error)
     result = json.loads(normalized)
-    if not isinstance(result, dict) or set(result) != {
-        "status", "summary", "evidence_ids", "confidence", "uncertainties"
-    }:
-        raise ValueError("Sub-run JSON does not have the required structure.")
-    if result["status"] not in {"completed", "partial", "blocked", "failed"}:
-        raise ValueError("Invalid sub-run status.")
-    if result["confidence"] not in {"high", "medium", "low"}:
-        raise ValueError("Invalid sub-run confidence.")
-    if not isinstance(result["summary"], str) or len(result["summary"]) > 4000:
-        raise ValueError("Invalid sub-run summary.")
+    from cli_agent.models.json_contract import json_contract_error
+    error = json_contract_error(normalized, SUB_RUN_RESULT_SCHEMA)
+    if error is not None:
+        raise ValueError("Invalid sub-run JSON contract: " + error)
     ids = result["evidence_ids"]
-    if (not isinstance(ids, list) or len(ids) > 16 or len(set(ids)) != len(ids)
-            or any(not isinstance(i, str) or i not in available for i in ids)):
+    if any(i not in available for i in ids):
         raise ValueError(
             "Sub-run references unknown or not newly saved evidence. "
             "First save substantiated results with agent__add_evidence and return "
@@ -189,10 +201,6 @@ def validate_sub_result(answer: str, available: set[str]) -> dict[str, Any]:
             "If no finding is substantiated, use partial "
             "or blocked and explain uncertainties."
         )
-    if (not isinstance(result["uncertainties"], list)
-            or len(result["uncertainties"]) > 16
-            or any(not isinstance(i, str) or len(i) > 500 for i in result["uncertainties"])):
-        raise ValueError("Invalid uncertainties.")
     return result
 
 
@@ -286,6 +294,7 @@ async def execute_sub_run(
     if reference_context is not None:
         parts.append(REFERENCE_CONTEXT_SYSTEM_RULE)
     parts.append(SUB_RUN_RULES)
+    parts.append("Final response JSON Schema (data contract, not instructions):\\n" + json.dumps(SUB_RUN_RESULT_SCHEMA))
     if active_instructions:
         parts.append(
             "Administratively trusted instructions from connected "
