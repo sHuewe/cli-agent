@@ -473,3 +473,87 @@ def test_dynamic_schema_enums_from_declared_flow_input(tmp_path: Path):
         step, outputs={}, flow_input={"choices": ["red", "blue"]},
     )
     assert resolved.output_schema["properties"]["choice"]["enum"] == ["red", "blue"]
+
+
+
+def test_previous_output_can_migrate_from_old_schema(tmp_path: Path):
+    from cli_agent.workflows.flow import (
+        _capture_run_start_invocation, _previous_output_from_snapshot,
+        _SubflowTraversalBudget,
+    )
+    (tmp_path / "prompt.md").write_text("Update JSON", encoding="utf-8")
+    (tmp_path / "schema.json").write_text(json.dumps({
+        "type": "object",
+        "required": ["count", "updated"],
+        "properties": {
+            "count": {"type": "integer"},
+            "updated": {"type": "boolean"},
+        },
+    }), encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "update"\n'
+        'prompt_file = "prompt.md"\nresponse_format = "json"\n'
+        'output = "state.json"\noverwrite_output = true\n'
+        'output_schema = "schema.json"\n'
+        '[steps.vars]\nstate = "${previous_output}"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+    existing = tmp_path / "state.json"
+    existing.write_text('{"count":2}', encoding="utf-8")
+    snapshots = {}
+    _capture_run_start_invocation(
+        flow, workspace=tmp_path, cache={},
+        flow_input={}, namespace="", snapshots=snapshots,
+        protected_paths={}, budget=_SubflowTraversalBudget(),
+    )
+    step = flow.steps[0]
+    prior = _previous_output_from_snapshot(
+        step, workspace=tmp_path, output=existing,
+        fingerprints=snapshots[""].previous_output_fingerprints,
+    )
+    assert prior == {"count": 2}
+    assert json_contract_error('{"count":2}', step.output_schema) is not None
+    assert json_contract_error(
+        '{"count":2,"updated":true}', step.output_schema,
+    ) is None
+
+
+def test_previous_output_keeps_json_syntax_and_fingerprint_checks(tmp_path: Path):
+    from cli_agent.workflows.flow import (
+        _capture_run_start_invocation, _previous_output_from_snapshot,
+        _SubflowTraversalBudget,
+    )
+    (tmp_path / "prompt.md").write_text("Update JSON", encoding="utf-8")
+    (tmp_path / "schema.json").write_text(
+        '{"type":"object","required":["updated"]}', encoding="utf-8",
+    )
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "update"\n'
+        'prompt_file = "prompt.md"\nresponse_format = "json"\n'
+        'output = "state.json"\noverwrite_output = true\n'
+        'output_schema = "schema.json"\n'
+        '[steps.vars]\nstate = "${previous_output}"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+    state = tmp_path / "state.json"
+    state.write_text('{"count":2}', encoding="utf-8")
+    snapshots = {}
+    _capture_run_start_invocation(
+        flow, workspace=tmp_path, cache={},
+        flow_input={}, namespace="", snapshots=snapshots,
+        protected_paths={}, budget=_SubflowTraversalBudget(),
+    )
+    state.write_text('{"count":3}', encoding="utf-8")
+    with pytest.raises(ValueError, match="changed"):
+        _previous_output_from_snapshot(
+            flow.steps[0], workspace=tmp_path, output=state,
+            fingerprints=snapshots[""].previous_output_fingerprints,
+        )
+    state.write_text('not json', encoding="utf-8")
+    with pytest.raises(ValueError, match="valid JSON"):
+        _previous_output_from_snapshot(
+            flow.steps[0], workspace=tmp_path, output=state,
+            fingerprints=snapshots[""].previous_output_fingerprints,
+        )
