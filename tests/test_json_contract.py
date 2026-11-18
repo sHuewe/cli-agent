@@ -147,3 +147,51 @@ async def test_unfixable_schema_mismatch_raises():
             agent, '{"ok": "invalid"}', messages=[], tools=[], routes={},
             enabled_server_names=set(), run_state=SimpleNamespace(),
         )
+
+
+def test_json_contract_accepts_keyword_like_property_names_and_const_data():
+    schema = check_json_contract({
+        "type": "object",
+        "properties": {
+            "$ref": {"type": "string"},
+            "record": {"const": {"$id": "record-id"}},
+        },
+    })
+    assert json_contract_error(
+        '{"$ref": "ordinary-value", "record": {"$id": "record-id"}}',
+        schema,
+    ) is None
+
+
+def test_json_contract_rejects_remote_ref_in_nested_subschema():
+    with pytest.raises(ValueError, match="local"):
+        check_json_contract({
+            "type": "object",
+            "properties": {
+                "value": {"$ref": "https://example.com/remote.json"},
+            },
+        })
+
+
+def test_existing_json_checkpoint_rejects_schema_mismatch(tmp_path: Path):
+    from cli_agent.workflows.flow import _existing_json_checkpoint
+    (tmp_path / "prompt.md").write_text("Return JSON", encoding="utf-8")
+    (tmp_path / "result.schema.json").write_text(json.dumps({
+        "type": "object", "required": ["ok"],
+        "properties": {"ok": {"type": "boolean"}},
+    }), encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "check"\n'
+        'prompt_file = "prompt.md"\nresponse_format = "json"\n'
+        'output_schema = "result.schema.json"\noutput = "result.json"\n',
+        encoding="utf-8",
+    )
+    step = load_flow(Path("flow.toml"), workspace=tmp_path).steps[0]
+    output = tmp_path / "result.json"
+    output.write_text('{"ok": "bad"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="does not match output_schema"):
+        _existing_json_checkpoint(step, workspace=tmp_path, output=output)
+    output.write_text('{"ok": true}', encoding="utf-8")
+    assert json.loads(_existing_json_checkpoint(
+        step, workspace=tmp_path, output=output,
+    )) == {"ok": True}
