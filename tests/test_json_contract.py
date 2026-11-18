@@ -338,7 +338,7 @@ def _dynamic_enum_flow(tmp_path: Path, *, reference: str, foreach: str | None = 
         "required": ["choice"],
         "properties": {"choice": {"type": "string"}},
     }), encoding="utf-8")
-    source = '[[steps]]\nid = "discover"\nprompt_file = "prompt.md"\nresponse_format = "json"\noutput = "choices.json"\n'
+    source = 'version = 1\n[[steps]]\nid = "discover"\nprompt_file = "prompt.md"\nresponse_format = "json"\noutput = "choices.json"\n'
     target = (
         '\n[[steps]]\nid = "select"\nprompt_file = "prompt.md"\n'
         'response_format = "json"\noutput_schema = "schema.json"\n'
@@ -395,7 +395,7 @@ def test_dynamic_schema_enum_requires_matching_schema_property(tmp_path: Path):
     (tmp_path / "prompt.md").write_text("Return JSON", encoding="utf-8")
     (tmp_path / "schema.json").write_text('{"type":"object"}', encoding="utf-8")
     (tmp_path / "flow.toml").write_text(
-        '[[steps]]\nid = "select"\nprompt_file = "prompt.md"\n'
+        'version = 1\n[[steps]]\nid = "select"\nprompt_file = "prompt.md"\n'
         'response_format = "json"\noutput_schema = "schema.json"\n'
         '[steps.output_schema_enums]\n"/properties/missing" = "input.allowed"\n',
         encoding="utf-8",
