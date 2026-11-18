@@ -397,6 +397,16 @@ def validate_allowed_values(
     )
     entries: list[tuple[str, Any]] = []
     findings: list[dict[str, Any]] = []
+    max_findings = 1000
+
+    def add_finding(finding: dict[str, Any]) -> None:
+        # Apply one bound to ALL failure types, including structural errors
+        # discovered while walking the candidate JSON selection.
+        if len(findings) >= max_findings:
+            raise ValueError(
+                f"JSON membership validation exceeds {max_findings} findings."
+            )
+        findings.append(finding)
 
     def esc(part: str) -> str:
         return part.replace("~", "~0").replace("/", "~1")
@@ -409,7 +419,7 @@ def validate_allowed_values(
         for node, pointer in nodes:
             if token == "*":
                 if not isinstance(node, list):
-                    findings.append({
+                    add_finding({
                         "path": pointer or "", "reason": "expected_array",
                         "value": deepcopy(node),
                     })
@@ -421,7 +431,7 @@ def validate_allowed_values(
             elif isinstance(node, dict):
                 path = f"{pointer}/{esc(token)}"
                 if token not in node:
-                    findings.append({
+                    add_finding({
                         "path": path, "reason": "missing_field",
                     })
                 else:
@@ -430,11 +440,11 @@ def validate_allowed_values(
                 i = int(token)
                 path = f"{pointer}/{i}"
                 if i >= len(node):
-                    findings.append({"path": path, "reason": "missing_index"})
+                    add_finding({"path": path, "reason": "missing_index"})
                 else:
                     next_nodes.append((node[i], path))
             else:
-                findings.append({
+                add_finding({
                     "path": pointer or "", "reason": "invalid_container",
                     "value": deepcopy(node),
                 })
@@ -443,19 +453,17 @@ def validate_allowed_values(
         nodes = next_nodes
     entries = nodes
     if not entries and not findings:
-        findings.append({"path": values_path, "reason": "no_values"})
+        add_finding({"path": values_path, "reason": "no_values"})
 
     for value, pointer in entries:
         key = _json_distinct_key(value)
         if key in allowed_keys or (value is None and permitted_null):
             continue
-        findings.append({
+        add_finding({
             "path": pointer,
             "reason": "null_not_allowed" if value is None else "not_allowed",
             "value": deepcopy(value),
         })
-        if len(findings) > 1000:
-            raise ValueError("JSON membership validation exceeds 1000 findings.")
 
     # Present findings in original document order (including missing fields),
     # rather than discovering all missing fields before invalid values.
