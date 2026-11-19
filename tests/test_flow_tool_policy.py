@@ -212,3 +212,77 @@ def test_flow_policy_skips_forbidden_knowledge_preflight(allowed_tools, source):
         _knowledge_session=ForbiddenSession(),
     )
     assert asyncio.run(ConversationMixin._collect_knowledge(agent, "test")) is None
+
+
+
+def test_internal_only_flow_policy_retains_enabled_internal_tools(tmp_path):
+    from cli_agent.runtime.agent import CliAgent
+    from cli_agent.state.evidence_state import EvidenceState
+    from cli_agent.state.sub_runs import START_SUB_RUN
+    from cli_agent.state.evidence_tools import PLAN_TOOL_NAME
+
+    agent = CliAgent.__new__(CliAgent)
+    agent._server_tools = {
+        "os": [{"type": "function", "function": {"name": "os__read_file"}}],
+    }
+    agent._active_servers = {"os"}
+    agent._disabled_tools = set()
+    agent._sub_run_enabled = True
+    agent._evidence_state = EvidenceState()
+    agent._flow_tool_allowlist = frozenset({PLAN_TOOL_NAME, START_SUB_RUN})
+
+    names = {tool["function"]["name"] for tool in agent._model_tools()}
+    assert names == {PLAN_TOOL_NAME, START_SUB_RUN}
+
+    agent._flow_tool_allowlist = frozenset()
+    assert agent._model_tools() == []
+
+    agent._flow_tool_allowlist = None
+    names = {tool["function"]["name"] for tool in agent._model_tools()}
+    assert "os__read_file" in names
+    assert PLAN_TOOL_NAME in names
+
+
+def test_policy_disabled_required_vector_does_not_block_okf(tmp_path, monkeypatch):
+    import json
+    import cli_agent.runtime.agent_conversation as conversation
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+
+    class OkfSession:
+        async def call_tool(self, name, arguments):
+            assert name == "knowledge_index"
+            return SimpleNamespace(isError=False, structuredContent={}, content=[])
+
+    seen = []
+    async def fake_loop(**kwargs):
+        seen.append(kwargs)
+        return json.dumps({
+            "found_content": False, "selected_okf_tokens": [],
+            "reason_code": "not_applicable",
+        })
+
+    async def fake_operation(awaitable, **kwargs):
+        return await awaitable
+
+    monkeypatch.setattr(conversation, "await_mcp_operation", fake_operation)
+    monkeypatch.setattr(conversation, "tool_result_text", lambda result: "{}")
+    monkeypatch.setattr(conversation, "_knowledge_allowed_calls", lambda result: {})
+
+    session = OkfSession()
+    agent = SimpleNamespace(
+        _flow_tool_allowlist=frozenset({"okf__knowledge_index"}),
+        _okf_options=SimpleNamespace(required=True, max_tool_calls=10, max_concept_reads=10),
+        _okf_enabled=True,
+        _vector_config=SimpleNamespace(mode="okf", required=True),
+        _vector_session=SimpleNamespace(),
+        _knowledge_session=session,
+        _knowledge_routes={"okf__knowledge_index": (session, "knowledge_index", None)},
+        _knowledge_tools=[{"function": {"name": "okf__knowledge_index"}}],
+        history=[],
+        _build_knowledge_system_prompt=lambda **kwargs: "Test",
+        _dump_value=lambda *args: None,
+        _run_model_loop=fake_loop,
+    )
+    assert asyncio.run(ConversationMixin._collect_knowledge(agent, "check")) is None
+    assert len(seen) == 1
+    assert [tool["function"]["name"] for tool in seen[0]["tools"]] == ["okf__knowledge_index"]
