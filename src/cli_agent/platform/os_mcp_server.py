@@ -281,6 +281,10 @@ def parse_args() -> argparse.Namespace:
             "write-capable OS tools. May be repeated."
         ),
     )
+    parser.add_argument("--scoped-writes", action="store_true",
+                        help="Deny writes except explicitly listed exact paths.")
+    parser.add_argument("--scoped-write-file", type=Path, action="append", default=[])
+    parser.add_argument("--scoped-mkdir-dir", type=Path, action="append", default=[])
     parser.add_argument(
         "--path-policy-file",
         type=Path,
@@ -367,6 +371,8 @@ def main() -> None:
             )
         )
         vision_config = vision_config_from_environment()
+        if (args.scoped_write_file or args.scoped_mkdir_dir) and not args.scoped_writes:
+            raise ValueError("Scoped OS targets require --scoped-writes.")
         workspace = Workspace.from_directory(
             project_directory,
             mcp_config,
@@ -378,6 +384,8 @@ def main() -> None:
                 *getattr(args, "mutation_protected_path", ()),
                 *policy_paths["mutation_protected_paths"],
             ),
+            scoped_write_files=tuple(args.scoped_write_file) if args.scoped_writes else None,
+            scoped_mkdir_dirs=tuple(args.scoped_mkdir_dir) if args.scoped_writes else None,
             **({"allowed_paths": tuple(
                     AllowedPath(Path(entry["path"]), entry["access"])
                     for entry in policy_paths["allowed_paths"]
@@ -387,6 +395,11 @@ def main() -> None:
         logger.exception("MCP server initialization failed")
         raise SystemExit(str(exc)) from exc
 
+    server = (
+        create_server(workspace, mcp_config, vision_config=vision_config)
+        if vision_config is not None
+        else create_server(workspace, mcp_config)
+    )
     server = (
         create_server(workspace, mcp_config, vision_config=vision_config)
         if vision_config is not None
