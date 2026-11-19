@@ -5693,7 +5693,7 @@ async def _execute_model_iteration(
             if (not rendered or path.is_absolute() or win.drive
                     or ".." in path.parts or ".." in win.parts):
                 raise ValueError("tool_policy requires safe workspace-relative paths.")
-            return _workspace_path(workspace, path, purpose="Flow tool-policy path")
+            return _workspace_path(workspace, path, purpose="Flow tool-policy path", must_exist=False)
 
         if step.workspace_access == "write":
             scoped_write_files = tuple(
