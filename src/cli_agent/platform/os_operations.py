@@ -266,7 +266,10 @@ class Workspace(WorkspaceIoMixin):
             for protected in self.mutation_protected_paths
         )
 
-    def _reject_protected_mutation(self, path: Path) -> None:
+    def _reject_protected_mutation(self, path: Path, *, directory: bool = False) -> None:
+        # Central enforcement protects every modifying OS operation, including
+        # delete/copy/move. Tool filtering alone is not a filesystem boundary.
+        self._enforce_scoped_mutation(path, directory=directory)
         if self._is_mutation_protected_path(path):
             raise WorkspaceError(
                 "Modifying protected "
