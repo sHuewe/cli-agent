@@ -1520,6 +1520,23 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                             or PureWindowsPath(literal).drive or ".." in Path(literal).parts
                             or ".." in PureWindowsPath(literal).parts):
                         raise ValueError("checkpoint_status.paths must be workspace-relative.")
+            if raw_filesystem_operation["kind"] == "assert_file":
+                assert_template = raw_filesystem_operation["path"]
+                assert_remainder = _INPUT_EXPR.sub("", assert_template)
+                if "${" in assert_remainder:
+                    raise ValueError("assert_file supports only input and variable references.")
+                _validate_input_references(
+                    [assert_template], declared_inputs=inputs,
+                    field="assert_file.path",
+                )
+                literal_assert = _INPUT_EXPR.sub("placeholder", assert_template)
+                windows_assert = PureWindowsPath(literal_assert)
+                if (not literal_assert.strip()
+                        or Path(literal_assert).is_absolute()
+                        or windows_assert.is_absolute() or windows_assert.drive
+                        or ".." in Path(literal_assert).parts
+                        or ".." in windows_assert.parts):
+                    raise ValueError("assert_file.path must be workspace-relative.")
             if raw_filesystem_operation["kind"] == "markdown_sections":
                 source_template = raw_filesystem_operation["source_path"]
                 remainder_source = _INPUT_EXPR.sub("", source_template)
