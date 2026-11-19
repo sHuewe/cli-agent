@@ -5740,6 +5740,14 @@ async def _execute_model_iteration(
             if (not rendered or path.is_absolute() or win.drive
                     or ".." in path.parts or ".." in win.parts):
                 raise ValueError("tool_policy requires safe workspace-relative paths.")
+            # Never canonicalize a symlinked ancestor into a new grant:
+            # doing so could redirect write permission to another concept.
+            current = workspace
+            from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
+            for component in path.parts:
+                current = current / component
+                if path_entry_is_symlink_or_reparse(current):
+                    raise ValueError("tool_policy paths must not contain symlinks or junctions.")
             return _workspace_path(workspace, path, purpose="Flow tool-policy path", must_exist=False)
 
         if step.workspace_access == "write":
