@@ -1344,6 +1344,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "output_schema_enums",
         "json_restart_attempts",
         "approve_tools",
+        "tool_policy",
         "vars",
         "foreach",
         "conversation_items",
@@ -1452,7 +1453,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 raise ValueError("filesystem_operation requires output without foreach.")
             if op["kind"] == "checkpoint_status" and raw.get("overwrite_output") is not True:
                 raise ValueError("checkpoint_status requires overwrite_output=true for current checks.")
-            forbidden = {"config", "model", "context_file", "add_file_context", "add_web_context", "workspace_access", "with_data", "with_mcp", "retry", "approve_tools", "vars", "conversation_items", "conversation_final_prompt_file", "exclude_paths", "json_inputs", "input"}
+            forbidden = {"config", "model", "context_file", "add_file_context", "add_web_context", "workspace_access", "with_data", "with_mcp", "retry", "approve_tools", "tool_policy", "vars", "conversation_items", "conversation_final_prompt_file", "exclude_paths", "json_inputs", "input"}
             if forbidden & set(raw):
                 raise ValueError("filesystem_operation must not set model or tool options.")
         if raw_filesystem_operation is not None:
@@ -1739,7 +1740,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             forbidden = {
                 "config", "model", "context_file", "add_file_context",
                 "add_web_context", "workspace_access", "with_data", "with_mcp",
-                "retry", "approve_tools", "vars", "conversation_items",
+                "retry", "approve_tools", "tool_policy", "vars", "conversation_items",
                 "conversation_final_prompt_file", "exclude_paths",
             }
             if forbidden & set(raw):
@@ -1904,6 +1905,31 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "'none', 'read' or 'write'."
             )
         workspace_access = str(workspace_access_value)
+        tool_policy = raw.get("tool_policy")
+        if tool_policy is not None:
+            if (not isinstance(tool_policy, dict) or "allowed_tools" not in tool_policy
+                    or set(tool_policy) - {"allowed_tools", "write_paths", "mkdir_paths"}):
+                raise ValueError(f"steps[{index}].tool_policy has invalid keys.")
+            for key in ("allowed_tools", "write_paths", "mkdir_paths"):
+                values = tool_policy.get(key, [])
+                if (not isinstance(values, list) or len(values) > 100
+                        or any(not isinstance(item, str) or not item.strip() for item in values)
+                        or len(set(values)) != len(values)):
+                    raise ValueError(f"steps[{index}].tool_policy.{key} must be unique nonempty strings.")
+            if any("${" in value for value in tool_policy["allowed_tools"]):
+                raise ValueError("tool_policy.allowed_tools may not be dynamic.")
+            if workspace_access != "write" and (
+                tool_policy.get("write_paths") or tool_policy.get("mkdir_paths")
+            ):
+                raise ValueError("tool_policy write paths require workspace_access=write.")
+            if tool_policy.get("write_paths") and "os__write_file" not in tool_policy["allowed_tools"]:
+                raise ValueError("tool_policy.write_paths require os__write_file.")
+            if tool_policy.get("mkdir_paths") and "os__make_directory" not in tool_policy["allowed_tools"]:
+                raise ValueError("tool_policy.mkdir_paths require os__make_directory.")
+            if workspace_access == "write" and (
+                {"os__write_file", "os__make_directory"} & set(tool_policy["allowed_tools"])
+            ) and "write_paths" not in tool_policy:
+                raise ValueError("tool_policy scoped writes must explicitly declare write_paths.")
 
         with_data = raw.get("with_data", False)
         if not isinstance(with_data, bool):
@@ -2408,6 +2434,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 output_schema_enums=schema_enums or None,
                 json_restart_attempts=json_restart_attempts,
                 approve_tools=approve_tools,
+                tool_policy=dict(tool_policy) if tool_policy is not None else None,
                 variables=variables,
                 global_variables=global_variables,
                 foreach=foreach,
@@ -5648,6 +5675,33 @@ async def _execute_model_iteration(
         if step.config is not None
         else None
     )
+    tool_allowlist = None
+    scoped_write_files = None
+    scoped_mkdir_dirs = None
+    if step.tool_policy is not None:
+        tool_allowlist = tuple(step.tool_policy["allowed_tools"])
+        from pathlib import PureWindowsPath
+
+        def scoped_path(template: str) -> Path:
+            rendered = _render_dynamic_text(
+                template, item=item, iteration_id=iteration_id,
+                conversation_item=None, previous_output=None,
+                outputs=outputs, flow_input=flow_input,
+            )
+            path = Path(rendered)
+            win = PureWindowsPath(rendered)
+            if (not rendered or path.is_absolute() or win.drive
+                    or ".." in path.parts or ".." in win.parts):
+                raise ValueError("tool_policy requires safe workspace-relative paths.")
+            return _workspace_path(workspace, path, purpose="Flow tool-policy path")
+
+        if step.workspace_access == "write":
+            scoped_write_files = tuple(
+                scoped_path(x) for x in step.tool_policy.get("write_paths", ())
+            )
+            scoped_mkdir_dirs = tuple(
+                scoped_path(x) for x in step.tool_policy.get("mkdir_paths", ())
+            ) or tuple(dict.fromkeys(path.parent for path in scoped_write_files))
     callback = build_preapproval_callback(
         step.approve_tools,
         fallback=context.approval_callback,
@@ -5733,6 +5787,9 @@ async def _execute_model_iteration(
                         config_file=config_file,
                         model=step.model,
                         workspace_access=step.workspace_access,
+                        tool_allowlist=tool_allowlist,
+                        scoped_write_files=scoped_write_files,
+                        scoped_mkdir_dirs=scoped_mkdir_dirs,
                         with_data=step.with_data,
                         with_mcp=step.with_mcp,
                         retry_policy=effective_retry_policy,
@@ -5758,6 +5815,9 @@ async def _execute_model_iteration(
                         config_file=config_file,
                         model=step.model,
                         workspace_access=step.workspace_access,
+                        tool_allowlist=tool_allowlist,
+                        scoped_write_files=scoped_write_files,
+                        scoped_mkdir_dirs=scoped_mkdir_dirs,
                         with_data=step.with_data,
                         with_mcp=step.with_mcp,
                         retry_policy=effective_retry_policy,
