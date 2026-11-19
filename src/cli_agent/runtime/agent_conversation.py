@@ -553,7 +553,10 @@ class ConversationMixin:
         if not active_okf and not active_vector:
             return None
         okf_required = bool(options and active_okf and options.required)
-        vector_required = bool(vector_config and vector_config.required and not hybrid_okf_disabled)
+        vector_required = bool(
+            vector_config and vector_config.required
+            and not hybrid_okf_disabled and allow_vector
+        )
         required = okf_required or (vector_required and active_vector)
         if active_okf and self._knowledge_session is None:
             if okf_required:
