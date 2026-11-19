@@ -39,7 +39,7 @@ def test_scoped_workspace_blocks_symlinked_target(tmp_path):
         aliased.symlink_to(actual, target_is_directory=True)
     except (OSError, NotImplementedError):
         pytest.skip("symlink unavailable on host")
-    with pytest.raises(WorkspaceError, match="Symlinks or junctions"):
+    with pytest.raises(WorkspaceError, match="symlinks"):
         Workspace.from_directory(
             tmp_path, McpServerConfig(name="os"),
             scoped_write_files=(aliased / "target.md",),
@@ -83,7 +83,6 @@ write_paths = ["output/concept.md"]
     'allowed_tools = ["os__write_file"]',
     'allowed_tools = ["os__write_file"]\nwrite_paths = ["" ]',
     'allowed_tools = ["os__read_file"]\nwrite_paths = ["output/file.md"]',
-    'allowed_tools = ["os__read_file"]\nwrite_paths = ["../out.md"]',
 ])
 def test_invalid_or_unauthorized_policy_is_not_executed(tmp_path, policy):
     (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
@@ -92,11 +91,18 @@ def test_invalid_or_unauthorized_policy_is_not_executed(tmp_path, policy):
         'workspace_access = "write"\n[steps.tool_policy]\n' + policy,
         encoding="utf-8",
     )
-    if "../" in policy:
-        # The static parser rejects structural errors; path traversal is
-        # explicitly rejected when the resolved invocation is prepared.
-        flow = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
-        assert flow.steps[0].tool_policy is not None
-    else:
-        with pytest.raises(ValueError, match="tool_policy"):
-            load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="tool_policy"):
+        load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+
+def test_tool_policy_rejects_parent_traversal_at_runtime(tmp_path):
+    (tmp_path / "prompt.md").write_text("test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "x"\nprompt_file = "prompt.md"\n'
+        'workspace_access = "write"\n[steps.tool_policy]\n'
+        'allowed_tools = ["os__write_file"]\nwrite_paths = ["../outside.md"]',
+        encoding="utf-8",
+    )
+    flow = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="tool_policy"):
+        asyncio.run(run_flow(flow, workspace=tmp_path))
