@@ -10,6 +10,8 @@ class Workspace(WorkspaceIoMixin):
     protected_paths: frozenset[Path] = frozenset()
     mutation_protected_paths: frozenset[Path] = frozenset()
     allowed_paths: tuple[AllowedPath, ...] = ()
+    scoped_write_files: tuple[Path, ...] | None = None
+    scoped_mkdir_dirs: tuple[Path, ...] | None = None
 
     @classmethod
     def from_directory(
@@ -20,6 +22,8 @@ class Workspace(WorkspaceIoMixin):
         protected_paths: tuple[Path, ...] = (),
         mutation_protected_paths: tuple[Path, ...] = (),
         allowed_paths: tuple[AllowedPath, ...] = (),
+        scoped_write_files: tuple[Path, ...] | None = None,
+        scoped_mkdir_dirs: tuple[Path, ...] | None = None,
     ) -> Workspace:
         resolved = directory.resolve()
         if not resolved.is_dir():
@@ -61,6 +65,26 @@ class Workspace(WorkspaceIoMixin):
                 raise WorkspaceError("Symlinks or junctions are not allowed in allowed_paths.")
             checked_allowed.append(AllowedPath(canonical, item.access))
 
+        def checked_scope(paths: tuple[Path, ...] | None) -> tuple[Path, ...] | None:
+            if paths is None:
+                return None
+            result = []
+            for path in paths:
+                raw = path.expanduser()
+                if ".." in raw.parts or ".." in PureWindowsPath(str(raw)).parts:
+                    raise WorkspaceError("Scoped mutation paths cannot traverse parents.")
+                candidate = raw if raw.is_absolute() else resolved / raw
+                lexical = candidate.absolute()
+                try:
+                    lexical.relative_to(resolved)
+                    canonical = candidate.resolve(strict=False)
+                except (ValueError, OSError, RuntimeError) as exc:
+                    raise WorkspaceError("Scoped mutation paths must remain inside workspace.") from exc
+                if os.path.normcase(str(lexical)) != os.path.normcase(str(canonical)):
+                    raise WorkspaceError("Scoped mutation paths cannot traverse symlinks.")
+                result.append(canonical)
+            return tuple(result)
+
         return cls(
             directory=resolved,
             config=config,
@@ -69,7 +93,14 @@ class Workspace(WorkspaceIoMixin):
                 mutation_protected_paths
             ),
             allowed_paths=tuple(checked_allowed),
+            scoped_write_files=checked_scope(scoped_write_files),
+            scoped_mkdir_dirs=checked_scope(scoped_mkdir_dirs),
         )
+
+    def _enforce_scoped_mutation(self, path: Path, *, directory: bool) -> None:
+        allowed = self.scoped_mkdir_dirs if directory else self.scoped_write_files
+        if allowed is not None and path not in allowed:
+            raise WorkspaceError("Path is outside the scoped OS mutation allowlist.")
 
     def resolve_path(self, path: str, *, must_exist: bool = True) -> Path:
         if not isinstance(path, str) or not path.strip():
