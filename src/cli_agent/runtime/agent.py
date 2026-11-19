@@ -494,9 +494,10 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         return "\n\n".join(parts)
 
     def _tool_is_enabled(self, exposed_name: str) -> bool:
+        policy = getattr(self, "_flow_tool_allowlist", None)
         return (
             exposed_name not in self._disabled_tools
-            and (self._flow_tool_allowlist is None or exposed_name in self._flow_tool_allowlist)
+            and (policy is None or exposed_name in policy)
         )
 
     def set_tool_enabled(self, tool_name: str, *, enabled: bool) -> bool:
@@ -569,7 +570,7 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
                 tools.append(copy.deepcopy(SUB_RUN_TOOL))
             tools.extend(self._evidence_state.tool_definitions())
             tools.append(PUBLISH_TOOL)
-        if self._flow_tool_allowlist is not None:
+        if getattr(self, "_flow_tool_allowlist", None) is not None:
             tools = [
                 tool for tool in tools
                 if self._tool_is_enabled(str(tool["function"]["name"]))
