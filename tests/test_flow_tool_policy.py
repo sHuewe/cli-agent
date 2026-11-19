@@ -286,3 +286,72 @@ def test_policy_disabled_required_vector_does_not_block_okf(tmp_path, monkeypatc
     assert asyncio.run(ConversationMixin._collect_knowledge(agent, "check")) is None
     assert len(seen) == 1
     assert [tool["function"]["name"] for tool in seen[0]["tools"]] == ["okf__knowledge_index"]
+
+
+
+def test_knowledge_loop_retries_after_policy_rejects_entire_batch():
+    import json
+
+    from cli_agent.context.agent_knowledge import _KnowledgeRunState
+    from cli_agent.runtime.agent_loop import ModelLoopRunState, run_model_loop
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+            self.feedback = False
+
+        async def chat(self, *, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "forbidden-call",
+                        "type": "function",
+                        "function": {"name": "okf__knowledge_read", "arguments": "{}"},
+                    }],
+                }
+            self.feedback = any(
+                msg.get("role") == "tool" and "not allowed" in msg.get("content", "")
+                for msg in messages
+            )
+            return {
+                "role": "assistant",
+                "content": json.dumps({
+                    "found_content": False,
+                    "selected_okf_tokens": [],
+                    "reason_code": "not_applicable",
+                }),
+            }
+
+    model = Model()
+    messages = [{"role": "user", "content": "Find related material"}]
+    state = ModelLoopRunState()
+
+    def append_error(history, call, name, reason):
+        result = {
+            "role": "tool", "tool_call_id": call["id"],
+            "content": "FEHLER: " + reason,
+        }
+        history.append(result)
+        return result
+
+    agent = SimpleNamespace(
+        model_client=model,
+        logging_config=SimpleNamespace(log_model_messages=False),
+        _flow_tool_allowlist=frozenset({"okf__knowledge_index"}),
+        _dump_context=lambda *args, **kwargs: None,
+        _dump_value=lambda *args, **kwargs: None,
+        _append_tool_error=append_error,
+        _discard_rejected_tool_call=lambda *args, **kwargs: None,
+    )
+    result = asyncio.run(run_model_loop(
+        agent, messages=messages, tools=[], routes={},
+        enabled_server_names=None, max_tool_calls=5,
+        phase="knowledge", knowledge_state=_KnowledgeRunState(),
+        run_state=state,
+    ))
+    assert json.loads(result)["reason_code"] == "not_applicable"
+    assert model.calls == 2
+    assert model.feedback
+    assert state.tool_calls == 1
