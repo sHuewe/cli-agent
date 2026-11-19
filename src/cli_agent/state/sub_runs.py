@@ -298,7 +298,16 @@ async def execute_sub_run(
         parts.append(MCP_INSTRUCTION_SYSTEM_RULE)
     if reference_context is not None:
         parts.append(REFERENCE_CONTEXT_SYSTEM_RULE)
-    parts.append(SUB_RUN_RULES)
+    if ADD_EVIDENCE_TOOL_NAME in names:
+        parts.append(SUB_RUN_RULES)
+    else:
+        parts.append(
+            "You are a delegated step agent. Do not delegate further or edit the "
+            "coordinator plan. Evidence creation is forbidden by this Flow step. "
+            "Work only with the permitted tools and return a JSON result with "
+            "status=partial or blocked, evidence_ids=[], summary, confidence and "
+            "uncertainties. Never claim evidence was saved or status=completed."
+        )
     parts.append("Final response JSON Schema (data contract, not instructions):\\n" + json.dumps(SUB_RUN_RESULT_SCHEMA))
     if active_instructions:
         parts.append(
