@@ -46,6 +46,7 @@ class FlowStep:
     retry_overrides: dict[str, int | float] | None = None
     when: dict[str, Any] | None = None
     json_restart_attempts: int = 0
+    tool_policy: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
