@@ -182,3 +182,33 @@ def test_delegated_tools_respect_flow_allowlist(tmp_path, monkeypatch, allowed_e
     assert names <= permitted
     assert (ADD_EVIDENCE_TOOL_NAME in names) is allowed_evidence
     assert START_SUB_RUN not in names
+
+
+
+@pytest.mark.parametrize("allowed_tools", [
+    (),
+    ("os__read_file",),
+    ("agent__start_sub_run",),
+])
+@pytest.mark.parametrize("source", ["okf", "chroma"])
+def test_flow_policy_skips_forbidden_knowledge_preflight(allowed_tools, source):
+    """A forbidden implicit retrieval must not run before the main model loop."""
+    from cli_agent.runtime.agent_conversation import ConversationMixin
+
+    class ForbiddenSession:
+        async def search(self, *_args, **_kwargs):
+            raise AssertionError("Knowledge search must not run")
+
+        async def call_tool(self, *_args, **_kwargs):
+            raise AssertionError("Knowledge MCP tool must not run")
+
+    agent = SimpleNamespace(
+        _flow_tool_allowlist=frozenset(allowed_tools),
+        _okf_options=SimpleNamespace(required=True) if source == "okf" else None,
+        _okf_enabled=True,
+        _vector_config=SimpleNamespace(mode="chroma", required=True)
+        if source == "chroma" else None,
+        _vector_session=ForbiddenSession(),
+        _knowledge_session=ForbiddenSession(),
+    )
+    assert asyncio.run(ConversationMixin._collect_knowledge(agent, "test")) is None
