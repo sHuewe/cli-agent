@@ -460,6 +460,11 @@ async def run_model_loop(
                         f"Tool {name!r} is not allowed by this Flow step.",
                     )
             tool_calls = retained
+            if not tool_calls:
+                # All requested calls were denied and already charged to the
+                # tool budget. Let the model respond to their error messages,
+                # rather than dispatching an empty Knowledge tool batch.
+                continue
         if tool_calls:
             empty_responses = 0
         if phase == "sub":
