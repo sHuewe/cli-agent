@@ -371,7 +371,10 @@ def main() -> None:
             )
         )
         vision_config = vision_config_from_environment()
-        if (args.scoped_write_file or args.scoped_mkdir_dir) and not args.scoped_writes:
+        scoped = bool(getattr(args, "scoped_writes", False))
+        scoped_files = tuple(getattr(args, "scoped_write_file", ()))
+        scoped_dirs = tuple(getattr(args, "scoped_mkdir_dir", ()))
+        if (scoped_files or scoped_dirs) and not scoped:
             raise ValueError("Scoped OS targets require --scoped-writes.")
         workspace = Workspace.from_directory(
             project_directory,
@@ -384,8 +387,8 @@ def main() -> None:
                 *getattr(args, "mutation_protected_path", ()),
                 *policy_paths["mutation_protected_paths"],
             ),
-            scoped_write_files=tuple(args.scoped_write_file) if args.scoped_writes else None,
-            scoped_mkdir_dirs=tuple(args.scoped_mkdir_dir) if args.scoped_writes else None,
+            **({"scoped_write_files": scoped_files,
+                "scoped_mkdir_dirs": scoped_dirs} if scoped else {}),
             **({"allowed_paths": tuple(
                     AllowedPath(Path(entry["path"]), entry["access"])
                     for entry in policy_paths["allowed_paths"]
