@@ -446,6 +446,14 @@ async def run_model_loop(
                 if isinstance(name, str) and name in permitted:
                     retained.append(tool_call)
                 else:
+                    # An unauthorized call still consumes the run's tool budget.
+                    # Otherwise repeated model hallucinations can evade the limit.
+                    calls += 1
+                    state.tool_calls = calls
+                    if calls > max_tool_calls:
+                        raise RuntimeError(
+                            f"Flow tool-call limit exceeded after rejecting {name!r}."
+                        )
                     agent._append_tool_error(
                         messages, tool_call, name,
                         f"Tool {name!r} is not allowed by this Flow step.",
