@@ -5448,6 +5448,8 @@ def _execute_filesystem_step(
                 or win.drive or ".." in raw.parts or ".." in win.parts):
             raise ValueError("assert_file requires a safe workspace-relative path.")
         target_path = _workspace_path(workspace, raw, purpose="assert_file target", must_exist=True)
+        if _filesystem_path_key(target_path) == _filesystem_path_key(output):
+            raise ValueError("assert_file.output must not overwrite the asserted file.")
         lexical = (workspace / raw).absolute()
         if os.path.normcase(str(lexical)) != os.path.normcase(str(target_path)):
             raise ValueError("assert_file forbids symlink or junction indirection.")
