@@ -436,6 +436,21 @@ async def run_model_loop(
             )
             continue
 
+        if tool_calls and phase == "main" and getattr(agent, "_flow_tool_allowlist", None) is not None:
+            # Internal evidence, publication and sub-run calls bypass the
+            # ordinary MCP router. Reject them here before any side effect.
+            permitted = agent._flow_tool_allowlist
+            retained = []
+            for tool_call in tool_calls:
+                name = (tool_call.get("function") or {}).get("name")
+                if isinstance(name, str) and name in permitted:
+                    retained.append(tool_call)
+                else:
+                    agent._append_tool_error(
+                        messages, tool_call, name,
+                        f"Tool {name!r} is not allowed by this Flow step.",
+                    )
+            tool_calls = retained
         if tool_calls:
             empty_responses = 0
         if phase == "sub":
