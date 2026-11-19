@@ -135,3 +135,49 @@ def test_flow_policy_rejects_symlinked_parent_even_within_workspace(tmp_path, mo
     with pytest.raises(ValueError, match="symlinks or junctions"):
         asyncio.run(run_flow(flow, workspace=tmp_path))
     assert not (target_dir / "other.md").exists()
+
+
+@pytest.mark.parametrize("allowed_evidence", [False, True])
+def test_delegated_tools_respect_flow_allowlist(tmp_path, monkeypatch, allowed_evidence):
+    import json
+
+    from cli_agent.state.evidence_state import EvidenceState
+    from cli_agent.state.evidence_tools import ADD_EVIDENCE_TOOL_NAME
+    from cli_agent.state.sub_runs import START_SUB_RUN, execute_sub_run
+    import cli_agent.runtime.agent_loop as agent_loop
+
+    permitted = {"os__read_file", START_SUB_RUN}
+    if allowed_evidence:
+        permitted.add(ADD_EVIDENCE_TOOL_NAME)
+    tool = lambda name: {"type": "function", "function": {"name": name}}
+    agent = SimpleNamespace(
+        _sub_runs=[],
+        _evidence_state=EvidenceState(),
+        _flow_tool_allowlist=frozenset(permitted),
+        _model_tools=lambda: [tool("os__read_file"), tool(START_SUB_RUN)],
+        _server_instructions={},
+        _active_servers=set(),
+        _build_reference_context_message=lambda **kwargs: None,
+        _main_tools_need_workspace_context=lambda names: False,
+        _format_current_time=lambda now: "test time",
+        model_client=SimpleNamespace(),
+        _timezone=None,
+        base_system_prompt="Test",
+    )
+    captured = []
+
+    async def fake_run_loop(child, **kwargs):
+        captured.append(kwargs["tools"])
+        return json.dumps({
+            "status": "partial", "summary": "No evidence required",
+            "evidence_ids": [], "confidence": "low",
+            "uncertainties": ["Delegated test"],
+        })
+
+    monkeypatch.setattr(agent_loop, "run_model_loop", fake_run_loop)
+    result = asyncio.run(execute_sub_run(agent, {"task": "Inspect the selected artifact only"}))
+    assert result["status"] == "partial"
+    names = {entry["function"]["name"] for entry in captured[0]}
+    assert names <= permitted
+    assert (ADD_EVIDENCE_TOOL_NAME in names) is allowed_evidence
+    assert START_SUB_RUN not in names
