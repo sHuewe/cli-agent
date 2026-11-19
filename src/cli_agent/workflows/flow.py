@@ -1492,7 +1492,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     replace_inventory_var,
                     raw_filesystem_operation["source_path"],
                 )
-            else:
+            elif raw_filesystem_operation["kind"] == "checkpoint_status":
                 raw_filesystem_operation["paths"] = [
                     re.sub(r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}", replace_inventory_var, p)
                     for p in raw_filesystem_operation["paths"]
@@ -1500,6 +1500,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 raw_filesystem_operation["expected_source_path"] = re.sub(
                     r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
                     replace_inventory_var, raw_filesystem_operation["expected_source_path"],
+                )
+            elif raw_filesystem_operation["kind"] == "assert_file":
+                raw_filesystem_operation["path"] = re.sub(
+                    r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
+                    replace_inventory_var, raw_filesystem_operation["path"],
                 )
             # Only static vars and declared flow inputs are supported;
             # step/item expressions cannot be resolved by _render_input_text.
