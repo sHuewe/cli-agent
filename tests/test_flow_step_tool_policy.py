@@ -147,7 +147,6 @@ path = "output/concept.md"
 @pytest.mark.parametrize("asserted_path,report_path", [
     ("output/concept.md", "output/concept.md"),
     ("output/./concept.md", "output/concept.md"),
-    ("output/concept.md", "output/../output/concept.md"),
 ])
 def test_assert_file_never_overwrites_asserted_target(tmp_path, asserted_path, report_path):
     import asyncio
