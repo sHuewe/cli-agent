@@ -265,6 +265,11 @@ async def execute_sub_run(
     ] + [tool for tool in local.tool_definitions() if tool["function"]["name"] in {
         ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, REMOVE_EVIDENCE_TOOL_NAME
     }]
+    # Delegated runs inherit the Flow step boundary: local evidence definitions
+    # must not reintroduce tools forbidden in the coordinator.
+    permitted = getattr(agent, "_flow_tool_allowlist", None)
+    if permitted is not None:
+        tools = [tool for tool in tools if tool["function"]["name"] in permitted]
     # Build a distinct prompt from the delegated tool set. Preserve the same
     # trust boundary as the coordinator: administrator-approved MCP instructions
     # belong in the system prompt; server-provided untrusted instructions are
