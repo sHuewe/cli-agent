@@ -400,11 +400,6 @@ def main() -> None:
         if vision_config is not None
         else create_server(workspace, mcp_config)
     )
-    server = (
-        create_server(workspace, mcp_config, vision_config=vision_config)
-        if vision_config is not None
-        else create_server(workspace, mcp_config)
-    )
     server.run(transport="stdio")
 
 
