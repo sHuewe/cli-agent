@@ -1403,8 +1403,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
-            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "target_chars", "max_sections", "always_sections"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "path", "target_chars", "max_sections", "always_sections"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections", "assert_file"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
                 raise ValueError("filesystem_operation requires kind=inventory and directory.")
+            if op["kind"] == "assert_file":
+                if set(op) != {"kind", "path"} or not isinstance(op["path"], str) or not op["path"].strip():
+                    raise ValueError("assert_file requires exactly one nonempty path.")
+                if raw.get("overwrite_output") is not True:
+                    raise ValueError("assert_file requires overwrite_output=true for fresh validation.")
             if op["kind"] == "markdown_sections":
                 if not isinstance(op.get("source_path"), str) or not op["source_path"]:
                     raise ValueError("markdown_sections.source_path is missing.")
@@ -5410,6 +5415,26 @@ def _execute_filesystem_step(
             # A miss never adds this guard, so the parent may write.
             assert context.reserved_inputs is not None
             context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
+        return answer
+    if op["kind"] == "assert_file":
+        from cli_agent.security.filesystem_security import regular_file_has_multiple_links
+        from pathlib import PureWindowsPath
+        candidate = _render_input_text(op["path"], flow_input)
+        raw = Path(candidate)
+        win = PureWindowsPath(candidate)
+        if (not candidate or raw.is_absolute() or win.is_absolute()
+                or win.drive or ".." in raw.parts or ".." in win.parts):
+            raise ValueError("assert_file requires a safe workspace-relative path.")
+        target_path = _workspace_path(workspace, raw, purpose="assert_file target", must_exist=True)
+        lexical = (workspace / raw).absolute()
+        if os.path.normcase(str(lexical)) != os.path.normcase(str(target_path)):
+            raise ValueError("assert_file forbids symlink or junction indirection.")
+        if not target_path.is_file() or regular_file_has_multiple_links(target_path):
+            raise ValueError(f"assert_file requires a regular, unique file: {candidate}")
+        payload = {"status": "ok", "path": candidate, "size_bytes": target_path.stat().st_size}
+        answer = _json_dumps_preserving_numbers(payload)
+        prepare_output_target(workspace, output, overwrite=True).write_text(answer)
+        context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
         return answer
     if op["kind"] == "markdown_sections":
         _reject_markdown_source_output_alias(
