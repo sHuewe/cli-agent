@@ -157,6 +157,7 @@ def test_delegated_tools_respect_flow_allowlist(tmp_path, monkeypatch, allowed_e
         _model_tools=lambda: [tool("os__read_file"), tool(START_SUB_RUN)],
         _server_instructions={},
         _active_servers=set(),
+        _tool_routes={},
         _build_reference_context_message=lambda **kwargs: None,
         _main_tools_need_workspace_context=lambda names: False,
         _format_current_time=lambda now: "test time",
