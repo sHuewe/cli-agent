@@ -511,7 +511,18 @@ class ConversationMixin:
     async def _collect_knowledge(self, prompt: str) -> str | None:
         options = self._okf_options
         vector_config = getattr(self, "_vector_config", None)
-        active_okf = options is not None and getattr(self, "_okf_enabled", True)
+        # Flow tool policies also cover the implicit knowledge preflight.
+        # An unlisted root index or vector search must never be called
+        # automatically before the model's allowed tools are considered.
+        policy = getattr(self, "_flow_tool_allowlist", None)
+        allow_okf = policy is None or "okf__knowledge_index" in policy
+        allow_vector = policy is None or "vector__knowledge_search" in policy
+        if not allow_okf and not allow_vector:
+            return None
+        active_okf = (
+            options is not None and getattr(self, "_okf_enabled", True)
+            and allow_okf
+        )
         # An OKF-backed vector index supplements OKF navigation; it must not
         # stay usable after the operator disables OKF for this session.
         hybrid_okf_disabled = (
@@ -523,8 +534,11 @@ class ConversationMixin:
             vector_config is not None
             and self._vector_session is not None
             and not hybrid_okf_disabled
+            and allow_vector
         )
         if vector_config is not None and vector_config.mode == "chroma":
+            if not allow_vector:
+                return None
             # Chroma is a standalone Knowledge source: any simultaneous OKF
             # configuration must not make Chroma optionality/selection depend
             # on the OKF server's state or required flag.
@@ -539,7 +553,10 @@ class ConversationMixin:
         if not active_okf and not active_vector:
             return None
         okf_required = bool(options and active_okf and options.required)
-        vector_required = bool(vector_config and vector_config.required and not hybrid_okf_disabled)
+        vector_required = bool(
+            vector_config and vector_config.required
+            and not hybrid_okf_disabled and allow_vector
+        )
         required = okf_required or (vector_required and active_vector)
         if active_okf and self._knowledge_session is None:
             if okf_required:
@@ -606,6 +623,15 @@ class ConversationMixin:
                 name: route for name, route in self._knowledge_routes.items()
                 if active_vector or not name.startswith("vector__")
             }
+            if policy is not None:
+                run_tools = [
+                    tool for tool in run_tools
+                    if tool["function"]["name"] in policy
+                ]
+                run_routes = {
+                    name: route for name, route in run_routes.items()
+                    if name in policy
+                }
             knowledge_state = _KnowledgeRunState(
                 seen_calls=seen_calls,
                 allowed_calls=allowed_calls,
@@ -746,6 +772,8 @@ class ConversationMixin:
             run_tools = [
                 tool for tool in self._knowledge_tools
                 if tool["function"]["name"] == "vector__knowledge_search"
+                and (getattr(self, "_flow_tool_allowlist", None) is None
+                     or "vector__knowledge_search" in self._flow_tool_allowlist)
             ]
             run_routes = {
                 name: route for name, route in self._knowledge_routes.items()

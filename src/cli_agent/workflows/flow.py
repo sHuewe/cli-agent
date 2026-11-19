@@ -1344,6 +1344,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "output_schema_enums",
         "json_restart_attempts",
         "approve_tools",
+        "tool_policy",
         "vars",
         "foreach",
         "conversation_items",
@@ -1402,8 +1403,13 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
-            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "target_chars", "max_sections", "always_sections"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "path", "target_chars", "max_sections", "always_sections"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections", "assert_file"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
                 raise ValueError("filesystem_operation requires kind=inventory and directory.")
+            if op["kind"] == "assert_file":
+                if set(op) != {"kind", "path"} or not isinstance(op["path"], str) or not op["path"].strip():
+                    raise ValueError("assert_file requires exactly one nonempty path.")
+                if raw.get("overwrite_output") is not True:
+                    raise ValueError("assert_file requires overwrite_output=true for fresh validation.")
             if op["kind"] == "markdown_sections":
                 if not isinstance(op.get("source_path"), str) or not op["source_path"]:
                     raise ValueError("markdown_sections.source_path is missing.")
@@ -1452,7 +1458,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 raise ValueError("filesystem_operation requires output without foreach.")
             if op["kind"] == "checkpoint_status" and raw.get("overwrite_output") is not True:
                 raise ValueError("checkpoint_status requires overwrite_output=true for current checks.")
-            forbidden = {"config", "model", "context_file", "add_file_context", "add_web_context", "workspace_access", "with_data", "with_mcp", "retry", "approve_tools", "vars", "conversation_items", "conversation_final_prompt_file", "exclude_paths", "json_inputs", "input"}
+            forbidden = {"config", "model", "context_file", "add_file_context", "add_web_context", "workspace_access", "with_data", "with_mcp", "retry", "approve_tools", "tool_policy", "vars", "conversation_items", "conversation_final_prompt_file", "exclude_paths", "json_inputs", "input"}
             if forbidden & set(raw):
                 raise ValueError("filesystem_operation must not set model or tool options.")
         if raw_filesystem_operation is not None:
@@ -1486,7 +1492,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     replace_inventory_var,
                     raw_filesystem_operation["source_path"],
                 )
-            else:
+            elif raw_filesystem_operation["kind"] == "checkpoint_status":
                 raw_filesystem_operation["paths"] = [
                     re.sub(r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}", replace_inventory_var, p)
                     for p in raw_filesystem_operation["paths"]
@@ -1494,6 +1500,11 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 raw_filesystem_operation["expected_source_path"] = re.sub(
                     r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
                     replace_inventory_var, raw_filesystem_operation["expected_source_path"],
+                )
+            elif raw_filesystem_operation["kind"] == "assert_file":
+                raw_filesystem_operation["path"] = re.sub(
+                    r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
+                    replace_inventory_var, raw_filesystem_operation["path"],
                 )
             # Only static vars and declared flow inputs are supported;
             # step/item expressions cannot be resolved by _render_input_text.
@@ -1509,6 +1520,23 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                             or PureWindowsPath(literal).drive or ".." in Path(literal).parts
                             or ".." in PureWindowsPath(literal).parts):
                         raise ValueError("checkpoint_status.paths must be workspace-relative.")
+            if raw_filesystem_operation["kind"] == "assert_file":
+                assert_template = raw_filesystem_operation["path"]
+                assert_remainder = _INPUT_EXPR.sub("", assert_template)
+                if "${" in assert_remainder:
+                    raise ValueError("assert_file supports only input and variable references.")
+                _validate_input_references(
+                    [assert_template], declared_inputs=inputs,
+                    field="assert_file.path",
+                )
+                literal_assert = _INPUT_EXPR.sub("placeholder", assert_template)
+                windows_assert = PureWindowsPath(literal_assert)
+                if (not literal_assert.strip()
+                        or Path(literal_assert).is_absolute()
+                        or windows_assert.is_absolute() or windows_assert.drive
+                        or ".." in Path(literal_assert).parts
+                        or ".." in windows_assert.parts):
+                    raise ValueError("assert_file.path must be workspace-relative.")
             if raw_filesystem_operation["kind"] == "markdown_sections":
                 source_template = raw_filesystem_operation["source_path"]
                 remainder_source = _INPUT_EXPR.sub("", source_template)
@@ -1739,7 +1767,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             forbidden = {
                 "config", "model", "context_file", "add_file_context",
                 "add_web_context", "workspace_access", "with_data", "with_mcp",
-                "retry", "approve_tools", "vars", "conversation_items",
+                "retry", "approve_tools", "tool_policy", "vars", "conversation_items",
                 "conversation_final_prompt_file", "exclude_paths",
             }
             if forbidden & set(raw):
@@ -1904,6 +1932,31 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "'none', 'read' or 'write'."
             )
         workspace_access = str(workspace_access_value)
+        tool_policy = raw.get("tool_policy")
+        if tool_policy is not None:
+            if (not isinstance(tool_policy, dict) or "allowed_tools" not in tool_policy
+                    or set(tool_policy) - {"allowed_tools", "write_paths", "mkdir_paths"}):
+                raise ValueError(f"steps[{index}].tool_policy has invalid keys.")
+            for key in ("allowed_tools", "write_paths", "mkdir_paths"):
+                values = tool_policy.get(key, [])
+                if (not isinstance(values, list) or len(values) > 100
+                        or any(not isinstance(item, str) or not item.strip() for item in values)
+                        or len(set(values)) != len(values)):
+                    raise ValueError(f"steps[{index}].tool_policy.{key} must be unique nonempty strings.")
+            if any("${" in value for value in tool_policy["allowed_tools"]):
+                raise ValueError("tool_policy.allowed_tools may not be dynamic.")
+            if workspace_access != "write" and (
+                tool_policy.get("write_paths") or tool_policy.get("mkdir_paths")
+            ):
+                raise ValueError("tool_policy write paths require workspace_access=write.")
+            if tool_policy.get("write_paths") and "os__write_file" not in tool_policy["allowed_tools"]:
+                raise ValueError("tool_policy.write_paths require os__write_file.")
+            if tool_policy.get("mkdir_paths") and "os__make_directory" not in tool_policy["allowed_tools"]:
+                raise ValueError("tool_policy.mkdir_paths require os__make_directory.")
+            if workspace_access == "write" and (
+                {"os__write_file", "os__make_directory"} & set(tool_policy["allowed_tools"])
+            ) and "write_paths" not in tool_policy:
+                raise ValueError("tool_policy scoped writes must explicitly declare write_paths.")
 
         with_data = raw.get("with_data", False)
         if not isinstance(with_data, bool):
@@ -2408,6 +2461,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 output_schema_enums=schema_enums or None,
                 json_restart_attempts=json_restart_attempts,
                 approve_tools=approve_tools,
+                tool_policy=dict(tool_policy) if tool_policy is not None else None,
                 variables=variables,
                 global_variables=global_variables,
                 foreach=foreach,
@@ -5384,6 +5438,28 @@ def _execute_filesystem_step(
             assert context.reserved_inputs is not None
             context.reserved_inputs[_filesystem_path_key(source_path)] = source_path
         return answer
+    if op["kind"] == "assert_file":
+        from cli_agent.security.filesystem_security import regular_file_has_multiple_links
+        from pathlib import PureWindowsPath
+        candidate = _render_input_text(op["path"], flow_input)
+        raw = Path(candidate)
+        win = PureWindowsPath(candidate)
+        if (not candidate or raw.is_absolute() or win.is_absolute()
+                or win.drive or ".." in raw.parts or ".." in win.parts):
+            raise ValueError("assert_file requires a safe workspace-relative path.")
+        target_path = _workspace_path(workspace, raw, purpose="assert_file target", must_exist=True)
+        if _filesystem_path_key(target_path) == _filesystem_path_key(output):
+            raise ValueError("assert_file.output must not overwrite the asserted file.")
+        lexical = (workspace / raw).absolute()
+        if os.path.normcase(str(lexical)) != os.path.normcase(str(target_path)):
+            raise ValueError("assert_file forbids symlink or junction indirection.")
+        if not target_path.is_file() or regular_file_has_multiple_links(target_path):
+            raise ValueError(f"assert_file requires a regular, unique file: {candidate}")
+        payload = {"status": "ok", "path": candidate, "size_bytes": target_path.stat().st_size}
+        answer = _json_dumps_preserving_numbers(payload)
+        prepare_output_target(workspace, output, overwrite=True).write_text(answer)
+        context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+        return answer
     if op["kind"] == "markdown_sections":
         _reject_markdown_source_output_alias(
             step, workspace=workspace, flow_input=flow_input, output=output,
@@ -5648,6 +5724,41 @@ async def _execute_model_iteration(
         if step.config is not None
         else None
     )
+    tool_allowlist = None
+    scoped_write_files = None
+    scoped_mkdir_dirs = None
+    if step.tool_policy is not None:
+        tool_allowlist = tuple(step.tool_policy["allowed_tools"])
+        from pathlib import PureWindowsPath
+
+        def scoped_path(template: str) -> Path:
+            rendered = _render_dynamic_text(
+                template, item=item, iteration_id=iteration_id,
+                conversation_item=None, previous_output=None,
+                outputs=outputs, flow_input=flow_input,
+            )
+            path = Path(rendered)
+            win = PureWindowsPath(rendered)
+            if (not rendered or path.is_absolute() or win.drive
+                    or ".." in path.parts or ".." in win.parts):
+                raise ValueError("tool_policy requires safe workspace-relative paths.")
+            # Never canonicalize a symlinked ancestor into a new grant:
+            # doing so could redirect write permission to another concept.
+            current = workspace
+            from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
+            for component in path.parts:
+                current = current / component
+                if path_entry_is_symlink_or_reparse(current):
+                    raise ValueError("tool_policy paths must not contain symlinks or junctions.")
+            return _workspace_path(workspace, path, purpose="Flow tool-policy path", must_exist=False)
+
+        if step.workspace_access == "write":
+            scoped_write_files = tuple(
+                scoped_path(x) for x in step.tool_policy.get("write_paths", ())
+            )
+            scoped_mkdir_dirs = tuple(
+                scoped_path(x) for x in step.tool_policy.get("mkdir_paths", ())
+            ) or tuple(dict.fromkeys(path.parent for path in scoped_write_files))
     callback = build_preapproval_callback(
         step.approve_tools,
         fallback=context.approval_callback,
@@ -5733,6 +5844,9 @@ async def _execute_model_iteration(
                         config_file=config_file,
                         model=step.model,
                         workspace_access=step.workspace_access,
+                        tool_allowlist=tool_allowlist,
+                        scoped_write_files=scoped_write_files,
+                        scoped_mkdir_dirs=scoped_mkdir_dirs,
                         with_data=step.with_data,
                         with_mcp=step.with_mcp,
                         retry_policy=effective_retry_policy,
@@ -5758,6 +5872,9 @@ async def _execute_model_iteration(
                         config_file=config_file,
                         model=step.model,
                         workspace_access=step.workspace_access,
+                        tool_allowlist=tool_allowlist,
+                        scoped_write_files=scoped_write_files,
+                        scoped_mkdir_dirs=scoped_mkdir_dirs,
                         with_data=step.with_data,
                         with_mcp=step.with_mcp,
                         retry_policy=effective_retry_policy,

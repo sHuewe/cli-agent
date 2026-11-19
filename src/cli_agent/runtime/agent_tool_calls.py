@@ -134,7 +134,8 @@ async def process_tool_calls(
                 continue
 
         if (
-            phase != "knowledge"
+            (phase != "knowledge"
+             or getattr(agent, "_flow_tool_allowlist", None) is not None)
             and isinstance(exposed_name, str)
             and hasattr(agent, "_tool_is_enabled")
             and not agent._tool_is_enabled(exposed_name)

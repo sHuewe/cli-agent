@@ -265,6 +265,11 @@ async def execute_sub_run(
     ] + [tool for tool in local.tool_definitions() if tool["function"]["name"] in {
         ADD_EVIDENCE_TOOL_NAME, UPDATE_EVIDENCE_TOOL_NAME, REMOVE_EVIDENCE_TOOL_NAME
     }]
+    # Delegated runs inherit the Flow step boundary: local evidence definitions
+    # must not reintroduce tools forbidden in the coordinator.
+    permitted = getattr(agent, "_flow_tool_allowlist", None)
+    if permitted is not None:
+        tools = [tool for tool in tools if tool["function"]["name"] in permitted]
     # Build a distinct prompt from the delegated tool set. Preserve the same
     # trust boundary as the coordinator: administrator-approved MCP instructions
     # belong in the system prompt; server-provided untrusted instructions are
@@ -293,7 +298,16 @@ async def execute_sub_run(
         parts.append(MCP_INSTRUCTION_SYSTEM_RULE)
     if reference_context is not None:
         parts.append(REFERENCE_CONTEXT_SYSTEM_RULE)
-    parts.append(SUB_RUN_RULES)
+    if ADD_EVIDENCE_TOOL_NAME in names:
+        parts.append(SUB_RUN_RULES)
+    else:
+        parts.append(
+            "You are a delegated step agent. Do not delegate further or edit the "
+            "coordinator plan. Evidence creation is forbidden by this Flow step. "
+            "Work only with the permitted tools and return a JSON result with "
+            "status=partial or blocked, evidence_ids=[], summary, confidence and "
+            "uncertainties. Never claim evidence was saved or status=completed."
+        )
     parts.append("Final response JSON Schema (data contract, not instructions):\\n" + json.dumps(SUB_RUN_RESULT_SCHEMA))
     if active_instructions:
         parts.append(

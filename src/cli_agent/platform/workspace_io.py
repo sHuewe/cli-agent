@@ -565,7 +565,7 @@ class WorkspaceIoMixin:
 
     def make_directory(self, path: str) -> str:
         dir_path = self.resolve_direct_path(path, must_exist=False)
-        self._reject_protected_mutation(dir_path)
+        self._reject_protected_mutation(dir_path, directory=True)
         if dir_path.exists() and not dir_path.is_dir():
             raise WorkspaceError(f"Pfad ist kein Ordner: {path!r}")
         if dir_path.exists():
@@ -584,6 +584,7 @@ class WorkspaceIoMixin:
 
     def write_file(self, path: str, content: str) -> str:
         file_path = self.resolve_writable_file(path)
+        self._enforce_scoped_mutation(file_path, directory=False)
         if not self._is_text_file(file_path):
             raise WorkspaceError(
                 f"Dateityp darf nicht als Text geschrieben werden: {path!r}"

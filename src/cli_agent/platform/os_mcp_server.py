@@ -281,6 +281,10 @@ def parse_args() -> argparse.Namespace:
             "write-capable OS tools. May be repeated."
         ),
     )
+    parser.add_argument("--scoped-writes", action="store_true",
+                        help="Deny writes except explicitly listed exact paths.")
+    parser.add_argument("--scoped-write-file", type=Path, action="append", default=[])
+    parser.add_argument("--scoped-mkdir-dir", type=Path, action="append", default=[])
     parser.add_argument(
         "--path-policy-file",
         type=Path,
@@ -367,6 +371,11 @@ def main() -> None:
             )
         )
         vision_config = vision_config_from_environment()
+        scoped = bool(getattr(args, "scoped_writes", False))
+        scoped_files = tuple(getattr(args, "scoped_write_file", ()))
+        scoped_dirs = tuple(getattr(args, "scoped_mkdir_dir", ()))
+        if (scoped_files or scoped_dirs) and not scoped:
+            raise ValueError("Scoped OS targets require --scoped-writes.")
         workspace = Workspace.from_directory(
             project_directory,
             mcp_config,
@@ -378,6 +387,8 @@ def main() -> None:
                 *getattr(args, "mutation_protected_path", ()),
                 *policy_paths["mutation_protected_paths"],
             ),
+            **({"scoped_write_files": scoped_files,
+                "scoped_mkdir_dirs": scoped_dirs} if scoped else {}),
             **({"allowed_paths": tuple(
                     AllowedPath(Path(entry["path"]), entry["access"])
                     for entry in policy_paths["allowed_paths"]

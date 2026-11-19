@@ -436,6 +436,35 @@ async def run_model_loop(
             )
             continue
 
+        if tool_calls and phase in {"main", "sub", "knowledge"} and getattr(agent, "_flow_tool_allowlist", None) is not None:
+            # Internal evidence, publication and sub-run calls bypass the
+            # ordinary MCP router. Enforce the same step policy in delegated
+            # loops, even when a model invents a tool not in its definitions.
+            permitted = agent._flow_tool_allowlist
+            retained = []
+            for tool_call in tool_calls:
+                name = (tool_call.get("function") or {}).get("name")
+                if isinstance(name, str) and name in permitted:
+                    retained.append(tool_call)
+                else:
+                    # An unauthorized call still consumes the run's tool budget.
+                    # Otherwise repeated model hallucinations can evade the limit.
+                    calls += 1
+                    state.tool_calls = calls
+                    if calls > max_tool_calls:
+                        raise RuntimeError(
+                            f"Flow tool-call limit exceeded after rejecting {name!r}."
+                        )
+                    agent._append_tool_error(
+                        messages, tool_call, name,
+                        f"Tool {name!r} is not allowed by this Flow step.",
+                    )
+            tool_calls = retained
+            if not tool_calls:
+                # All requested calls were denied and already charged to the
+                # tool budget. Let the model respond to their error messages,
+                # rather than dispatching an empty Knowledge tool batch.
+                continue
         if tool_calls:
             empty_responses = 0
         if phase == "sub":
