@@ -130,7 +130,7 @@ must be relative to this workspace; never use absolute file paths.
 """
 
 class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", output_schema: dict[str, Any] | None = None, workspace_access: str | None = None, agent_timezone: str | None = None, system_prompt: str | None = None, sdk_configless: bool = False) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", output_schema: dict[str, Any] | None = None, workspace_access: str | None = None, agent_timezone: str | None = None, system_prompt: str | None = None, sdk_configless: bool = False, tool_allowlist: tuple[str, ...] | None = None) -> None:
         self.workspace_directory = workspace_directory.resolve()
         # Evidence is an agent capability, not a per-entry-point configuration.
         # No model request uses it unless relevant tools are available.
@@ -175,6 +175,9 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         self.output_schema = output_schema
         self._session_approved_tools: set[str] = set()
         self._disabled_tools: set[str] = set()
+        self._flow_tool_allowlist: frozenset[str] | None = (
+            frozenset(tool_allowlist) if tool_allowlist is not None else None
+        )
         self._okf_options = self._normalize_okf_config(okf)
         self._okf_enabled = self._okf_options is not None
         self._vector_config = knowledge_vector
@@ -491,7 +494,10 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         return "\n\n".join(parts)
 
     def _tool_is_enabled(self, exposed_name: str) -> bool:
-        return exposed_name not in self._disabled_tools
+        return (
+            exposed_name not in self._disabled_tools
+            and (self._flow_tool_allowlist is None or exposed_name in self._flow_tool_allowlist)
+        )
 
     def set_tool_enabled(self, tool_name: str, *, enabled: bool) -> bool:
         known = any(
@@ -563,6 +569,11 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
                 tools.append(copy.deepcopy(SUB_RUN_TOOL))
             tools.extend(self._evidence_state.tool_definitions())
             tools.append(PUBLISH_TOOL)
+        if self._flow_tool_allowlist is not None:
+            tools = [
+                tool for tool in tools
+                if self._tool_is_enabled(str(tool["function"]["name"]))
+            ]
         return tools
 
     def _tool_input_schema(self, exposed_name: str, *, phase: str) -> dict[str, Any] | None:
