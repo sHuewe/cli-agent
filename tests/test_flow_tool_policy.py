@@ -106,3 +106,32 @@ def test_tool_policy_rejects_parent_traversal_at_runtime(tmp_path):
     flow = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
     with pytest.raises(ValueError, match="tool_policy"):
         asyncio.run(run_flow(flow, workspace=tmp_path))
+
+
+def test_flow_policy_rejects_symlinked_parent_even_within_workspace(tmp_path, monkeypatch):
+    import asyncio
+
+    target_dir = tmp_path / "other-concept"
+    target_dir.mkdir()
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(target_dir, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink creation is unsupported.")
+    (tmp_path / "prompt.md").write_text("write", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[[steps]]\nid = "build"\nprompt_file = "prompt.md"\n'
+        'workspace_access = "write"\n[steps.tool_policy]\n'
+        'allowed_tools = ["os__write_file"]\n'
+        'write_paths = ["alias/other.md"]\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+    async def forbidden_model(*args, **kwargs):
+        raise AssertionError("Model must not run with redirected write grant")
+
+    monkeypatch.setattr(runner, "run_once", forbidden_model)
+    with pytest.raises(ValueError, match="symlinks or junctions"):
+        asyncio.run(run_flow(flow, workspace=tmp_path))
+    assert not (target_dir / "other.md").exists()
