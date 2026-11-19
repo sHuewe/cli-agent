@@ -556,16 +556,24 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         return was_enabled != enabled
 
     def _model_tools(self) -> list[dict[str, Any]]:
-        tools = [
+        # Assemble internal capabilities based on active, session-enabled MCP
+        # tools before applying a Flow step's allowlist. Otherwise an
+        # internal-only policy would suppress those capabilities entirely.
+        available_mcp_tools = [
             tool
             for server_name, server_tools in self._server_tools.items()
             if server_name in self._active_servers
             for tool in server_tools
+            if str(tool.get("function", {}).get("name") or "")
+            not in self._disabled_tools
+        ]
+        tools = [
+            tool for tool in available_mcp_tools
             if self._tool_is_enabled(
                 str(tool.get("function", {}).get("name") or "")
             )
         ]
-        if tools or getattr(self, "_agui_frontend_tools", None):
+        if available_mcp_tools or getattr(self, "_agui_frontend_tools", None):
             if self._sub_run_enabled:
                 tools.append(copy.deepcopy(SUB_RUN_TOOL))
             tools.extend(self._evidence_state.tool_definitions())
