@@ -109,3 +109,36 @@ def test_empty_scope_blocks_all_writes(tmp_path):
         workspace.write_file("new.md", "no")
     with pytest.raises(WorkspaceError, match="scope"):
         workspace.make_directory("out")
+
+
+def test_assert_file_operation_rechecks_existing_output_and_rejects_missing(tmp_path):
+    import asyncio
+    import json
+    from cli_agent.workflows.flow import run_flow
+
+    target = tmp_path / "output" / "concept.md"
+    target.parent.mkdir()
+    (tmp_path / "flow.toml").write_text('''
+version = 1
+[[steps]]
+id = "assert"
+output = "state/file-check.json"
+overwrite_output = true
+[steps.filesystem_operation]
+kind = "assert_file"
+path = "output/concept.md"
+''', encoding="utf-8")
+    flow = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+
+    with pytest.raises((ValueError, FileNotFoundError)):
+        asyncio.run(run_flow(flow, workspace=tmp_path))
+
+    target.write_text("# Concept", encoding="utf-8")
+    asyncio.run(run_flow(flow, workspace=tmp_path))
+    report = json.loads((tmp_path / "state/file-check.json").read_text())
+    assert report["status"] == "ok"
+    assert report["path"] == "output/concept.md"
+
+    target.unlink()
+    with pytest.raises((ValueError, FileNotFoundError)):
+        asyncio.run(run_flow(flow, workspace=tmp_path))
