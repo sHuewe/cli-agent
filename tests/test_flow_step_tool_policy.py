@@ -142,3 +142,33 @@ path = "output/concept.md"
     target.unlink()
     with pytest.raises((ValueError, FileNotFoundError)):
         asyncio.run(run_flow(flow, workspace=tmp_path))
+
+
+@pytest.mark.parametrize("asserted_path,report_path", [
+    ("output/concept.md", "output/concept.md"),
+    ("output/./concept.md", "output/concept.md"),
+    ("output/concept.md", "output/../output/concept.md"),
+])
+def test_assert_file_never_overwrites_asserted_target(tmp_path, asserted_path, report_path):
+    import asyncio
+
+    from cli_agent.workflows.flow import run_flow
+
+    target = tmp_path / "output" / "concept.md"
+    target.parent.mkdir()
+    target.write_text("# Original concept", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        "version = 1\n"
+        "[[steps]]\n"
+        'id = "assert"\n'
+        f'output = "{report_path}"\n'
+        "overwrite_output = true\n"
+        "[steps.filesystem_operation]\n"
+        'kind = "assert_file"\n'
+        f'path = "{asserted_path}"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(tmp_path / "flow.toml", workspace=tmp_path)
+    with pytest.raises(ValueError, match="must not overwrite"):
+        asyncio.run(run_flow(flow, workspace=tmp_path))
+    assert target.read_text(encoding="utf-8") == "# Original concept"
