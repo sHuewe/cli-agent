@@ -436,9 +436,10 @@ async def run_model_loop(
             )
             continue
 
-        if tool_calls and phase == "main" and getattr(agent, "_flow_tool_allowlist", None) is not None:
+        if tool_calls and phase in {"main", "sub"} and getattr(agent, "_flow_tool_allowlist", None) is not None:
             # Internal evidence, publication and sub-run calls bypass the
-            # ordinary MCP router. Reject them here before any side effect.
+            # ordinary MCP router. Enforce the same step policy in delegated
+            # loops, even when a model invents a tool not in its definitions.
             permitted = agent._flow_tool_allowlist
             retained = []
             for tool_call in tool_calls:
