@@ -565,8 +565,7 @@ class WorkspaceIoMixin:
 
     def make_directory(self, path: str) -> str:
         dir_path = self.resolve_direct_path(path, must_exist=False)
-        self._enforce_scoped_mutation(dir_path, directory=True)
-        self._reject_protected_mutation(dir_path)
+        self._reject_protected_mutation(dir_path, directory=True)
         if dir_path.exists() and not dir_path.is_dir():
             raise WorkspaceError(f"Pfad ist kein Ordner: {path!r}")
         if dir_path.exists():
