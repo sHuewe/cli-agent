@@ -91,6 +91,9 @@ class OneShotRunOptions:
     excluded_paths: tuple[Path, ...] = ()
     dump_file_prefix: str | None = None
     with_mcp: tuple[str, ...] = ()
+    tool_allowlist: tuple[str, ...] | None = None
+    scoped_write_files: tuple[Path, ...] | None = None
+    scoped_mkdir_dirs: tuple[Path, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,9 @@ class ConversationRunOptions:
     excluded_paths: tuple[Path, ...] = ()
     dump_file_prefix: str | None = None
     with_mcp: tuple[str, ...] = ()
+    tool_allowlist: tuple[str, ...] | None = None
+    scoped_write_files: tuple[Path, ...] | None = None
+    scoped_mkdir_dirs: tuple[Path, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +176,8 @@ def os_mcp_server_config(
     mutation_protected_paths: tuple[Path, ...] = (),
     excluded_paths: tuple[Path, ...] = (),
     max_pdf_pages: int = 100,
+    scoped_write_files: tuple[Path, ...] | None = None,
+    scoped_mkdir_dirs: tuple[Path, ...] | None = None,
 ) -> McpServerConfig:
     if access not in {"read", "write"}:
         raise ValueError(f"Unsupported OS MCP access mode: {access!r}")
@@ -196,6 +204,15 @@ def os_mcp_server_config(
                     str(path),
                 )
             )
+            + tuple(
+                argument for path in (scoped_write_files or ())
+                for argument in ("--scoped-write-file", str(path))
+            )
+            + tuple(
+                argument for path in (scoped_mkdir_dirs or ())
+                for argument in ("--scoped-mkdir-dir", str(path))
+            )
+            + (("--scoped-writes",) if scoped_write_files is not None else ())
             + tuple(
                 argument
                 for path in (mutation_protected_paths if access == "write" else ())
@@ -298,6 +315,8 @@ def apply_workspace_access_override(
     workspace_access: str | None,
     mutation_protected_paths: tuple[Path, ...] = (),
     excluded_paths: tuple[Path, ...] = (),
+    scoped_write_files: tuple[Path, ...] | None = None,
+    scoped_mkdir_dirs: tuple[Path, ...] | None = None,
 ) -> AppConfig:
     if workspace_access is None:
         return config
@@ -320,6 +339,8 @@ def apply_workspace_access_override(
             mutation_protected_paths=mutation_protected_paths,
             excluded_paths=excluded_paths,
             max_pdf_pages=config.max_pdf_pages,
+            scoped_write_files=scoped_write_files,
+            scoped_mkdir_dirs=scoped_mkdir_dirs,
         ),
     )
     return replace(config, mcp_servers=servers)
@@ -540,6 +561,8 @@ def prepare_agent(
         workspace_access=options.workspace_access,
         mutation_protected_paths=options.mutation_protected_paths,
         excluded_paths=excluded_paths,
+        scoped_write_files=options.scoped_write_files,
+        scoped_mkdir_dirs=options.scoped_mkdir_dirs,
     )
     config = apply_data_override(
         config,
@@ -639,6 +662,7 @@ def prepare_agent(
         response_format=response_format,
         output_schema=options.output_schema,
         workspace_access=effective_workspace_access,
+        **({"tool_allowlist": options.tool_allowlist} if options.tool_allowlist is not None else {}),
         **({"sdk_configless": True} if project_config is not None else {}),
     )
     agent.telemetry_config = config.telemetry
