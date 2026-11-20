@@ -67,7 +67,14 @@ def _canonical_source_path(value: Any) -> str:
     return value
 
 
-def _validate_doctrine(plan: dict[str, Any]) -> None:
+MAX_DOCTRINE_CONCEPTS = 1_000
+# The current Flow processes at most 250 batches of six candidates.
+MAX_PRECONSOLIDATION_CANDIDATES = 1_500
+
+
+def _validate_doctrine(
+    plan: dict[str, Any], *, max_concepts: int = MAX_DOCTRINE_CONCEPTS,
+) -> None:
     folder = _obj(plan.get("folder"), "folder")
     folder_id = _slug(folder.get("id"), "folder.id")
     base = f"doctrines/{folder_id}"
@@ -91,8 +98,8 @@ def _validate_doctrine(plan: dict[str, Any]) -> None:
     concepts = _array(plan.get("concepts"), "concepts")
     if not concepts:
         raise ValueError("An empty concept plan cannot be published.")
-    if len(concepts) > 1000:
-        raise ValueError("Concept plan exceeds 1000 concepts.")
+    if len(concepts) > max_concepts:
+        raise ValueError(f"Concept plan exceeds {max_concepts} concepts.")
     concept_ids: set[str] = set()
     concept_paths: set[str] = set()
     for raw in concepts:
@@ -572,7 +579,7 @@ def assemble_section_outlines(
         "summary": "Merge of complete section outlines",
         "concepts": list(merged.values()), "warnings": warnings[:100],
     }
-    _validate_doctrine(result)
+    _validate_doctrine(result, max_concepts=MAX_PRECONSOLIDATION_CANDIDATES)
     return result
 
 
@@ -619,7 +626,7 @@ def prepare_section_outline_tasks(sections: Any, analyses: Any) -> dict[str, Any
 def build_doctrine_taxonomy_profile(outline: Any) -> dict[str, Any]:
     """Small topic inventory; never feed all candidates to a global model."""
     plan = _obj(outline, "outline")
-    _validate_doctrine(plan)
+    _validate_doctrine(plan, max_concepts=MAX_PRECONSOLIDATION_CANDIDATES)
     concepts = _array(plan["concepts"], "concepts")
     counts: dict[str, int] = {}
     for concept in concepts:
@@ -676,7 +683,7 @@ def prepare_doctrine_consolidation_batches(
 ) -> dict[str, Any]:
     """Cluster nearby topics into small, checkpointable semantic comparisons."""
     plan = _obj(outline, "outline")
-    _validate_doctrine(plan)
+    _validate_doctrine(plan, max_concepts=MAX_PRECONSOLIDATION_CANDIDATES)
     if type(batch_size) is not int or not 4 <= batch_size <= 16:
         raise ValueError("Consolidation batch_size must be between 4 and 16.")
     concepts = _array(plan["concepts"], "concepts")
@@ -735,7 +742,7 @@ def assemble_doctrine_consolidation(
 ) -> dict[str, Any]:
     """Reject any missing/duplicate source; preserve all sections and tags."""
     plan = _obj(outline, "outline")
-    _validate_doctrine(plan)
+    _validate_doctrine(plan, max_concepts=MAX_PRECONSOLIDATION_CANDIDATES)
     source = _canonical_source_path(plan.get("source_path"))
     folder_id = _slug(_obj(plan.get("folder"), "folder").get("id"), "folder.id")
     original = {c["id"]: c for c in _array(plan["concepts"], "concepts")}
