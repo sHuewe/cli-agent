@@ -5907,11 +5907,10 @@ payload = "${steps.discover.output}"
     assert [call.prompt for call in calls] == ["discover", "typed"]
 
 
-def test_global_subflow_execution_budget_is_shared(
+def test_subflow_iterations_run_without_global_execution_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(flow_module, "MAX_FLOW_EXECUTIONS", 2)
     (tmp_path / "discover.md").write_text("discover", encoding="utf-8")
     (tmp_path / "child.md").write_text("child", encoding="utf-8")
     (tmp_path / "child.toml").write_text(
@@ -5946,7 +5945,10 @@ item = "${item}"
         encoding="utf-8",
     )
 
+    calls = []
+
     async def fake_run_once(options, *, dependencies=None):
+        calls.append(options.prompt)
         if options.prompt == "discover":
             return SimpleNamespace(
                 answer='{"items":[1,2]}',
@@ -5957,8 +5959,8 @@ item = "${item}"
     monkeypatch.setattr(flow_module, "run_once", fake_run_once)
     definition = load_flow(tmp_path / "parent.toml", workspace=tmp_path)
 
-    with pytest.raises(ValueError, match="Flow execution exceeds the global limit of 2 step iterations\\."):
-        asyncio.run(run_flow(definition, workspace=tmp_path))
+    asyncio.run(run_flow(definition, workspace=tmp_path))
+    assert calls == ["discover", "child", "child"]
 
 
 

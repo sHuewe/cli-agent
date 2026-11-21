@@ -99,7 +99,6 @@ MAX_STRUCTURED_OUTPUT_BYTES = 100_000_000
 MAX_JSON_INPUT_FILES = 1000
 MAX_JSON_INPUT_TOTAL_BYTES = 100_000_000
 MAX_SUBFLOW_DEPTH = 8
-MAX_FLOW_EXECUTIONS = 10_000
 MAX_SUBFLOW_GRAPH_EXPANSIONS = 10_000
 MAX_DYNAMIC_CHECKPOINT_CANDIDATES = 20_000
 MAX_DYNAMIC_CHECKPOINT_TOTAL_BYTES = 200_000_000
@@ -179,7 +178,6 @@ class _FlowExecutionContext:
     dependencies: ExecutionDependencies
     approval_callback: ApprovalCallback | None
     user_message_callback: UserMessageCallback | None
-    executed_steps: int = 0
     claimed_outputs: dict[str, str] | None = None
     reserved_inputs: dict[str, Path] | None = None
     flow_cache: dict[str, FlowDefinition] | None = None
@@ -6611,13 +6609,6 @@ async def _run_flow_internal(
                 namespace=namespace, step=step.step_id,
                 iteration_id=iteration_id,
             )
-            context.executed_steps += 1
-            if context.executed_steps > MAX_FLOW_EXECUTIONS:
-                raise ValueError(
-                    f"Flow execution exceeds the global limit of "
-                    f"{MAX_FLOW_EXECUTIONS} step iterations."
-                )
-
             suffix = (
                 f" [{index}/{len(items)}; id={iteration_id}]"
                 if step.foreach is not None
