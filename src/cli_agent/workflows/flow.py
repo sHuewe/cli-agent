@@ -4845,7 +4845,7 @@ def validate_flow(
                 raise ValueError("JSON-Operation requires workspace_access=none und JSON.")
             if step.foreach is not None and step.python_script is None:
                 raise ValueError("JSON operation does not support foreach.")
-            if _INPUT_EXPR.search(step.output) is None:
+            if step.foreach is None and _INPUT_EXPR.search(step.output) is None:
                 static_output = _output_for_iteration(
                     step, workspace=workspace, item=None,
                 )
