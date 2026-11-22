@@ -44,6 +44,7 @@ from cli_agent.workflows.flow_json_operations import transform_json
 from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest, prepare_doctrine_concept_batches, assemble_doctrine_concept_plan, prepare_section_outline_tasks, assemble_section_outlines, build_doctrine_taxonomy_profile, prepare_doctrine_consolidation_batches, assemble_doctrine_consolidation
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
+from cli_agent.workflows.flow_route_normalization import canonicalize_group_routes
 from cli_agent.workflows.flow_json_relations import (
     project_fields, join_by_alias, validate_partition, validate_allowed_values,
 )
@@ -1571,7 +1572,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             if (
                 not isinstance(raw_json_operation, dict)
                 or set(raw_json_operation) - {
-                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items", "fields", "items_path", "item_id_path", "item_key_path", "mapping_path", "mapping_id_path", "mapping_alias_path", "id_prefix", "require_all_aliases", "source_field", "target_field", "output_field", "wrap_batches", "source_input", "source_path", "source_records_path", "reference_template", "distinct_path", "min_distinct", "selected_path", "references_path", "excluded_path", "source_members_path", "result_members_path", "source_status_path", "source_warnings_path", "result_status_path", "result_warnings_path", "result_id_path", "result_id_prefix", "result_id_pattern", "member_fields", "member_patterns", "result_path_field", "result_path_template", "allowed_path", "values_path", "null_policy", "on_invalid"
+                    "kind", "input", "batch_size", "max_batch_bytes", "target_fragment_bytes", "array_paths", "max_concept_bytes", "plan_kind", "expected_source_path", "expected_source_slug", "results_step", "batches_step", "max_fragment_items", "fields", "items_path", "item_id_path", "item_key_path", "mapping_path", "mapping_id_path", "mapping_alias_path", "id_prefix", "require_all_aliases", "source_field", "target_field", "output_field", "wrap_batches", "source_input", "source_path", "source_records_path", "reference_template", "distinct_path", "min_distinct", "selected_path", "references_path", "excluded_path", "source_members_path", "result_members_path", "source_status_path", "source_warnings_path", "result_status_path", "result_warnings_path", "result_id_path", "result_id_prefix", "result_id_pattern", "member_fields", "member_patterns", "result_path_field", "result_path_template", "allowed_path", "values_path", "null_policy", "on_invalid", "canonicalize_route_ids"
                 }
                 or raw_json_operation.get("kind") not in {"batch", "batch_routes", "batch_arrays", "flatten", "group_items", "verify_coverage", "validate_okf_plan", "build_okf_manifest", "prepare_doctrine_batches", "assemble_doctrine_plan", "prepare_outline_tasks", "assemble_section_outlines", "doctrine_taxonomy_profile", "prepare_doctrine_consolidation", "assemble_doctrine_consolidation", "json_project", "json_join_aliases", "json_validate_partition", "json_validate_allowed_values"}
                 or not isinstance(raw_json_operation.get("input"), str)
@@ -1660,6 +1661,14 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 {"plan", "navigation"}
                 if raw_json_operation["kind"] == "build_okf_manifest" else set()
             )
+            if raw_json_operation["kind"] == "group_items":
+                normalize = raw_json_operation.get("canonicalize_route_ids", False)
+                if type(normalize) is not bool:
+                    raise ValueError("group_items.canonicalize_route_ids must be boolean.")
+                if normalize and "sections" not in raw.get("json_inputs", {}):
+                    raise ValueError("Canonical group routes require json_inputs.sections.")
+            elif "canonicalize_route_ids" in raw_json_operation:
+                raise ValueError("canonicalize_route_ids is valid only for group_items.")
             if required_sources and (raw_json_operation["input"] != ("plan" if raw_json_operation["kind"] == "build_okf_manifest" else sorted(required_sources)[0])
                                      or not required_sources <= set(raw.get("json_inputs", {}))):
                 raise ValueError("JSON grouping operation requires the specified json_inputs.")
@@ -5624,10 +5633,18 @@ def _execute_json_step(
             batches=_parse_structured_output(outputs[operation["batches_step"]], step_id=step.step_id),
         )
     elif operation["kind"] == "group_items":
+        routes = _parse_structured_output(json_values["routes"], step_id=step.step_id)
+        topics = _parse_structured_output(json_values["topics"], step_id=step.step_id)
+        if operation.get("canonicalize_route_ids", False):
+            routes = canonicalize_group_routes(
+                routes=routes,
+                sections=_parse_structured_output(json_values["sections"], step_id=step.step_id),
+                topics=topics,
+            )
         transformed = group_assigned_items(
-            routes=_parse_structured_output(json_values["routes"], step_id=step.step_id),
+            routes=routes,
             assignments=_parse_structured_output(json_values["assignments"], step_id=step.step_id),
-            topic_plan=_parse_structured_output(json_values["topics"], step_id=step.step_id),
+            topic_plan=topics,
             max_concept_bytes=operation.get("max_concept_bytes", 80000),
             serializer=_json_dumps_preserving_numbers,
         )
