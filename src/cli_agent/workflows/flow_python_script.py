@@ -96,8 +96,11 @@ def prepare_script_config(workspace: Path, config: dict[str, Any]) -> dict[str, 
     launch = Path(raw_executable)
     if not launch.is_absolute():
         launch = workspace / launch
+    bootstrap = Path(__file__).with_name("flow_python_windows_bootstrap.py").resolve(strict=True)
     return {
         **config,
+        "_bootstrap": str(bootstrap),
+        "_bootstrap_sha256": _digest(bootstrap, limit=MAX_SCRIPT_BYTES),
         "_script": str(script),
         "_script_sha256": _digest(script, limit=MAX_SCRIPT_BYTES),
         "_interpreter": str(interpreter),
@@ -108,6 +111,10 @@ def prepare_script_config(workspace: Path, config: dict[str, Any]) -> dict[str, 
 
 
 def verify_script_config(workspace: Path, config: dict[str, Any]) -> tuple[Path, Path]:
+    bootstrap = Path(__file__).with_name("flow_python_windows_bootstrap.py").resolve(strict=True)
+    if (str(bootstrap) != config["_bootstrap"]
+            or _digest(bootstrap, limit=MAX_SCRIPT_BYTES) != config["_bootstrap_sha256"]):
+        raise ValueError("Python subprocess bootstrap changed after Flow startup.")
     script = _safe_script_path(workspace, config["path"])
     if str(script) != config["_script"] or _digest(script, limit=MAX_SCRIPT_BYTES) != config["_script_sha256"]:
         raise ValueError("Python script changed after Flow startup.")
@@ -172,7 +179,11 @@ async def run_script(
     data = envelope_json.encode("utf-8")
     if len(data) > MAX_SCRIPT_INPUT:
         raise ValueError("Python script input exceeds the JSON size limit.")
-    command = [str(interpreter), str(script), *config.get("args", [])]
+    command = (
+        [str(interpreter), config["_bootstrap"], str(script), *config.get("args", [])]
+        if os.name == "nt"
+        else [str(interpreter), str(script), *config.get("args", [])]
+    )
     kwargs = (
         {"start_new_session": True} if os.name == "posix"
         else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
