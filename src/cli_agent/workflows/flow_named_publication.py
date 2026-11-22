@@ -20,7 +20,7 @@ LINK_RE = re.compile(
     r"|(?P<html_prefix>\b(?:href|src)\s*=\s*['\"])(?P<html_url>[^'\"\n]+)",
     re.MULTILINE | re.IGNORECASE,
 )
-CODE_SPAN_RE = re.compile(r"(?P<ticks>\x60+)[^\x60\r\n]*?(?P=ticks)")
+CODE_SPAN_RE = re.compile(r"(?P<ticks>\x60+)[^\x60]*?(?P=ticks)")
 FENCE_RE = re.compile(r"^[ ]{0,3}(?P<fence>\x60{3,}|~{3,})")
 WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *{f"com{i}" for i in range(1, 10)},
                     *{f"lpt{i}" for i in range(1, 10)}}
@@ -223,48 +223,57 @@ def _rewrite_markdown(
     text: str, *, old: str, new: str, mapping: dict[str, str],
     originals: set[str], original_root: str,
 ) -> str:
-    fenced: tuple[str, int] | None = None
-    rewritten = []
-    for line in text.splitlines(keepends=True):
-        match = FENCE_RE.match(line)
-        if match:
-            marker = match.group("fence")
-            if fenced is None:
-                fenced = (marker[0], len(marker))
-            elif fenced[0] == marker[0] and len(marker) >= fenced[1]:
-                fenced = None
-            rewritten.append(line)
-            continue
-        if fenced is not None:
-            rewritten.append(line)
-            continue
+    """Rewrite full Markdown link constructs, including multiline links.
 
-        def rewrite_uncoded(part: str) -> str:
-            def subst(match: re.Match[str]) -> str:
-                prefix = (
-                    match.group("inline_prefix") or match.group("ref_prefix")
-                    or match.group("html_prefix")
-                )
-                url = (
-                    match.group("inline_url") or match.group("ref_url")
-                    or match.group("html_url")
-                )
-                return prefix + _rewrite_link(
-                    url, source_file=old, published_file=new,
-                    mapping=mapping, originals=originals, original_root=original_root,
-                )
-            return LINK_RE.sub(subst, part)
+    Protect fenced and inline code from replacement. Parse contiguous prose
+    across newlines so a link like [Concept](\nold-name.md\n) is not missed.
+    """
+    def rewrite_prose(prose: str) -> str:
+        def substitute(match: re.Match[str]) -> str:
+            prefix = (
+                match.group("inline_prefix") or match.group("ref_prefix")
+                or match.group("html_prefix")
+            )
+            url = (
+                match.group("inline_url") or match.group("ref_url")
+                or match.group("html_url")
+            )
+            return prefix + _rewrite_link(
+                url, source_file=old, published_file=new,
+                mapping=mapping, originals=originals, original_root=original_root,
+            )
 
+        chunks: list[str] = []
         cursor = 0
-        chunks = []
-        for code in CODE_SPAN_RE.finditer(line):
-            chunks.append(rewrite_uncoded(line[cursor:code.start()]))
+        for code in CODE_SPAN_RE.finditer(prose):
+            chunks.append(LINK_RE.sub(substitute, prose[cursor:code.start()]))
             chunks.append(code.group(0))
             cursor = code.end()
-        chunks.append(rewrite_uncoded(line[cursor:]))
-        rewritten.append("".join(chunks))
-    return "".join(rewritten)
+        chunks.append(LINK_RE.sub(substitute, prose[cursor:]))
+        return "".join(chunks)
 
+    fenced: tuple[str, int] | None = None
+    rewritten: list[str] = []
+    prose: list[str] = []
+    for line in text.splitlines(keepends=True):
+        match = FENCE_RE.match(line)
+        if match is not None:
+            marker = match.group("fence")
+            if fenced is None:
+                rewritten.append(rewrite_prose("".join(prose)))
+                prose.clear()
+                fenced = (marker[0], len(marker))
+                rewritten.append(line)
+                continue
+            if fenced[0] == marker[0] and len(marker) >= fenced[1]:
+                fenced = None
+            rewritten.append(line)
+        elif fenced is None:
+            prose.append(line)
+        else:
+            rewritten.append(line)
+    rewritten.append(rewrite_prose("".join(prose)))
+    return "".join(rewritten)
 
 def publish_named_okf(
     *, workspace: Path, source_root: str,
