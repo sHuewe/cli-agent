@@ -5486,6 +5486,19 @@ def _execute_filesystem_step(
         context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
         return answer
     if op["kind"] == "publish_named_okf":
+        # The report is written after publication completes. Prevent a
+        # malicious or mistaken Flow config from overwriting any source
+        # concept, checkpoint, or file inside the published output.
+        for name in ("source_root", "state_root", "destination_root"):
+            source = _workspace_path(
+                workspace, Path(_render_input_text(op[name], flow_input)),
+                purpose="publish_named_okf " + name, must_exist=False,
+            )
+            if output == source or source in output.parents:
+                raise ValueError(
+                    "publish_named_okf output must be outside all publication "
+                    f"and checkpoint roots: {name}"
+                )
         transformed = publish_named_okf(
             workspace=workspace,
             source_root=_render_input_text(op["source_root"], flow_input),
