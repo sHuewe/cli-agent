@@ -157,3 +157,46 @@ def test_same_title_does_not_overwrite_concepts(tmp_path):
 
 def test_slug_transliterates_german_characters():
     assert _slug("Äußere Überwachung & Befehle") == "aeussere-ueberwachung-befehle"
+
+
+def test_named_publication_filesystem_operation_is_accepted_by_flow_loader(tmp_path):
+    from cli_agent.workflows.flow import load_flow
+
+    config = tmp_path / "publish.toml"
+    config.write_text(
+        'version = 1\n'
+        'result = "steps.publish.output"\n'
+        '[[steps]]\n'
+        'id = "publish"\n'
+        'output = "state/publish.json"\n'
+        'overwrite_output = true\n'
+        '[steps.filesystem_operation]\n'
+        'kind = "publish_named_okf"\n'
+        'source_root = "generated"\n'
+        'destination_root = "published"\n'
+        'state_root = "state/docs"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("publish.toml"), workspace=tmp_path)
+    assert flow.steps[0].filesystem_operation["kind"] == "publish_named_okf"
+
+
+def test_named_publication_operation_requires_checkpoint_overwrite(tmp_path):
+    from cli_agent.workflows.flow import load_flow
+
+    config = tmp_path / "publish.toml"
+    config.write_text(
+        'version = 1\n'
+        'result = "steps.publish.output"\n'
+        '[[steps]]\n'
+        'id = "publish"\n'
+        'output = "state/publish.json"\n'
+        '[steps.filesystem_operation]\n'
+        'kind = "publish_named_okf"\n'
+        'source_root = "generated"\n'
+        'destination_root = "published"\n'
+        'state_root = "state/docs"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="overwrite_output"):
+        load_flow(Path("publish.toml"), workspace=tmp_path)
