@@ -45,6 +45,7 @@ from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_ok
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
 from cli_agent.workflows.flow_route_normalization import canonicalize_group_routes
+from cli_agent.workflows.flow_python_script import prepare_script_config, run_script
 from cli_agent.workflows.flow_json_relations import (
     project_fields, join_by_alias, validate_partition, validate_allowed_values,
 )
@@ -743,6 +744,24 @@ def _reserved_flow_input_paths(
                 ),
             )
 
+        if step.python_script is not None:
+            config = step.python_script
+            bootstrap = Path(config["_bootstrap"])
+            if bootstrap.is_relative_to(workspace):
+                reserved[_filesystem_path_key(bootstrap)] = bootstrap
+            source = Path(config["_script"])
+            reserved[_filesystem_path_key(source)] = source
+            lexical = config.get("_interpreter_lexical")
+            if lexical:
+                path = Path(lexical)
+                reserved[_filesystem_path_key(path)] = path
+            executable = Path(config["_interpreter"])
+            if executable.is_relative_to(workspace):
+                reserved[_filesystem_path_key(executable)] = executable
+            if step.output_schema_path is not None:
+                path = step.output_schema_path
+                reserved[_filesystem_path_key(path)] = path
+            continue
         if step.json_operation is not None or step.filesystem_operation is not None:
             continue
         if step.output_schema_path is not None:
@@ -1352,6 +1371,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         "json_inputs",
         "json_operation",
         "filesystem_operation",
+        "python_script",
         "flow",
         "input",
         "when",
@@ -1399,6 +1419,37 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 "not contain dynamic flow placeholders."
             )
         prompt_value = raw.get("prompt_file")
+        raw_python_script = raw.get("python_script")
+        if raw_python_script is not None:
+            if (not isinstance(raw_python_script, dict)
+                    or set(raw_python_script) - {"path", "interpreter", "args", "timeout_seconds"}
+                    or not isinstance(raw_python_script.get("path"), str)
+                    or not raw_python_script["path"].strip()):
+                raise ValueError("python_script requires a path and optional interpreter, args, timeout_seconds.")
+            for key in ("path", "interpreter"):
+                val = raw_python_script.get(key)
+                if val is not None and (not isinstance(val, str) or not val.strip() or "${" in val):
+                    raise ValueError(f"python_script.{key} must be a static nonempty string.")
+            args = raw_python_script.get("args", [])
+            if (not isinstance(args, list) or len(args) > 64
+                    or any(not isinstance(v, str) or "${" in v or "\x00" in v for v in args)):
+                raise ValueError("python_script.args must be a list of static strings.")
+            timeout = raw_python_script.get("timeout_seconds", 300)
+            if type(timeout) not in (int, float) or not 1 <= timeout <= 3600:
+                raise ValueError("python_script.timeout_seconds must be in [1, 3600].")
+            forbidden = {
+                "config", "model", "prompt_file", "flow", "filesystem_operation",
+                "json_operation", "with_mcp", "with_data", "workspace_access",
+                "approve_tools", "tool_policy", "vars", "retry", "exclude_paths",
+                "conversation_items", "conversation_final_prompt_file",
+                "context_file", "add_file_context", "add_web_context",
+                "json_restart_attempts", "output_schema_enums", "input",
+            }
+            if forbidden & set(raw):
+                raise ValueError("python_script cannot combine model or tool configuration.")
+            if "output" not in raw:
+                raise ValueError("python_script requires an output checkpoint.")
+            raw_python_script = prepare_script_config(workspace, dict(raw_python_script))
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
@@ -1745,7 +1796,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             raise ValueError(
                 f"steps[{index}] must not set flow and prompt_file simultaneously."
             )
-        if child_flow is None and prompt_value is None and raw_json_operation is None and raw_filesystem_operation is None:
+        if child_flow is None and prompt_value is None and raw_json_operation is None and raw_filesystem_operation is None and raw_python_script is None:
             raise ValueError(
                 f"steps[{index}] requires prompt_file, flow or json_operation."
             )
@@ -2001,18 +2052,20 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
             )
 
         response_format_value = raw.get(
-            "response_format", "json" if raw_json_operation is not None or raw_filesystem_operation is not None else "text"
+            "response_format", "json" if raw_json_operation is not None or raw_filesystem_operation is not None or raw_python_script is not None else "text"
         )
         if response_format_value not in {"text", "json"}:
             raise ValueError(
                 f"steps[{index}].response_format must be 'text' or 'json'."
             )
         response_format = str(response_format_value)
+        if raw_python_script is not None and response_format != "json":
+            raise ValueError("python_script requires response_format=json.")
         output_schema = None
         schema_path = None
         schema_name = raw.get("output_schema")
         if schema_name is not None:
-            if response_format != "json" or prompt_value is None or raw_json_operation is not None or raw_filesystem_operation is not None or child_flow is not None:
+            if response_format != "json" or (prompt_value is None and raw_python_script is None) or raw_json_operation is not None or raw_filesystem_operation is not None or child_flow is not None:
                 raise ValueError(f"steps[{index}].output_schema requires a JSON model step.")
             if not isinstance(schema_name, str) or not schema_name.strip() or "${" in schema_name:
                 raise ValueError(f"steps[{index}].output_schema must be a static file path.")
@@ -2475,6 +2528,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 json_inputs=json_inputs,
                 json_operation=dict(raw_json_operation) if raw_json_operation else None,
                 filesystem_operation=dict(raw_filesystem_operation) if raw_filesystem_operation else None,
+                python_script=dict(raw_python_script) if raw_python_script else None,
                 conversation_items=conversation_items,
                 conversation_final_prompt_file=conversation_final_prompt_file,
                 iteration_id=iteration_id,
@@ -4771,7 +4825,7 @@ def validate_flow(
             produced.add(step.step_id)
             continue
 
-        if step.json_operation is not None or step.filesystem_operation is not None:
+        if step.json_operation is not None or step.filesystem_operation is not None or step.python_script is not None:
             if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
                 if os.name not in {"posix", "nt"} or (os.name == "posix" and (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"))):
                     raise ValueError("Secure directory inventory requires POSIX or Windows.")
@@ -4792,9 +4846,9 @@ def validate_flow(
             assert step.output is not None
             if step.workspace_access != "none" or step.response_format != "json":
                 raise ValueError("JSON-Operation requires workspace_access=none und JSON.")
-            if step.foreach is not None:
+            if step.foreach is not None and step.python_script is None:
                 raise ValueError("JSON operation does not support foreach.")
-            if _INPUT_EXPR.search(step.output) is None:
+            if step.foreach is None and _INPUT_EXPR.search(step.output) is None:
                 static_output = _output_for_iteration(
                     step, workspace=workspace, item=None,
                 )
@@ -5505,6 +5559,45 @@ def _execute_filesystem_step(
     context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
     return answer
 
+
+@trace_flow_operation("python")
+async def _execute_python_step(
+    step: FlowStep, *, workspace: Path, flow_input: dict[str, Any],
+    item: Any, iteration_id: str | None, output: Path | None,
+    context: _FlowExecutionContext,
+) -> str:
+    assert step.python_script is not None and output is not None
+    assert context.completed_json_outputs is not None
+    json_values = _resolve_json_inputs(
+        step, workspace=workspace, flow_input=flow_input, item=item,
+        iteration_id=iteration_id,
+        completed_json_outputs=context.completed_json_outputs,
+    )
+    envelope = {
+        "inputs": {key: _parse_structured_output(value, step_id=step.step_id)
+                   for key, value in json_values.items()},
+        "flow_input": flow_input, "item": item,
+        "iteration_id": iteration_id,
+    }
+    answer = await run_script(
+        workspace=workspace, config=step.python_script,
+        envelope_json=_json_dumps_preserving_numbers(envelope),
+    )
+    # Normalize JSON to a compact, lossless representation before writing.
+    # OutputTarget writes text with platform-native newlines on Windows;
+    # hashing subprocess stdout directly can otherwise disagree with the
+    # persisted checkpoint and reject untouched json_inputs during foreach.
+    answer = _json_dumps_preserving_numbers(
+        _parse_structured_output(answer, step_id=step.step_id)
+    )
+    if step.output_schema is not None:
+        from cli_agent.models.json_contract import json_contract_error
+        error = json_contract_error(answer, step.output_schema)
+        if error is not None:
+            raise ValueError(f"Python step {step.step_id!r} failed output_schema: {error}")
+    prepare_output_target(workspace, output, overwrite=step.overwrite_output).write_text(answer)
+    context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+    return answer
 
 @trace_flow_operation("json")
 def _execute_json_step(
@@ -6742,6 +6835,15 @@ async def _run_flow_internal(
                 record_iteration_answer(answer, True, iteration_id)
                 continue
 
+            if step.python_script is not None:
+                answer = await _execute_python_step(
+                    step, workspace=workspace, flow_input=flow_input,
+                    item=item, iteration_id=iteration_id, output=output,
+                    context=context,
+                )
+                record_iteration_answer(answer, True, iteration_id)
+                continue
+
             if step.json_operation is not None:
                 answer = _execute_json_step(
                     step, outputs=outputs, workspace=workspace, flow=flow,
@@ -7088,7 +7190,7 @@ def _discover_initial_flow_model_config(
                     ),
                     depth + 1,
                 ))
-            elif step.json_operation is not None or step.filesystem_operation is not None:
+            elif step.json_operation is not None or step.filesystem_operation is not None or step.python_script is not None:
                 continue
             elif step.config is None:
                 return True, None
