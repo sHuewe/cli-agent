@@ -200,3 +200,12 @@ def test_named_publication_operation_requires_checkpoint_overwrite(tmp_path):
     )
     with pytest.raises(ValueError, match="overwrite_output"):
         load_flow(Path("publish.toml"), workspace=tmp_path)
+
+
+def test_publish_rejects_links_escaping_okf_root(tmp_path):
+    root, _ = workspace(tmp_path)
+    path = root / "doctrines/example/command/index.md"
+    path.write_text("[Outside](../../../../secret.md)\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="escapes the published root"):
+        publish(tmp_path)
+    assert not (tmp_path / "okf-batched-published-v3").exists()
