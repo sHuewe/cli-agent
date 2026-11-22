@@ -279,3 +279,21 @@ def test_publish_preserves_longer_code_spans_with_nested_shorter_runs(tmp_path):
     ).read_text(encoding="utf-8")
     assert "[sample](ghost.md)" in output
     assert "[Actual](fuehrungsgrundsaetze.md)" in output
+
+
+def test_publish_keeps_valid_backtick_fenced_code_and_rewrites_following_link(tmp_path):
+    root, _ = workspace(tmp_path)
+    page = root / "doctrines/example/command/index.md"
+    page.write_text(
+        "```markdown\n"
+        "[literal](ghost.md) [literal2](s003-c002.md)\n"
+        "```\n"
+        "[Real](s003-c002.md)\n",
+        encoding="utf-8",
+    )
+    publish(tmp_path)
+    output = (
+        tmp_path / "okf-batched-published-v3/doctrines/example/command/index.md"
+    ).read_text(encoding="utf-8")
+    assert "```markdown\n[literal](ghost.md) [literal2](s003-c002.md)\n```" in output
+    assert "[Real](fuehrungsgrundsaetze.md)" in output
