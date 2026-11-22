@@ -113,3 +113,17 @@ async def test_schema_validates_before_checkpoint(tmp_path):
     flow = load_flow(Path("flow.toml"), workspace=tmp_path)
     with pytest.raises(ValueError, match="output_schema"):
         await run_flow(flow, workspace=tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_foreach_receives_earlier_json_data_and_item(tmp_path):
+    (tmp_path / 'test_script.py').write_text("import json\nimport sys\ndata = json.load(sys.stdin)\nif sys.argv[1] == 'seed':\n    print(json.dumps({\"items\":[{\"id\":\"a\"},{\"id\":\"b\"}],\"v\":7}))\nelse:\n    print(json.dumps({\"key\":data[\"item\"][\"id\"],\"seed\":data[\"inputs\"][\"data\"][\"v\"],\"iteration\":data[\"iteration_id\"]}))", encoding='utf-8')
+    (tmp_path / 'flow.toml').write_text("version = 1\nresult = \"steps.process.output\"\n[[steps]]\nid = \"seed\"\noutput = \"state/seed.json\"\n[steps.python_script]\npath = \"test_script.py\"\nargs = [\"seed\"]\n[[steps]]\nid = \"process\"\nforeach = \"steps.seed.output.items\"\niteration_id = \"${item.id}\"\noutput = \"state/item-${iteration.id}.json\"\n[steps.python_script]\npath = \"test_script.py\"\nargs = [\"process\"]\n[steps.json_inputs.data]\npath = \"state/seed.json\"", encoding='utf-8')
+    flow = load_flow(Path('flow.toml'), workspace=tmp_path)
+    await run_flow(flow, workspace=tmp_path)
+    outputs = [json.loads((tmp_path / ('state/item-' + suffix + '.json')).read_text())
+               for suffix in ('a', 'b')]
+    assert outputs == [
+        {'key': 'a', 'seed': 7, 'iteration': 'a'},
+        {'key': 'b', 'seed': 7, 'iteration': 'b'},
+    ]
