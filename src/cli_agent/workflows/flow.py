@@ -5577,7 +5577,8 @@ async def _execute_python_step(
         "iteration_id": iteration_id,
     }
     answer = await run_script(
-        workspace=workspace, config=step.python_script, envelope=envelope,
+        workspace=workspace, config=step.python_script,
+        envelope_json=_json_dumps_preserving_numbers(envelope),
     )
     _parse_structured_output(answer, step_id=step.step_id)
     if step.output_schema is not None:
