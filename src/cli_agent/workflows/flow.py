@@ -746,6 +746,9 @@ def _reserved_flow_input_paths(
 
         if step.python_script is not None:
             config = step.python_script
+            bootstrap = Path(config["_bootstrap"])
+            if bootstrap.is_relative_to(workspace):
+                reserved[_filesystem_path_key(bootstrap)] = bootstrap
             source = Path(config["_script"])
             reserved[_filesystem_path_key(source)] = source
             lexical = config.get("_interpreter_lexical")
