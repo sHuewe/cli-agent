@@ -177,3 +177,48 @@ async def test_timeout_terminates_child_process_tree(tmp_path):
         await asyncio.wait_for(run_flow(flow, workspace=tmp_path), timeout=8)
     await asyncio.sleep(2.2)
     assert not (tmp_path / "surviving-child.txt").exists()
+
+
+
+@pytest.mark.asyncio
+async def test_large_envelope_with_early_closed_stdin_keeps_valid_result(tmp_path):
+    # A script that never reads stdin must not fail the Flow just because
+    # its input exceeds the OS pipe buffer.
+    flow = make_flow(
+        tmp_path,
+        "import os\nos.close(0)\nprint('{}')",
+        opts="timeout_seconds = 10\n",
+    )
+    from cli_agent.workflows.flow_python_script import run_script
+    result = await asyncio.wait_for(
+        run_script(
+            workspace=tmp_path,
+            config=flow.steps[0].python_script,
+            envelope_json=json.dumps({"data": "x" * 1_000_000}),
+        ),
+        timeout=8,
+    )
+    assert json.loads(result) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["exit", "invalid_json"])
+async def test_failed_result_terminates_descendants_with_detached_pipes(tmp_path, failure):
+    # Child redirects all streams, so parent pipe tasks finish before the
+    # descendant does. Process-tree termination must still run on errors.
+    child = (
+        "import time; time.sleep(2); "
+        "from pathlib import Path; Path('surviving-child.txt').write_text('bad')"
+    )
+    output = "sys.exit(7)" if failure == "exit" else "print('not json')"
+    script = (
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', " + repr(child) +
+        "], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        + output
+    )
+    flow = make_flow(tmp_path, script)
+    with pytest.raises(ValueError, match="code 7|valid JSON"):
+        await asyncio.wait_for(run_flow(flow, workspace=tmp_path), timeout=8)
+    await asyncio.sleep(2.2)
+    assert not (tmp_path / "surviving-child.txt").exists()
