@@ -31,19 +31,8 @@ def _create_kill_on_close_job() -> int:
             ("SchedulingClass", wintypes.DWORD),
         ]
 
+    # IO_COUNTERS contains six 64-bit counters.
     class IO_COUNTERS(ctypes.Structure):
-        _fields_ = [
-            ("ReadOperationCount", ctypes.c_uint64),
-            ("WriteOperationCount", ctypes.c_uint64),
-            ("OtherOperationCount", ctypes.c_uint64),
-            ("ReadTransferCount", ctypes.c_uint64),
-            ("OtherTransferCount", ctypes.c_uint64),
-            ("ReadTransferCountExtra", ctypes.c_uint64),
-        ]
-
-    # IO_COUNTERS has exactly six 64-bit counters. Avoid relying on
-    # platform-dependent aliases in ctypes.wintypes.
-    class ACTUAL_IO_COUNTERS(ctypes.Structure):
         _fields_ = [(field, ctypes.c_uint64) for field in (
             "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
             "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
@@ -52,7 +41,7 @@ def _create_kill_on_close_job() -> int:
     class EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
         _fields_ = [
             ("BasicLimitInformation", BASIC_LIMIT_INFORMATION),
-            ("IoInfo", ACTUAL_IO_COUNTERS),
+            ("IoInfo", IO_COUNTERS),
             ("ProcessMemoryLimit", ctypes.c_size_t),
             ("JobMemoryLimit", ctypes.c_size_t),
             ("PeakProcessMemoryUsed", ctypes.c_size_t),
