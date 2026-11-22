@@ -1,6 +1,7 @@
-"""Validate each scan against its planned section before reconciling routing folder IDs.
+"""Validate each scan against its planned section before reconciling routing IDs.
 
-The scan model can provide a noncanonical folder_id. This is metadata, not
+The scan model can provide noncanonical document_id and folder_id. These are
+metadata, not
 knowledge content. Only the *in-memory* group input is normalized. The
 original scan and assignment checkpoints must remain byte-for-byte unchanged.
 """
@@ -25,7 +26,8 @@ def canonicalize_group_routes(
             or folder_path != f"doctrines/{folder_id}"
             or not isinstance(source_path, str) or not source_path):
         raise ValueError("Authoritative folder or source identity is invalid.")
-    # These source IDs also construct the global IDs used in assign.json.
+    # assign.json constructs global IDs from the canonical source slug,
+    # not from model-supplied scan.document_id. The latter may differ.
     expected: dict[str, dict[str, Any]] = {}
     for section in sections["sections"]:
         if not isinstance(section, dict):
@@ -54,7 +56,6 @@ def canonicalize_group_routes(
             ("start_line", planned["start_line"]),
             ("end_line", planned["end_line"]),
             ("chunk_id", sid),
-            ("document_id", folder_id),
         ):
             if route.get(key) != expected_value:
                 raise ValueError(
@@ -63,7 +64,13 @@ def canonicalize_group_routes(
                 )
         if route.get("status") != "ok":
             raise ValueError(f"Scan {sid} is not complete.")
-        # All content is passed through without edits. Only folder_id
-        # changes, and only once every independently planned field matches.
-        result.append({**route, "folder_id": folder_id})
+        # Scan document_id/folder_id are routing metadata authored by the
+        # model. The assignment join independently prefixes item IDs with
+        # the canonical source slug, so normalize BOTH fields in memory.
+        # Local item IDs, descriptions and evidence are never modified.
+        for key in ("document_id", "folder_id"):
+            value = route.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Scan {sid}: {key} must be a nonempty string.")
+        result.append({**route, "document_id": folder_id, "folder_id": folder_id})
     return result
