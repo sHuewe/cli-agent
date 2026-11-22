@@ -218,7 +218,7 @@ def test_publish_rewrites_multiline_markdown_links(tmp_path):
         "[First](\ns001-c010.md\n)\n"
         "[Second][key]\n\n[key]:\n  s003-c002.md\n"
         "\x60[unchanged](s001-c010.md)\x60\n"
-        "~~\x60\n[code](s001-c010.md)\n~~\x60\n",
+        "~~~\n[code](s001-c010.md)\n~~~\n",
         encoding="utf-8",
     )
     publish(tmp_path)
@@ -226,8 +226,7 @@ def test_publish_rewrites_multiline_markdown_links(tmp_path):
         tmp_path / "okf-batched-published-v3/doctrines/example/command/index.md"
     ).read_text(encoding="utf-8")
     assert "[First](\nbefehlsgebung-und-koordination.md\n)" in published
-    # Markdown reference definitions with multiline whitespace are preserved
-    # unless their source contains a recognized destination in the same line.
+    assert "[key]:\n  fuehrungsgrundsaetze.md" in published
     assert "[Second][key]" in published
     assert "\x60[unchanged](s001-c010.md)\x60" in published
     assert "[code](s001-c010.md)" in published
