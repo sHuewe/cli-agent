@@ -41,7 +41,7 @@ from cli_agent.context.file_context import (
     read_existing_output_text,
 )
 from cli_agent.workflows.flow_json_operations import transform_json
-from cli_agent.workflows.flow_named_publication import publish_named_okf
+from cli_agent.workflows.flow_named_publication import publish_named_okf, validate_publication_report_path
 from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest, prepare_doctrine_concept_batches, assemble_doctrine_concept_plan, prepare_section_outline_tasks, assemble_section_outlines, build_doctrine_taxonomy_profile, prepare_doctrine_consolidation_batches, assemble_doctrine_consolidation
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
@@ -5486,19 +5486,13 @@ def _execute_filesystem_step(
         context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
         return answer
     if op["kind"] == "publish_named_okf":
-        # The report is written after publication completes. Prevent a
-        # malicious or mistaken Flow config from overwriting any source
-        # concept, checkpoint, or file inside the published output.
-        for name in ("source_root", "state_root", "destination_root"):
-            source = _workspace_path(
-                workspace, Path(_render_input_text(op[name], flow_input)),
-                purpose="publish_named_okf " + name, must_exist=False,
-            )
-            if output == source or source in output.parents:
-                raise ValueError(
-                    "publish_named_okf output must be outside all publication "
-                    f"and checkpoint roots: {name}"
-                )
+        # Validate the report path before publishing or writing any checkpoint.
+        validate_publication_report_path(
+            workspace=workspace, output=output,
+            source_root=_render_input_text(op["source_root"], flow_input),
+            state_root=_render_input_text(op["state_root"], flow_input),
+            destination_root=_render_input_text(op["destination_root"], flow_input),
+        )
         transformed = publish_named_okf(
             workspace=workspace,
             source_root=_render_input_text(op["source_root"], flow_input),
