@@ -34,6 +34,7 @@ class FlowStep:
     json_inputs: dict[str, JsonInputSpec] | None = None
     json_operation: dict[str, Any] | None = None
     filesystem_operation: dict[str, Any] | None = None
+    python_script: dict[str, Any] | None = None
     conversation_items: tuple[Any, ...] | str | None = None
     conversation_final_prompt_file: Path | None = None
     iteration_id: str | None = None
