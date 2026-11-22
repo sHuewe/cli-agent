@@ -49,6 +49,25 @@ def _relative_root(workspace: Path, value: str, *, name: str) -> Path:
     return path
 
 
+
+def validate_publication_report_path(
+    *, workspace: Path, output: Path,
+    source_root: str, state_root: str, destination_root: str,
+) -> None:
+    """A publication report must not overwrite a source, state or output file."""
+    for name, value in (
+        ("source_root", source_root),
+        ("state_root", state_root),
+        ("destination_root", destination_root),
+    ):
+        root = _relative_root(workspace, value, name=name)
+        if output == root or root in output.parents:
+            raise ValueError(
+                "publish_named_okf output must be outside all publication "
+                f"and checkpoint roots: {name}"
+            )
+
+
 def _files(root: Path) -> dict[str, Path]:
     if not root.is_dir() or root.is_symlink():
         raise ValueError(f"Required publication source is not a directory: {root}")
