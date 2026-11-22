@@ -20,7 +20,13 @@ LINK_RE = re.compile(
     r"|(?P<html_prefix>\b(?:href|src)\s*=\s*['\"])(?P<html_url>[^'\"\n]+)",
     re.MULTILINE | re.IGNORECASE,
 )
-CODE_SPAN_RE = re.compile(r"(?P<ticks>\x60+)[^\x60]*?(?P=ticks)")
+# CommonMark code spans use complete backtick runs of *equal* length.
+# Shorter runs inside a longer code span are literal content and must not
+# expose Markdown links to rewriting. Both delimiters require run boundaries.
+CODE_SPAN_RE = re.compile(
+    r"(?<!\x60)(?P<ticks>\x60+)(?!\x60).*?(?<!\x60)(?P=ticks)(?!\x60)",
+    re.DOTALL,
+)
 FENCE_RE = re.compile(r"^[ ]{0,3}(?P<fence>\x60{3,}|~{3,})")
 WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *{f"com{i}" for i in range(1, 10)},
                     *{f"lpt{i}" for i in range(1, 10)}}
