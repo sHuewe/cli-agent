@@ -744,6 +744,21 @@ def _reserved_flow_input_paths(
                 ),
             )
 
+        if step.python_script is not None:
+            config = step.python_script
+            source = Path(config["_script"])
+            reserved[_filesystem_path_key(source)] = source
+            lexical = config.get("_interpreter_lexical")
+            if lexical:
+                path = Path(lexical)
+                reserved[_filesystem_path_key(path)] = path
+            executable = Path(config["_interpreter"])
+            if executable.is_relative_to(workspace):
+                reserved[_filesystem_path_key(executable)] = executable
+            if step.output_schema_path is not None:
+                path = step.output_schema_path
+                reserved[_filesystem_path_key(path)] = path
+            continue
         if step.json_operation is not None or step.filesystem_operation is not None:
             continue
         if step.output_schema_path is not None:
@@ -4807,7 +4822,7 @@ def validate_flow(
             produced.add(step.step_id)
             continue
 
-        if step.json_operation is not None or step.filesystem_operation is not None:
+        if step.json_operation is not None or step.filesystem_operation is not None or step.python_script is not None:
             if step.filesystem_operation is not None and step.filesystem_operation["kind"] == "inventory":
                 if os.name not in {"posix", "nt"} or (os.name == "posix" and (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"))):
                     raise ValueError("Secure directory inventory requires POSIX or Windows.")
@@ -4828,7 +4843,7 @@ def validate_flow(
             assert step.output is not None
             if step.workspace_access != "none" or step.response_format != "json":
                 raise ValueError("JSON-Operation requires workspace_access=none und JSON.")
-            if step.foreach is not None:
+            if step.foreach is not None and step.python_script is None:
                 raise ValueError("JSON operation does not support foreach.")
             if _INPUT_EXPR.search(step.output) is None:
                 static_output = _output_for_iteration(
@@ -5541,6 +5556,40 @@ def _execute_filesystem_step(
     context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
     return answer
 
+
+@trace_flow_operation("python")
+async def _execute_python_step(
+    step: FlowStep, *, workspace: Path, flow_input: dict[str, Any],
+    item: Any, iteration_id: str | None, output: Path | None,
+    context: _FlowExecutionContext,
+) -> str:
+    assert step.python_script is not None and output is not None
+    assert context.completed_json_outputs is not None
+    json_values = _resolve_json_inputs(
+        step, workspace=workspace, flow_input=flow_input, item=item,
+        iteration_id=iteration_id,
+        completed_json_outputs=context.completed_json_outputs,
+    )
+    envelope = {
+        "inputs": {key: _parse_structured_output(value, step_id=step.step_id)
+                   for key, value in json_values.items()},
+        "flow_input": flow_input, "item": item,
+        "iteration_id": iteration_id,
+    }
+    answer = await run_script(
+        workspace=workspace, config=step.python_script, envelope=envelope,
+    )
+    _parse_structured_output(answer, step_id=step.step_id)
+    if step.output_schema is not None:
+        from cli_agent.models.json_contract import json_contract_error
+        error = json_contract_error(answer, step.output_schema)
+        if error is not None:
+            raise ValueError(f"Python step {step.step_id!r} failed output_schema: {error}")
+    prepare_output_target(workspace, output, overwrite=step.overwrite_output).write_text(
+        answer, encoding="utf-8",
+    )
+    context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+    return answer
 
 @trace_flow_operation("json")
 def _execute_json_step(
@@ -6778,6 +6827,15 @@ async def _run_flow_internal(
                 record_iteration_answer(answer, True, iteration_id)
                 continue
 
+            if step.python_script is not None:
+                answer = await _execute_python_step(
+                    step, workspace=workspace, flow_input=flow_input,
+                    item=item, iteration_id=iteration_id, output=output,
+                    context=context,
+                )
+                record_iteration_answer(answer, True, iteration_id)
+                continue
+
             if step.json_operation is not None:
                 answer = _execute_json_step(
                     step, outputs=outputs, workspace=workspace, flow=flow,
@@ -7124,7 +7182,7 @@ def _discover_initial_flow_model_config(
                     ),
                     depth + 1,
                 ))
-            elif step.json_operation is not None or step.filesystem_operation is not None:
+            elif step.json_operation is not None or step.filesystem_operation is not None or step.python_script is not None:
                 continue
             elif step.config is None:
                 return True, None
