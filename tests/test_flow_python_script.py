@@ -106,7 +106,7 @@ async def test_schema_validates_before_checkpoint(tmp_path):
         "type": "object", "properties": {"value": {"type": "integer"}},
         "required": ["value"]
     }))
-    make_flow(tmp_path, "print('{\\"value\\":\\"no\\"}')")
+    make_flow(tmp_path, 'import json\nprint(json.dumps({"value":"no"}))')
     config = (tmp_path / "flow.toml").read_text()
     config = config.replace("[steps.python_script]", 'output_schema = "schema.json"\n[steps.python_script]')
     (tmp_path / "flow.toml").write_text(config)
