@@ -127,3 +127,23 @@ async def test_foreach_receives_earlier_json_data_and_item(tmp_path):
         {'key': 'a', 'seed': 7, 'iteration': 'a'},
         {'key': 'b', 'seed': 7, 'iteration': 'b'},
     ]
+
+
+
+@pytest.mark.asyncio
+async def test_workspace_venv_interpreter_uses_its_own_prefix(tmp_path):
+    import os
+    import venv
+
+    virtualenv = tmp_path / ".venv"
+    venv.EnvBuilder(with_pip=False).create(virtualenv)
+    executable = ".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python"
+    flow = make_flow(
+        tmp_path,
+        "import sys, json\nprint(json.dumps({'prefix':sys.prefix,'base':sys.base_prefix}))",
+        opts="interpreter = " + json.dumps(executable) + "\n",
+    )
+    await run_flow(flow, workspace=tmp_path)
+    output = json.loads((tmp_path / "state/result.json").read_text())
+    assert Path(output["prefix"]).resolve() == virtualenv.resolve()
+    assert output["prefix"] != output["base"]
