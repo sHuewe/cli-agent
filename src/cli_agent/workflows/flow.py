@@ -5580,7 +5580,13 @@ async def _execute_python_step(
         workspace=workspace, config=step.python_script,
         envelope_json=_json_dumps_preserving_numbers(envelope),
     )
-    _parse_structured_output(answer, step_id=step.step_id)
+    # Normalize JSON to a compact, lossless representation before writing.
+    # OutputTarget writes text with platform-native newlines on Windows;
+    # hashing subprocess stdout directly can otherwise disagree with the
+    # persisted checkpoint and reject untouched json_inputs during foreach.
+    answer = _json_dumps_preserving_numbers(
+        _parse_structured_output(answer, step_id=step.step_id)
+    )
     if step.output_schema is not None:
         from cli_agent.models.json_contract import json_contract_error
         error = json_contract_error(answer, step.output_schema)
