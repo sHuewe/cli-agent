@@ -282,21 +282,33 @@ def _rewrite_markdown(
     prose: list[str] = []
     for line in text.splitlines(keepends=True):
         match = FENCE_RE.match(line)
-        if match is not None:
-            marker = match.group("fence")
-            if fenced is None:
-                rewritten.append(rewrite_prose("".join(prose)))
-                prose.clear()
-                fenced = (marker[0], len(marker))
-                rewritten.append(line)
-                continue
-            if fenced[0] == marker[0] and len(marker) >= fenced[1]:
+        marker = match.group("fence") if match is not None else None
+        tail = line[match.end():].rstrip("\r\n") if match is not None else ""
+        # CommonMark does not allow backticks in the info string of a
+        # backtick-fenced block. Such lines may instead contain an inline
+        # code span beginning at column zero, which must not consume links
+        # on later lines as if they were part of a fenced code block.
+        opening_fence = marker is not None and (
+            marker[0] == "~" or "`" not in tail
+        )
+        closing_fence = (
+            marker is not None
+            and fenced is not None
+            and marker[0] == fenced[0]
+            and len(marker) >= fenced[1]
+            and not tail.strip()
+        )
+        if fenced is None and opening_fence:
+            rewritten.append(rewrite_prose("".join(prose)))
+            prose.clear()
+            fenced = (marker[0], len(marker))
+            rewritten.append(line)
+        elif fenced is not None:
+            if closing_fence:
                 fenced = None
             rewritten.append(line)
-        elif fenced is None:
-            prose.append(line)
         else:
-            rewritten.append(line)
+            prose.append(line)
     rewritten.append(rewrite_prose("".join(prose)))
     return "".join(rewritten)
 
