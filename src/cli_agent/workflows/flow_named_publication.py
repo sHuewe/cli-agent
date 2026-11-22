@@ -199,8 +199,12 @@ def _rewrite_link(
             original = path[len(root_prefix):]
         elif path in originals and path.startswith(("doctrines/", "themen/")):
             original = path
+    if original == ".." or original.startswith("../"):
+        raise ValueError(
+            f"Markdown link escapes the published root in {source_file}: {url!r}"
+        )
     if original not in originals:
-        if not (original == ".." or original.startswith("../")) and path.lower().endswith(".md"):
+        if path.lower().endswith(".md"):
             raise ValueError(
                 f"Broken internal Markdown link in {source_file}: {url!r}"
             )
