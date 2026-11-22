@@ -246,3 +246,36 @@ def test_publication_report_cannot_overwrite_source_or_state(tmp_path, report_pa
             destination_root="okf-batched-published-v3",
             state_root="okf-batched/state-v3/docs",
         )
+
+def test_publish_preserves_code_span_with_shorter_backtick_runs(tmp_path):
+    root, _ = workspace(tmp_path)
+    page = root / "doctrines/example/command/index.md"
+    page.write_text(
+        "``example `tick` [sample](ghost.md)``\n"
+        "``example `tick` [existing](s001-c010.md)``\n"
+        "[Real](s001-c010.md)\n",
+        encoding="utf-8",
+    )
+    publish(tmp_path)
+    output = (
+        tmp_path / "okf-batched-published-v3/doctrines/example/command/index.md"
+    ).read_text(encoding="utf-8")
+    assert "``example `tick` [sample](ghost.md)``" in output
+    assert "``example `tick` [existing](s001-c010.md)``" in output
+    assert "[Real](befehlsgebung-und-koordination.md)" in output
+
+
+def test_publish_preserves_longer_code_spans_with_nested_shorter_runs(tmp_path):
+    root, _ = workspace(tmp_path)
+    page = root / "doctrines/example/command/index.md"
+    page.write_text(
+        "```Example ``nested`` `tick` [sample](ghost.md)```\n"
+        "[Actual](s003-c002.md)\n",
+        encoding="utf-8",
+    )
+    publish(tmp_path)
+    output = (
+        tmp_path / "okf-batched-published-v3/doctrines/example/command/index.md"
+    ).read_text(encoding="utf-8")
+    assert "[sample](ghost.md)" in output
+    assert "[Actual](fuehrungsgrundsaetze.md)" in output
