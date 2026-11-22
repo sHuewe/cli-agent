@@ -90,11 +90,16 @@ def prepare_script_config(workspace: Path, config: dict[str, Any]) -> dict[str, 
     script = _safe_script_path(workspace, config["path"])
     interpreter, lexical = _interpreter_path(workspace, config.get("interpreter"))
     interpreter_hash = _digest(interpreter)
+    raw_executable = config.get("interpreter") or sys.executable
+    launch = Path(raw_executable)
+    if not launch.is_absolute():
+        launch = workspace / launch
     return {
         **config,
         "_script": str(script),
         "_script_sha256": _digest(script, limit=MAX_SCRIPT_BYTES),
         "_interpreter": str(interpreter),
+        "_interpreter_launch": str(launch),
         "_interpreter_sha256": interpreter_hash,
         "_interpreter_lexical": str(lexical) if lexical else None,
     }
@@ -109,7 +114,15 @@ def verify_script_config(workspace: Path, config: dict[str, Any]) -> tuple[Path,
             or _digest(interpreter) != config["_interpreter_sha256"]
             or (str(lexical) if lexical else None) != config["_interpreter_lexical"]):
         raise ValueError("Python interpreter changed after Flow startup.")
-    return script, interpreter
+    raw_executable = config.get("interpreter") or sys.executable
+    launch = Path(raw_executable)
+    if not launch.is_absolute():
+        launch = workspace / launch
+    if str(launch) != config["_interpreter_launch"]:
+        raise ValueError("Python interpreter selection changed after Flow startup.")
+    # Use the lexical entry point for execution: venv/bin/python is commonly a
+    # symlink whose path (not just its target) controls sys.prefix and imports.
+    return script, launch
 
 
 async def run_script(
