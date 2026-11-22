@@ -51,7 +51,7 @@ def _interpreter_path(workspace: Path, raw: str | None) -> tuple[Path, Path | No
     and resolved targets are checked on each execution.
     """
     if raw is None:
-        return Path(sys.executable).resolve(strict=True), None
+        raw = sys.executable
     if not isinstance(raw, str) or not raw.strip() or "${" in raw:
         raise ValueError("python_script.interpreter must be a static path.")
     path = Path(raw)
@@ -112,10 +112,10 @@ def verify_script_config(workspace: Path, config: dict[str, Any]) -> tuple[Path,
 
 
 async def run_script(
-    *, workspace: Path, config: dict[str, Any], envelope: Any,
+    *, workspace: Path, config: dict[str, Any], envelope_json: str,
 ) -> str:
     script, interpreter = verify_script_config(workspace, config)
-    data = json.dumps(envelope, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    data = envelope_json.encode("utf-8")
     if len(data) > MAX_SCRIPT_INPUT:
         raise ValueError("Python script input exceeds the JSON size limit.")
     command = [str(interpreter), str(script), *config.get("args", [])]
