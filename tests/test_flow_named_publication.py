@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from cli_agent.workflows.flow_named_publication import (
-    publish_named_okf, _slug, _rewrite_markdown,
+    publish_named_okf, validate_publication_report_path, _slug, _rewrite_markdown,
 )
 
 
@@ -209,3 +209,41 @@ def test_publish_rejects_links_escaping_okf_root(tmp_path):
     with pytest.raises(ValueError, match="escapes the published root"):
         publish(tmp_path)
     assert not (tmp_path / "okf-batched-published-v3").exists()
+
+
+def test_publish_rewrites_multiline_markdown_links(tmp_path):
+    root, _ = workspace(tmp_path)
+    path = root / "doctrines/example/command/index.md"
+    path.write_text(
+        "[First](\ns001-c010.md\n)\n"
+        "[Second][key]\n\n[key]:\n  s003-c002.md\n"
+        "\x60[unchanged](s001-c010.md)\x60\n"
+        "~~\x60\n[code](s001-c010.md)\n~~\x60\n",
+        encoding="utf-8",
+    )
+    publish(tmp_path)
+    published = (
+        tmp_path / "okf-batched-published-v3/doctrines/example/command/index.md"
+    ).read_text(encoding="utf-8")
+    assert "[First](\nbefehlsgebung-und-koordination.md\n)" in published
+    # Markdown reference definitions with multiline whitespace are preserved
+    # unless their source contains a recognized destination in the same line.
+    assert "[Second][key]" in published
+    assert "\x60[unchanged](s001-c010.md)\x60" in published
+    assert "[code](s001-c010.md)" in published
+
+
+@pytest.mark.parametrize("report_path", [
+    "okf-batched-generated-v3/doctrines/example/command/s001-c010.md",
+    "okf-batched/state-v3/docs/example/group.json",
+    "okf-batched-published-v3/index.md",
+])
+def test_publication_report_cannot_overwrite_source_or_state(tmp_path, report_path):
+    root, _ = workspace(tmp_path)
+    with pytest.raises(ValueError, match="outside all publication"):
+        validate_publication_report_path(
+            workspace=tmp_path, output=tmp_path / report_path,
+            source_root="okf-batched-generated-v3",
+            destination_root="okf-batched-published-v3",
+            state_root="okf-batched/state-v3/docs",
+        )
