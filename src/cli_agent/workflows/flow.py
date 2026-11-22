@@ -5586,9 +5586,7 @@ async def _execute_python_step(
         error = json_contract_error(answer, step.output_schema)
         if error is not None:
             raise ValueError(f"Python step {step.step_id!r} failed output_schema: {error}")
-    prepare_output_target(workspace, output, overwrite=step.overwrite_output).write_text(
-        answer, encoding="utf-8",
-    )
+    prepare_output_target(workspace, output, overwrite=step.overwrite_output).write_text(answer)
     context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
     return answer
 
