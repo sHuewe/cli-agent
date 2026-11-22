@@ -14,6 +14,7 @@ import sys
 from typing import Any
 
 from cli_agent.security.filesystem_security import path_entry_is_symlink_or_reparse
+from cli_agent.interfaces.terminal_output import sanitize_terminal_text
 
 MAX_SCRIPT_BYTES = 2_000_000
 MAX_SCRIPT_STDERR = 65_536
@@ -162,7 +163,10 @@ async def run_script(
 
     if stderr:
         # Never treat process diagnostics as JSON output.
-        print(stderr.decode("utf-8", errors="replace"), file=sys.stderr)
+        print(sanitize_terminal_text(
+            stderr.decode("utf-8", errors="replace"), multiline=True,
+            escape_invisible_formatting=True, escape_literal_backslashes=True,
+        ), file=sys.stderr)
     if code:
         raise ValueError(f"Python script exited with code {code}.")
     try:
