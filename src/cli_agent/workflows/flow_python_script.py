@@ -210,8 +210,15 @@ async def run_script(
         try:
             proc.stdin.write(data)
             await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            # The child may close stdin immediately and still produce a valid
+            # JSON result. This is normal subprocess communication behavior.
+            pass
         finally:
-            proc.stdin.close()
+            try:
+                proc.stdin.close()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     assert proc.stdout is not None and proc.stderr is not None
     tasks = (
@@ -235,7 +242,31 @@ async def run_script(
         _, stdout, stderr, code = completed.result()
         if overflow.is_set():
             raise ValueError(overflow_message or "Python script output exceeded its limit.")
+        if stderr:
+            # Never treat process diagnostics as JSON output.
+            print(sanitize_terminal_text(
+                stderr.decode("utf-8", errors="replace"), multiline=True,
+                escape_invisible_formatting=True, escape_literal_backslashes=True,
+            ), file=sys.stderr)
+        if code:
+            raise ValueError(f"Python script exited with code {code}.")
+        try:
+            answer = stdout.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Python script stdout is not UTF-8 JSON.") from exc
+        try:
+            json.loads(
+                answer,
+                parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+            )
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "Python script must emit exactly one valid JSON value on stdout."
+            ) from exc
+        # Only a successful zero exit AND a valid JSON result completes
+        # the step. Any failure still terminates descendants in finally.
         failed = False
+        return answer
     finally:
         exceeded.cancel()
         if failed:
@@ -258,20 +289,3 @@ async def run_script(
                         transport.close()
                 await asyncio.sleep(0)
 
-    if stderr:
-        # Never treat process diagnostics as JSON output.
-        print(sanitize_terminal_text(
-            stderr.decode("utf-8", errors="replace"), multiline=True,
-            escape_invisible_formatting=True, escape_literal_backslashes=True,
-        ), file=sys.stderr)
-    if code:
-        raise ValueError(f"Python script exited with code {code}.")
-    try:
-        answer = stdout.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError("Python script stdout is not UTF-8 JSON.") from exc
-    try:
-        json.loads(answer, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise ValueError("Python script must emit exactly one valid JSON value on stdout.") from exc
-    return answer
