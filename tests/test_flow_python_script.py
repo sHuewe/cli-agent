@@ -147,3 +147,33 @@ async def test_workspace_venv_interpreter_uses_its_own_prefix(tmp_path):
     output = json.loads((tmp_path / "state/result.json").read_text())
     assert Path(output["prefix"]).resolve() == virtualenv.resolve()
     assert output["prefix"] != output["base"]
+
+
+@pytest.mark.asyncio
+async def test_oversized_stderr_does_not_hang_process_cleanup(tmp_path):
+    flow = make_flow(
+        tmp_path,
+        "import sys\nsys.stderr.write('E' * 10000000)\nsys.stderr.flush()\n",
+        opts="timeout_seconds = 10\n",
+    )
+    with pytest.raises(ValueError, match="stderr exceeds"):
+        await asyncio.wait_for(run_flow(flow, workspace=tmp_path), timeout=8)
+    assert not (tmp_path / "state/result.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_timeout_terminates_child_process_tree(tmp_path):
+    child = (
+        "import time; time.sleep(2); "
+        "from pathlib import Path; Path('surviving-child.txt').write_text('bad')"
+    )
+    script = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
+        "time.sleep(30)\n"
+    )
+    flow = make_flow(tmp_path, script, opts="timeout_seconds = 1\n")
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(run_flow(flow, workspace=tmp_path), timeout=8)
+    await asyncio.sleep(2.2)
+    assert not (tmp_path / "surviving-child.txt").exists()
