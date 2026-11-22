@@ -41,6 +41,7 @@ from cli_agent.context.file_context import (
     read_existing_output_text,
 )
 from cli_agent.workflows.flow_json_operations import transform_json
+from cli_agent.workflows.flow_named_publication import publish_named_okf
 from cli_agent.workflows.flow_json_validation import validate_okf_plan, build_okf_manifest, prepare_doctrine_concept_batches, assemble_doctrine_concept_plan, prepare_section_outline_tasks, assemble_section_outlines, build_doctrine_taxonomy_profile, prepare_doctrine_consolidation_batches, assemble_doctrine_consolidation
 from cli_agent.workflows.flow_filesystem_operations import inventory_directory, markdown_sections, MAX_INVENTORY_ENTRIES, _workspace_directory
 from cli_agent.workflows.flow_json_grouping import group_assigned_items, verify_assigned_coverage
@@ -1401,8 +1402,15 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         raw_filesystem_operation = raw.get("filesystem_operation")
         if raw_filesystem_operation is not None:
             op = raw_filesystem_operation
-            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "path", "target_chars", "max_sections", "always_sections"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections", "assert_file"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
+            if not isinstance(op, dict) or set(op) - {"kind", "directory", "recursive", "extensions", "exclude_names", "max_entries", "stable_slugs", "paths", "expected_status", "expected_source_path", "release_source_on_miss", "source_path", "path", "target_chars", "max_sections", "always_sections", "source_root", "destination_root", "state_root"} or op.get("kind") not in {"inventory", "checkpoint_status", "markdown_sections", "assert_file", "publish_named_okf"} or (op.get("kind") == "inventory" and not isinstance(op.get("directory"), str)):
                 raise ValueError("filesystem_operation requires kind=inventory and directory.")
+            if op["kind"] == "publish_named_okf":
+                if (set(op) != {"kind", "source_root", "destination_root", "state_root"}
+                        or any(not isinstance(op.get(k), str) or not op[k].strip()
+                               for k in ("source_root", "destination_root", "state_root"))):
+                    raise ValueError("publish_named_okf requires three nonempty root paths.")
+                if raw.get("overwrite_output") is not True:
+                    raise ValueError("publish_named_okf requires overwrite_output=true.")
             if op["kind"] == "assert_file":
                 if set(op) != {"kind", "path"} or not isinstance(op["path"], str) or not op["path"].strip():
                     raise ValueError("assert_file requires exactly one nonempty path.")
@@ -1499,6 +1507,12 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                     r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
                     replace_inventory_var, raw_filesystem_operation["expected_source_path"],
                 )
+            elif raw_filesystem_operation["kind"] == "publish_named_okf":
+                for key in ("source_root", "destination_root", "state_root"):
+                    raw_filesystem_operation[key] = re.sub(
+                        r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
+                        replace_inventory_var, raw_filesystem_operation[key],
+                    )
             elif raw_filesystem_operation["kind"] == "assert_file":
                 raw_filesystem_operation["path"] = re.sub(
                     r"\$\{var\.([A-Za-z_][A-Za-z0-9_-]*)\}",
@@ -1518,6 +1532,19 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                             or PureWindowsPath(literal).drive or ".." in Path(literal).parts
                             or ".." in PureWindowsPath(literal).parts):
                         raise ValueError("checkpoint_status.paths must be workspace-relative.")
+            if raw_filesystem_operation["kind"] == "publish_named_okf":
+                for key in ("source_root", "destination_root", "state_root"):
+                    value = raw_filesystem_operation[key]
+                    if "${" in _INPUT_EXPR.sub("", value):
+                        raise ValueError("publish_named_okf permits only input/var references.")
+                    _validate_input_references([value], declared_inputs=inputs,
+                                               field="publish_named_okf." + key)
+                    literal = _INPUT_EXPR.sub("placeholder", value)
+                    win = PureWindowsPath(literal)
+                    if (Path(literal).is_absolute() or win.is_absolute() or win.drive
+                            or ".." in Path(literal).parts or ".." in win.parts
+                            or "\\" in literal or not literal.strip()):
+                        raise ValueError("publish_named_okf roots must be workspace-relative.")
             if raw_filesystem_operation["kind"] == "assert_file":
                 assert_template = raw_filesystem_operation["path"]
                 assert_remainder = _INPUT_EXPR.sub("", assert_template)
@@ -5455,6 +5482,19 @@ def _execute_filesystem_step(
             raise ValueError(f"assert_file requires a regular, unique file: {candidate}")
         payload = {"status": "ok", "path": candidate, "size_bytes": target_path.stat().st_size}
         answer = _json_dumps_preserving_numbers(payload)
+        prepare_output_target(workspace, output, overwrite=True).write_text(answer)
+        context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
+        return answer
+    if op["kind"] == "publish_named_okf":
+        transformed = publish_named_okf(
+            workspace=workspace,
+            source_root=_render_input_text(op["source_root"], flow_input),
+            destination_root=_render_input_text(op["destination_root"], flow_input),
+            state_root=_render_input_text(op["state_root"], flow_input),
+        )
+        answer = _json_dumps_preserving_numbers(transformed)
+        if len(answer.encode("utf-8")) > MAX_STRUCTURED_OUTPUT_BYTES:
+            raise ValueError("Named publication report exceeds checkpoint size limit.")
         prepare_output_target(workspace, output, overwrite=True).write_text(answer)
         context.completed_json_outputs[_filesystem_path_key(output)] = _checkpoint_fingerprint(answer)
         return answer
