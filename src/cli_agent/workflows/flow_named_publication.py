@@ -16,7 +16,7 @@ import yaml
 MAX_FILES = 100_000
 LINK_RE = re.compile(
     r"(?P<inline_prefix>\]\(\s*)(?P<inline_url><[^>\n]+>|[^\s()]+)"
-    r"|(?P<ref_prefix>^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*)(?P<ref_url><[^>\n]+>|[^\s]+)"
+    r"|(?P<ref_prefix>^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*(?:\r?\n[ \t]+)?)(?P<ref_url><[^>\n]+>|[^\s]+)"
     r"|(?P<html_prefix>\b(?:href|src)\s*=\s*['\"])(?P<html_url>[^'\"\n]+)",
     re.MULTILINE | re.IGNORECASE,
 )
