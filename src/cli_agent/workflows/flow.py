@@ -1818,8 +1818,6 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 field=f"steps[{index}].input.{name}",
             )
 
-        if raw_python_script is not None and response_format != "json":
-            raise ValueError("python_script requires response_format=json.")
         if raw_json_operation is not None:
             forbidden = {
                 "config", "model", "context_file", "add_file_context",
@@ -2058,6 +2056,8 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 f"steps[{index}].response_format must be 'text' or 'json'."
             )
         response_format = str(response_format_value)
+        if raw_python_script is not None and response_format != "json":
+            raise ValueError("python_script requires response_format=json.")
         output_schema = None
         schema_path = None
         schema_name = raw.get("output_schema")
