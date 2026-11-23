@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -95,6 +96,26 @@ def test_foreach_limit_configuration(tmp_path: Path, configured, expected) -> No
             flow.steps[0], outputs={},
             flow_input={"items": [*items, {"id": "overflow"}]},
         )
+
+
+def test_foreach_step_output_allows_large_configured_collection(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("Process", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[limits]\nmax_foreach_items = 2000\n'
+        '[[steps]]\nid = "discover"\nprompt_file = "prompt.md"\n'
+        'response_format = "json"\noutput = "items.json"\n'
+        '[[steps]]\nid = "process"\nprompt_file = "prompt.md"\n'
+        'foreach = "steps.discover.output.items"\n'
+        'iteration_id = "${item.id}"\noutput = "out-${iteration.id}.json"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+    outputs = {"discover": json.dumps({
+        "items": [{"id": str(i)} for i in range(1430)],
+    })}
+    assert len(_foreach_items(
+        flow.steps[1], outputs=outputs, flow_input={},
+    )) == 1430
 
 
 @pytest.mark.parametrize("setting", [
