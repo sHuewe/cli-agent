@@ -78,6 +78,33 @@ title = "${item.title}"
 
 The workspace is fixed for the complete flow. Every step may select its own normal agent configuration and model. `approve_tools` contains exact exposed tool names, such as `os__write_file`. Approval applies to calls from **that step's iterations only**; other tools still require normal approval (or fail without interactive input). This never activates missing capabilities or bypasses administrative, workspace or network policy.
 
+## Configurable foreach iteration capacity
+
+The default limit is **1,000 items per foreach step**. Large, independently
+checkpointed processing pipelines may opt into a higher capacity using a
+top-level table in their Flow TOML:
+
+```toml
+version = 1
+
+[limits]
+max_foreach_items = 5000
+
+[[steps]]
+id = "process"
+foreach = "input.items"
+prompt_file = "prompts/process.md"
+```
+
+The validated range is **1–10,000**, and omission retains the previous
+1,000-item default. The setting applies only to the ordinary `foreach`
+source item count of this flow, including during checkpoint/preflight
+evaluation. Subflows have their own independently declared setting.
+This is a workload capacity limit, **not** a timeout, concurrency
+setting or a reason to put larger content in one model call. Other
+safety limits (output size, checkpoint budgets and conversation-item
+limits) remain unchanged.
+
 ## Subflows and explicit interfaces
 
 A step may invoke a statically declared child flow:

@@ -96,6 +96,7 @@ def _set_flow_diagnostic(
 
 MAX_FLOW_STEPS = 100
 MAX_FOREACH_ITEMS = 1000
+MAX_CONFIGURED_FOREACH_ITEMS = 10000
 MAX_FLOW_FILE_BYTES = 1_000_000
 MAX_STRUCTURED_OUTPUT_BYTES = 100_000_000
 MAX_JSON_INPUT_FILES = 1000
@@ -1125,6 +1126,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
     """Validate top-level TOML options independently from step parsing."""
     allowed_root = {
         "checkpoint",
+        "limits",
         "version",
         "config",
         "model",
@@ -1223,6 +1225,20 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             ),
         )
 
+    limits_options = values.get("limits", {})
+    if (not isinstance(limits_options, dict)
+            or set(limits_options) - {"max_foreach_items"}):
+        raise ValueError("limits supports only max_foreach_items.")
+    max_foreach_items = limits_options.get(
+        "max_foreach_items", MAX_FOREACH_ITEMS,
+    )
+    if (type(max_foreach_items) is not int
+            or not 1 <= max_foreach_items <= MAX_CONFIGURED_FOREACH_ITEMS):
+        raise ValueError(
+            "limits.max_foreach_items must be an integer from 1 to "
+            f"{MAX_CONFIGURED_FOREACH_ITEMS}."
+        )
+
     checkpoint_options = values.get("checkpoint", {})
     if (not isinstance(checkpoint_options, dict)
             or set(checkpoint_options) - {"max_snapshot_bytes", "max_candidates", "retain_intermediate", "preserve_steps"}):
@@ -1294,7 +1310,7 @@ def _parse_flow_root(values: dict[str, Any]) -> tuple[Any, ...]:
             f"Flow contains more than {MAX_FLOW_STEPS} steps."
         )
 
-    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry, max_snapshot_bytes, max_candidates, retain_intermediate, tuple(preserve_steps))
+    return (inputs, result_selector, fallback_selector, global_config, global_model, global_retry_policy, global_variables, excluded_paths, raw_steps, allowed_retry, max_snapshot_bytes, max_candidates, retain_intermediate, tuple(preserve_steps), max_foreach_items)
 
 
 def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
@@ -1338,6 +1354,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         max_candidates,
         retain_intermediate,
         checkpoint_preserve_steps,
+        max_foreach_items,
     ) = _parse_flow_root(values)
 
     steps: list[FlowStep] = []
@@ -2525,6 +2542,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
                 variables=variables,
                 global_variables=global_variables,
                 foreach=foreach,
+                max_foreach_items=max_foreach_items,
                 json_inputs=json_inputs,
                 json_operation=dict(raw_json_operation) if raw_json_operation else None,
                 filesystem_operation=dict(raw_filesystem_operation) if raw_filesystem_operation else None,
@@ -2564,6 +2582,7 @@ def load_flow(path: Path, *, workspace: Path) -> FlowDefinition:
         checkpoint_max_candidates=max_candidates,
         retain_intermediate=retain_intermediate,
         checkpoint_preserve_steps=checkpoint_preserve_steps,
+        max_foreach_items=max_foreach_items,
     )
 
 
@@ -4214,10 +4233,14 @@ def _foreach_items(
         raise ValueError(
             f"foreach source {step.foreach!r} is not a list."
         )
-    if len(items) > MAX_FOREACH_ITEMS:
+    # Lightweight FlowStep test doubles predate the optional field;
+    # preserve the same conservative default for those callers.
+    limit = getattr(step, "max_foreach_items", MAX_FOREACH_ITEMS)
+    if len(items) > limit:
         raise ValueError(
             f"foreach source contains {len(items)} items; "
-            f"at most {MAX_FOREACH_ITEMS}."
+            f"at most {limit} "
+            "(configured via [limits].max_foreach_items)."
         )
     return items
 
