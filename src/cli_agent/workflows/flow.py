@@ -4233,10 +4233,13 @@ def _foreach_items(
         raise ValueError(
             f"foreach source {step.foreach!r} is not a list."
         )
-    if len(items) > step.max_foreach_items:
+    # Lightweight FlowStep test doubles predate the optional field;
+    # preserve the same conservative default for those callers.
+    limit = getattr(step, "max_foreach_items", MAX_FOREACH_ITEMS)
+    if len(items) > limit:
         raise ValueError(
             f"foreach source contains {len(items)} items; "
-            f"at most {step.max_foreach_items} "
+            f"at most {limit} "
             "(configured via [limits].max_foreach_items)."
         )
     return items
