@@ -70,3 +70,54 @@ def test_foreach_input_rejects_undeclared_root(tmp_path: Path) -> None:
 def test_foreach_input_rejects_bad_syntax(tmp_path: Path, source: str) -> None:
     with pytest.raises(ValueError, match="foreach"):
         _flow(tmp_path, selector=source)
+
+
+@pytest.mark.parametrize("configured,expected", [
+    (None, 1000), (1500, 1500), (2000, 2000), (10000, 10000),
+])
+def test_foreach_limit_configuration(tmp_path: Path, configured, expected) -> None:
+    (tmp_path / "prompt.md").write_text("Test", encoding="utf-8")
+    limits = "" if configured is None else f"[limits]\nmax_foreach_items = {configured}\n"
+    (tmp_path / "flow.toml").write_text(
+        f'version = 1\n{limits}inputs = ["items"]\n'
+        '[[steps]]\nid = "route"\nprompt_file = "prompt.md"\n'
+        'foreach = "input.items"\niteration_id = "${item.id}"\n'
+        'output = "out-${iteration.id}.json"\nresponse_format = "json"\n',
+        encoding="utf-8",
+    )
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+    assert flow.max_foreach_items == expected
+    assert flow.steps[0].max_foreach_items == expected
+    items = [{"id": str(i)} for i in range(expected)]
+    assert len(_foreach_items(flow.steps[0], outputs={}, flow_input={"items": items})) == expected
+    with pytest.raises(ValueError, match=rf"at most {expected}"):
+        _foreach_items(
+            flow.steps[0], outputs={},
+            flow_input={"items": [*items, {"id": "overflow"}]},
+        )
+
+
+@pytest.mark.parametrize("setting", [
+    "0", "-1", "10001", "true", '"2000"', "2.5",
+])
+def test_foreach_limit_rejects_invalid_values(tmp_path: Path, setting: str) -> None:
+    (tmp_path / "prompt.md").write_text("Test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        f'version = 1\n[limits]\nmax_foreach_items = {setting}\n'
+        '[[steps]]\nid = "route"\nprompt_file = "prompt.md"\n'
+        'foreach = "input.items"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"limits.max_foreach_items"):
+        load_flow(Path("flow.toml"), workspace=tmp_path)
+
+
+def test_foreach_limit_rejects_unknown_configuration(tmp_path: Path) -> None:
+    (tmp_path / "prompt.md").write_text("Test", encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\n[limits]\nunknown = 2000\n'
+        '[[steps]]\nid = "route"\nprompt_file = "prompt.md"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"limits supports only"):
+        load_flow(Path("flow.toml"), workspace=tmp_path)
