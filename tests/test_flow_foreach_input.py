@@ -79,7 +79,7 @@ def test_foreach_limit_configuration(tmp_path: Path, configured, expected) -> No
     (tmp_path / "prompt.md").write_text("Test", encoding="utf-8")
     limits = "" if configured is None else f"[limits]\nmax_foreach_items = {configured}\n"
     (tmp_path / "flow.toml").write_text(
-        f'version = 1\n{limits}inputs = ["items"]\n'
+        f'version = 1\ninputs = ["items"]\n{limits}'
         '[[steps]]\nid = "route"\nprompt_file = "prompt.md"\n'
         'foreach = "input.items"\niteration_id = "${item.id}"\n'
         'output = "out-${iteration.id}.json"\nresponse_format = "json"\n',
