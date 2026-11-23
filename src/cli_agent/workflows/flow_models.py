@@ -31,6 +31,7 @@ class FlowStep:
     variables: dict[str, str]
     global_variables: dict[str, str]
     foreach: str | None
+    max_foreach_items: int = 1000
     json_inputs: dict[str, JsonInputSpec] | None = None
     json_operation: dict[str, Any] | None = None
     filesystem_operation: dict[str, Any] | None = None
@@ -64,6 +65,7 @@ class FlowDefinition:
     checkpoint_max_candidates: int = 20_000
     retain_intermediate: bool = True
     checkpoint_preserve_steps: tuple[str, ...] = ()
+    max_foreach_items: int = 1000
 
 
 @dataclass(frozen=True)
