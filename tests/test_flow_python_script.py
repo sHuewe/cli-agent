@@ -39,6 +39,82 @@ async def test_json_stdin_stdout_and_checkpoint_resume(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_python_script_utf8_stdin_even_with_non_utf8_inherited_stdio(
+    tmp_path, monkeypatch,
+):
+    """A Windows cp1252 subprocess must not mangle the UTF-8 JSON pipe.
+
+    Covers Unicode punctuation that CP1252 decodes into different characters,
+    as in the 1,687-item OKF source repair task envelope.
+    """
+    from cli_agent.workflows.flow_python_script import run_script
+
+    flow = make_flow(
+        tmp_path,
+        "import json, sys\n"
+        "payload = json.load(sys.stdin)\n"
+        "print(json.dumps({"
+        "'value': payload['inputs']['tasks']['concepts'][0]['name'],"
+        "'stdin_encoding': sys.stdin.encoding}, ensure_ascii=True))",
+    )
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1252")
+    original = "Annex E—Optional Formats at E-1; Führung – Prüfung ✓"
+    result = await run_script(
+        workspace=tmp_path,
+        config=flow.steps[0].python_script,
+        envelope_json=json.dumps(
+            {"inputs": {"tasks": {"concepts": [{"name": original}]}}},
+            ensure_ascii=False,
+        ),
+    )
+    parsed = json.loads(result)
+    assert parsed["value"] == original
+    assert parsed["stdin_encoding"].lower().replace("-", "") == "utf8"
+
+
+@pytest.mark.asyncio
+async def test_flow_json_inputs_round_trip_unicode_across_python_steps(
+    tmp_path, monkeypatch,
+):
+    """The actual json_inputs handoff must preserve task metadata."""
+    script = (
+        "import json, sys\n"
+        "payload = json.load(sys.stdin)\n"
+        "if sys.argv[1] == 'prepare':\n"
+        "    print(json.dumps({'concepts': [{"
+        "'name': 'Annex E—Optional Formats at E-1',"
+        "'title': 'Führung – Umsetzung',"
+        "'description': 'Prüfung ✓'}]}, ensure_ascii=True))\n"
+        "else:\n"
+        "    print(json.dumps(payload['inputs']['tasks'], ensure_ascii=True))\n"
+    )
+    (tmp_path / "script.py").write_text(script, encoding="utf-8")
+    (tmp_path / "flow.toml").write_text(
+        'version = 1\nresult = "steps.apply.output"\n'
+        '[[steps]]\nid = "prepare"\noutput = "state/tasks.json"\n'
+        'overwrite_output = true\n'
+        '[steps.python_script]\npath = "script.py"\nargs = ["prepare"]\n'
+        '[[steps]]\nid = "apply"\noutput = "state/apply.json"\n'
+        '[steps.python_script]\npath = "script.py"\nargs = ["apply"]\n'
+        '[steps.json_inputs.tasks]\npath = "state/tasks.json"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1252")
+    flow = load_flow(Path("flow.toml"), workspace=tmp_path)
+    await run_flow(flow, workspace=tmp_path)
+    stored = json.loads(
+        (tmp_path / "state/tasks.json").read_text(encoding="utf-8")
+    )
+    applied = json.loads(
+        (tmp_path / "state/apply.json").read_text(encoding="utf-8")
+    )
+    assert applied == stored
+    assert applied["concepts"][0]["name"] == "Annex E—Optional Formats at E-1"
+    assert applied["concepts"][0]["title"] == "Führung – Umsetzung"
+    assert applied["concepts"][0]["description"] == "Prüfung ✓"
+
+
+@pytest.mark.asyncio
 async def test_overwrite_executes_again(tmp_path):
     flow = make_flow(tmp_path, (
         "from pathlib import Path\n"
