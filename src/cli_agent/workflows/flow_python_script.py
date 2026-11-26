@@ -189,10 +189,17 @@ async def run_script(
         else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
         if os.name == "nt" else {}
     )
+    # The envelope is encoded as UTF-8. On Windows Python otherwise opens
+    # redirected stdin using the active locale (commonly cp1252), silently
+    # corrupting non-ASCII task metadata before json.load(sys.stdin).
+    # Explicitly match Python's standard streams to the transport encoding,
+    # irrespective of the caller's console, venv, or inherited overrides.
+    child_env = os.environ.copy()
+    child_env["PYTHONIOENCODING"] = "utf-8"
     proc = await asyncio.create_subprocess_exec(
         *command, cwd=workspace, stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        **kwargs,
+        env=child_env, **kwargs,
     )
     overflow = asyncio.Event()
     overflow_message: str | None = None
