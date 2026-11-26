@@ -451,3 +451,6 @@ A schema validates the structure, not the factual correctness of an answer.
 Schema files are trusted local configuration, not permission grants. Workspace
 and MCP security policies remain unchanged.
 
+### Regenerating schema-invalid checkpoints
+
+Run `cli-agent-flow run flow.toml --delete-invalid-checkpoints` (alias: `--delete-invalide-checkpoints`) to delete and regenerate existing JSON step checkpoints that fail the current effective `output_schema`. Valid checkpoints are reused, including individual foreach iterations. Skipped steps are not modified. The option does not delete unreadable or malformed JSON, unrelated files, or compact completion markers, and does not change the normal overwrite policy or invalidate otherwise schema-valid downstream outputs. Without the flag, a schema mismatch remains an error.
