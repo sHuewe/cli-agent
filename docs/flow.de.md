@@ -1154,3 +1154,7 @@ the runner resolves `result_fallback`. Both must refer to a declared
 step output. This permits a deterministic result from either a legacy
 verification or a conditionally executed fresh verifier. A missing
 result in both branches is an error.
+
+### Schema-ungültige Checkpoints neu erzeugen
+
+Mit `cli-agent-flow run flow.toml --delete-invalid-checkpoints` (Alias: `--delete-invalide-checkpoints`) werden vorhandene JSON-Checkpoints, die das aktuell wirksame `output_schema` verletzen, gelöscht und neu erzeugt. Gültige Checkpoints bleiben erhalten, auch bei einzelnen foreach-Iterationen. Übersprungene Schritte bleiben unverändert. Nicht lesbares oder syntaktisch ungültiges JSON, fremde Dateien und kompakte Abschlussmarker werden nicht gelöscht. Schema-gültige nachgelagerte Checkpoints werden nicht automatisch invalidiert. Ohne Option bleibt ein Schemafehler ein Abbruchgrund.
