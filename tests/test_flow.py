@@ -3022,7 +3022,7 @@ id = "${item.id}"
     original = flow_module._verified_preflight_checkpoint
     verification_calls = 0
 
-    def tampering_verifier(step, *, workspace, output, expected_fingerprint):
+    def tampering_verifier(step, *, workspace, output, expected_fingerprint, **kwargs):
         nonlocal verification_calls
         verification_calls += 1
         if verification_calls == 1:
@@ -3035,6 +3035,7 @@ id = "${item.id}"
             workspace=workspace,
             output=output,
             expected_fingerprint=expected_fingerprint,
+            **kwargs,
         )
 
     monkeypatch.setattr(
