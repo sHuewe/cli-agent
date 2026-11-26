@@ -192,6 +192,7 @@ class _FlowExecutionContext:
     completed_invocation_artifacts: dict[str, dict[str, tuple[Path, bool, bool]]] | None = None
     completed_json_outputs: dict[str, bytes] | None = None
     preflight_budget: "_SubflowTraversalBudget" | None = None
+    delete_invalid_checkpoints: bool = False
 
     def __post_init__(self) -> None:
         if self.claimed_outputs is None:
@@ -3091,18 +3092,35 @@ def _checkpoint_snapshot_key(
     return step.step_id, _filesystem_path_key(output)
 
 
+class _CheckpointSchemaMismatch(ValueError):
+    """A readable JSON checkpoint failed its declared output contract."""
+
+    def __init__(self, message: str, text: str) -> None:
+        super().__init__(message)
+        self.text = text
+
+
 def _verified_preflight_checkpoint(
     step: FlowStep,
     *,
     workspace: Path,
     output: Path | None,
     expected_fingerprint: bytes,
-) -> str:
-    checkpoint = _existing_json_checkpoint(
-        step,
-        workspace=workspace,
-        output=output,
-    )
+    delete_invalid_checkpoints: bool = False,
+    preflight_only: bool = False,
+) -> str | None:
+    mismatch: _CheckpointSchemaMismatch | None = None
+    try:
+        checkpoint = _existing_json_checkpoint(
+            step,
+            workspace=workspace,
+            output=output,
+        )
+    except _CheckpointSchemaMismatch as exc:
+        if not delete_invalid_checkpoints:
+            raise
+        mismatch = exc
+        checkpoint = exc.text
     if checkpoint is None:
         raise ValueError(
             f"JSON checkpoint of step {step.step_id!r} was changed after "
@@ -3113,6 +3131,30 @@ def _verified_preflight_checkpoint(
             f"JSON checkpoint of step {step.step_id!r} was changed after "
             f"Preflight changed: {output}"
         )
+    if mismatch is not None:
+        # Batch preflight remains non-destructive. The actual iteration
+        # re-verifies the same startup fingerprint immediately before removal.
+        if preflight_only:
+            return None
+        assert output is not None
+        # Reuse the output safety checks (including hardlinks and sensitive
+        # files). Never delete a file reached through changed parent links.
+        target = prepare_output_target(workspace, output, overwrite=True)
+        if target.path != output:
+            raise ValueError(f"Checkpoint path changed before deletion: {output}")
+        _ensure_output_parent_directory(workspace, output)
+        if _checkpoint_fingerprint(read_existing_output_text(
+            workspace, output, max_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+        )) != expected_fingerprint:
+            raise ValueError(f"JSON checkpoint changed before deletion: {output}")
+        output.unlink()
+        print(sanitize_terminal_text(
+            f"Flow step {step.step_id}: deleted schema-invalid JSON checkpoint: {output}",
+            multiline=False,
+            escape_invisible_formatting=True,
+            escape_literal_backslashes=True,
+        ))
+        return None
     return checkpoint
 
 
@@ -3140,9 +3182,10 @@ def _existing_json_output(
         from cli_agent.models.json_contract import json_contract_error
         error = json_contract_error(text, step.output_schema)
         if error is not None:
-            raise ValueError(
+            raise _CheckpointSchemaMismatch(
                 f"JSON checkpoint for step {step.step_id!r} does not match "
-                f"output_schema ({output}): {error}"
+                f"output_schema ({output}): {error}",
+                text,
             )
     return text
 
@@ -3210,6 +3253,7 @@ def _prepare_flow_output(
     workspace: Path,
     output: Path,
     defer_existing_output: bool = False,
+    delete_invalid_checkpoints: bool = False,
 ) -> str | None:
     # A compact invocation may have a preserved artifact whose format is
     # different from an earlier static writer of the same path (e.g. JSON
@@ -3224,11 +3268,17 @@ def _prepare_flow_output(
         )
         return None
 
-    checkpoint = _existing_json_checkpoint(
-        replace(step, output_schema=None) if step.output_schema_enums else step,
-        workspace=workspace,
-        output=output,
-    )
+    try:
+        checkpoint = _existing_json_checkpoint(
+            replace(step, output_schema=None) if step.output_schema_enums else step,
+            workspace=workspace,
+            output=output,
+        )
+    except _CheckpointSchemaMismatch as exc:
+        if not delete_invalid_checkpoints:
+            raise
+        # Structural validation must never mutate the workspace.
+        return exc.text
     if checkpoint is not None:
         return checkpoint
 
@@ -3333,6 +3383,7 @@ def _capture_run_start_invocation(
     call_stack: tuple[str, ...] = (),
     reserved_inputs: dict[str, Path] | None = None,
     compact_markers: dict[str, bytes] | None = None,
+    delete_invalid_checkpoints: bool = False,
 ) -> _FlowResultValue | None:
     _set_flow_diagnostic(
         phase="run-start-snapshot", flow=flow.source,
@@ -3389,6 +3440,26 @@ def _capture_run_start_invocation(
         key = _filesystem_path_key(output)
         checkpoint_paths[key] = output
         protected_paths[key] = output
+
+    def snapshot_checkpoint(
+        step: FlowStep, resolved_step: FlowStep | None, output: Path,
+    ) -> str | None:
+        try:
+            checkpoint = _existing_json_checkpoint(
+                resolved_step if resolved_step is not None else replace(step, output_schema=None),
+                workspace=workspace,
+                output=output,
+            )
+        except _CheckpointSchemaMismatch as exc:
+            if not delete_invalid_checkpoints:
+                raise
+            # Protect the invalid file just like a valid checkpoint, but do
+            # not expose its data to downstream startup planning.
+            remember_checkpoint(step, output, exc.text)
+            return None
+        if checkpoint is not None:
+            remember_checkpoint(step, output, checkpoint)
+        return checkpoint
 
     def remember_previous_output(
         step: FlowStep,
@@ -3544,6 +3615,7 @@ def _capture_run_start_invocation(
                     ),
                     call_stack=next_stack,
                     compact_markers=compact_markers,
+                    delete_invalid_checkpoints=delete_invalid_checkpoints,
                 )
                 if item_condition is not True:
                     complete = False
@@ -3620,13 +3692,8 @@ def _capture_run_start_invocation(
                     allow_unavailable=True,
                 )
             )
-            checkpoint = _existing_json_checkpoint(
-                resolved_step if resolved_step is not None else replace(step, output_schema=None),
-                workspace=workspace,
-                output=output,
-            )
+            checkpoint = snapshot_checkpoint(step, resolved_step, output)
             if checkpoint is not None:
-                remember_checkpoint(step, output, checkpoint)
                 if not unknown_gate and resolved_step is not None:
                     available_outputs[step.step_id] = checkpoint
                     output_json[step.step_id] = True
@@ -3752,15 +3819,10 @@ def _capture_run_start_invocation(
                     item=item, allow_unavailable=True,
                 )
             )
-            checkpoint = _existing_json_checkpoint(
-                resolved_step if resolved_step is not None else replace(step, output_schema=None),
-                workspace=workspace,
-                output=output,
-            )
+            checkpoint = snapshot_checkpoint(step, resolved_step, output)
             if checkpoint is None:
                 complete = False
                 continue
-            remember_checkpoint(step, output, checkpoint)
             if resolved_step is None:
                 complete = False
             if complete:
@@ -4100,6 +4162,7 @@ def _capture_run_start_snapshots(
     cache: dict[str, FlowDefinition],
     reserved_inputs: dict[str, Path] | None = None,
     compact_markers: dict[str, bytes] | None = None,
+    delete_invalid_checkpoints: bool = False,
 ) -> tuple[
     dict[str, _RunStartSnapshot],
     tuple[Path, ...],
@@ -4117,6 +4180,7 @@ def _capture_run_start_snapshots(
         budget=_SubflowTraversalBudget(),
         reserved_inputs=reserved_inputs,
         compact_markers=compact_markers,
+        delete_invalid_checkpoints=delete_invalid_checkpoints,
     )
     return snapshots, tuple(protected_paths.values())
 
@@ -4771,6 +4835,7 @@ def validate_flow(
     _planned_static_outputs: dict[str, str] | None = None,
     _all_reserved_inputs: dict[str, Path] | None = None,
     _compact_ancestor: bool = False,
+    delete_invalid_checkpoints: bool = False,
 ) -> None:
     _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
     workspace = workspace.expanduser().resolve()
@@ -4833,6 +4898,7 @@ def validate_flow(
                 _planned_static_outputs=planned_static_outputs,
                 _all_reserved_inputs=all_reserved_inputs,
                 _compact_ancestor=_compact_ancestor or not flow.retain_intermediate,
+                delete_invalid_checkpoints=delete_invalid_checkpoints,
             )
             _set_flow_diagnostic(
                 phase="validate-step", flow=flow.source,
@@ -4884,6 +4950,7 @@ def validate_flow(
                 if step.when is None:
                     _prepare_flow_output(
                         step, workspace=workspace, output=static_output,
+                        delete_invalid_checkpoints=delete_invalid_checkpoints,
                         defer_existing_output=(
                             _compact_ancestor or not flow.retain_intermediate
                         ),
@@ -5042,6 +5109,7 @@ def validate_flow(
                     step,
                     workspace=workspace,
                     output=static_output,
+                    delete_invalid_checkpoints=delete_invalid_checkpoints,
                     defer_existing_output=(
                         _compact_ancestor or not flow.retain_intermediate
                     ),
@@ -6271,6 +6339,8 @@ def _preflight_foreach_output_batch(
                 workspace=workspace,
                 output=output,
                 expected_fingerprint=expected_fingerprint,
+                delete_invalid_checkpoints=context.delete_invalid_checkpoints,
+                preflight_only=True,
             )
         else:
             _ensure_output_parent_directory(workspace, output)
@@ -6480,6 +6550,7 @@ def _prepare_iteration_checkpoint(
             workspace=workspace,
             output=output,
             expected_fingerprint=expected_fingerprint,
+            delete_invalid_checkpoints=context.delete_invalid_checkpoints,
         )
     else:
         checkpoint = None
@@ -7006,6 +7077,7 @@ async def run_flow(
     dependencies: ExecutionDependencies | None = None,
     approval_callback: ApprovalCallback | None = None,
     user_message_callback: UserMessageCallback | None = _show_mcp_user_message,
+    delete_invalid_checkpoints: bool = False,
 ) -> None:
     workspace = workspace.expanduser().resolve()
     deps = dependencies or ExecutionDependencies()
@@ -7039,6 +7111,7 @@ async def run_flow(
         admin_config_loader=deps.load_admin_config,
         _cache=cache,
         _budget=validation_budget,
+        delete_invalid_checkpoints=delete_invalid_checkpoints,
     )
     if flow.inputs:
         raise ValueError(
@@ -7071,6 +7144,7 @@ async def run_flow(
             # before earlier writers can overwrite them.
             reserved_inputs=reserved_inputs,
             compact_markers=compact_markers,
+            delete_invalid_checkpoints=delete_invalid_checkpoints,
         )
     )
     known_fingerprints: dict[str, bytes] = {}
@@ -7103,6 +7177,7 @@ async def run_flow(
         ),
         run_start_dynamic_checkpoints=dynamic_fingerprints,
         run_start_compact_markers=compact_markers,
+        delete_invalid_checkpoints=delete_invalid_checkpoints,
     )
     if not flow.retain_intermediate:
         # The root may itself declare a public result. Honor its completion
@@ -7163,6 +7238,12 @@ def build_parser() -> argparse.ArgumentParser:
                 "(default: current directory)."
             ),
         )
+        if name == "run":
+            sub.add_argument(
+                "--delete-invalid-checkpoints", "--delete-invalide-checkpoints",
+                action="store_true",
+                help="Delete and regenerate existing JSON checkpoints that do not match the current output_schema.",
+            )
     return parser
 
 
@@ -7283,10 +7364,11 @@ def main() -> None:
         configure_logging(config.logging)
         logging_initialized = True
         _set_flow_diagnostic(phase="validate-flow", flow=flow.source)
-        validate_flow(
-            flow,
-            workspace=workspace,
-        )
+        if args.command == "validate" or not args.delete_invalid_checkpoints:
+            validate_flow(
+                flow,
+                workspace=workspace,
+            )
         if args.command == "validate":
             print(
                 sanitize_terminal_text(
@@ -7304,6 +7386,7 @@ def main() -> None:
                 flow,
                 workspace=workspace,
                 approval_callback=approve_tool_call,
+                **({"delete_invalid_checkpoints": True} if args.delete_invalid_checkpoints else {}),
             )
         )
     except Exception as exc:
