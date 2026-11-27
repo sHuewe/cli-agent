@@ -130,7 +130,7 @@ must be relative to this workspace; never use absolute file paths.
 """
 
 class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
-    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", output_schema: dict[str, Any] | None = None, workspace_access: str | None = None, agent_timezone: str | None = None, system_prompt: str | None = None, sdk_configless: bool = False, tool_allowlist: tuple[str, ...] | None = None) -> None:
+    def __init__(self, workspace_directory: Path, model_client: ModelClient, mcp_servers: tuple[McpServerConfig, ...], *, max_tool_calls: int = 200, logging_config: LoggingConfig | None = None, config_file: Path | None = None, dump_llm_context: bool = False, dump_file_prefix: str | None = None, network: NetworkConfig | None = None, mcp_policy: McpPolicy | None = None, approval_callback: ApprovalCallback | None = None, user_message_callback: UserMessageCallback | None = None, okf: OkfConfigLike | str | Path | None = None, knowledge_vector=None, model_credential_rules=(), response_format: str = "text", output_schema: dict[str, Any] | None = None, workspace_access: str | None = None, agent_timezone: str | None = None, system_prompt: str | None = None, sdk_configless: bool = False, tool_allowlist: tuple[str, ...] | None = None, request_tool_limit: int | None = None, max_additional_knowledge_calls: int = 2) -> None:
         self.workspace_directory = workspace_directory.resolve()
         # Evidence is an agent capability, not a per-entry-point configuration.
         # No model request uses it unless relevant tools are available.
@@ -139,7 +139,18 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         self._sub_run_enabled = True
         self.model_client = model_client
         self.mcp_servers = mcp_servers
-        self.max_tool_calls = max_tool_calls
+        for name, value in (("request_tool_limit", request_tool_limit),
+                            ("max_additional_knowledge_calls", max_additional_knowledge_calls)):
+            if value is None and name == "request_tool_limit":
+                continue
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer.")
+        self.max_tool_calls = max_tool_calls if request_tool_limit is None else request_tool_limit
+        # Explicit SDK budget spans coordinator and delegated model loops.
+        # Knowledge selection retains its independently configured budget.
+        self._request_tool_limit = request_tool_limit
+        self._request_tool_calls = 0
+        self.max_additional_knowledge_calls = max_additional_knowledge_calls
         self.logging_config = logging_config or LoggingConfig()
         self.telemetry_config = TelemetryConfig()  # Set by configured entry points.
         self.config_file = config_file
@@ -216,9 +227,10 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
                 structuredContent={"status": "no_new_information", "reason": "Diese Knowledge-Frage wurde bereits gestellt."},
                 content=[], isError=False,
             )
-        if self._knowledge_reentry_calls >= 2:
+        limit = getattr(self, "max_additional_knowledge_calls", 2)
+        if self._knowledge_reentry_calls >= limit:
             return SimpleNamespace(
-                structuredContent={"status": "limit_reached", "reason": "At most two additional Knowledge queries per request."},
+                structuredContent={"status": "limit_reached", "reason": f"Additional Knowledge limit ({limit}) reached. Answer using existing context."},
                 content=[], isError=False,
             )
         self._knowledge_reentry_calls += 1
@@ -498,6 +510,11 @@ class CliAgent(McpLifecycleMixin, ConversationMixin, ContextDumpMixin):
         return (
             exposed_name not in self._disabled_tools
             and (policy is None or exposed_name in policy)
+            and not (
+                exposed_name == "knowledge_reentry__request_additional_knowledge"
+                and getattr(self, "_knowledge_reentry_calls", 0)
+                >= getattr(self, "max_additional_knowledge_calls", 2)
+            )
         )
 
     def set_tool_enabled(self, tool_name: str, *, enabled: bool) -> bool:
