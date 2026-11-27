@@ -92,6 +92,8 @@ class OneShotRunOptions:
     dump_file_prefix: str | None = None
     with_mcp: tuple[str, ...] = ()
     tool_allowlist: tuple[str, ...] | None = None
+    max_tool_calls: int | None = None
+    max_additional_knowledge_calls: int | None = None
     scoped_write_files: tuple[Path, ...] | None = None
     scoped_mkdir_dirs: tuple[Path, ...] | None = None
 
@@ -663,6 +665,9 @@ def prepare_agent(
         output_schema=options.output_schema,
         workspace_access=effective_workspace_access,
         **({"tool_allowlist": options.tool_allowlist} if options.tool_allowlist is not None else {}),
+        **({"request_tool_limit": options.max_tool_calls} if options.max_tool_calls is not None else {}),
+        **({"max_additional_knowledge_calls": options.max_additional_knowledge_calls}
+           if options.max_additional_knowledge_calls is not None else {}),
         **({"sdk_configless": True} if project_config is not None else {}),
     )
     agent.telemetry_config = config.telemetry
