@@ -102,6 +102,11 @@ async def run_model_loop(
     knowledge_selection_only_mode = False
     selection_only_tool_rejections = 0
     sub_finalization_rounds = 0
+    request_limit = getattr(agent, "_request_tool_limit", None) if phase in {"main", "sub"} else None
+    reentry_name = "knowledge_reentry__request_additional_knowledge"
+    budget_notice = False
+    knowledge_notice = False
+    exhausted_tool_retries = 0
 
     def partial_sub_result(reason: str) -> str:
         evidence_state = getattr(agent, "_evidence_state", None)
@@ -143,6 +148,33 @@ async def run_model_loop(
                         "Describe unfinished work in uncertainties."
                     ),
                 })
+        offered_tools = tools
+        if phase in {"main", "sub"}:
+            knowledge_limit = getattr(agent, "max_additional_knowledge_calls", 2)
+            knowledge_exhausted = getattr(agent, "_knowledge_reentry_calls", 0) >= knowledge_limit
+            reentry_available = (
+                any(t["function"]["name"] == reentry_name for t in tools)
+                or (reentry_name in routes and getattr(agent, "_flow_tool_allowlist", None) is None)
+                or (reentry_name in routes and reentry_name in (getattr(agent, "_flow_tool_allowlist", None) or ()))
+            )
+            if knowledge_exhausted:
+                offered_tools = [t for t in offered_tools if t["function"]["name"] != reentry_name]
+                if reentry_available and not knowledge_notice:
+                    messages.append({"role": "user", "content":
+                        "The additional Knowledge query limit has been reached. "
+                        "Do not request more Knowledge. Answer using the available context; "
+                        "state any remaining uncertainty."})
+                    knowledge_notice = True
+            if request_limit is not None and getattr(agent, "_request_tool_calls", 0) >= request_limit:
+                offered_tools = []
+                if not budget_notice:
+                    messages.append({"role": "user", "content":
+                        "The tool-call limit has been reached. No more tools are available. "
+                        "Return the required final answer now using the existing context and evidence. "
+                        "State uncertainty rather than inventing missing information."})
+                    budget_notice = True
+            if phase == "main" and hasattr(agent, "_last_working_tools"):
+                agent._last_working_tools = offered_tools
         agent._dump_context(messages, phase=phase)
         # Model lifecycle telemetry is an SDK opt-in. Existing CLI/API event
         # consumers use a tool-only protocol and must remain unchanged.
@@ -168,10 +200,10 @@ async def run_model_loop(
                         []
                         if phase == "knowledge" and knowledge_selection_only_mode
                         else (
-                            [tool for tool in tools
+                            [tool for tool in offered_tools
                              if tool["function"]["name"] == ADD_EVIDENCE_TOOL_NAME]
                             if phase == "sub" and calls >= SUB_RUN_SOFT_TOOL_LIMIT
-                            else tools
+                            else offered_tools
                         )
                     ),
                 )
@@ -436,6 +468,25 @@ async def run_model_loop(
             )
             continue
 
+        if tool_calls and request_limit is not None:
+            # Reserve a shared request budget before dispatch, including denied
+            # and malformed calls. A delegated run cannot bypass this limit.
+            remaining = max(0, request_limit - getattr(agent, "_request_tool_calls", 0))
+            accepted, rejected = tool_calls[:remaining], tool_calls[remaining:]
+            agent._request_tool_calls = getattr(agent, "_request_tool_calls", 0) + len(accepted)
+            for call in rejected:
+                name = (call.get("function") or {}).get("name")
+                agent._append_tool_error(messages, call, name,
+                    "Tool-call limit reached. Return the final answer using existing context.")
+            tool_calls = accepted
+            if not tool_calls:
+                exhausted_tool_retries += 1
+                if exhausted_tool_retries >= 2:
+                    answer = str(message.get("content") or "").strip()
+                    if answer:
+                        return answer
+                    raise RuntimeError("The model repeatedly requested tools after the tool-call limit and did not provide an answer.")
+                continue
         if tool_calls and phase in {"main", "sub", "knowledge"} and getattr(agent, "_flow_tool_allowlist", None) is not None:
             # Internal evidence, publication and sub-run calls bypass the
             # ordinary MCP router. Enforce the same step policy in delegated
