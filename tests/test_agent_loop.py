@@ -408,3 +408,55 @@ def test_model_usage_diagnostics_marks_missing_usage_unknown(caplog):
         assert _run(agent) == "done"
     assert "input_tokens=unknown" in caplog.text
     assert "context_utilization_percent=unknown" in caplog.text
+
+
+def test_request_tool_limit_trims_batch_and_finalizes(monkeypatch):
+    from cli_agent.runtime import agent_loop
+    seen = []
+
+    async def dispatch(agent, *, tool_calls, calls, **kwargs):
+        seen.extend(c["function"]["name"] for c in tool_calls)
+        return calls + len(tool_calls), False
+
+    monkeypatch.setattr(agent_loop, "process_tool_calls", dispatch)
+    tool = {"type": "function", "function": {"name": "os_read_file"}}
+    call = lambda n: {"id": str(n), "type": "function", "function": {"name": "os_read_file", "arguments": {}}}
+    agent = LoopAgent([
+        {"role": "assistant", "tool_calls": [call(1), call(2), call(3)]},
+        {"role": "assistant", "content": "answer"},
+    ])
+    agent._request_tool_limit = 2
+    agent._request_tool_calls = 0
+    assert _run(agent, tools=[tool]) == "answer"
+    assert seen == ["os_read_file", "os_read_file"]
+    assert agent._request_tool_calls == 2
+    assert agent.model_client.tool_sets == [[tool], []]
+
+
+def test_zero_request_tool_limit_hides_all_tools():
+    agent = LoopAgent([{"role": "assistant", "content": "answer"}])
+    agent._request_tool_limit = 0
+    agent._request_tool_calls = 0
+    assert _run(agent, tools=[{"function": {"name": "os_read_file"}}]) == "answer"
+    assert agent.model_client.tool_sets == [[]]
+
+
+def test_additional_knowledge_limit_hides_only_reentry(monkeypatch):
+    from cli_agent.runtime import agent_loop
+    name = "knowledge_reentry__request_additional_knowledge"
+    reentry = {"function": {"name": name}}
+    other = {"function": {"name": "os_analyze_image"}}
+
+    async def dispatch(agent, *, tool_calls, calls, **kwargs):
+        agent._knowledge_reentry_calls += 1
+        return calls + len(tool_calls), False
+
+    monkeypatch.setattr(agent_loop, "process_tool_calls", dispatch)
+    agent = LoopAgent([
+        {"role": "assistant", "tool_calls": [{"id": "k", "function": {"name": name, "arguments": {}}}]},
+        {"role": "assistant", "content": "answer"},
+    ])
+    agent.max_additional_knowledge_calls = 1
+    agent._knowledge_reentry_calls = 0
+    assert _run(agent, tools=[reentry, other]) == "answer"
+    assert agent.model_client.tool_sets == [[reentry, other], [other]]
