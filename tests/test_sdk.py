@@ -1223,3 +1223,26 @@ def test_sdk_tool_trace_redaction_never_changes_runtime_payload():
     assert original["document_body"] == ["secret", "nested"]
     assert original["nested"]["client_secret"] == "S3"
     assert not truncated
+
+
+def test_sdk_accepts_and_snapshots_tool_limits_and_allowlist():
+    names = ["os_analyze_image", "vector__knowledge_search"]
+    agent = AgentBuilder().with_project_config(
+        tool_allowlist=names, max_tool_calls=3, max_additional_knowledge_calls=0,
+    ).build()
+    names.clear()
+    assert agent._options["tool_allowlist"] == ("os_analyze_image", "vector__knowledge_search")
+    assert agent._options["max_tool_calls"] == 3
+    assert agent._options["max_additional_knowledge_calls"] == 0
+
+
+@pytest.mark.parametrize("key", ["max_tool_calls", "max_additional_knowledge_calls"])
+@pytest.mark.parametrize("value", [-1, True, 1.5, "2"])
+def test_sdk_rejects_invalid_tool_limits(key, value):
+    with pytest.raises(ValueError):
+        AgentBuilder().with_project_config(**{key: value})
+
+
+def test_sdk_rejects_string_tool_allowlist():
+    with pytest.raises(ValueError):
+        AgentBuilder().with_project_config(tool_allowlist="os_analyze_image")

@@ -414,7 +414,8 @@ class McpLifecycleMixin:
         exposed = "knowledge_reentry__request_additional_knowledge"
         tool = {"type": "function", "function": {
             "name": exposed,
-            "description": "Use only when genuinely new, necessary knowledge gaps arise during the main task: retrieve additional project-specific knowledge. Do not use to reconfirm known facts or repeat queries. At most twice per user request.",
+            "description": "Use only when genuinely new, necessary knowledge gaps arise during the main task: retrieve additional project-specific knowledge. Do not use to reconfirm known facts or repeat queries. "
+                            f"At most {getattr(self, 'max_additional_knowledge_calls', 2)} per user request.",
             "parameters": {"type": "object", "properties": {
                 "question": {"type": "string", "minLength": 1, "maxLength": 2000}
             }, "required": ["question"], "additionalProperties": False},

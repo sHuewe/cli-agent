@@ -184,6 +184,7 @@ class ConversationMixin:
         getattr(self, "_sub_runs", []).clear()
         self._knowledge_reentry_calls = 0
         self._knowledge_reentry_seen = set()
+        self._request_tool_calls = 0
         if getattr(self, "_evidence_state", None) is not None:
             self._evidence_state.begin_task()
         from cli_agent.state.evidence_cleanup import reset_cleanup_tracking

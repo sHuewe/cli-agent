@@ -100,6 +100,7 @@ _PROJECT_OPTIONS = {
 }
 _RUN_OPTIONS = {
     "workspace", "workspace_access", "with_data", "with_mcp",
+    "tool_allowlist", "max_tool_calls", "max_additional_knowledge_calls",
     "response_format", "context_files", "excluded_paths",
     "mutation_protected_paths", "retry_policy", "approval_callback",
     "user_message_callback", "add_web_context", "dump_file_prefix",
@@ -203,6 +204,17 @@ class AgentBuilder:
         if "system_prompt" in overrides or config.agent.system_prompt is not None:
             self._system_prompt_override = None
         run_options = {k: v for k, v in overrides.items() if k in _RUN_OPTIONS}
+        for key in ("max_tool_calls", "max_additional_knowledge_calls"):
+            value = run_options.get(key)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"{key} must be a nonnegative integer or None.")
+        allowlist = run_options.get("tool_allowlist")
+        if allowlist is not None:
+            if not isinstance(allowlist, (tuple, list)) or any(
+                not isinstance(name, str) or not name.strip() for name in allowlist
+            ):
+                raise ValueError("tool_allowlist must be a list or tuple of nonempty tool names.")
+            run_options["tool_allowlist"] = tuple(allowlist)
         # Callback configuration is independent of project configuration.
         # Keep the existing approval callback across project updates, unless
         # a caller explicitly replaces or clears it in this call.

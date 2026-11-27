@@ -574,8 +574,9 @@ def test_run_once_rejects_excluded_paths_without_os_access(
 
 
 
+@pytest.mark.parametrize("budgets", [{}, {"max_tool_calls": 5, "max_additional_knowledge_calls": 0}])
 def test_run_conversation_reuses_one_agent_for_all_prompts(
-    tmp_path: Path,
+    tmp_path: Path, budgets,
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -585,6 +586,7 @@ def test_run_conversation_reuses_one_agent_for_all_prompts(
         def __init__(self, _workspace, _model_client, _servers, **kwargs):
             type(self).instances += 1
             captured["response_format"] = kwargs["response_format"]
+            captured["budgets"] = {key: kwargs[key] for key in ("request_tool_limit", "max_additional_knowledge_calls") if key in kwargs}
             captured["prompts"] = []
 
         async def __aenter__(self):
@@ -613,6 +615,7 @@ def test_run_conversation_reuses_one_agent_for_all_prompts(
                 workspace=tmp_path,
                 prompts=("one", "two", "final"),
                 response_format="json",
+                **budgets,
             ),
             dependencies=dependencies,
         )
@@ -623,6 +626,7 @@ def test_run_conversation_reuses_one_agent_for_all_prompts(
     assert captured["response_format"] == "json"
     assert result.answer == "answer:final"
     assert result.usage == "usage"
+    assert captured["budgets"] == ({"request_tool_limit": 5, "max_additional_knowledge_calls": 0} if budgets else {})
 
 
 def test_run_conversation_rejects_local_agent_commands(
