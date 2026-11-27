@@ -172,6 +172,9 @@ These additional keys are accepted by `with_project_config`, but are
 | `workspace_access` | `str \| None` | `"none"`, `"read"`, or `"write"` |
 | `with_data` | `bool` | Enable built-in Data MCP |
 | `with_mcp` | `tuple[str, ...]` | Named MCP servers to enable from admin configuration |
+| `tool_allowlist` | `list[str] \| tuple[str, ...] \| None` | Exact exposed tool names; default `None` (no additional restriction) |
+| `max_tool_calls` | `int \| None` | Shared main/sub-run tool-call budget per request; default `None` (legacy limit behavior) |
+| `max_additional_knowledge_calls` | `int \| None` | Maximum additional Knowledge retrievals per request; default `None` (two) |
 | `response_format` | `str` | `"text"` (default) or `"json"` |
 | `context_files` | `tuple[Path, ...]` | Explicit local file contexts |
 | `excluded_paths` | `tuple[Path, ...]` | Paths excluded from tool access |
@@ -186,6 +189,105 @@ The configuration dataclasses are defined in
 `cli_agent.settings.config`. `ModelRetryPolicy` is defined in
 `cli_agent.models.model`. The builder validates model and policy settings;
 values forwarded as runtime options are also subject to runtime validation.
+
+### Explicit tool selection and per-request budgets
+
+Use `tool_allowlist` to restrict the agent to exact exposed tool names,
+independently of workspace access and approvals. MCP tools use the
+`server__tool` naming convention (two underscores).
+
+- `None` (or omitted): no additional allowlist restriction. Existing
+  server activation, workspace permissions and approval policies still apply.
+- `()` or `[]`: do not offer any tools; the implicit Knowledge preflight
+  is also skipped.
+- A nonempty tuple or list: only the listed, otherwise available tools
+  are eligible. Internal plan, evidence, publication and sub-run tools
+  must be listed explicitly if desired. Listing a tool does not activate
+  its server, grant filesystem permissions, or approve its execution.
+
+The same allowlist applies to the implicit Knowledge preflight and its
+selection loop. Include `okf__knowledge_index` for OKF, and the OKF
+navigation/read tools required by the configured corpus. Include
+`vector__knowledge_search` for Chroma or hybrid vector retrieval.
+Omitting the corresponding preflight tool skips that backend, even if it
+is configured. Include both preflight tools for hybrid OKF/vector use.
+To permit subsequent Knowledge retrievals initiated by the main agent,
+also include `knowledge_reentry__request_additional_knowledge`.
+
+Example: allow only image analysis among OS tools, alongside Chroma
+Knowledge retrieval and optional plan/evidence tools. This assumes
+`config.toml` contains a working model and Chroma configuration and the
+applicable admin policy permits their endpoints and credentials.
+
+```python
+from cli_agent.sdk import AgentBuilder
+
+async def approve(name, arguments):
+    return name == "os__analyze_image"
+
+agent = (
+    AgentBuilder()
+    .with_admin_config()  # explicitly use the system policy for this example
+    .with_project_config(
+        path="config.toml",
+        workspace=".",
+        workspace_access="read",
+        tool_allowlist=(
+            "os__analyze_image",
+            "vector__knowledge_search",
+            "knowledge_reentry__request_additional_knowledge",
+            "agent__update_plan",
+            "agent__add_evidence",
+            "agent__update_evidence",
+        ),
+        max_tool_calls=20,
+        max_additional_knowledge_calls=2,
+    )
+    .with_approval_callback(approve)
+    .build()
+)
+
+async with agent:
+    for tool in await agent.list_tools():
+        print(tool.name, tool.approval_required)
+    result = await agent.ask("Answer the question using the available knowledge.")
+    print(result.answer)
+```
+
+**Tool budgets:**
+
+- `max_tool_calls` accepts a nonnegative integer or `None`.
+  An explicit integer sets a shared budget for model-requested tools in
+  the main and delegated sub-run loops, including additional Knowledge
+  requests, internal tools and rejected attempts admitted to the budget.
+  Parallel calls consume individual slots; calls beyond the remaining
+  budget are rejected before execution. Once exhausted, no more tools are
+  offered in these loops and the model is instructed to produce its final
+  answer using existing context and evidence, stating uncertainty where
+  needed. A model that repeatedly ignores this instruction without
+  producing an answer can still fail the run.
+- `max_tool_calls=0` disables model-requested main/sub-run tools from the
+  beginning. It does not disable the initial Knowledge preflight.
+  `None` preserves the legacy main-loop hard limit of 200 calls and the
+  existing sub-run limits; it does not mean unlimited.
+- `max_additional_knowledge_calls` accepts a nonnegative integer or
+  `None`. Omitted or `None` uses the existing default of two additional
+  retrievals. Zero disables additional retrievals without disabling the
+  initial Knowledge phase. Duplicate or invalid questions do not start a
+  new retrieval. After exhaustion, the reentry tool is removed and the
+  model is instructed to answer with existing context; other allowed tools
+  remain available until their own budget is exhausted.
+- Both counters start fresh for each regular `ask()` request, including
+  requests in a persistent session. The initial Knowledge phase and
+  internal calls during Knowledge retrieval use their own existing
+  limits, not the shared main/sub-run budget. Direct host-initiated
+  `agent.mcp.call_tool()` operations are not model-loop budget entries.
+  The allowlist and normal approval checks still apply to direct MCP calls.
+
+`agent.list_tools()` reports the currently offered main-agent tools;
+Knowledge-phase-only tools are not listed there. The limits control
+model-driven investigation, not the number of LLM requests or total token
+consumption.
 
 ### API keys: external OpenAI-compatible API (example: OpenRouter)
 
