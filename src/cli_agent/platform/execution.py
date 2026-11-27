@@ -122,6 +122,8 @@ class ConversationRunOptions:
     dump_file_prefix: str | None = None
     with_mcp: tuple[str, ...] = ()
     tool_allowlist: tuple[str, ...] | None = None
+    max_tool_calls: int | None = None
+    max_additional_knowledge_calls: int | None = None
     scoped_write_files: tuple[Path, ...] | None = None
     scoped_mkdir_dirs: tuple[Path, ...] | None = None
 
